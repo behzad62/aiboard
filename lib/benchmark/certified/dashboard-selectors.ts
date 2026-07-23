@@ -107,18 +107,23 @@ export interface CertifiedLeaderboardRow {
   tracks: string[];
   caseTitles: string[];
   attempts: number;
+  passed: number | null;
   preliminary: boolean;
   verifiedQuality: number | null;
   overallScore: number | null;
   trackBreakdown: Array<{
     track: string;
     attempts: number;
-    averageVerifiedQuality: number;
+    passed: number | null;
+    verifiedPassRate: number | null;
+    averageVerifiedQuality: number | null;
   }>;
   passRate: number | null;
   efficiencyScore: number | null;
   toolReliabilityScore: number | null;
+  toolReliabilitySamples: number | null;
   averageCostUsd: number | null;
+  costPerPass: number | null;
   averageDurationMs: number | null;
   durationMs: number | null;
   speedPerPassMs: number | null;
@@ -130,9 +135,11 @@ export interface CertifiedLeaderboardRow {
    * comboHash/display key). Solo/team lens filtering and roster-chip lookups
    * key off this. */
   teamCompositionId: string;
-  /** Member model ids. Length 1 (or 0 for legacy rows without the field) is a
-   * solo row; length > 1 is a team row — see isTeamRow/isSoloRow below. */
+  /** Deduplicated member model ids. Use isTeam for composition identity because
+   * a multi-role team can repeat the same model. */
   modelIds: string[];
+  /** Explicit composition identity; does not collapse repeated-model roles. */
+  isTeam: boolean;
   latestAttemptId?: string;
   latestAttemptStatus?: string;
   latestAttemptTrack?: string;
@@ -142,6 +149,11 @@ export interface CertifiedLeaderboardRow {
   >;
   providerUnavailableAttemptIds: string[];
   providerUnavailableAttemptIdsByTrack: Record<string, string[]>;
+  /** Optional comparison metadata attached by useBenchmarkDashboard. Imported
+   * and legacy bundles may not carry it, so readers always expose empty arrays. */
+  providerIds: string[];
+  reasoningEfforts: string[];
+  latestCompletedAt?: string;
 }
 
 export interface ModelIntelligenceTrackBreakdown {
@@ -266,6 +278,14 @@ export function readLeaderboard(
             providerUnavailableAttemptIds: meta.providerUnavailableAttemptIds,
             providerUnavailableAttemptIdsByTrack:
               meta.providerUnavailableAttemptIdsByTrack,
+            providerIds: meta.providerIds,
+            reasoningEfforts: meta.reasoningEfforts,
+            latestCompletedAt: meta.latestCompletedAt,
+            passed: row.passed ?? meta.passed,
+            toolReliabilitySamples:
+              row.toolReliabilitySamples ?? meta.toolReliabilitySamples,
+            costPerPass: row.costPerPass ?? meta.costPerPass,
+            isTeam: meta.isTeam,
           }
         : row;
     });
@@ -355,6 +375,8 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     readString(row.teamCompositionId) ??
     readString(row.modelId);
   if (!id) return null;
+  const attempts = readNumber(row.attempts) ?? readNumber(row.totalAttempts) ?? 0;
+  const modelIds = readStringList(row.modelIds);
 
   return {
     id,
@@ -367,8 +389,11 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     detail: readString(row.comboHash) ?? readString(row.modelId) ?? undefined,
     tracks: readTrackList(row),
     caseTitles: readStringList(row.caseTitles),
-    attempts: readNumber(row.attempts) ?? readNumber(row.totalAttempts) ?? 0,
-    preliminary: readBoolean(row.preliminary),
+    attempts,
+    passed: readNumber(row.passed),
+    preliminary:
+      readOptionalBoolean(row.preliminary) ??
+      (attempts > 0 && attempts < 3),
     verifiedQuality:
       readNumber(row.verifiedQuality) ??
       readNumber(row.averageVerifiedQuality) ??
@@ -381,7 +406,9 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     toolReliabilityScore:
       readNumber(row.toolReliabilityScore) ??
       readNumber(row.averageToolReliabilityScore),
+    toolReliabilitySamples: readNumber(row.toolReliabilitySamples),
     averageCostUsd: readNumber(row.averageCostUsd) ?? readNumber(row.costUsd),
+    costPerPass: readNumber(row.costPerPass),
     averageDurationMs:
       readNumber(row.averageDurationMs) ??
       readNumber(row.averageLatencyMs) ??
@@ -396,7 +423,8 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     costBasis: readCostBasis(row.costBasis),
     teamLift: readNumber(row.teamLift) ?? readNumber(row.averageTeamLift),
     teamCompositionId: readString(row.teamCompositionId) ?? id,
-    modelIds: readStringList(row.modelIds),
+    modelIds,
+    isTeam: readOptionalBoolean(row.isTeam) ?? modelIds.length > 1,
     latestAttemptId: readString(row.latestAttemptId) ?? undefined,
     latestAttemptStatus: readString(row.latestAttemptStatus) ?? undefined,
     latestAttemptTrack: readString(row.latestAttemptTrack) ?? undefined,
@@ -407,6 +435,9 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     providerUnavailableAttemptIdsByTrack: readStringListByTrack(
       row.providerUnavailableAttemptIdsByTrack
     ),
+    providerIds: readStringList(row.providerIds),
+    reasoningEfforts: readStringList(row.reasoningEfforts),
+    latestCompletedAt: readString(row.latestCompletedAt) ?? undefined,
   };
 }
 
@@ -637,7 +668,13 @@ function readTrackList(row: Record<string, unknown>): string[] {
 
 function readTrackBreakdown(
   value: unknown
-): Array<{ track: string; attempts: number; averageVerifiedQuality: number }> {
+): Array<{
+  track: string;
+  attempts: number;
+  passed: number | null;
+  verifiedPassRate: number | null;
+  averageVerifiedQuality: number | null;
+}> {
   return readArray(value)
     .map((item) => {
       const row = readRecord(item);
@@ -646,7 +683,9 @@ function readTrackBreakdown(
       return {
         track,
         attempts: readNumber(row.attempts) ?? 0,
-        averageVerifiedQuality: readNumber(row.averageVerifiedQuality) ?? 0,
+        passed: readNumber(row.passed),
+        verifiedPassRate: readNumber(row.verifiedPassRate),
+        averageVerifiedQuality: readNumber(row.averageVerifiedQuality),
       };
     })
     .filter(
@@ -655,7 +694,9 @@ function readTrackBreakdown(
       ): item is {
         track: string;
         attempts: number;
-        averageVerifiedQuality: number;
+        passed: number | null;
+        verifiedPassRate: number | null;
+        averageVerifiedQuality: number | null;
       } => item !== null
     );
 }
@@ -715,6 +756,10 @@ function readBoolean(value: unknown): boolean {
   return value === true;
 }
 
+function readOptionalBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -729,7 +774,7 @@ function readCostBasis(value: unknown): "usd" | "tokens" | null {
  * `modelIds` existed on the payload (empty array) fall back to solo — the
  * safer default for a leaderboard row with no team evidence. */
 export function isTeamRow(row: CertifiedLeaderboardRow): boolean {
-  return row.modelIds.length > 1;
+  return row.isTeam;
 }
 
 export function isSoloRow(row: CertifiedLeaderboardRow): boolean {

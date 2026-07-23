@@ -9,6 +9,10 @@ import {
   verifierAssertionDetailsForDisplay,
 } from "../components/benchmark/certified/VerifierAssertionTable";
 import { getGameIqScenarioPack } from "../lib/benchmark/gameiq";
+import {
+  isTeamRow,
+  readLeaderboard,
+} from "../lib/benchmark/certified/dashboard-selectors";
 import type {
   BenchmarkAttemptV2,
   BenchmarkModelCallTrace,
@@ -31,6 +35,107 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 const certifiedResultTablesSource = readFileSync(
   "components/benchmark/certified/CertifiedResultTables.tsx",
   "utf8"
+);
+
+type EnrichedLeaderboardRow = ReturnType<typeof readLeaderboard>[number] & {
+  providerIds?: string[];
+  reasoningEfforts?: string[];
+  latestCompletedAt?: string;
+};
+
+const enrichedLeaderboard = readLeaderboard(
+  {
+    leaderboard: [
+      {
+        id: "row-enriched",
+        displayName: "Enriched model",
+        teamCompositionId: "team-enriched",
+        modelIds: ["model-enriched"],
+        isTeam: false,
+        tracks: ["workbench"],
+        attempts: 4,
+        passed: 3,
+        costPerPass: 0.25,
+        toolReliabilitySamples: 4,
+        providerIds: ["chatgpt"],
+        reasoningEfforts: ["xhigh"],
+        latestCompletedAt: "2026-07-22T12:00:00.000Z",
+      },
+    ],
+    overallLeaderboard: [
+      {
+        id: "row-enriched",
+        displayName: "Enriched model",
+        teamCompositionId: "team-enriched",
+        modelIds: ["model-enriched"],
+        isTeam: false,
+        tracks: ["workbench"],
+      },
+    ],
+  },
+  "all",
+  "overall"
+)[0] as EnrichedLeaderboardRow;
+check(
+  "alternate leaderboard sorts preserve provider, effort, and completion metadata",
+  enrichedLeaderboard?.providerIds?.join(",") === "chatgpt" &&
+    enrichedLeaderboard.reasoningEfforts?.join(",") === "xhigh" &&
+    enrichedLeaderboard.latestCompletedAt === "2026-07-22T12:00:00.000Z" &&
+    enrichedLeaderboard.passed === 3 &&
+    enrichedLeaderboard.costPerPass === 0.25 &&
+    enrichedLeaderboard.toolReliabilitySamples === 4,
+  enrichedLeaderboard
+);
+
+const legacyLeaderboard = readLeaderboard(
+  {
+    leaderboard: [
+      {
+        id: "row-legacy",
+        displayName: "Legacy model",
+        teamCompositionId: "team-legacy",
+        modelIds: ["model-legacy"],
+        tracks: ["gameiq"],
+        attempts: 2,
+        trackBreakdown: [
+          { track: "gameiq", attempts: 2 },
+        ],
+      },
+    ],
+  },
+  "all"
+)[0] as EnrichedLeaderboardRow;
+check(
+  "legacy leaderboard rows expose empty comparison metadata",
+  Array.isArray(legacyLeaderboard?.providerIds) &&
+    legacyLeaderboard.providerIds.length === 0 &&
+    Array.isArray(legacyLeaderboard.reasoningEfforts) &&
+    legacyLeaderboard.reasoningEfforts.length === 0 &&
+    legacyLeaderboard.latestCompletedAt === undefined &&
+    legacyLeaderboard.preliminary === true &&
+    legacyLeaderboard.trackBreakdown[0]?.averageVerifiedQuality === null,
+  legacyLeaderboard
+);
+
+const repeatedModelTeamRow = readLeaderboard(
+  {
+    leaderboard: [
+      {
+        id: "row-repeated-team",
+        displayName: "Same model, two roles",
+        teamCompositionId: "team-repeated",
+        modelIds: ["model-same"],
+        isTeam: true,
+        attempts: 3,
+      },
+    ],
+  },
+  "all"
+)[0];
+check(
+  "explicit team identity survives reading even when model ids are deduplicated",
+  Boolean(repeatedModelTeamRow && isTeamRow(repeatedModelTeamRow)),
+  repeatedModelTeamRow
 );
 
 check(

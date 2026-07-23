@@ -45,6 +45,35 @@ function soloTeam(id: string, modelId: string): BenchmarkTeamComposition {
   };
 }
 
+function repeatedModelTeam(
+  id: string,
+  modelId: string
+): BenchmarkTeamComposition {
+  return {
+    id,
+    name: `${modelId} repeated team`,
+    comboHash: `team:${modelId}:repeated`,
+    roles: [
+      {
+        role: "architect",
+        slot: "architect",
+        modelId,
+        providerId: "test",
+        displayName: modelId,
+        temperature: 0,
+      },
+      {
+        role: "worker",
+        slot: "worker",
+        modelId,
+        providerId: "test",
+        displayName: modelId,
+        temperature: 0,
+      },
+    ],
+  };
+}
+
 function attempt(
   id: string,
   teamId: string,
@@ -150,9 +179,13 @@ check(
   lopsidedRow?.trackBreakdown.length === 2 &&
     lopsidedRow.trackBreakdown[0]?.track === "gameiq" &&
     lopsidedRow.trackBreakdown[0]?.attempts === 1 &&
+    lopsidedRow.trackBreakdown[0]?.passed === 1 &&
+    lopsidedRow.trackBreakdown[0]?.verifiedPassRate === 1 &&
     lopsidedRow.trackBreakdown[0]?.averageVerifiedQuality === 1 &&
     lopsidedRow.trackBreakdown[1]?.track === "workbench" &&
     lopsidedRow.trackBreakdown[1]?.attempts === 19 &&
+    lopsidedRow.trackBreakdown[1]?.passed === 19 &&
+    lopsidedRow.trackBreakdown[1]?.verifiedPassRate === 1 &&
     lopsidedRow.trackBreakdown[1]?.averageVerifiedQuality === 0.5,
   lopsidedRow?.trackBreakdown
 );
@@ -164,7 +197,7 @@ const singleTeam = soloTeam("solo-single", "prov:single");
 const singleRows = aggregateCertifiedRunScores({
   attempts: [
     attempt("s1", singleTeam.id, "gameiq", 0.8),
-    attempt("s2", singleTeam.id, "gameiq", 0.6),
+    attempt("s2", singleTeam.id, "gameiq", 0.6, { status: "failed" }),
   ],
   cases: [],
   teamCompositions: [singleTeam],
@@ -177,6 +210,34 @@ check(
     singleRow?.verifiedQuality === 0.7 &&
     singleRow?.trackBreakdown.length === 1,
   singleRow
+);
+check(
+  "trackBreakdown exposes per-track pass evidence for result profiles",
+  singleRow?.trackBreakdown[0]?.passed === 1 &&
+    singleRow.trackBreakdown[0]?.verifiedPassRate === 0.5,
+  singleRow?.trackBreakdown
+);
+
+const repeatedSolo = soloTeam("solo-repeat-baseline", "prov:repeat");
+const repeatedTeam = repeatedModelTeam("team-repeat", "prov:repeat");
+const repeatedRows = aggregateCertifiedRunScores({
+  attempts: [
+    attempt("repeat-solo", repeatedSolo.id, "workbench", 0.5),
+    attempt("repeat-team", repeatedTeam.id, "workbench", 0.8),
+  ],
+  cases: [],
+  teamCompositions: [repeatedSolo, repeatedTeam],
+  verifierResults: [],
+});
+const repeatedTeamRow = repeatedRows.find(
+  (item) => item.teamCompositionId === repeatedTeam.id
+);
+check(
+  "multi-role repeated-model compositions remain teams and receive lift",
+  repeatedTeamRow?.isTeam === true &&
+    repeatedTeamRow.modelIds.length === 1 &&
+    repeatedTeamRow.teamLift != null,
+  repeatedTeamRow
 );
 
 // ---------------------------------------------------------------------------

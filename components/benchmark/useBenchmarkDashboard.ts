@@ -22,6 +22,7 @@ import {
 import type {
   BenchmarkAttemptV2,
   BenchmarkFailure,
+  BenchmarkTeamComposition,
 } from "@/lib/benchmark/types";
 import {
   listBenchmarkAttemptsV2,
@@ -159,7 +160,11 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       harnessCertifications,
     });
     setCertifiedDashboard(
-      withCertifiedDeleteMetadata(certifiedDashboardData, benchmarkAttemptsV2)
+      withCertifiedDeleteMetadata(
+        certifiedDashboardData,
+        benchmarkAttemptsV2,
+        teamCompositions
+      )
     );
     setSuiteCount(benchmarkSuites.length);
     setTraceCount(benchmarkTraces.length);
@@ -228,7 +233,8 @@ type CertifiedDashboardWithLeaderboard = ReturnType<
 
 function withCertifiedDeleteMetadata(
   dashboard: CertifiedDashboardWithLeaderboard,
-  attempts: BenchmarkAttemptV2[]
+  attempts: BenchmarkAttemptV2[],
+  teams: BenchmarkTeamComposition[]
 ): CertifiedDashboardWithLeaderboard & {
   providerErrorAttempts: Array<{
     id: string;
@@ -240,6 +246,7 @@ function withCertifiedDeleteMetadata(
     (attempt) => attempt.mode === "certified"
   );
   const attemptsByTeam = new Map<string, BenchmarkAttemptV2[]>();
+  const teamById = new Map(teams.map((team) => [team.id, team]));
   for (const attempt of certifiedAttempts) {
     const list = attemptsByTeam.get(attempt.teamCompositionId) ?? [];
     list.push(attempt);
@@ -251,6 +258,7 @@ function withCertifiedDeleteMetadata(
     leaderboard: dashboard.leaderboard.map((row) => {
       const teamAttempts = attemptsByTeam.get(row.teamCompositionId) ?? [];
       const latest = newestAttempt(teamAttempts);
+      const team = teamById.get(row.teamCompositionId);
       return {
         ...row,
         latestAttemptId: latest?.id,
@@ -262,6 +270,13 @@ function withCertifiedDeleteMetadata(
           .map((attempt) => attempt.id),
         providerUnavailableAttemptIdsByTrack:
           providerUnavailableAttemptIdsByTrack(teamAttempts),
+        providerIds: uniqueStrings(
+          (team?.roles ?? []).map((role) => role.providerId)
+        ),
+        reasoningEfforts: uniqueStrings(
+          (team?.roles ?? []).map((role) => role.reasoningEffort)
+        ),
+        latestCompletedAt: latest?.completedAt ?? latest?.startedAt,
       };
     }),
     providerErrorAttempts: certifiedAttempts
@@ -272,6 +287,12 @@ function withCertifiedDeleteMetadata(
         teamCompositionId: attempt.teamCompositionId,
       })),
   };
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value)))
+  ).sort();
 }
 
 function latestAttemptsByTrack(

@@ -13,7 +13,7 @@ import { BenchmarkHeadToHeadTable } from "@/components/benchmark/BenchmarkHeadTo
 import { CapabilityRadarChart } from "@/components/benchmark/CapabilityRadarChart";
 import { CertifiedBenchmarkOverview } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
 import { CertifiedRunPanel } from "@/components/benchmark/certified/CertifiedRunPanel";
-import { VerdictStrip } from "@/components/benchmark/results/VerdictStrip";
+import { BenchmarkDecisionDashboard } from "@/components/benchmark/results/BenchmarkDecisionDashboard";
 import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { BenchmarkDashboardData } from "@/lib/benchmark/metrics";
@@ -65,16 +65,29 @@ export function BenchmarkPage() {
         <TabsContent value="results" className="space-y-6">
           <DashboardGate locked={locked} loading={loading}>
             {message && <MessageBanner message={message} />}
-            <VerdictStrip certified={certifiedDashboard} />
-            <CertifiedBenchmarkOverview
-              certified={certifiedDashboard}
-              counts={reportCounts}
-              track="all"
-              corruptRunFileCount={corruptRunFileCount}
-              onRefresh={refresh}
-              setMessage={setMessage}
-            />
-            <AnalysisSection dashboard={dashboard} />
+            <BenchmarkDecisionDashboard certified={certifiedDashboard} />
+            <details className="overflow-hidden rounded-xl border">
+              <summary className="cursor-pointer select-none px-4 py-4">
+                <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  Audit
+                </span>
+                <span className="mt-1 block text-base font-semibold">Audit evidence</span>
+                <span className="mt-1 block max-w-3xl text-xs font-normal text-muted-foreground">
+                  Inspect exclusions, verifier counts, team and role lenses, raw benchmark analysis, and evidence-removal controls.
+                </span>
+              </summary>
+              <div className="space-y-6 border-t p-4">
+                <CertifiedBenchmarkOverview
+                  certified={certifiedDashboard}
+                  counts={reportCounts}
+                  track="all"
+                  corruptRunFileCount={corruptRunFileCount}
+                  onRefresh={refresh}
+                  setMessage={setMessage}
+                />
+                <AnalysisSection dashboard={dashboard} />
+              </div>
+            </details>
           </DashboardGate>
         </TabsContent>
 
@@ -146,7 +159,7 @@ function AnalysisSection({
   return (
     <details className="rounded-md border">
       <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
-        Analysis: head-to-head outcomes and capability profile
+        Additional analysis: head-to-head outcomes and capability profile
       </summary>
       <div className="grid gap-4 border-t p-4 xl:grid-cols-2">
         {dashboard ? (

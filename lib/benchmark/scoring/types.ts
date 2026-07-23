@@ -104,6 +104,8 @@ export interface CertifiedRunScore {
   comboHash: string;
   displayName: string;
   modelIds: string[];
+  /** True for multi-role compositions, even when every role uses one model. */
+  isTeam: boolean;
   tracks: string[];
   /**
    * Human-readable titles of the cases this row aggregates, so the leaderboard
@@ -143,11 +145,14 @@ export interface CertifiedRunScore {
   trackBreakdown: Array<{
     track: string;
     attempts: number;
+    passed: number;
+    verifiedPassRate: number | null;
     averageVerifiedQuality: number;
   }>;
   jobSuccessScore: number;
   efficiencyScore: number;
   toolReliabilityScore: number | null;
+  toolReliabilitySamples: number;
   costUsd: number | null;
   averageCostUsd: number | null;
   durationMs: number | null;

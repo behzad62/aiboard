@@ -161,12 +161,16 @@ interface MutableCertifiedRunScore {
   comboHash: string;
   displayName: string;
   modelIds: string[];
+  isTeam: boolean;
   tracks: Set<string>;
   // Per-track quality accumulators feeding the equal-weighted overall score.
   // Keyed by resolved track; each holds this row's attempt count and verified-
   // quality sum WITHIN that one track, so finalizeGroup can average per track
   // and then take the simple (equal-weight) mean of those track averages.
-  trackQuality: Map<string, { attempts: number; verifiedQualitySum: number }>;
+  trackQuality: Map<
+    string,
+    { attempts: number; passed: number; verifiedQualitySum: number }
+  >;
   caseIds: Set<string>;
   // Case ids in first-appearance order across this row's attempts. The Set above
   // tracks membership (for the `cases` count and dedup); this array preserves a
@@ -228,8 +232,9 @@ export function aggregateCertifiedRunScores(
         | undefined)?.track ??
       "unknown";
 
+    const attemptPassed = isPassedAttempt(attempt);
     group.attempts += 1;
-    if (isPassedAttempt(attempt)) group.passed += 1;
+    if (attemptPassed) group.passed += 1;
     else group.failed += 1;
     if (attempt.caseId) {
       if (!group.caseIds.has(attempt.caseId)) {
@@ -240,8 +245,9 @@ export function aggregateCertifiedRunScores(
     group.tracks.add(track);
     const trackQuality =
       group.trackQuality.get(track) ??
-      { attempts: 0, verifiedQualitySum: 0 };
+      { attempts: 0, passed: 0, verifiedQualitySum: 0 };
     trackQuality.attempts += 1;
+    if (attemptPassed) trackQuality.passed += 1;
     trackQuality.verifiedQualitySum += verifiedQuality;
     group.trackQuality.set(track, trackQuality);
     group.verifiedQualitySum += verifiedQuality;
@@ -415,6 +421,7 @@ function groupFor(
     comboHash: team?.comboHash ?? teamId,
     displayName,
     modelIds,
+    isTeam: roles.length > 1,
     tracks: new Set(),
     trackQuality: new Map(),
     caseIds: new Set(),
@@ -472,6 +479,8 @@ function finalizeGroup(
     .map(([track, acc]) => ({
       track,
       attempts: acc.attempts,
+      passed: acc.passed,
+      verifiedPassRate: rate(acc.passed, acc.attempts),
       averageVerifiedQuality: average(acc.verifiedQualitySum, acc.attempts),
     }))
     .sort((a, b) => a.track.localeCompare(b.track));
@@ -492,6 +501,7 @@ function finalizeGroup(
     comboHash: group.comboHash,
     displayName: group.displayName,
     modelIds: group.modelIds,
+    isTeam: group.isTeam,
     tracks: Array.from(group.tracks).sort(),
     caseTitles: resolveCaseTitles(group.caseIdOrder, caseById),
     attempts: group.attempts,
@@ -509,6 +519,7 @@ function finalizeGroup(
       group.toolReliabilitySamples > 0
         ? average(group.toolReliabilityScoreSum, group.toolReliabilitySamples)
         : null,
+    toolReliabilitySamples: group.toolReliabilitySamples,
     costUsd,
     averageCostUsd:
       group.costSamples > 0 ? round(group.costUsd / group.costSamples, 6) : null,
@@ -532,7 +543,7 @@ function finalizeGroup(
 function applyTeamLift(rows: CertifiedRunScore[]): void {
   const soloScoreByModel = new Map<string, CertifiedRunScore>();
   for (const row of rows) {
-    if (row.modelIds.length !== 1) continue;
+    if (row.isTeam || row.modelIds.length !== 1) continue;
     const modelId = row.modelIds[0];
     const existing = soloScoreByModel.get(modelId);
     if (!existing || row.jobSuccessScore > existing.jobSuccessScore) {
@@ -541,7 +552,7 @@ function applyTeamLift(rows: CertifiedRunScore[]): void {
   }
 
   for (const row of rows) {
-    if (row.modelIds.length <= 1) continue;
+    if (!row.isTeam) continue;
     const lift = computeTeamLift(row, soloScoreByModel);
     if (!lift) continue;
     row.bestSoloScore = lift.bestSoloScore;
