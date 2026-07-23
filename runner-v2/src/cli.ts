@@ -202,6 +202,14 @@ function parseRunnerArguments(rawArgs: string[]): string[] {
   while (args.length > 0 && args[0] === "--") {
     args.shift();
   }
+  if (
+    args.length >= 2 &&
+    isAbsolute(args[0]) &&
+    args[1].startsWith("--") &&
+    args.includes("--state-dir")
+  ) {
+    args.unshift("--project");
+  }
   return args;
 }
 
@@ -249,7 +257,7 @@ function parseArguments(args: string[]): CliOptions {
       index += 1;
       continue;
     }
-    if (!["--project", "--state-dir", "--port", "--token"].includes(flag)) {
+  if (!["--project", "--state-dir", "--port", "--token"].includes(flag)) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
     }
     const value = args[index + 1];
@@ -260,6 +268,7 @@ function parseArguments(args: string[]): CliOptions {
       throw new Error(`invalid_arguments: Duplicate option ${flag}.`);
     }
     values.set(flag, value);
+    index += 1;
   }
 
   const projectPath = requiredAbsolutePath(values, "--project");
