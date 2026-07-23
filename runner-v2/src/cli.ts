@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   let resources: RunnerResources | undefined;
   try {
     assertSupportedNodeVersion(process.versions.node);
-    const args = process.argv.slice(2);
+    const args = parseRunnerArguments(process.argv.slice(2));
     if (isHelpRequested(args)) {
       printHelp();
       return;
@@ -197,6 +197,14 @@ function syncAutonomousBuildLifecycle(
   }
 }
 
+function parseRunnerArguments(rawArgs: string[]): string[] {
+  const args = [...rawArgs];
+  while (args.length > 0 && args[0] === "--") {
+    args.shift();
+  }
+  return args;
+}
+
 function isHelpRequested(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
@@ -334,7 +342,8 @@ function writeReadableStartupSummary(
   }
 ): void {
   const lines = [
-    "Runner V2 started",
+    "AI Board Runner V2",
+    "===================",
     `  Protocol   : ${readiness.protocolVersion}`,
     `  URL        : ${readiness.url}`,
     `  Token hint : ...${readiness.tokenHint}`,
@@ -355,6 +364,8 @@ function writeReadableStartupSummary(
     lines.push("    - https://aiboard.me");
     lines.push("    - https://www.aiboard.me");
   }
+  lines.push("");
+  lines.push("  Tip: Use --help to show all CLI flags and defaults.");
   process.stderr.write(`${lines.join("\n")}\n`);
 }
 

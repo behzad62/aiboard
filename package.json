@@ -5,7 +5,7 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "publish-downloads": "node scripts/publish-downloads.mjs",
-    "runner:v2": "npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs runner-v2/src/cli.ts",
+    "runner:v2": "npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs runner-v2/src/cli.ts --",
     "test:runner-v2": "npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs --test runner-v2/test/*.test.ts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-runner-v2-client.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-build-policy.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-build-policy-ui.tsx && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-build-cutover.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-build-pause-gates.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-model-usage.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-build-live-state.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-build-transcript-panel.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-native-build-files.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-build-run-stats.mts && npx -y node@24.18.0 node_modules/tsx/dist/cli.mjs scripts/test-runner-v2-observability.mts",
     "typecheck:runner-v2": "tsc -p runner-v2/tsconfig.json --noEmit",
     "predev": "npm run publish-downloads",

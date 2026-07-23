@@ -95,7 +95,7 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
         ?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
       check(`${path} uses the root package license`, packageJson.license === rootPackageJson.license);
       check(`${path} requires Node.js 24.18.0 or newer`, packageJson.engines?.node === ">=24.18.0");
-      check(`${path} starts src/cli.ts`, packageJson.scripts?.start === "tsx src/cli.ts");
+      check(`${path} starts src/cli.ts`, packageJson.scripts?.start === "tsx src/cli.ts --");
       check(
         `${path} installs Chromium through Playwright`,
         packageJson.scripts?.["setup:browser"] === "playwright install chromium"

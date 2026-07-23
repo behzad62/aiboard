@@ -85,7 +85,7 @@ async function publishNativeRunner() {
     type: "module",
     engines: { node: ">=24.18.0" },
     scripts: {
-      start: "tsx src/cli.ts",
+      start: "tsx src/cli.ts --",
       "setup:browser": "playwright install chromium",
     },
     dependencies: {
@@ -121,6 +121,15 @@ Runner V2 is the native process required by AI Board Build mode.
    \`\`\`powershell
    npm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787
    \`\`\`
+
+5. Optional flags can be passed in:
+
+   \`\`\`powershell
+   npm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --allow-origin https://aiboard.me
+   \`\`\`
+
+Default behavior already allows \`https://aiboard.me\` and \`https://www.aiboard.me\`.
+Run \`npm start -- --help\` to list all options.
 
 Runner V2 prints its localhost URL and control token. Paste both into AI Board Build setup, then test the connection.
 `, { date: new Date(0), createFolders: false });

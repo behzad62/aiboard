@@ -9,7 +9,7 @@
     "aiboard-runner-v2": "./src/cli.ts"
   },
   "scripts": {
-    "dev": "tsx src/cli.ts",
+    "dev": "tsx src/cli.ts --",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   }
