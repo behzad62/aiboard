@@ -28,7 +28,10 @@ import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>(["https://aiboard.me"]);
+const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
+  "https://aiboard.me",
+  "https://www.aiboard.me",
+]);
 
 export interface ControlServerOptions {
   supervisor: RunSupervisor;

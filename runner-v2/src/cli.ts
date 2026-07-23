@@ -308,7 +308,7 @@ function printHelp(): void {
     "  --token <string>        Authentication token. Auto-generated if omitted.",
     "  --mcp <name=command>    Register MCP server; can be repeated.",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
-    "                         Defaults to loopback origins + https://aiboard.me.",
+    "                         Defaults to loopback origins + aiboard.me.",
     "  --help, -h              Show this help text.",
     "",
     "Examples:",
@@ -353,6 +353,7 @@ function writeReadableStartupSummary(
     lines.push("  Allowed CORS origins:");
     lines.push("    - loopback (127.0.0.1, localhost)");
     lines.push("    - https://aiboard.me");
+    lines.push("    - https://www.aiboard.me");
   }
   process.stderr.write(`${lines.join("\n")}\n`);
 }
