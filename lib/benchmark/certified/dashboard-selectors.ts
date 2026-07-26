@@ -15,6 +15,11 @@ import type {
   TeamIqRecommendationCard,
   TeamIqRecommendationLabel,
 } from "@/lib/benchmark/teamiq";
+import {
+  benchmarkVariantKey,
+  benchmarkVariantLabel,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 
 export type CertifiedTrackView =
   | "all"
@@ -166,6 +171,8 @@ export interface ModelIntelligenceTrackBreakdown {
 
 export interface ModelIntelligenceRow {
   modelId: string;
+  reasoningEffort: string;
+  variantKey: string;
   displayName: string;
   attempts: number;
   passed: number;
@@ -179,6 +186,8 @@ export interface ModelIntelligenceRow {
 export interface WorkBenchRoleRow {
   id: string;
   modelId: string;
+  reasoningEffort: string;
+  variantKey: string;
   displayName: string;
   attempts: number;
   passed: number;
@@ -336,6 +345,16 @@ export function readModelIntelligence(certified: unknown): ModelIntelligenceRow[
       const row = readRecord(value);
       const modelId = readString(row.modelId);
       if (!modelId) return null;
+      const reasoningEffort: string = normalizeBenchmarkReasoningEffort(
+        row.reasoningEffort
+      );
+      const variantKey =
+        readString(row.variantKey) ??
+        benchmarkVariantKey(modelId, reasoningEffort);
+      const displayName = variantDisplayName(
+        readString(row.displayName) ?? modelId,
+        reasoningEffort
+      );
       const tracks = readArray(row.tracks)
         .map((item) => {
           const trackRow = readRecord(item);
@@ -355,7 +374,9 @@ export function readModelIntelligence(certified: unknown): ModelIntelligenceRow[
         );
       return {
         modelId,
-        displayName: readString(row.displayName) ?? modelId,
+        reasoningEffort,
+        variantKey,
+        displayName,
         attempts: readNumber(row.attempts) ?? 0,
         passed: readNumber(row.passed) ?? 0,
         verifiedPassRate: readNumber(row.verifiedPassRate),
@@ -472,10 +493,21 @@ export function readWorkBenchRoleRows(value: unknown): WorkBenchRoleRow[] {
       const row = readRecord(item);
       const modelId = readString(row.modelId);
       if (!modelId) return null;
+      const reasoningEffort: string = normalizeBenchmarkReasoningEffort(
+        row.reasoningEffort
+      );
+      const variantKey =
+        readString(row.variantKey) ??
+        benchmarkVariantKey(modelId, reasoningEffort);
       return {
         id: readString(row.id) ?? modelId,
         modelId,
-        displayName: readString(row.displayName) ?? modelId,
+        reasoningEffort,
+        variantKey,
+        displayName: variantDisplayName(
+          readString(row.displayName) ?? modelId,
+          reasoningEffort
+        ),
         attempts: readNumber(row.attempts) ?? 0,
         passed: readNumber(row.passed) ?? 0,
         verifiedPassRate: readNumber(row.verifiedPassRate),
@@ -486,6 +518,13 @@ export function readWorkBenchRoleRows(value: unknown): WorkBenchRoleRow[] {
       };
     })
     .filter((row): row is WorkBenchRoleRow => row !== null);
+}
+
+function variantDisplayName(displayName: string, effort: unknown): string {
+  const suffix = benchmarkVariantLabel("", effort);
+  return displayName.endsWith(suffix)
+    ? displayName
+    : benchmarkVariantLabel(displayName, effort);
 }
 
 export function readTeamIqComboMatrixRows(certified: unknown): TeamIqComboMatrixRow[] {
@@ -517,6 +556,11 @@ export function readTeamIqComboMatrixRow(value: unknown): TeamIqComboMatrixRow |
   const modelIds = readArray(row.modelIds).filter(
     (item): item is string => typeof item === "string" && item.length > 0
   );
+  const storedVariantKeys = readStringList(row.modelVariantKeys);
+  const modelVariantKeys =
+    storedVariantKeys.length > 0
+      ? storedVariantKeys
+      : modelIds.map((modelId) => benchmarkVariantKey(modelId, "default"));
   return {
     id,
     teamCompositionId,
@@ -524,6 +568,7 @@ export function readTeamIqComboMatrixRow(value: unknown): TeamIqComboMatrixRow |
     comboHash,
     track: readBenchmarkTrack(track) ?? "teamiq",
     modelIds,
+    modelVariantKeys,
     isSolo: row.isSolo === true || recommendationLabel === "solo_baseline",
     attempts: readNumber(row.attempts) ?? 0,
     verifiedQuality: readNumber(row.verifiedQuality) ?? 0,

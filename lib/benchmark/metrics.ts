@@ -35,6 +35,11 @@ import { MIN_CONFIDENT_ATTEMPTS } from "@/lib/benchmark/teamiq/recommendations";
 import { sortRowsByTeamLift } from "@/lib/benchmark/certified/team-lift";
 import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
 import { partitionBenchmarkCases } from "@/lib/benchmark/build-cases";
+import {
+  benchmarkVariantKey,
+  benchmarkVariantLabel,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 
 const EVIDENCE_PER_MODEL_CAP = 50;
 
@@ -524,6 +529,8 @@ function buildWorkBenchRoleLeaderboards(
     {
       role: Role;
       modelId: string;
+      reasoningEffort: string;
+      variantKey: string;
       displayName: string;
       attempts: number;
       passed: number;
@@ -540,15 +547,24 @@ function buildWorkBenchRoleLeaderboards(
     role: Role,
     modelId: string,
     displayName: string,
+    reasoningEffortValue: unknown,
     attempt: BenchmarkAttemptV2
   ) => {
-    const key = `${role}:${modelId}`;
+    const reasoningEffort =
+      normalizeBenchmarkReasoningEffort(reasoningEffortValue);
+    const variantKey = benchmarkVariantKey(modelId, reasoningEffort);
+    const key = `${role}:${variantKey}`;
     const row =
       rows.get(key) ??
       {
         role,
         modelId,
-        displayName,
+        reasoningEffort,
+        variantKey,
+        displayName: benchmarkVariantLabel(
+          displayName || displayModelName(modelId),
+          reasoningEffort
+        ),
         attempts: 0,
         passed: 0,
         verifiedQualitySum: 0,
@@ -587,9 +603,21 @@ function buildWorkBenchRoleLeaderboards(
         role.role === "worker" ||
         role.role === "reviewer"
       ) {
-        addRoleAttempt(role.role, role.modelId, role.displayName, attempt);
+        addRoleAttempt(
+          role.role,
+          role.modelId,
+          role.displayName,
+          role.reasoningEffort,
+          attempt
+        );
       } else if (role.role === "single") {
-        addRoleAttempt("worker", role.modelId, role.displayName, attempt);
+        addRoleAttempt(
+          "worker",
+          role.modelId,
+          role.displayName,
+          role.reasoningEffort,
+          attempt
+        );
       }
     }
   }
@@ -601,10 +629,12 @@ function buildWorkBenchRoleLeaderboards(
   };
   for (const row of rows.values()) {
     byRole[row.role].push({
-      id: `${row.role}:${row.modelId}`,
+      id: `${row.role}:${row.variantKey}`,
       role: row.role,
       modelId: row.modelId,
-      displayName: row.displayName || displayModelName(row.modelId),
+      reasoningEffort: row.reasoningEffort,
+      variantKey: row.variantKey,
+      displayName: row.displayName,
       attempts: row.attempts,
       passed: row.passed,
       verifiedPassRate: rate(row.passed, row.attempts),
@@ -1022,6 +1052,8 @@ export interface ModelIntelligenceTrackBreakdown {
 
 export interface ModelIntelligenceRow {
   modelId: string;
+  reasoningEffort: string;
+  variantKey: string;
   displayName: string;
   /** Total solo scored attempts for this model across all tracks (post-dedupe). */
   attempts: number;
@@ -1089,6 +1121,8 @@ export function buildModelIntelligenceRows(
   }
   interface ModelAcc {
     modelId: string;
+    reasoningEffort: string;
+    variantKey: string;
     displayName: string;
     attempts: number;
     passed: number;
@@ -1101,15 +1135,24 @@ export function buildModelIntelligenceRows(
     const role = team?.roles[0];
     const modelId = role?.modelId;
     if (!modelId) continue;
+    const reasoningEffort = normalizeBenchmarkReasoningEffort(
+      role.reasoningEffort
+    );
+    const variantKey = benchmarkVariantKey(modelId, reasoningEffort);
     const track = (attempt.track ??
       caseById.get(attempt.caseId)?.track ??
       "workbench") as BenchmarkTrack;
 
     const model =
-      models.get(modelId) ??
+      models.get(variantKey) ??
       ({
         modelId,
-        displayName: role?.displayName || displayModelName(modelId),
+        reasoningEffort,
+        variantKey,
+        displayName: benchmarkVariantLabel(
+          role?.displayName || displayModelName(modelId),
+          reasoningEffort
+        ),
         attempts: 0,
         passed: 0,
         tracks: new Map(),
@@ -1126,7 +1169,7 @@ export function buildModelIntelligenceRows(
     trackAcc.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
 
     model.tracks.set(track, trackAcc);
-    models.set(modelId, model);
+    models.set(variantKey, model);
   }
 
   const rows: ModelIntelligenceRow[] = Array.from(models.values()).map(
@@ -1156,6 +1199,8 @@ export function buildModelIntelligenceRows(
           : 0;
       return {
         modelId: model.modelId,
+        reasoningEffort: model.reasoningEffort,
+        variantKey: model.variantKey,
         displayName: model.displayName,
         attempts: model.attempts,
         passed: model.passed,

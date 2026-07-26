@@ -104,6 +104,7 @@ export interface CertifiedRunScore {
   comboHash: string;
   displayName: string;
   modelIds: string[];
+  modelVariantKeys: string[];
   /** True for multi-role compositions, even when every role uses one model. */
   isTeam: boolean;
   tracks: string[];
@@ -185,6 +186,8 @@ export interface WorkBenchRoleLeaderboardRow {
   id: string;
   role: "architect" | "worker" | "reviewer";
   modelId: string;
+  reasoningEffort: string;
+  variantKey: string;
   displayName: string;
   attempts: number;
   passed: number;
@@ -267,6 +270,8 @@ export interface CertifiedBenchmarkDashboardData {
    */
   modelIntelligence: Array<{
     modelId: string;
+    reasoningEffort: string;
+    variantKey: string;
     displayName: string;
     attempts: number;
     passed: number;

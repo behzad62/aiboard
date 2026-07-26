@@ -239,7 +239,7 @@ const ctx = createCertifiedRunContext({
 }
 
 {
-  // Only output reported -> reported source, input estimated per-side.
+  // Only output reported -> partial source, input estimated per-side.
   const result = await callCertifiedModel({
     model,
     system: "sys",
@@ -259,7 +259,7 @@ const ctx = createCertifiedRunContext({
   });
   check(
     "partial usage keeps reported output and estimates input",
-    result.usageSource === "reported" &&
+    result.usageSource === "partial" &&
       result.outputTokens === 500 &&
       result.inputTokens > 0 &&
       result.inputTokens !== 500,

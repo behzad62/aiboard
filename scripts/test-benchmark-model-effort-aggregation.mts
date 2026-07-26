@@ -1,0 +1,216 @@
+import assert from "node:assert/strict";
+import {
+  buildCertifiedBenchmarkDashboardData,
+  buildModelIntelligenceRows,
+} from "../lib/benchmark/metrics";
+import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
+import {
+  readModelIntelligence,
+  readWorkBenchRoleRows,
+} from "../lib/benchmark/certified/dashboard-selectors";
+import type {
+  BenchmarkAttemptV2,
+  BenchmarkTeamComposition,
+} from "../lib/benchmark/types";
+
+const createdAt = "2026-07-26T00:00:00.000Z";
+const modelId = "openai:model";
+
+function solo(
+  id: string,
+  reasoningEffort?: BenchmarkTeamComposition["roles"][number]["reasoningEffort"]
+): BenchmarkTeamComposition {
+  return {
+    id,
+    name: "Model solo",
+    comboHash: id,
+    strategy: "solo",
+    roles: [{
+      role: "single",
+      slot: "single",
+      modelId,
+      providerId: "openai",
+      displayName: "Model",
+      reasoningEffort,
+      temperature: 0,
+    }],
+  };
+}
+
+function attempt(
+  id: string,
+  teamCompositionId: string,
+  verifiedQuality: number,
+  track: BenchmarkAttemptV2["track"] = "gameiq"
+): BenchmarkAttemptV2 {
+  return {
+    id,
+    runId: `run-${id}`,
+    caseId: `case-${id}`,
+    teamCompositionId,
+    mode: "certified",
+    track,
+    harnessProfile: track === "workbench" ? "local-runner" : "raw-single-model",
+    status: "passed",
+    startedAt: createdAt,
+    completedAt: createdAt,
+    verifiedQuality,
+    jobSuccessScore: verifiedQuality * 100,
+    efficiencyScore: verifiedQuality * 100,
+    costUsd: null,
+    inputTokens: 10,
+    outputTokens: 5,
+    modelCalls: 1,
+    toolCalls: 0,
+    durationMs: 1_000,
+    artifactIds: [],
+    traceIds: [],
+    failureIds: [],
+    harnessVersion: "test-harness",
+    promptSetVersion: "test-prompts",
+    scoringVersion: "test-scoring",
+  };
+}
+
+const low = solo("solo-low", "low");
+const high = solo("solo-high", "high");
+const legacy = solo("solo-legacy");
+const attempts = [
+  attempt("low", low.id, 0.4),
+  attempt("high", high.id, 0.9),
+  attempt("legacy", legacy.id, 0.6),
+];
+
+const aggregateRows = aggregateCertifiedRunScores({
+  attempts,
+  teamCompositions: [low, high, legacy],
+});
+assert.equal(aggregateRows.length, 3);
+assert.deepEqual(
+  aggregateRows.map((row) => row.displayName).sort(),
+  ["Model · Default", "Model · High", "Model · Low"]
+);
+assert.deepEqual(
+  aggregateRows.map((row) => row.teamName).sort(),
+  ["Model · Default", "Model · High", "Model · Low"]
+);
+assert.deepEqual(
+  aggregateRows.map((row) => row.modelVariantKeys[0]).sort(),
+  ["openai:model\u0000default", "openai:model\u0000high", "openai:model\u0000low"]
+);
+
+const highTeam: BenchmarkTeamComposition = {
+  id: "team-high",
+  name: "High effort team",
+  comboHash: "team-high",
+  strategy: "parallel",
+  roles: [
+    {
+      ...high.roles[0],
+      role: "architect",
+      slot: "architect",
+    },
+    {
+      ...high.roles[0],
+      role: "worker",
+      slot: "worker",
+    },
+  ],
+};
+const teamAttempt = attempt("team-high", highTeam.id, 0.8);
+const lowBaselineAttempt = attempt("lift-low", low.id, 0.9);
+const highBaselineAttempt = attempt("lift-high", high.id, 0.6);
+const effortLiftRows = aggregateCertifiedRunScores({
+  attempts: [lowBaselineAttempt, highBaselineAttempt, teamAttempt],
+  teamCompositions: [low, high, highTeam],
+});
+assert.equal(
+  effortLiftRows.find((row) => row.teamCompositionId === highTeam.id)?.teamLift,
+  20
+);
+const missingEffortLiftRows = aggregateCertifiedRunScores({
+  attempts: [lowBaselineAttempt, teamAttempt],
+  teamCompositions: [low, highTeam],
+});
+assert.equal(
+  missingEffortLiftRows.find((row) => row.teamCompositionId === highTeam.id)?.teamLift,
+  null
+);
+
+const intelligenceRows = buildModelIntelligenceRows({
+  attempts,
+  teamCompositions: [low, high, legacy],
+});
+assert.equal(intelligenceRows.length, 3);
+assert.deepEqual(
+  intelligenceRows.map((row) => ({
+    variantKey: row.variantKey,
+    reasoningEffort: row.reasoningEffort,
+    displayName: row.displayName,
+  })).sort((a, b) => a.variantKey.localeCompare(b.variantKey)),
+  [
+    { variantKey: "openai:model\u0000default", reasoningEffort: "default", displayName: "Model · Default" },
+    { variantKey: "openai:model\u0000high", reasoningEffort: "high", displayName: "Model · High" },
+    { variantKey: "openai:model\u0000low", reasoningEffort: "low", displayName: "Model · Low" },
+  ]
+);
+
+const dashboard = buildCertifiedBenchmarkDashboardData({
+  caseV2: [],
+  attemptsV2: [
+    attempt("workbench-low", low.id, 0.4, "workbench"),
+    attempt("workbench-high", high.id, 0.9, "workbench"),
+  ],
+  verifierResults: [],
+  teamCompositions: [low, high],
+  harnessCertifications: [],
+});
+assert.deepEqual(
+  dashboard.workBenchRoleLeaderboards.worker.map((row) => ({
+    variantKey: row.variantKey,
+    reasoningEffort: row.reasoningEffort,
+    displayName: row.displayName,
+  })).sort((a, b) => a.variantKey.localeCompare(b.variantKey)),
+  [
+    { variantKey: "openai:model\u0000high", reasoningEffort: "high", displayName: "Model · High" },
+    { variantKey: "openai:model\u0000low", reasoningEffort: "low", displayName: "Model · Low" },
+  ]
+);
+
+assert.deepEqual(
+  readModelIntelligence({
+    modelIntelligence: [{ modelId, displayName: "Model", attempts: 1, tracks: [] }],
+  })[0],
+  {
+    modelId,
+    variantKey: "openai:model\u0000default",
+    reasoningEffort: "default",
+    displayName: "Model · Default",
+    attempts: 1,
+    passed: 0,
+    verifiedPassRate: null,
+    combinedScore: 0,
+    trackCount: 0,
+    preliminary: false,
+    tracks: [],
+  }
+);
+assert.deepEqual(
+  readWorkBenchRoleRows([{ id: "worker:openai:model", modelId, displayName: "Model", attempts: 1 }])[0],
+  {
+    id: "worker:openai:model",
+    modelId,
+    variantKey: "openai:model\u0000default",
+    reasoningEffort: "default",
+    displayName: "Model · Default",
+    attempts: 1,
+    passed: 0,
+    verifiedPassRate: null,
+    verifiedQuality: null,
+    efficiencyScore: null,
+    averageCostUsd: null,
+    averageDurationMs: null,
+  }
+);
+
+console.log("PASS benchmark model effort aggregation");

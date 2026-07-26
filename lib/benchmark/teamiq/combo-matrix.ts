@@ -6,6 +6,7 @@ import { computeParetoFrontier } from "@/lib/benchmark/scoring/pareto";
 import type { TeamLiftLabel } from "@/lib/benchmark/scoring/types";
 import {
   getTeamCompositionModelIds,
+  getTeamCompositionModelVariantKeys,
   isSoloTeamComposition,
 } from "./compositions";
 import { linkTeamLiftBaselines } from "./baselines";
@@ -33,6 +34,7 @@ export interface TeamIqComboMatrixRow {
   comboHash: string;
   track: BenchmarkAttemptV2["track"];
   modelIds: string[];
+  modelVariantKeys: string[];
   isSolo: boolean;
   attempts: number;
   verifiedQuality: number;
@@ -54,6 +56,7 @@ interface MutableComboRow {
   comboHash: string;
   track: BenchmarkAttemptV2["track"];
   modelIds: string[];
+  modelVariantKeys: string[];
   attempts: number;
   verifiedQualitySum: number;
   jobSuccessScoreSum: number;
@@ -161,6 +164,7 @@ function groupFor(
     comboHash: team?.comboHash ?? attempt.teamCompositionId,
     track: attempt.track,
     modelIds,
+    modelVariantKeys: getTeamCompositionModelVariantKeys(team),
     attempts: 0,
     verifiedQualitySum: 0,
     jobSuccessScoreSum: 0,
@@ -186,6 +190,7 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
     comboHash: group.comboHash,
     track: group.track,
     modelIds: group.modelIds,
+    modelVariantKeys: group.modelVariantKeys,
     isSolo: group.isSolo,
     attempts: group.attempts,
     verifiedQuality: average(group.verifiedQualitySum, group.attempts, 4),

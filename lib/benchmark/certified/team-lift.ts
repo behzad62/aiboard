@@ -21,6 +21,7 @@ import { scoreTeamLift } from "@/lib/benchmark/scoring/teamiq";
  */
 export interface TeamLiftRowLike {
   modelIds: string[];
+  modelVariantKeys?: string[];
   jobSuccessScore: number;
   averageCostUsd?: number | null;
   costUsd?: number | null;
@@ -39,10 +40,16 @@ export interface TeamLiftRowLike {
  */
 export function computeTeamLift(
   teamRow: TeamLiftRowLike,
-  soloRowsByModel: Map<string, TeamLiftRowLike>
+  soloRowsByMemberKey: Map<string, TeamLiftRowLike>
 ): TeamLiftScore | null {
-  if (teamRow.modelIds.length === 0) return null;
-  const soloRows = teamRow.modelIds.map((modelId) => soloRowsByModel.get(modelId));
+  const memberKeys =
+    teamRow.modelVariantKeys?.length
+      ? teamRow.modelVariantKeys
+      : teamRow.modelIds;
+  if (memberKeys.length === 0) return null;
+  const soloRows = memberKeys.map((memberKey) =>
+    soloRowsByMemberKey.get(memberKey)
+  );
   if (soloRows.some((row) => !row)) return null;
   const solos = soloRows as TeamLiftRowLike[];
   const bestSolo = solos.reduce((best, solo) =>

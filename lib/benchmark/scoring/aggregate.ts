@@ -4,6 +4,10 @@ import type {
   BenchmarkTeamComposition,
 } from "@/lib/benchmark/types";
 import { computeTeamLift } from "@/lib/benchmark/certified/team-lift";
+import {
+  benchmarkVariantKey,
+  benchmarkVariantLabel,
+} from "@/lib/benchmark/model-effort";
 import type { CertifiedAggregateInput, CertifiedRunScore } from "./types";
 import { finiteOrNull, round } from "./types";
 
@@ -151,6 +155,7 @@ type TeamLike = BenchmarkTeamComposition & {
     displayName?: string;
     role?: string;
     slot?: string;
+    reasoningEffort?: unknown;
   }>;
 };
 
@@ -161,6 +166,7 @@ interface MutableCertifiedRunScore {
   comboHash: string;
   displayName: string;
   modelIds: string[];
+  modelVariantKeys: string[];
   isTeam: boolean;
   tracks: Set<string>;
   // Per-track quality accumulators feeding the equal-weighted overall score.
@@ -408,20 +414,32 @@ function groupFor(
 
   const roles = team?.roles ?? [];
   const modelIds = uniqueStrings(roles.map((role) => role.modelId));
+  const modelVariantKeys = uniqueStrings(
+    roles.map((role) =>
+      role.modelId
+        ? benchmarkVariantKey(role.modelId, role.reasoningEffort)
+        : undefined
+    )
+  );
   const displayNames = uniqueStrings(
     roles.map((role) => role.displayName ?? role.modelId)
   );
+  const baseDisplayName =
+    displayNames.length > 0 ? displayNames.join(" + ") : teamId;
+  const isTeam = roles.length > 1;
   const displayName =
-    team?.name ??
-    (displayNames.length > 0 ? displayNames.join(" + ") : teamId);
+    !isTeam && roles[0]
+      ? benchmarkVariantLabel(baseDisplayName, roles[0].reasoningEffort)
+      : (team?.name ?? baseDisplayName);
   const created: MutableCertifiedRunScore = {
     id: team?.comboHash ?? teamId,
     teamCompositionId: teamId,
-    teamName: team?.name ?? displayName,
+    teamName: isTeam ? (team?.name ?? displayName) : displayName,
     comboHash: team?.comboHash ?? teamId,
     displayName,
     modelIds,
-    isTeam: roles.length > 1,
+    modelVariantKeys,
+    isTeam,
     tracks: new Set(),
     trackQuality: new Map(),
     caseIds: new Set(),
@@ -501,6 +519,7 @@ function finalizeGroup(
     comboHash: group.comboHash,
     displayName: group.displayName,
     modelIds: group.modelIds,
+    modelVariantKeys: group.modelVariantKeys,
     isTeam: group.isTeam,
     tracks: Array.from(group.tracks).sort(),
     caseTitles: resolveCaseTitles(group.caseIdOrder, caseById),
@@ -541,19 +560,19 @@ function finalizeGroup(
 }
 
 function applyTeamLift(rows: CertifiedRunScore[]): void {
-  const soloScoreByModel = new Map<string, CertifiedRunScore>();
+  const soloScoreByVariant = new Map<string, CertifiedRunScore>();
   for (const row of rows) {
-    if (row.isTeam || row.modelIds.length !== 1) continue;
-    const modelId = row.modelIds[0];
-    const existing = soloScoreByModel.get(modelId);
+    if (row.isTeam || row.modelVariantKeys.length !== 1) continue;
+    const variantKey = row.modelVariantKeys[0];
+    const existing = soloScoreByVariant.get(variantKey);
     if (!existing || row.jobSuccessScore > existing.jobSuccessScore) {
-      soloScoreByModel.set(modelId, row);
+      soloScoreByVariant.set(variantKey, row);
     }
   }
 
   for (const row of rows) {
     if (!row.isTeam) continue;
-    const lift = computeTeamLift(row, soloScoreByModel);
+    const lift = computeTeamLift(row, soloScoreByVariant);
     if (!lift) continue;
     row.bestSoloScore = lift.bestSoloScore;
     row.teamLift = lift.teamLift;

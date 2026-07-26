@@ -261,6 +261,93 @@ check(
   missingBaselineLift === null,
   missingBaselineLift
 );
+
+const effortTeamRow: TeamLiftRowLike = {
+  modelIds: ["openai:gpt-effort"],
+  modelVariantKeys: ["openai:gpt-effort\u0000high"],
+  jobSuccessScore: 80,
+};
+const effortSoloRows = new Map<string, TeamLiftRowLike>([
+  [
+    "openai:gpt-effort\u0000low",
+    {
+      modelIds: ["openai:gpt-effort"],
+      modelVariantKeys: ["openai:gpt-effort\u0000low"],
+      jobSuccessScore: 90,
+    },
+  ],
+  [
+    "openai:gpt-effort\u0000high",
+    {
+      modelIds: ["openai:gpt-effort"],
+      modelVariantKeys: ["openai:gpt-effort\u0000high"],
+      jobSuccessScore: 60,
+    },
+  ],
+]);
+const matchingEffortLift = computeTeamLift(effortTeamRow, effortSoloRows);
+check(
+  "team lift uses only the solo baseline with the same effort",
+  matchingEffortLift?.bestSoloScore === 60 && matchingEffortLift.teamLift === 20,
+  matchingEffortLift
+);
+effortSoloRows.delete("openai:gpt-effort\u0000high");
+check(
+  "team lift is null when the matching effort baseline is missing",
+  computeTeamLift(effortTeamRow, effortSoloRows) === null
+);
+
+const lowEffortSolo = deriveSoloTeamComposition({
+  modelId: "openai:gpt-effort",
+  displayName: "GPT Effort",
+  reasoningEffort: "low",
+});
+const highEffortSolo = deriveSoloTeamComposition({
+  modelId: "openai:gpt-effort",
+  displayName: "GPT Effort",
+  reasoningEffort: "high",
+});
+const highEffortTeam = deriveTeamComposition({
+  name: "High effort pair",
+  strategy: "parallel",
+  roles: [
+    {
+      ...highEffortSolo.roles[0],
+      role: "architect",
+      slot: "architect",
+    },
+    {
+      ...highEffortSolo.roles[0],
+      role: "worker",
+      slot: "worker",
+    },
+  ],
+});
+const effortAttempts = [
+  teamIqAttempt("effort-low", lowEffortSolo.id, 90, 1, 1_000),
+  teamIqAttempt("effort-high", highEffortSolo.id, 60, 1, 1_000),
+  teamIqAttempt("effort-team", highEffortTeam.id, 80, 1, 1_000),
+];
+const effortComboRows = buildTeamIqComboMatrixRows({
+  attempts: effortAttempts,
+  teamCompositions: [lowEffortSolo, highEffortSolo, highEffortTeam],
+  track: "teamiq",
+});
+check(
+  "per-attempt team lift links roles to same-effort solo evidence",
+  effortComboRows[0]?.teamLift === 20,
+  effortComboRows
+);
+const missingEffortComboRows = buildTeamIqComboMatrixRows({
+  attempts: [effortAttempts[0], effortAttempts[2]],
+  teamCompositions: [lowEffortSolo, highEffortTeam],
+  track: "teamiq",
+});
+check(
+  "per-attempt team lift does not fall back to another effort",
+  missingEffortComboRows[0]?.teamLift === null,
+  missingEffortComboRows
+);
 check(
   "null lift renders as a dash (never n/a, never 0, never blank)",
   formatLift(null) === "–",
@@ -281,6 +368,9 @@ function comboRow(overrides: Partial<TeamIqComboMatrixRow>): TeamIqComboMatrixRo
     comboHash: overrides.comboHash ?? "hash",
     track: overrides.track ?? "teamiq",
     modelIds: overrides.modelIds ?? ["model-a", "model-b"],
+    modelVariantKeys:
+      overrides.modelVariantKeys ??
+      ["model-a\u0000default", "model-b\u0000default"],
     isSolo: false,
     attempts: overrides.attempts ?? 3,
     verifiedQuality: overrides.verifiedQuality ?? 0.5,

@@ -5,7 +5,7 @@ import type {
 import { scoreTeamLift } from "@/lib/benchmark/scoring/teamiq";
 import type { TeamLiftScore } from "@/lib/benchmark/scoring/types";
 import {
-  getTeamCompositionModelIds,
+  getTeamCompositionModelVariantKeys,
   isSoloTeamComposition,
 } from "./compositions";
 
@@ -26,7 +26,7 @@ export interface TeamIqBaselineLink {
 
 interface SoloCandidate {
   attempt: BenchmarkAttemptV2;
-  modelId: string;
+  variantKey: string;
 }
 
 export function linkTeamLiftBaselines(
@@ -40,8 +40,8 @@ export function linkTeamLiftBaselines(
     .map((attempt): SoloCandidate | null => {
       const team = teamsById.get(attempt.teamCompositionId);
       if (!isSoloTeamComposition(team)) return null;
-      const modelId = getTeamCompositionModelIds(team)[0];
-      return modelId ? { attempt, modelId } : null;
+      const variantKey = getTeamCompositionModelVariantKeys(team)[0];
+      return variantKey ? { attempt, variantKey } : null;
     })
     .filter((candidate): candidate is SoloCandidate => candidate !== null);
 
@@ -49,17 +49,17 @@ export function linkTeamLiftBaselines(
   for (const teamAttempt of input.teamAttempts) {
     if (!matchesTrack(teamAttempt, input.track)) continue;
     const teamComposition = teamsById.get(teamAttempt.teamCompositionId);
-    const modelIds = getTeamCompositionModelIds(teamComposition);
-    if (!teamComposition || isSoloTeamComposition(teamComposition) || modelIds.length === 0) {
+    const variantKeys = getTeamCompositionModelVariantKeys(teamComposition);
+    if (!teamComposition || isSoloTeamComposition(teamComposition) || variantKeys.length === 0) {
       continue;
     }
 
-    const memberSoloAttempts = modelIds
-      .map((modelId) =>
-        bestSoloAttemptForModel(soloCandidates, modelId, teamAttempt)
+    const memberSoloAttempts = variantKeys
+      .map((variantKey) =>
+        bestSoloAttemptForVariant(soloCandidates, variantKey, teamAttempt)
       )
       .filter((attempt): attempt is BenchmarkAttemptV2 => attempt !== null);
-    if (memberSoloAttempts.length !== modelIds.length) continue;
+    if (memberSoloAttempts.length !== variantKeys.length) continue;
 
     const bestSoloAttempt = memberSoloAttempts.reduce((best, attempt) =>
       scoreForAttempt(attempt) > scoreForAttempt(best) ? attempt : best
@@ -85,14 +85,14 @@ export function linkTeamLiftBaselines(
   return links;
 }
 
-function bestSoloAttemptForModel(
+function bestSoloAttemptForVariant(
   candidates: SoloCandidate[],
-  modelId: string,
+  variantKey: string,
   teamAttempt: BenchmarkAttemptV2
 ): BenchmarkAttemptV2 | null {
   const matches = candidates.filter(
     (candidate) =>
-      candidate.modelId === modelId &&
+      candidate.variantKey === variantKey &&
       candidate.attempt.caseId === teamAttempt.caseId &&
       candidate.attempt.track === teamAttempt.track &&
       candidate.attempt.harnessVersion === teamAttempt.harnessVersion &&
