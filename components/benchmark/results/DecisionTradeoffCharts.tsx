@@ -40,7 +40,7 @@ export function DecisionTradeoffCharts({ rows }: { rows: DecisionRow[] }) {
   const tokenPoints = projectDecisionTradeoffPoints(rows, "tokens");
   const timePoints = projectDecisionTradeoffPoints(rows, "time");
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
+    <div className="grid min-w-0 gap-4 xl:grid-cols-2">
       <TradeoffChart
         title="Overall index vs tokens per successful case"
         description="Closer to the upper-left means a stronger cross-track overall index with less token use."
@@ -78,7 +78,7 @@ function TradeoffChart({
 }) {
   const id = title.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-");
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle id={`${id}-title`} className="text-base">{title}</CardTitle>
         <p id={`${id}-description`} className="text-xs leading-relaxed text-muted-foreground">
@@ -171,7 +171,7 @@ function TradeoffChart({
               <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
                 Accessible data
               </summary>
-              <div className="overflow-x-auto border-t">
+              <div className="min-w-0 overflow-x-auto border-t">
                 <table className="w-full min-w-96 text-xs">
                   <thead>
                     <tr className="text-left text-muted-foreground">

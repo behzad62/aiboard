@@ -741,6 +741,13 @@ check(
   longLegendMarkup
 );
 check(
+  "trade-off cards contain accessible-data tables within narrow grid tracks",
+  decisionChartMarkup.includes('class="grid min-w-0 gap-4 xl:grid-cols-2"') &&
+    decisionChartMarkup.includes('class="rounded-lg border bg-card text-card-foreground shadow-sm min-w-0"') &&
+    decisionChartMarkup.includes('class="min-w-0 overflow-x-auto border-t"'),
+  decisionChartMarkup
+);
+check(
   "trade-off charts retain accessible data values",
   decisionChartMarkup.includes("84.0") &&
     decisionChartMarkup.includes("77.0") &&
