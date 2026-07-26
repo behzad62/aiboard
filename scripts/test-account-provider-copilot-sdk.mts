@@ -1,5 +1,7 @@
 /** Copilot SDK adapter contract checks (run: npx tsx scripts/test-account-provider-copilot-sdk.mts) */
 
+import { supportedBenchmarkReasoningEfforts } from "../lib/benchmark/model-effort";
+
 const sdk = await import("../lib/account-provider-copilot-sdk.mjs") as typeof import("../lib/account-provider-copilot-sdk.mjs");
 
 let failed = 0;
@@ -21,6 +23,24 @@ const config = sdk.buildCopilotSdkSessionConfig({
 
 check("SDK session selects the requested Copilot Gemini model", config.model === "gemini-3.5-flash", config);
 check("SDK session maps max reasoning to xhigh", config.reasoningEffort === "xhigh", config);
+const supportedCopilotEfforts = supportedBenchmarkReasoningEfforts({
+  modelId: "github-copilot:gpt-5.4",
+  providerId: "github-copilot",
+});
+const copilotNativeConfigs = supportedCopilotEfforts.map((reasoningEffort) => {
+  const nativeConfig = sdk.buildCopilotSdkSessionConfig({
+    model: "gpt-5.4",
+    reasoningEffort,
+  });
+  return JSON.stringify({
+    reasoningEffort: nativeConfig.reasoningEffort ?? null,
+  });
+});
+check(
+  "every advertised Copilot effort produces a distinct SDK reasoning config",
+  new Set(copilotNativeConfigs).size === supportedCopilotEfforts.length,
+  { supportedCopilotEfforts, copilotNativeConfigs }
+);
 check(
   "SDK session explicitly enables Bing-backed web tools",
   JSON.stringify(config.availableTools?.toArray?.() ?? config.availableTools) ===

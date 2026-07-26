@@ -123,8 +123,8 @@ export function supportedBenchmarkReasoningEfforts(
   }
   if (providerId === "github-copilot") {
     return providerModel.trim().toLowerCase() === "gemini-3.5-flash"
-      ? googleEfforts(providerModel)
-      : ["default", "none", "low", "medium", "high", "xhigh"];
+      ? googleEfforts(providerModel).filter((effort) => effort !== "none")
+      : ["default", "low", "medium", "high", "xhigh"];
   }
   if (providerId === "openrouter") {
     const normalized = providerModel.trim().toLowerCase();

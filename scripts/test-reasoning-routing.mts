@@ -193,6 +193,12 @@ check(
   geminiThinkingConfig("gemini-3.6-flash", "low", 4096)
 );
 check(
+  "Gemini 3.6 xhigh falls back to its highest supported thinking level",
+  json(geminiThinkingConfig("gemini-3.6-flash", "xhigh", 4096)) ===
+    json({ thinkingLevel: "HIGH" }),
+  geminiThinkingConfig("gemini-3.6-flash", "xhigh", 4096)
+);
+check(
   "Gemini 3.6 max maps to high thinking",
   json(geminiThinkingConfig("gemini-3.6-flash", "max", 4096)) ===
     json({ thinkingLevel: "HIGH" }),

@@ -38,6 +38,20 @@ assert.equal(
   ),
   "default"
 );
+assert.deepEqual(
+  supportedBenchmarkReasoningEfforts({
+    modelId: "github-copilot:gpt-5.4",
+    providerId: "github-copilot",
+  }),
+  ["default", "low", "medium", "high", "xhigh"]
+);
+assert.deepEqual(
+  supportedBenchmarkReasoningEfforts({
+    modelId: "github-copilot:gemini-3.5-flash",
+    providerId: "github-copilot",
+  }),
+  ["default", "low", "medium", "high"]
+);
 
 const effortMap: BenchmarkModelEffortMap = {
   "openai:gpt-5.6-sol": "max",
