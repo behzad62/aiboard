@@ -235,6 +235,64 @@ try {
       effortRequest
     );
   }
+  await copilotChat({
+    runtimeMode: "discussion",
+    stream: true,
+    model: "gemini-3.5-flash",
+    messages: [{ role: "user", content: "Use the provider default." }],
+    structuredOutput,
+    reasoningEffort: "default",
+  });
+  const defaultGeminiRequest = capturedRequests.at(-1);
+  check(
+    "structured Copilot Gemini omits default reasoning effort",
+    !Object.prototype.hasOwnProperty.call(
+      defaultGeminiRequest?.body ?? {},
+      "reasoning_effort"
+    ),
+    defaultGeminiRequest
+  );
+
+  await copilotChat({
+    runtimeMode: "discussion",
+    stream: true,
+    model: "claude-sonnet-4.5",
+    messages: [{ role: "user", content: "Use high reasoning." }],
+    structuredOutput,
+    reasoningEffort: "high",
+  });
+  const claudeRequest = capturedRequests.at(-1);
+  check(
+    "structured Copilot Claude chat-completions omits reasoning effort",
+    String(claudeRequest?.url).includes("chat/completions") &&
+      !Object.prototype.hasOwnProperty.call(
+        claudeRequest?.body ?? {},
+        "reasoning_effort"
+      ) &&
+      !Object.prototype.hasOwnProperty.call(
+        claudeRequest?.body ?? {},
+        "reasoning"
+      ),
+    claudeRequest
+  );
+
+  await copilotChat({
+    runtimeMode: "discussion",
+    stream: true,
+    model: "unsupported-chat-model",
+    messages: [{ role: "user", content: "Use high reasoning." }],
+    structuredOutput,
+    reasoningEffort: "high",
+  });
+  const unsupportedRequest = capturedRequests.at(-1);
+  check(
+    "structured Copilot unsupported chat-completions model omits reasoning effort",
+    !Object.prototype.hasOwnProperty.call(
+      unsupportedRequest?.body ?? {},
+      "reasoning_effort"
+    ),
+    unsupportedRequest
+  );
 
   check("fenced ```json reply is stripped to bare JSON", chatResult.data.content === '{"answer":42}', chatResult);
 
