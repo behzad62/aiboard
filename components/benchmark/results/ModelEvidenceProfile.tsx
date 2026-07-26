@@ -42,12 +42,12 @@ export function ModelEvidenceProfile({
       tabIndex={-1}
       className="border-sky-500/30 bg-sky-500/[0.025] outline-none focus-visible:ring-2 focus-visible:ring-sky-500/50"
     >
-      <CardHeader className="flex-row items-start justify-between gap-4">
-        <div>
+      <CardHeader className="min-w-0 flex-row items-start justify-between gap-4">
+        <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-600 dark:text-sky-400">
             Evidence profile
           </p>
-          <CardTitle id={titleId} className="mt-1 text-xl">
+          <CardTitle id={titleId} className="mt-1 min-w-0 break-words text-xl">
             {row.label}
           </CardTitle>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -73,6 +73,7 @@ export function ModelEvidenceProfile({
           type="button"
           variant="ghost"
           size="sm"
+          className="shrink-0"
           onClick={onClose}
           aria-label="Close evidence profile"
         >
@@ -83,7 +84,7 @@ export function ModelEvidenceProfile({
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <ProfileMetric
             label="Overall index"
-            value={formatMaybeScore(row.overallScore ?? row.verifiedQuality)}
+            value={formatMaybeScore(row.overallScore)}
           />
           <ProfileMetric
             label="Verified pass rate"
@@ -127,9 +128,11 @@ export function ModelEvidenceProfile({
                     {formatMaybeScore(track.averageVerifiedQuality)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {track.verifiedPassRate == null
-                      ? `${track.passed ?? 0} of ${track.attempts} passed`
-                      : `${track.passed ?? Math.round(track.verifiedPassRate * track.attempts)} of ${track.attempts} passed · ${formatPercent(track.verifiedPassRate)}`}
+                    {track.passed == null && track.verifiedPassRate == null
+                      ? `${track.attempts} attempt${track.attempts === 1 ? "" : "s"} \u00b7 Pass evidence unavailable`
+                      : track.verifiedPassRate == null
+                        ? `${track.passed} of ${track.attempts} passed`
+                        : `${track.passed ?? Math.round(track.verifiedPassRate * track.attempts)} of ${track.attempts} passed · ${formatPercent(track.verifiedPassRate)}`}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
                     {budgetFailures} budget failure

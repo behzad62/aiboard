@@ -192,7 +192,7 @@ const responsiveRows: DecisionRow[] = [
     isTeam: true,
     modelIds: ["openai:architect", "openai:worker"],
     teamCompositionId: "responsive-team",
-    teamLift: null,
+    teamLift: 0,
     teamLiftTracks: [],
     trackBreakdown: [
       {
@@ -270,6 +270,9 @@ const responsiveLeaderboardMarkup = renderToStaticMarkup(
     onSelect: () => undefined
   })
 );
+const mobileListStart = responsiveLeaderboardMarkup.indexOf('<ul class="md:hidden">');
+const responsiveDesktopMarkup = responsiveLeaderboardMarkup.slice(0, mobileListStart);
+const responsiveMobileMarkup = responsiveLeaderboardMarkup.slice(mobileListStart);
 check(
   "leaderboard renders complementary desktop table and mobile evidence list",
   responsiveLeaderboardMarkup.includes('class="hidden overflow-x-auto md:block"') &&
@@ -279,7 +282,7 @@ check(
 );
 check(
   "mobile evidence cards preserve full identities and core decision metrics",
-  responsiveLeaderboardMarkup.includes(
+  responsiveMobileMarkup.includes(
     '<h3 class="break-words text-base font-semibold">A deliberately long solo model identity that must wrap in full</h3>'
   ) &&
     [
@@ -290,47 +293,63 @@ check(
       "Tokens/pass",
       "Time/pass",
       "View profile"
-    ].every((label) => responsiveLeaderboardMarkup.includes(label)),
-  responsiveLeaderboardMarkup
+    ].every((label) => responsiveMobileMarkup.includes(label)),
+  responsiveMobileMarkup
 );
 check(
-  "failed rows surface persisted and certified budget evidence",
-  responsiveLeaderboardMarkup.includes("Failure evidence") &&
-    responsiveLeaderboardMarkup.includes("Tool Reliability") &&
-    responsiveLeaderboardMarkup.includes("Required tool output was malformed.") &&
-    responsiveLeaderboardMarkup.includes("Certified budget exhausted before this track completed."),
-  responsiveLeaderboardMarkup
+  "mobile rows surface persisted and certified budget evidence",
+  responsiveMobileMarkup.includes("Failure evidence") &&
+    responsiveMobileMarkup.includes("Tool Reliability") &&
+    responsiveMobileMarkup.includes("Required tool output was malformed.") &&
+    responsiveMobileMarkup.includes("Certified budget exhausted before this track completed."),
+  responsiveMobileMarkup
 );
 check(
-  "team lift without comparable tracks stays unavailable and directional",
-  responsiveLeaderboardMarkup.includes("Not comparable") &&
-    responsiveLeaderboardMarkup.includes("Run the same track solo and as a team.") &&
-    !responsiveLeaderboardMarkup.includes("+0.0"),
-  responsiveLeaderboardMarkup
+  "numeric legacy team lift without comparison tracks is unavailable in both layouts",
+  responsiveDesktopMarkup.includes("Not comparable") &&
+    responsiveDesktopMarkup.includes("Run the same track solo and as a team.") &&
+    responsiveMobileMarkup.includes("Not comparable") &&
+    responsiveMobileMarkup.includes("Run the same track solo and as a team.") &&
+    !responsiveDesktopMarkup.includes("+0") &&
+    !responsiveMobileMarkup.includes("+0"),
+  { responsiveDesktopMarkup, responsiveMobileMarkup }
 );
 
+const collidingIdentityRows: DecisionRow[] = [
+  { ...responsiveRows[0], id: "a:b", label: "Colon identity" },
+  { ...responsiveRows[0], id: "a/b", label: "Slash identity" }
+];
 const selectedResponsiveMarkup = renderToStaticMarkup(
   React.createElement(DecisionLeaderboard, {
-    rows: [responsiveRows[0]],
-    totalRows: 1,
+    rows: collidingIdentityRows,
+    totalRows: collidingIdentityRows.length,
     sortKey: "overall",
     onSortChange: () => undefined,
-    selectedId: responsiveRows[0].id,
+    selectedId: collidingIdentityRows[0].id,
     onSelect: () => undefined
   })
 );
 check(
-  "responsive profile copies have distinct controls and region ids",
-  selectedResponsiveMarkup.includes('aria-controls="benchmark-evidence-desktop-responsive-solo"') &&
-    selectedResponsiveMarkup.includes('id="benchmark-evidence-desktop-responsive-solo"') &&
+  "arbitrary row identities have injective desktop and mobile profile ids",
+  selectedResponsiveMarkup.includes(
+    'aria-controls="benchmark-evidence-desktop-u-000061-00003a-000062"'
+  ) &&
     selectedResponsiveMarkup.includes(
-      'aria-controls="benchmark-evidence-mobile-responsive-solo"'
+      'aria-controls="benchmark-evidence-mobile-u-000061-00003a-000062"'
     ) &&
-    selectedResponsiveMarkup.includes('id="benchmark-evidence-mobile-responsive-solo"') &&
-    selectedResponsiveMarkup.match(/role="region"/g)?.length === 2 &&
-    selectedResponsiveMarkup.match(/id="benchmark-evidence-desktop-responsive-solo"/g)?.length ===
-      1 &&
-    selectedResponsiveMarkup.match(/id="benchmark-evidence-mobile-responsive-solo"/g)?.length === 1,
+    selectedResponsiveMarkup.includes(
+      'aria-controls="benchmark-evidence-desktop-u-000061-00002f-000062"'
+    ) &&
+    selectedResponsiveMarkup.includes(
+      'aria-controls="benchmark-evidence-mobile-u-000061-00002f-000062"'
+    ) &&
+    selectedResponsiveMarkup.includes(
+      'id="benchmark-evidence-desktop-u-000061-00003a-000062"'
+    ) &&
+    selectedResponsiveMarkup.includes(
+      'id="benchmark-evidence-mobile-u-000061-00003a-000062"'
+    ) &&
+    selectedResponsiveMarkup.match(/role="region"/g)?.length === 2,
   selectedResponsiveMarkup
 );
 
@@ -375,6 +394,62 @@ check(
     explanatoryProfileMarkup.includes("2 budget failures") &&
     explanatoryProfileMarkup.split("Certified model-call budget was exhausted.").length - 1 === 1,
   explanatoryProfileMarkup
+);
+
+const missingEvidenceProfileMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "missing-evidence-profile",
+    row: {
+      ...responsiveRows[0],
+      overallScore: null,
+      verifiedQuality: 0.91,
+      trackBreakdown: [
+        {
+          track: "gameiq",
+          attempts: 3,
+          passed: null,
+          verifiedPassRate: null,
+          averageVerifiedQuality: 0.91
+        }
+      ]
+    },
+    onClose: () => undefined
+  })
+);
+const overallIndexMetricStart = missingEvidenceProfileMarkup.indexOf(">Overall index<");
+const overallIndexMetricMarkup = missingEvidenceProfileMarkup.slice(
+  overallIndexMetricStart,
+  missingEvidenceProfileMarkup.indexOf("</div></div>", overallIndexMetricStart)
+);
+check(
+  "profile does not substitute verified quality for a missing overall index",
+  overallIndexMetricMarkup.includes("Unavailable") && !overallIndexMetricMarkup.includes("91"),
+  overallIndexMetricMarkup
+);
+check(
+  "track profile preserves unavailable pass evidence",
+  missingEvidenceProfileMarkup.includes("3 attempts \u00b7 Pass evidence unavailable") &&
+    !missingEvidenceProfileMarkup.includes("0 of 3 passed"),
+  missingEvidenceProfileMarkup
+);
+
+const unbrokenProfileIdentity = "model_" + "x".repeat(160);
+const unbrokenProfileMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "unbroken-profile",
+    row: { ...responsiveRows[0], label: unbrokenProfileIdentity },
+    onClose: () => undefined
+  })
+);
+const unbrokenTitlePosition = unbrokenProfileMarkup.indexOf(unbrokenProfileIdentity);
+const unbrokenTitleMarkup = unbrokenProfileMarkup.slice(
+  Math.max(0, unbrokenTitlePosition - 220),
+  unbrokenTitlePosition + unbrokenProfileIdentity.length
+);
+check(
+  "profile title constrains and wraps an unbroken identity",
+  unbrokenTitleMarkup.includes("min-w-0") && unbrokenTitleMarkup.includes("break-words"),
+  unbrokenTitleMarkup
 );
 
 const teamDecisionRow: DecisionRow = {

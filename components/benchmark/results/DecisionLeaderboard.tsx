@@ -313,7 +313,7 @@ export function DecisionLeaderboard({
 }
 
 function evidenceProfileId(row: DecisionRow, layout: "desktop" | "mobile"): string {
-  return `benchmark-evidence-${layout}-${row.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  return `benchmark-evidence-${layout}-${encodeRowIdentity(row.id)}`;
 }
 
 function profileTriggerKey(row: DecisionRow, layout: "desktop" | "mobile"): string {
@@ -356,7 +356,14 @@ function formatRankMetric(row: DecisionRow, sortKey: LeaderboardSortKey): string
 }
 
 function isTeamLiftUnavailable(row: DecisionRow): boolean {
-  return row.isTeam && row.teamLift == null;
+  return row.isTeam && (row.teamLift == null || row.teamLiftTracks.length === 0);
+}
+
+function encodeRowIdentity(value: string): string {
+  if (value.length === 0) return "u-empty";
+  return `u-${Array.from(value, (character) =>
+    character.codePointAt(0)!.toString(16).padStart(6, "0")
+  ).join("-")}`;
 }
 
 function formatQualityScore(value: number | null): string {
