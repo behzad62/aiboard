@@ -15,6 +15,7 @@ import { ModelTeamPicker } from "./ModelTeamPicker";
 import { AttemptDetailPanel } from "./AttemptDetailPanel";
 import { TeamCompositionBuilder } from "@/components/benchmark/teamiq/TeamCompositionBuilder";
 import { WorkBenchRunPanel } from "@/components/benchmark/workbench/WorkBenchRunPanel";
+import { WorkBenchRunnerStatus } from "@/components/benchmark/workbench/WorkBenchRunnerStatus";
 import {
   ModelChecklist,
   persistModelChecklistConfig,
@@ -361,6 +362,24 @@ export function CertifiedRunPanel({
             onFocus={setFocusedPresetId}
             onRun={(preset) => void runPresetFromUi(preset)}
           />
+          {focusedPresetId === "full-certified" && (
+            <WorkBenchRunnerStatus
+              idPrefix="full-certified"
+              url={workBenchRunnerUrl}
+              token={workBenchRunnerToken}
+              health={workBenchRunnerHealth}
+              checking={checkingWorkBenchRunner}
+              onUrlChange={(value) => {
+                setWorkBenchRunnerUrl(value);
+                setWorkBenchRunnerHealth(null);
+              }}
+              onTokenChange={(value) => {
+                setWorkBenchRunnerToken(value);
+                setWorkBenchRunnerHealth(null);
+              }}
+              onCheck={() => void checkWorkBenchRunner()}
+            />
+          )}
           <RunProgressList
             rows={presetLegRows}
             running={presetRunning}

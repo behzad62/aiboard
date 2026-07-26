@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Play, RefreshCw } from "lucide-react";
+import { Play, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -74,23 +74,6 @@ export function PresetCards({
             <CardContent className="space-y-2">
               {gate.note && (
                 <p className="text-xs text-muted-foreground">{gate.note}</p>
-              )}
-              {preset.id === "full-certified" && focused && (
-                <div className="space-y-1">
-                  <Button type="button" variant="outline" className="w-full" asChild>
-                    <a
-                      href="/aiboard-workbench-runner.zip"
-                      download="aiboard-workbench-runner.zip"
-                    >
-                      <Download className="h-4 w-4" />
-                      Download WorkBench runner bundle
-                    </a>
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Includes Runner V2. After extraction, run <code>npm install</code> and{" "}
-                    <code>npm run setup:browser</code>.
-                  </p>
-                </div>
               )}
               <Button
                 className="w-full"

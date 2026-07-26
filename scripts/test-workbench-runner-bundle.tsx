@@ -189,6 +189,7 @@ if (archive) {
   );
   const unavailableMarkup = renderToStaticMarkup(
     <WorkBenchRunnerStatus
+      idPrefix="bundle-health"
       url="http://127.0.0.1:8797"
       token="bundle-health-test-token"
       health={extracted.health}
@@ -235,6 +236,19 @@ if (archive) {
 
 const runnerStatusMarkup = renderToStaticMarkup(
   <WorkBenchRunnerStatus
+    idPrefix="full-certified"
+    url=""
+    token=""
+    health={null}
+    checking={false}
+    onUrlChange={() => undefined}
+    onTokenChange={() => undefined}
+    onCheck={() => undefined}
+  />
+);
+const advancedRunnerStatusMarkup = renderToStaticMarkup(
+  <WorkBenchRunnerStatus
+    idPrefix="advanced-workbench"
     url=""
     token=""
     health={null}
@@ -258,21 +272,54 @@ const presetMarkup = renderToStaticMarkup(
     onRun={() => undefined}
   />
 );
-for (const [surface, markup] of [
-  ["runner status", runnerStatusMarkup],
-  ["full-certified preset", presetMarkup],
-] as const) {
-  check(
-    `${surface} downloads the complete WorkBench runner bundle`,
-    markup.includes('href="/aiboard-workbench-runner.zip"') &&
-      markup.includes('download="aiboard-workbench-runner.zip"') &&
-      markup.includes("Download WorkBench runner bundle") &&
-      markup.includes("Runner V2") &&
-      markup.includes("npm install") &&
-      markup.includes("npm run setup:browser"),
-    markup
-  );
-}
+check(
+  "shared runner status downloads the complete WorkBench runner bundle",
+  runnerStatusMarkup.includes('href="/aiboard-workbench-runner.zip"') &&
+    runnerStatusMarkup.includes('download="aiboard-workbench-runner.zip"') &&
+    runnerStatusMarkup.includes("Download WorkBench runner bundle") &&
+    runnerStatusMarkup.includes("Runner V2") &&
+    runnerStatusMarkup.includes("npm install") &&
+    runnerStatusMarkup.includes("npm run setup:browser"),
+  runnerStatusMarkup
+);
+check(
+  "Full certified preset card leaves runner setup to the shared panel",
+  !presetMarkup.includes("Download WorkBench runner bundle") &&
+    !presetMarkup.includes("/aiboard-workbench-runner.zip"),
+  presetMarkup
+);
+check(
+  "runner status instances use unique label and input ids",
+  runnerStatusMarkup.includes('for="full-certified-runner-url"') &&
+    runnerStatusMarkup.includes('id="full-certified-runner-url"') &&
+    runnerStatusMarkup.includes('for="full-certified-runner-token"') &&
+    runnerStatusMarkup.includes('id="full-certified-runner-token"') &&
+    advancedRunnerStatusMarkup.includes('for="advanced-workbench-runner-url"') &&
+    advancedRunnerStatusMarkup.includes('id="advanced-workbench-runner-url"') &&
+    advancedRunnerStatusMarkup.includes('for="advanced-workbench-runner-token"') &&
+    advancedRunnerStatusMarkup.includes('id="advanced-workbench-runner-token"'),
+  { runnerStatusMarkup, advancedRunnerStatusMarkup }
+);
+check(
+  "runner fields stack by default and keep the required wide-layout minimums",
+  runnerStatusMarkup.includes("@container") &&
+    runnerStatusMarkup.includes("minmax(18rem,1fr)") &&
+    runnerStatusMarkup.includes("minmax(16rem,0.8fr)") &&
+    !runnerStatusMarkup.includes("md:grid-cols-[1fr_0.8fr_auto]"),
+  runnerStatusMarkup
+);
+
+const certifiedRunPanelSource = await readFile(
+  join(repoRoot, "components", "benchmark", "certified", "CertifiedRunPanel.tsx"),
+  "utf8"
+);
+check(
+  "Full certified focus renders shared runner controls immediately after preset cards",
+  /<PresetCards[\s\S]*?\/>\s*\{focusedPresetId === "full-certified" && \(\s*<WorkBenchRunnerStatus/.test(
+    certifiedRunPanelSource
+  ),
+  certifiedRunPanelSource
+);
 
 const readyOutput = await startupOutput(
   join(repoRoot, "scripts", "bench-runner.mjs"),

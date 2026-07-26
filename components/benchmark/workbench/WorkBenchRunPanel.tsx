@@ -40,6 +40,7 @@ export function WorkBenchRunPanel({
         </div>
       </div>
       <WorkBenchRunnerStatus
+        idPrefix="advanced-workbench"
         url={runnerUrl}
         token={runnerToken}
         health={runnerHealth}

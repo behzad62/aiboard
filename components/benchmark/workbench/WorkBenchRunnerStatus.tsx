@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import type { BenchRunnerHealth } from "@/lib/client/bench-runner";
 
 export function WorkBenchRunnerStatus({
+  idPrefix,
   url,
   token,
   health,
@@ -15,6 +16,7 @@ export function WorkBenchRunnerStatus({
   onTokenChange,
   onCheck,
 }: {
+  idPrefix: string;
   url: string;
   token: string;
   health: BenchRunnerHealth | null;
@@ -23,6 +25,8 @@ export function WorkBenchRunnerStatus({
   onTokenChange: (value: string) => void;
   onCheck: () => void;
 }) {
+  const runnerUrlId = `${idPrefix}-runner-url`;
+  const runnerTokenId = `${idPrefix}-runner-token`;
   const benchStatusText = health
     ? health.ok
       ? `Bench Runner ready${health.root ? `: ${health.root}` : ""}`
@@ -39,21 +43,21 @@ export function WorkBenchRunnerStatus({
   const ManagedStatusIcon = managedReady ? CheckCircle2 : health ? XCircle : RefreshCw;
 
   return (
-    <div className="rounded-md border p-3">
-      <div className="grid gap-3 md:grid-cols-[1fr_0.8fr_auto] md:items-end">
+    <div className="@container rounded-md border p-3">
+      <div className="grid gap-3 @[64rem]:grid-cols-[minmax(18rem,1fr)_minmax(16rem,0.8fr)_auto] @[64rem]:items-end">
         <div className="space-y-2">
-          <Label htmlFor="workbench-runner-url">Bench runner URL</Label>
+          <Label htmlFor={runnerUrlId}>Bench runner URL</Label>
           <Input
-            id="workbench-runner-url"
+            id={runnerUrlId}
             value={url}
             onChange={(event) => onUrlChange(event.target.value)}
             placeholder="http://127.0.0.1:8797"
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="workbench-runner-token">Runner token</Label>
+          <Label htmlFor={runnerTokenId}>Runner token</Label>
           <Input
-            id="workbench-runner-token"
+            id={runnerTokenId}
             value={token}
             onChange={(event) => onTokenChange(event.target.value)}
             placeholder="Token from bench-runner"
@@ -61,7 +65,7 @@ export function WorkBenchRunnerStatus({
           />
         </div>
         <div className="space-y-2">
-          <div className="flex flex-wrap gap-2 md:justify-end">
+          <div className="flex flex-wrap gap-2 @[64rem]:justify-end">
             <Button type="button" variant="outline" asChild>
               <a
                 href="/aiboard-workbench-runner.zip"
@@ -81,7 +85,7 @@ export function WorkBenchRunnerStatus({
               Check
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground md:text-right">
+          <p className="text-xs text-muted-foreground @[64rem]:text-right">
             Includes Runner V2. After extraction, run <code>npm install</code> and{" "}
             <code>npm run setup:browser</code>.
           </p>

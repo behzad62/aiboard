@@ -533,12 +533,11 @@ check(
   certifiedRunPanelSource
 );
 check(
-  "selected Full certified preset links the complete runner bundle",
-  presetCardsSource.includes('preset.id === "full-certified" && focused') &&
-    presetCardsSource.includes('href="/aiboard-workbench-runner.zip"') &&
-    presetCardsSource.includes('download="aiboard-workbench-runner.zip"') &&
-    presetCardsSource.includes("Download WorkBench runner bundle") &&
-    presetCardsSource.includes("npm run setup:browser"),
+  "selected Full certified preset uses shared runner controls outside its card",
+  certifiedRunPanelSource.includes('focusedPresetId === "full-certified"') &&
+    certifiedRunPanelSource.includes("<WorkBenchRunnerStatus") &&
+    !presetCardsSource.includes("Download WorkBench runner bundle") &&
+    !presetCardsSource.includes("/aiboard-workbench-runner.zip"),
   presetCardsSource
 );
 // RunProgressTimeline (the Certify/Run/Persist step UI this check used to
