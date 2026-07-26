@@ -80,7 +80,8 @@ checking a constant or source string.
 Create `scripts/test-certified-teamiq-partial-persistence.mts`. Build two
 minimal team compositions and a one-case Tool Reliability task. Use a stream
 mock that lets the first composition finish, then throws
-`new Error("simulated later composition failure")` for the second composition.
+`new Error("Wall-clock budget exceeded in simulated later composition.")` for
+the second composition.
 Run through `runCertifiedBenchmark`, then assert:
 
 ```ts
@@ -95,7 +96,7 @@ const failed = attempts.find(
 check("first TeamIQ composition survives a later failure", completed?.status === "passed");
 check(
   "only the missing TeamIQ composition is synthesized as failed",
-  failed?.status === "failed_model" && attempts.length === 2
+  failed?.status === "failed_budget" && attempts.length === 2
 );
 check(
   "completed TeamIQ attempt is not recorded twice",
