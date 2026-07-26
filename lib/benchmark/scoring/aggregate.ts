@@ -3,7 +3,7 @@ import type {
   BenchmarkCaseV2,
   BenchmarkTeamComposition,
 } from "@/lib/benchmark/types";
-import { computeTeamLift } from "@/lib/benchmark/certified/team-lift";
+import { computeComparableTrackTeamLift } from "@/lib/benchmark/certified/team-lift";
 import {
   benchmarkVariantKey,
   benchmarkVariantLabel,
@@ -592,6 +592,7 @@ function finalizeGroup(
     bestSoloScore: null,
     teamLift: null,
     teamLiftLabel: null,
+    teamLiftTracks: [],
   };
 }
 
@@ -608,11 +609,12 @@ function applyTeamLift(rows: CertifiedRunScore[]): void {
 
   for (const row of rows) {
     if (!row.isTeam) continue;
-    const lift = computeTeamLift(row, soloScoreByVariant);
+    const lift = computeComparableTrackTeamLift(row, soloScoreByVariant);
     if (!lift) continue;
     row.bestSoloScore = lift.bestSoloScore;
     row.teamLift = lift.teamLift;
     row.teamLiftLabel = lift.label;
+    row.teamLiftTracks = lift.tracks;
   }
 }
 

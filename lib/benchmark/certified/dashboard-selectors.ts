@@ -137,6 +137,7 @@ export interface CertifiedLeaderboardRow {
   tokensPerPass: number | null;
   costBasis: "usd" | "tokens" | null;
   teamLift: number | null;
+  teamLiftTracks: string[];
   /** The underlying team composition id (distinct from `id`, which is the
    * comboHash/display key). Solo/team lens filtering and roster-chip lookups
    * key off this. */
@@ -297,6 +298,10 @@ export function readLeaderboard(
             toolReliabilitySamples:
               row.toolReliabilitySamples ?? meta.toolReliabilitySamples,
             costPerPass: row.costPerPass ?? meta.costPerPass,
+            teamLiftTracks:
+              row.teamLiftTracks.length > 0
+                ? row.teamLiftTracks
+                : meta.teamLiftTracks,
             isTeam: meta.isTeam,
           }
         : row;
@@ -444,6 +449,7 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     tokensPerPass: readNumber(row.tokensPerPass),
     costBasis: readCostBasis(row.costBasis),
     teamLift: readNumber(row.teamLift) ?? readNumber(row.averageTeamLift),
+    teamLiftTracks: readStringList(row.teamLiftTracks),
     teamCompositionId: readString(row.teamCompositionId) ?? id,
     modelIds,
     isTeam: readOptionalBoolean(row.isTeam) ?? modelIds.length > 1,
@@ -493,6 +499,9 @@ export function resolveLeaderboardDeleteFields(
 ): CertifiedLeaderboardRow {
   if (track === "all") return row;
   const latest = row.latestAttemptsByTrack[track];
+  const liftIncludesTrack = row.teamLiftTracks.some(
+    (item) => normalizeTrack(item) === track
+  );
   return {
     ...row,
     latestAttemptId: latest?.id,
@@ -500,6 +509,8 @@ export function resolveLeaderboardDeleteFields(
     latestAttemptTrack: latest?.track,
     providerUnavailableAttemptIds:
       row.providerUnavailableAttemptIdsByTrack[track] ?? [],
+    teamLift: liftIncludesTrack ? row.teamLift : null,
+    teamLiftTracks: liftIncludesTrack ? row.teamLiftTracks : [],
   };
 }
 

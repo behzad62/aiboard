@@ -8,8 +8,10 @@
  * produces real numbers end to end.
  */
 import {
+  computeComparableTrackTeamLift,
   computeTeamLift,
   sortRowsByTeamLift,
+  type ComparableTrackRowLike,
   type TeamLiftRowLike,
 } from "../lib/benchmark/certified/team-lift";
 import { formatLift } from "../components/benchmark/teamiq/ComboMatrix";
@@ -31,6 +33,162 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
+
+function comparableRow({
+  modelVariantKeys = ["model-a\u0000medium"],
+  tracks,
+  attemptsByTrack = {},
+}: {
+  modelVariantKeys?: string[];
+  tracks: Record<string, number>;
+  attemptsByTrack?: Record<string, number>;
+}): ComparableTrackRowLike {
+  return {
+    modelIds: modelVariantKeys.map((key) => key.split("\u0000")[0]),
+    modelVariantKeys,
+    jobSuccessScore: 0,
+    trackBreakdown: Object.entries(tracks).map(
+      ([track, averageVerifiedQuality]) => ({
+        track,
+        averageVerifiedQuality,
+        attempts: attemptsByTrack[track] ?? 1,
+      })
+    ),
+  };
+}
+
+const comparableTeam = comparableRow({
+  modelVariantKeys: ["model-a\u0000medium", "model-b\u0000medium"],
+  tracks: { teamiq: 0.8, workbench: 1 },
+});
+const comparableSolos = new Map([
+  [
+    "model-a\u0000medium",
+    comparableRow({ tracks: { teamiq: 0.7 } }),
+  ],
+  [
+    "model-b\u0000medium",
+    comparableRow({
+      modelVariantKeys: ["model-b\u0000medium"],
+      tracks: { teamiq: 0.6 },
+    }),
+  ],
+]);
+const comparableLift = computeComparableTrackTeamLift(
+  comparableTeam,
+  comparableSolos
+);
+check(
+  "comparable lift uses only tracks shared by every team member",
+  comparableLift?.teamLift === 10 &&
+    comparableLift.bestSoloScore === 70 &&
+    comparableLift.tracks.join(",") === "teamiq",
+  comparableLift
+);
+
+check(
+  "comparable lift is null when team and solo evidence have no overlapping track",
+  computeComparableTrackTeamLift(
+    comparableTeam,
+    new Map([
+      [
+        "model-a\u0000medium",
+        comparableRow({ tracks: { gameiq: 0.9 } }),
+      ],
+      [
+        "model-b\u0000medium",
+        comparableRow({
+          modelVariantKeys: ["model-b\u0000medium"],
+          tracks: { gameiq: 0.8 },
+        }),
+      ],
+    ])
+  ) === null
+);
+
+const incompleteTrackLift = computeComparableTrackTeamLift(
+  comparableRow({
+    modelVariantKeys: ["model-a\u0000medium", "model-b\u0000medium"],
+    tracks: { teamiq: 0.8, workbench: 0.9 },
+  }),
+  new Map([
+    [
+      "model-a\u0000medium",
+      comparableRow({ tracks: { teamiq: 0.7, workbench: 0.4 } }),
+    ],
+    [
+      "model-b\u0000medium",
+      comparableRow({
+        modelVariantKeys: ["model-b\u0000medium"],
+        tracks: { teamiq: 0.6 },
+      }),
+    ],
+  ])
+);
+check(
+  "a track missing any member solo baseline is excluded",
+  incompleteTrackLift?.tracks.join(",") === "teamiq" &&
+    incompleteTrackLift.teamLift === 10,
+  incompleteTrackLift
+);
+
+const equalTrackLift = computeComparableTrackTeamLift(
+  comparableRow({
+    modelVariantKeys: ["model-a\u0000medium", "model-b\u0000medium"],
+    tracks: { teamiq: 0.8, workbench: 0.4 },
+    attemptsByTrack: { teamiq: 100, workbench: 1 },
+  }),
+  new Map([
+    [
+      "model-a\u0000medium",
+      comparableRow({
+        tracks: { teamiq: 0.7, workbench: 0.1 },
+        attemptsByTrack: { teamiq: 2, workbench: 90 },
+      }),
+    ],
+    [
+      "model-b\u0000medium",
+      comparableRow({
+        modelVariantKeys: ["model-b\u0000medium"],
+        tracks: { teamiq: 0.6, workbench: 0.2 },
+        attemptsByTrack: { teamiq: 50, workbench: 3 },
+      }),
+    ],
+  ])
+);
+check(
+  "common tracks average track-local point differences equally, not by attempts",
+  equalTrackLift?.tracks.join(",") === "teamiq,workbench" &&
+    equalTrackLift.bestSoloScore === 45 &&
+    equalTrackLift.teamLift === 15,
+  equalTrackLift
+);
+
+const matchingVariantLift = computeComparableTrackTeamLift(
+  comparableRow({
+    modelVariantKeys: ["model-a\u0000medium"],
+    tracks: { teamiq: 0.8 },
+  }),
+  new Map([
+    [
+      "model-a\u0000medium",
+      comparableRow({ tracks: { teamiq: 0.6 } }),
+    ],
+    [
+      "model-a\u0000high",
+      comparableRow({
+        modelVariantKeys: ["model-a\u0000high"],
+        tracks: { teamiq: 0.95 },
+      }),
+    ],
+  ])
+);
+check(
+  "comparable lift ignores solo rows for non-member variant keys",
+  matchingVariantLift?.bestSoloScore === 60 &&
+    matchingVariantLift.teamLift === 20,
+  matchingVariantLift
+);
 
 // --- (a) TeamIQ lift equals a hand-computed fixture value -----------------
 //
@@ -142,6 +300,52 @@ check(
   "the refactored applyTeamLift (leaderboard aggregation) reproduces the same lift",
   leaderboardTeamRow?.teamLift === 10 && leaderboardTeamRow?.bestSoloScore === 74,
   leaderboardTeamRow
+);
+
+const disjointLeaderboard = aggregateCertifiedRunScores({
+  attempts: [
+    {
+      ...teamIqAttempt("disjoint-a-gameiq", soloGpt.id, 70, 0.8, 60_000),
+      caseId: "gameiq-a",
+      track: "gameiq",
+    },
+    {
+      ...teamIqAttempt(
+        "disjoint-b-reliability",
+        soloGemini.id,
+        60,
+        0.4,
+        40_000
+      ),
+      caseId: "reliability-b",
+      track: "toolreliability",
+    },
+    {
+      ...teamIqAttempt("disjoint-team-teamiq", strongTeam.id, 80, 1, 50_000),
+      caseId: "teamiq-team",
+    },
+    {
+      ...teamIqAttempt(
+        "disjoint-team-workbench",
+        strongTeam.id,
+        100,
+        1,
+        50_000
+      ),
+      caseId: "workbench-team",
+      track: "workbench",
+    },
+  ],
+  teamCompositions: [soloGpt, soloGemini, strongTeam],
+});
+const disjointLeaderboardTeam = disjointLeaderboard.find(
+  (row) => row.teamCompositionId === strongTeam.id
+);
+check(
+  "aggregate lift is null when solos and team have disjoint tracks",
+  disjointLeaderboardTeam?.teamLift === null &&
+    disjointLeaderboardTeam.teamLiftTracks.length === 0,
+  disjointLeaderboardTeam
 );
 
 // --- (b) WorkBench team+solo pair produces the expected lift --------------

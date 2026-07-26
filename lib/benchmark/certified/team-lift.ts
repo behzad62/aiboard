@@ -30,6 +30,89 @@ export interface TeamLiftRowLike {
   averageDurationMs?: number | null;
 }
 
+export interface ComparableTrackRowLike extends TeamLiftRowLike {
+  modelVariantKeys: string[];
+  trackBreakdown: Array<{
+    track: string;
+    averageVerifiedQuality: number;
+  }>;
+}
+
+export interface ComparableTrackTeamLift {
+  bestSoloScore: number;
+  teamLift: number;
+  label: TeamLiftScore["label"];
+  tracks: string[];
+}
+
+export function computeComparableTrackTeamLift(
+  teamRow: ComparableTrackRowLike,
+  soloRowsByVariant: Map<string, ComparableTrackRowLike>
+): ComparableTrackTeamLift | null {
+  if (teamRow.modelVariantKeys.length === 0) return null;
+  const soloRows = teamRow.modelVariantKeys.map((variantKey) => {
+    const row = soloRowsByVariant.get(variantKey);
+    return row?.modelVariantKeys.length === 1 &&
+      row.modelVariantKeys[0] === variantKey
+      ? row
+      : undefined;
+  });
+  if (soloRows.some((row) => !row)) return null;
+
+  const solos = soloRows as ComparableTrackRowLike[];
+  const tracks = teamRow.trackBreakdown
+    .filter((teamTrack) =>
+      solos.every((solo) =>
+        solo.trackBreakdown.some(
+          (soloTrack) => soloTrack.track === teamTrack.track
+        )
+      )
+    )
+    .sort((a, b) => a.track.localeCompare(b.track));
+  if (tracks.length === 0) return null;
+
+  const teamScore =
+    tracks.reduce(
+      (sum, track) => sum + track.averageVerifiedQuality * 100,
+      0
+    ) / tracks.length;
+  const bestSoloScore =
+    tracks.reduce((sum, teamTrack) => {
+      const bestOnTrack = Math.max(
+        ...solos.map(
+          (solo) =>
+            solo.trackBreakdown.find(
+              (soloTrack) => soloTrack.track === teamTrack.track
+            )!.averageVerifiedQuality * 100
+        )
+      );
+      return sum + bestOnTrack;
+    }, 0) / tracks.length;
+  const bestSolo = solos.reduce((best, solo) =>
+    solo.jobSuccessScore > best.jobSuccessScore ? solo : best
+  );
+  const score = scoreTeamLift({
+    teamScore,
+    memberSoloScores: [bestSoloScore],
+    teamCostUsd: finiteOrNull(teamRow.averageCostUsd ?? teamRow.costUsd),
+    bestSoloCostUsd: finiteOrNull(
+      bestSolo.averageCostUsd ?? bestSolo.costUsd
+    ),
+    teamDurationMs: finiteOrNull(
+      teamRow.durationMs ?? teamRow.averageDurationMs
+    ),
+    bestSoloDurationMs: finiteOrNull(
+      bestSolo.durationMs ?? bestSolo.averageDurationMs
+    ),
+  });
+  return {
+    bestSoloScore: score.bestSoloScore,
+    teamLift: score.teamLift,
+    label: score.label,
+    tracks: tracks.map((track) => track.track),
+  };
+}
+
 /**
  * Team quality vs. best solo member quality — the ONE shared implementation
  * every lens calls into (directly, or via lib/benchmark/teamiq/baselines.ts's

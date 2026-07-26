@@ -182,6 +182,7 @@ export interface CertifiedRunScore {
   bestSoloScore: number | null;
   teamLift: number | null;
   teamLiftLabel: TeamLiftLabel | null;
+  teamLiftTracks: string[];
 }
 
 export interface WorkBenchRoleLeaderboardRow {

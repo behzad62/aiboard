@@ -7,6 +7,7 @@ import {
   type DecisionFilters,
   type DecisionRow,
 } from "../lib/benchmark/certified/decision-dashboard";
+import { readLeaderboard } from "../lib/benchmark/certified/dashboard-selectors";
 import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import type { BenchmarkTeamComposition } from "../lib/benchmark/types";
@@ -58,6 +59,7 @@ function row(
     tokensPerPass: 12_500,
     costBasis: "tokens",
     teamLift: null,
+    teamLiftTracks: [],
     teamCompositionId: id,
     modelIds: [id],
     isTeam: false,
@@ -263,6 +265,149 @@ check(
       .sort()
       .join(",") === "gameiq,teamiq",
   compatibleMetadata
+);
+
+const disjointSoloA = {
+  ...legacyTeam,
+  id: "disjoint-solo-a",
+  name: "Disjoint Solo A",
+  comboHash: "disjoint-solo-a",
+  roles: [{ ...legacyTeam.roles[0], modelId: "model-a", displayName: "Model A" }],
+} as BenchmarkTeamComposition;
+const disjointSoloB = {
+  ...legacyTeam,
+  id: "disjoint-solo-b",
+  name: "Disjoint Solo B",
+  comboHash: "disjoint-solo-b",
+  roles: [{ ...legacyTeam.roles[0], modelId: "model-b", displayName: "Model B" }],
+} as BenchmarkTeamComposition;
+const disjointTeamComposition = {
+  id: "disjoint-team",
+  name: "Disjoint Team",
+  comboHash: "disjoint-team",
+  roles: [
+    {
+      ...disjointSoloA.roles[0],
+      role: "architect",
+      slot: "architect",
+    },
+    {
+      ...disjointSoloB.roles[0],
+      role: "worker",
+      slot: "worker",
+    },
+  ],
+} as BenchmarkTeamComposition;
+const disjointAttempts = [
+  {
+    id: "disjoint-a-gameiq",
+    runId: "run-disjoint",
+    caseId: "gameiq-a",
+    mode: "certified",
+    teamCompositionId: disjointSoloA.id,
+    track: "gameiq",
+    status: "passed",
+    startedAt: "2026-07-26T00:00:00.000Z",
+    verifiedQuality: 0.7,
+    jobSuccessScore: 70,
+  },
+  {
+    id: "disjoint-b-reliability",
+    runId: "run-disjoint",
+    caseId: "reliability-b",
+    mode: "certified",
+    teamCompositionId: disjointSoloB.id,
+    track: "toolreliability",
+    status: "passed",
+    startedAt: "2026-07-26T00:01:00.000Z",
+    verifiedQuality: 0.6,
+    jobSuccessScore: 60,
+  },
+  {
+    id: "disjoint-team-teamiq",
+    runId: "run-disjoint",
+    caseId: "teamiq-team",
+    mode: "certified",
+    teamCompositionId: disjointTeamComposition.id,
+    track: "teamiq",
+    status: "passed",
+    startedAt: "2026-07-26T00:02:00.000Z",
+    verifiedQuality: 0.8,
+    jobSuccessScore: 80,
+  },
+  {
+    id: "disjoint-team-workbench",
+    runId: "run-disjoint",
+    caseId: "workbench-team",
+    mode: "certified",
+    teamCompositionId: disjointTeamComposition.id,
+    track: "workbench",
+    status: "passed",
+    startedAt: "2026-07-26T00:03:00.000Z",
+    verifiedQuality: 1,
+    jobSuccessScore: 100,
+  },
+] as never;
+const disjointDashboard = buildCertifiedBenchmarkDashboardData({
+  caseV2: [],
+  attemptsV2: disjointAttempts,
+  verifierResults: [],
+  teamCompositions: [
+    disjointSoloA,
+    disjointSoloB,
+    disjointTeamComposition,
+  ],
+  harnessCertifications: [],
+});
+const disjointTeam = disjointDashboard.leaderboard.find(
+  (item) => item.teamCompositionId === disjointTeamComposition.id
+);
+check(
+  "disjoint solo and team tracks are not comparable",
+  disjointTeam?.teamLift == null &&
+    disjointTeam.teamLiftTracks.length === 0,
+  disjointTeam
+);
+
+const selectorLiftRow = {
+  ...row("selector-lift", {
+    tracks: ["teamiq", "workbench"],
+    modelIds: ["model-a", "model-b"],
+    isTeam: true,
+    teamLift: 10,
+    teamLiftTracks: ["teamiq"],
+  }),
+  teamName: "Selector Lift",
+};
+const selectorCertified = {
+  leaderboard: [selectorLiftRow],
+  teamLiftLeaderboard: [
+    {
+      ...selectorLiftRow,
+      teamLiftTracks: undefined,
+    },
+  ],
+};
+const alternateLiftRow = readLeaderboard(
+  selectorCertified,
+  "all",
+  "teamLift"
+)[0];
+check(
+  "alternate leaderboard sorting reattaches lift comparison tracks",
+  alternateLiftRow?.teamLiftTracks.join(",") === "teamiq",
+  alternateLiftRow
+);
+const workbenchScopedLift = readLeaderboard(
+  selectorCertified,
+  "workbench",
+  "teamLift"
+)[0];
+check(
+  "track scoping clears lift when the comparison excludes that track",
+  workbenchScopedLift?.teamLift === null &&
+    workbenchScopedLift.teamLiftTracks.length === 0,
+  workbenchScopedLift
 );
 
 const repeatedModelTeam = row("same-model-team", {
