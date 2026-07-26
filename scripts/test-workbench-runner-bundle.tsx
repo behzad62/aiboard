@@ -308,6 +308,25 @@ check(
     !runnerStatusMarkup.includes("md:grid-cols-[1fr_0.8fr_auto]"),
   runnerStatusMarkup
 );
+const downloadLinkMarkup =
+  runnerStatusMarkup.match(
+    /<a[^>]*href="\/aiboard-workbench-runner\.zip"[^>]*>[\s\S]*?<\/a>/
+  )?.[0] ?? "";
+const downloadLinkClasses =
+  downloadLinkMarkup.match(/class="([^"]*)"/)?.[1]?.split(/\s+/) ?? [];
+check(
+  "320px runner status reflows the download action without intrinsic-width overflow",
+  downloadLinkClasses.includes("w-full") &&
+    downloadLinkClasses.includes("min-w-0") &&
+    downloadLinkClasses.includes("h-auto") &&
+    downloadLinkClasses.includes("whitespace-normal") &&
+    !downloadLinkClasses.includes("whitespace-nowrap") &&
+    downloadLinkClasses.includes("break-words") &&
+    downloadLinkClasses.includes("@[32rem]:w-auto") &&
+    downloadLinkClasses.includes("@[32rem]:h-10") &&
+    downloadLinkClasses.includes("@[32rem]:whitespace-nowrap"),
+  downloadLinkMarkup
+);
 
 const certifiedRunPanelSource = await readFile(
   join(repoRoot, "components", "benchmark", "certified", "CertifiedRunPanel.tsx"),

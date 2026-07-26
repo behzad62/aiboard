@@ -66,12 +66,17 @@ export function WorkBenchRunnerStatus({
         </div>
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2 @[64rem]:justify-end">
-            <Button type="button" variant="outline" asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-auto w-full min-w-0 whitespace-normal break-words @[32rem]:h-10 @[32rem]:w-auto @[32rem]:whitespace-nowrap"
+              asChild
+            >
               <a
                 href="/aiboard-workbench-runner.zip"
                 download="aiboard-workbench-runner.zip"
               >
-                <Download className="h-4 w-4" />
+                <Download className="h-4 w-4 shrink-0" />
                 Download WorkBench runner bundle
               </a>
             </Button>
