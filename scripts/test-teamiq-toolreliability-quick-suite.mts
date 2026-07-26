@@ -1,5 +1,11 @@
 /* TeamIQ ToolReliability quick-suite checks (run: npx tsx scripts/test-teamiq-toolreliability-quick-suite.mts) */
-import { TEAMIQ_TOOL_RELIABILITY_QUICK_CASES } from "../lib/benchmark/teamiq";
+import {
+  TEAMIQ_TOOL_RELIABILITY_ALL_MODES_WALL_CLOCK_SECONDS,
+  TEAMIQ_TOOL_RELIABILITY_QUICK_CASES,
+  TEAMIQ_TOOL_RELIABILITY_QUICK_WALL_CLOCK_SECONDS,
+  teamIqToolReliabilityWallClockSecondsForSuite,
+} from "../lib/benchmark/teamiq";
+import { caseForSelection } from "../lib/benchmark/certified/run-execution";
 import {
   TOOL_RELIABILITY_CASES,
 } from "../lib/benchmark/toolreliability";
@@ -54,6 +60,32 @@ check(
   "TeamIQ ToolReliability quick suite stays small enough for per-turn team-call budget (3 cases, not the full 8)",
   TEAMIQ_TOOL_RELIABILITY_QUICK_CASES.length === 3,
   quickCaseIds
+);
+check(
+  "TeamIQ all-modes allows one hour",
+  TEAMIQ_TOOL_RELIABILITY_ALL_MODES_WALL_CLOCK_SECONDS === 3600 &&
+    teamIqToolReliabilityWallClockSecondsForSuite(
+      "teamiq-toolreliability-current-all-modes"
+    ) === 3600
+);
+check(
+  "TeamIQ quick retains its fifteen-minute budget",
+  TEAMIQ_TOOL_RELIABILITY_QUICK_WALL_CLOCK_SECONDS === 900 &&
+    teamIqToolReliabilityWallClockSecondsForSuite(
+      "teamiq-toolreliability-current"
+    ) === 900
+);
+
+const allModesCase = caseForSelection(
+  "teamiq",
+  "teamiq-toolreliability-current-all-modes",
+  2
+);
+check(
+  "TeamIQ all-modes case record carries the one-hour certified budget",
+  allModesCase.budget.maxWallClockSeconds === 3600 &&
+    allModesCase.budget.maxModelCalls === 150,
+  allModesCase.budget
 );
 
 if (failures === 0) {

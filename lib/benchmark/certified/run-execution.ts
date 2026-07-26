@@ -53,6 +53,7 @@ import {
   runCertifiedTeamIq,
   teamIqRoleSlotsForStrategy,
   teamIqToolReliabilityCasePackForSuite,
+  teamIqToolReliabilityWallClockSecondsForSuite,
   type TeamIqRoleAssignment,
 } from "@/lib/benchmark/teamiq";
 import {
@@ -634,7 +635,7 @@ function gameIqSuiteLabel(suiteId: string): string {
   return option?.label ?? (isGameIqBundleSuite(suiteId) ? "all GameIQ packs" : suiteId);
 }
 
-function caseForSelection(
+export function caseForSelection(
   track: RunnableTrack,
   suiteId: string,
   fireworksPlayerCount: 2 | 3
@@ -699,7 +700,12 @@ function caseForSelection(
       },
       environment: { type: "browser", timeoutSeconds: 60, network: "none" },
       verifier: { scorer: "rule-checker" },
-      budget: { maxUsd: 5, maxWallClockSeconds: 900, maxModelCalls: 150 },
+      budget: {
+        maxUsd: 5,
+        maxWallClockSeconds:
+          teamIqToolReliabilityWallClockSecondsForSuite(suiteId),
+        maxModelCalls: 150,
+      },
       scoring: { scoringVersion: "teamiq-toolreliability-v2", primary: "team_lift" },
       contamination: {
         originalTask: true,

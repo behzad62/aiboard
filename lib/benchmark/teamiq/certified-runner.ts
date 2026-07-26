@@ -3,6 +3,7 @@ import {
   throwIfCertifiedRunAborted,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
+import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import { saveBenchmarkTeamComposition } from "@/lib/benchmark/store";
 import type {
@@ -104,9 +105,13 @@ export async function runCertifiedTeamIq(
   const attempts: BenchmarkAttemptV2[] = [];
   for (const team of allTeams) {
     throwIfCertifiedRunAborted(input.signal);
-    attempts.push(
-      await runTeamIqToolReliabilityAttempt(input, team, input.task.casePack)
+    const attempt = await runTeamIqToolReliabilityAttempt(
+      input,
+      team,
+      input.task.casePack
     );
+    attempts.push(attempt);
+    await persistReturnedAttempts(input.context, [attempt]);
   }
 
   const links = linkTeamLiftBaselines({
@@ -122,6 +127,10 @@ export async function runCertifiedTeamIq(
   for (const link of links) {
     link.teamAttempt.teamLift = link.score.teamLift;
   }
+  await persistReturnedAttempts(
+    input.context,
+    links.map((link) => link.teamAttempt)
+  );
 
   return attempts;
 }
