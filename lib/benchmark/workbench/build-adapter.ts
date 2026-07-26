@@ -14,6 +14,7 @@ import type {
   WorkBenchBuildExecutionInput,
   WorkBenchBuildExecutionResult,
 } from "./types";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 
 export interface WorkBenchBuildAdapterInput extends WorkBenchBuildExecutionInput {
   executeBuild?: (input: {
@@ -148,7 +149,7 @@ function isValidWorkBenchToolCall(trace: BenchmarkToolCallTrace): boolean {
   );
 }
 
-function createWorkBenchBuildDiscussion(
+export function createWorkBenchBuildDiscussion(
   input: WorkBenchBuildAdapterInput,
   models: SelectedModel[]
 ): Discussion {
@@ -201,7 +202,9 @@ function createWorkBenchBuildDiscussion(
     convergenceScore: input.discussion?.convergenceScore ?? null,
     verbosity: input.discussion?.verbosity ?? "brief",
     styleNote: input.discussion?.styleNote ?? null,
-    reasoningEffort: input.discussion?.reasoningEffort ?? "default",
+    reasoningEffort:
+      roleMapping.architectReasoningEffort ??
+      normalizeBenchmarkReasoningEffort(input.discussion?.reasoningEffort),
     createdAt: input.discussion?.createdAt ?? now,
     updatedAt: input.discussion?.updatedAt ?? now,
   };
@@ -212,6 +215,7 @@ function workBenchRoleMapping(
   models: SelectedModel[]
 ): {
   architectModelId: string | null;
+  architectReasoningEffort: Discussion["reasoningEffort"] | null;
   reviewerModelId: string | null;
   workerModelIds: string[];
 } {
@@ -219,6 +223,7 @@ function workBenchRoleMapping(
     const modelIds = models.map((model) => model.modelId);
     return {
       architectModelId: modelIds[0] ?? null,
+      architectReasoningEffort: null,
       reviewerModelId: null,
       workerModelIds: modelIds,
     };
@@ -237,6 +242,10 @@ function workBenchRoleMapping(
   if (workers.length === 0 && architect) workers = [architect];
   return {
     architectModelId: architect?.modelId ?? null,
+    architectReasoningEffort:
+      architect?.reasoningEffort === undefined
+        ? null
+        : normalizeBenchmarkReasoningEffort(architect.reasoningEffort),
     reviewerModelId: reviewer?.modelId ?? null,
     workerModelIds: uniqueStrings(workers.map((role) => role.modelId)),
   };

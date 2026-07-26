@@ -1,6 +1,10 @@
 import type { BenchmarkTeamCompositionRole } from "@/lib/benchmark/types";
 import type { TeamIqStrategy } from "@/lib/benchmark/types";
 import type { SelectedModel } from "@/lib/providers/base";
+import {
+  benchmarkEffortForModel,
+  type BenchmarkModelEffortMap,
+} from "@/lib/benchmark/model-effort";
 import { deriveTeamComposition, inferProviderId } from "./compositions";
 
 export interface CreateTeamIqCompositionSelectionInput {
@@ -10,6 +14,7 @@ export interface CreateTeamIqCompositionSelectionInput {
   roleMode?: "default" | "fireworks_players";
   playerCount?: 2 | 3;
   roleAssignments?: TeamIqRoleAssignment[];
+  effortByModelId?: BenchmarkModelEffortMap;
 }
 
 export const TEAMIQ_TOOL_BENCH_STRATEGIES: Exclude<TeamIqStrategy, "solo">[] = [
@@ -57,10 +62,18 @@ export function createTeamIqCompositionFromSelection(
     strategy: input.roleMode === "fireworks_players" ? "panel" : strategy,
     roles:
       input.roleAssignments && input.roleAssignments.length > 0
-        ? rolesForAssignments(input.models, input.roleAssignments)
+        ? rolesForAssignments(
+            input.models,
+            input.roleAssignments,
+            input.effortByModelId
+          )
         : input.roleMode === "fireworks_players"
-        ? rolesForFireworksPlayers(selectedModels, input.playerCount ?? 3)
-        : rolesForStrategy(strategy, selectedModels),
+        ? rolesForFireworksPlayers(
+            selectedModels,
+            input.playerCount ?? 3,
+            input.effortByModelId
+          )
+        : rolesForStrategy(strategy, selectedModels, input.effortByModelId),
   });
 }
 
@@ -175,65 +188,69 @@ function selectedModelsForSelection(
 
 function rolesForFireworksPlayers(
   models: SelectedModel[],
-  playerCount: 2 | 3
+  playerCount: 2 | 3,
+  effortByModelId?: BenchmarkModelEffortMap
 ): BenchmarkTeamCompositionRole[] {
   return models.slice(0, playerCount).map((model, index) =>
-    roleFor("player", `P${index + 1}`, model)
+    roleFor("player", `P${index + 1}`, model, effortByModelId)
   );
 }
 
 function rolesForStrategy(
   strategy: Exclude<TeamIqStrategy, "solo">,
-  models: SelectedModel[]
+  models: SelectedModel[],
+  effortByModelId?: BenchmarkModelEffortMap
 ): BenchmarkTeamCompositionRole[] {
   if (strategy === "panel") {
     return [0, 1, 2].map((index) =>
       roleFor(
         "specialist",
         `panel-${String(index + 1).padStart(2, "0")}`,
-        modelForSlot(models, index)
+        modelForSlot(models, index),
+        effortByModelId
       )
     );
   }
   if (strategy === "debate") {
     return [
-      roleFor("critic", "01-debater", modelForSlot(models, 0)),
-      roleFor("critic", "02-debater", modelForSlot(models, 1)),
-      roleFor("judge", "03-debate-judge", modelForSlot(models, 2)),
+      roleFor("critic", "01-debater", modelForSlot(models, 0), effortByModelId),
+      roleFor("critic", "02-debater", modelForSlot(models, 1), effortByModelId),
+      roleFor("judge", "03-debate-judge", modelForSlot(models, 2), effortByModelId),
     ];
   }
   if (strategy === "architect_worker") {
     return [
-      roleFor("architect", "01-architect", modelForSlot(models, 0)),
-      roleFor("worker", "02-worker", modelForSlot(models, 1)),
+      roleFor("architect", "01-architect", modelForSlot(models, 0), effortByModelId),
+      roleFor("worker", "02-worker", modelForSlot(models, 1), effortByModelId),
     ];
   }
   if (strategy === "cheap_swarm_strong_judge") {
     const judge = models[models.length - 1];
     const workers = models.length > 1 ? models.slice(0, -1) : models;
     return [
-      roleFor("worker", "01-swarm-worker", modelForSlot(workers, 0)),
-      roleFor("worker", "02-swarm-worker", modelForSlot(workers, 1)),
-      roleFor("judge", "99-strong-judge", judge),
+      roleFor("worker", "01-swarm-worker", modelForSlot(workers, 0), effortByModelId),
+      roleFor("worker", "02-swarm-worker", modelForSlot(workers, 1), effortByModelId),
+      roleFor("judge", "99-strong-judge", judge, effortByModelId),
     ];
   }
   return [
-    roleFor("architect", "01-architect", modelForSlot(models, 0)),
-    roleFor("worker", "02-worker", modelForSlot(models, 1)),
-    roleFor("reviewer", "03-reviewer", modelForSlot(models, 2)),
+    roleFor("architect", "01-architect", modelForSlot(models, 0), effortByModelId),
+    roleFor("worker", "02-worker", modelForSlot(models, 1), effortByModelId),
+    roleFor("reviewer", "03-reviewer", modelForSlot(models, 2), effortByModelId),
   ];
 }
 
 function rolesForAssignments(
   models: SelectedModel[],
-  assignments: TeamIqRoleAssignment[]
+  assignments: TeamIqRoleAssignment[],
+  effortByModelId?: BenchmarkModelEffortMap
 ): BenchmarkTeamCompositionRole[] {
   return assignments.map((assignment) => {
     const model = models.find((candidate) => candidate.modelId === assignment.modelId);
     if (!model) {
       throw new Error(`TeamIQ role ${assignment.slot} has no selected model.`);
     }
-    return roleFor(assignment.role, assignment.slot, model);
+    return roleFor(assignment.role, assignment.slot, model, effortByModelId);
   });
 }
 
@@ -272,7 +289,8 @@ function strategyLabel(strategy: Exclude<TeamIqStrategy, "solo">): string {
 function roleFor(
   role: BenchmarkTeamCompositionRole["role"],
   slot: string,
-  model: SelectedModel
+  model: SelectedModel,
+  effortByModelId?: BenchmarkModelEffortMap
 ): BenchmarkTeamCompositionRole {
   return {
     role,
@@ -280,6 +298,10 @@ function roleFor(
     modelId: model.modelId,
     providerId: model.providerId || inferProviderId(model.modelId),
     displayName: model.displayName || model.modelId,
+    reasoningEffort: benchmarkEffortForModel(
+      effortByModelId ?? {},
+      model.modelId
+    ),
     temperature: 0,
   };
 }

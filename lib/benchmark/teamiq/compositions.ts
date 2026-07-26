@@ -3,6 +3,10 @@ import type {
   BenchmarkTeamCompositionRole,
   TeamIqStrategy,
 } from "@/lib/benchmark/types";
+import {
+  benchmarkVariantKey,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 
 export interface TeamIqSoloCompositionInput {
   modelId: string;
@@ -36,7 +40,7 @@ export function deriveSoloTeamComposition(
     modelId: input.modelId,
     providerId,
     displayName,
-    reasoningEffort: input.reasoningEffort,
+    reasoningEffort: normalizeBenchmarkReasoningEffort(input.reasoningEffort),
     temperature: input.temperature ?? 0,
     maxTokens: input.maxTokens,
   };
@@ -78,7 +82,7 @@ export function normalizeTeamRoles(
       modelId: role.modelId,
       providerId: role.providerId || inferProviderId(role.modelId),
       displayName: role.displayName || role.modelId,
-      reasoningEffort: role.reasoningEffort,
+      reasoningEffort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
       temperature: Number.isFinite(role.temperature) ? role.temperature : 0,
       maxTokens: role.maxTokens,
     }))
@@ -98,6 +102,19 @@ export function getTeamCompositionModelIds(
       team.roles
         .map((role) => role.modelId)
         .filter((modelId): modelId is string => Boolean(modelId))
+    )
+  ).sort();
+}
+
+export function getTeamCompositionModelVariantKeys(
+  team: BenchmarkTeamComposition | undefined
+): string[] {
+  if (!team) return [];
+  return Array.from(
+    new Set(
+      team.roles.map((role) =>
+        benchmarkVariantKey(role.modelId, role.reasoningEffort)
+      )
     )
   ).sort();
 }

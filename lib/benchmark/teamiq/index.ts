@@ -2,6 +2,7 @@ export {
   deriveSoloTeamComposition,
   deriveTeamComposition,
   getTeamCompositionModelIds,
+  getTeamCompositionModelVariantKeys,
   inferProviderId,
   isSoloTeamComposition,
   normalizeTeamRoles,

@@ -35,6 +35,7 @@ import {
 import type { SelectedModel } from "@/lib/providers/base";
 import type { WorkBenchBuildAdapterInput } from "./build-adapter";
 import type { WorkBenchBuildExecutionResult } from "./types";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 
 const WORKBENCH_HIDDEN_PATHS = [
   "case-meta.json",
@@ -61,7 +62,7 @@ export interface NativeWorkBenchDependencies {
   getNativeRunnerHealth: typeof getNativeRunnerHealth;
   createProviderConfigs: (
     runtimeIds: readonly string[],
-    reasoningEffort?: string
+    effortByRuntimeId?: Readonly<Record<string, string>>
   ) => NativeProviderConfig[];
   configureNativeProviders: typeof configureNativeProviders;
   createNativeBuild: typeof createNativeBuild;
@@ -113,9 +114,13 @@ const DEFAULT_DEPENDENCIES: NativeWorkBenchDependencies = {
   restoreManagedAttemptOracle,
   stopManagedAttemptRunner,
   getNativeRunnerHealth,
-  createProviderConfigs: (runtimeIds, reasoningEffort) =>
+  createProviderConfigs: (runtimeIds, effortByRuntimeId) =>
     runtimeIds.map((runtimeId, index) =>
-      createNativeProviderConfig(runtimeId, index, reasoningEffort)
+      createNativeProviderConfig(
+        runtimeId,
+        index,
+        normalizeBenchmarkReasoningEffort(effortByRuntimeId?.[runtimeId])
+      )
     ),
   configureNativeProviders,
   createNativeBuild,
@@ -127,6 +132,29 @@ const DEFAULT_DEPENDENCIES: NativeWorkBenchDependencies = {
   getNativeBuildAudit,
   wait: waitFor,
 };
+
+export function createNativeWorkBenchProviderConfigs(
+  team: BenchmarkTeamComposition | undefined,
+  models: SelectedModel[],
+  createProviderConfigs: NativeWorkBenchDependencies["createProviderConfigs"] =
+    DEFAULT_DEPENDENCIES.createProviderConfigs
+): NativeProviderConfig[] {
+  const roleMapping = nativeWorkBenchRoles(team, models);
+  const runtimeIds = uniqueStrings(
+    team
+      ? team.roles.map((role) => role.modelId)
+      : [roleMapping.architectRuntimeId, ...roleMapping.workerRuntimeIds]
+  );
+  const effortByRuntimeId: Record<string, string> = {};
+  for (const runtimeId of runtimeIds) {
+    const storedEffort = team?.roles.find(
+      (role) => role.modelId === runtimeId
+    )?.reasoningEffort;
+    effortByRuntimeId[runtimeId] =
+      normalizeBenchmarkReasoningEffort(storedEffort);
+  }
+  return createProviderConfigs(runtimeIds, effortByRuntimeId);
+}
 
 export async function runNativeWorkBenchBuild(
   input: NativeWorkBenchBuildInput,
@@ -157,16 +185,21 @@ export async function runNativeWorkBenchBuild(
       attemptId: input.attemptId,
     });
     const roleMapping = nativeWorkBenchRoles(input.teamComposition, input.models);
-    const configuredRuntimeIds = uniqueStrings([
-      roleMapping.architectRuntimeId,
-      ...roleMapping.workerRuntimeIds,
-    ]);
+    const configuredRuntimeIds = uniqueStrings(
+      input.teamComposition
+        ? input.teamComposition.roles.map((role) => role.modelId)
+        : [roleMapping.architectRuntimeId, ...roleMapping.workerRuntimeIds]
+    );
     if (!roleMapping.architectRuntimeId || roleMapping.workerRuntimeIds.length === 0) {
       throw new Error("WorkBench native execution requires an Architect and at least one worker runtime.");
     }
     await dependencies.configureNativeProviders(
       connection,
-      dependencies.createProviderConfigs(configuredRuntimeIds)
+      createNativeWorkBenchProviderConfigs(
+        input.teamComposition,
+        input.models,
+        dependencies.createProviderConfigs
+      )
     );
     nativeRunId = safeNativeId(`workbench-${input.attemptId}`);
     const budgetLimits = nativeBudgetLimits(input);

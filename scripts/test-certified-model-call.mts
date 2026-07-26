@@ -69,6 +69,7 @@ const result = await callCertifiedModel({
   structuredOutput,
   maxTokens: 64,
   temperature: 0,
+  reasoningEffort: "xhigh",
   context,
   caseId: "case-model-call",
   attemptId: "attempt-model-call",
@@ -82,6 +83,11 @@ const result = await callCertifiedModel({
     check("certified stream receives provider id", input.providerId === "openai", input);
     check("certified stream receives unqualified model id", input.params.model === "gpt-certified", input.params);
     check("certified stream forces temperature zero", input.params.temperature === 0, input.params);
+    check(
+      "certified stream receives xhigh reasoning effort",
+      input.params.reasoningEffort === "xhigh",
+      input.params
+    );
     check("certified stream receives structured output", input.params.structuredOutput?.name === "move", input.params.structuredOutput);
     yield { type: "token", content: "{\"move\":" };
     yield { type: "token", content: "3}" };
@@ -211,6 +217,11 @@ const errorTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-mo
 const emptyTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-model-call-empty");
 check("successful model call trace persisted", successTrace?.rawResponse === "{\"move\":3}" && successTrace.parsedResponseJson?.includes("\"move\":3") === true, successTrace);
 check("model call trace links certified run metadata", successTrace?.runId === context.runId && successTrace.caseId === "case-model-call" && successTrace.attemptId === "attempt-model-call", successTrace);
+check(
+  "model call trace records xhigh reasoning effort",
+  successTrace?.reasoningEffort === "xhigh",
+  successTrace
+);
 check("provider error trace persisted", errorTrace?.error?.includes("Provider 503") === true && errorTrace.retryHistory.some((attempt) => attempt.status === "provider_error"), errorTrace);
 check(
   "empty response trace persisted as provider error",

@@ -636,6 +636,7 @@ export function CertifiedRunPanel({
         {
           models,
           soloModelIds,
+          effortByModelId,
           teamModelIds: sharedTeamModelIds,
           teamIqStrategy: sharedTeamIqStrategy,
           workBenchRoleMode: workBenchRoleModeFromCount(
@@ -710,6 +711,7 @@ export function CertifiedRunPanel({
         suiteId,
         fireworksPlayerCount,
         certification,
+        effortByModelId,
         runAbortRef,
         setRunning,
         // The Advanced flow no longer renders a phase timeline (deleted with
@@ -738,6 +740,7 @@ export function CertifiedRunPanel({
       workBenchRunnerToken,
       effectiveHarnessProfile,
       certification,
+      effortByModelId,
       runAbortRef,
       setRunning,
       setRunPhase: () => {},

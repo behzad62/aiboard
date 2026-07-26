@@ -14,6 +14,7 @@ import { listCertifiedSuiteOptions } from "../lib/benchmark/certified/suite-opti
 import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
 import { buildAttemptDetailViewModel } from "../lib/benchmark/certified/attempt-detail";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { createWorkBenchTeamComposition } from "../lib/benchmark/certified/run-execution";
 import type {
   BenchmarkArtifact,
   BenchmarkAttemptV2,
@@ -116,6 +117,38 @@ check(
     workBenchRoleCount("architect_worker") === 2 &&
     workBenchRoleCount("architect_worker_reviewer") === 3,
   null
+);
+const workBenchEffortComposition = createWorkBenchTeamComposition({
+  models: [
+    {
+      modelId: "openai:gpt-5.6",
+      providerId: "openai",
+      displayName: "GPT 5.6",
+    },
+    {
+      modelId: "anthropic:claude-opus-5",
+      providerId: "anthropic",
+      displayName: "Claude Opus 5",
+    },
+    {
+      modelId: "google:gemini-reviewer",
+      providerId: "google",
+      displayName: "Gemini Reviewer",
+    },
+  ],
+  roleMode: "architect_worker_reviewer",
+  effortByModelId: {
+    "openai:gpt-5.6": "xhigh",
+    "anthropic:claude-opus-5": "low",
+    "google:gemini-reviewer": "default",
+  },
+});
+check(
+  "WorkBench UI role composition persists configured and explicit default efforts",
+  workBenchEffortComposition.roles
+    .map((role) => role.reasoningEffort)
+    .join(",") === "xhigh,low,default",
+  workBenchEffortComposition.roles
 );
 check(
   "WorkBench harness profile is derived from role mode",

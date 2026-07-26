@@ -82,6 +82,10 @@ import {
 } from "@/lib/benchmark/workbench";
 import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
+import {
+  benchmarkEffortForModel,
+  type BenchmarkModelEffortMap,
+} from "@/lib/benchmark/model-effort";
 
 export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 export const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
@@ -157,6 +161,7 @@ export interface RunSelectedContext extends CertifiedRunActions {
   workBenchRunnerToken: string;
   effectiveHarnessProfile: HarnessProfile;
   certification: HarnessCertificationResult;
+  effortByModelId: BenchmarkModelEffortMap;
 }
 
 export async function runSelected(ctx: RunSelectedContext): Promise<void> {
@@ -175,6 +180,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     workBenchRunnerToken,
     effectiveHarnessProfile,
     certification,
+    effortByModelId,
     runAbortRef,
     setRunning,
     setRunPhase,
@@ -223,17 +229,23 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
               ? "fireworks_players"
               : "default",
             playerCount: fireworksPlayerCount,
+            effortByModelId,
           })
         : [
             selectedTrack === "workbench"
               ? createWorkBenchTeamComposition({
                   models: workBenchSelectedModels,
                   roleMode: workBenchRoleMode,
+                  effortByModelId,
                 })
               : deriveSoloTeamComposition({
                   modelId: model!.modelId,
                   providerId: model!.providerId,
                   displayName: model!.displayName,
+                  reasoningEffort: benchmarkEffortForModel(
+                    effortByModelId,
+                    model!.modelId
+                  ),
                 }),
           ];
     const primaryTeam = teams[0]!;
@@ -339,6 +351,7 @@ export interface RunGameIqMultiModelContext extends CertifiedRunActions {
   fireworksPlayerCount: 2 | 3;
   certification: HarnessCertificationResult;
   setGameIqModelRuns: Dispatch<SetStateAction<GameIqModelRunState[]>>;
+  effortByModelId: BenchmarkModelEffortMap;
 }
 
 export async function runGameIqMultiModel(
@@ -356,6 +369,7 @@ export async function runGameIqMultiModel(
     setSummary,
     setMessage,
     setGameIqModelRuns,
+    effortByModelId,
     onComplete,
   } = ctx;
   const selectedModels = gameIqModelIds
@@ -421,6 +435,10 @@ export async function runGameIqMultiModel(
         modelId: model.modelId,
         providerId: model.providerId,
         displayName: model.displayName,
+        reasoningEffort: benchmarkEffortForModel(
+          effortByModelId,
+          model.modelId
+        ),
       });
       await saveBenchmarkTeamComposition(team);
       // Capture this model's pack attempts from inside the runner so the
@@ -780,13 +798,14 @@ function teamIqTaskForSuite(
   };
 }
 
-function teamIqCompositionsForRun(input: {
+export function teamIqCompositionsForRun(input: {
   models: SelectedModel[];
   selectedModelIds: string[];
   strategy: TeamIqUiStrategy;
   suiteId: string;
   roleMode: "default" | "fireworks_players";
   playerCount: 2 | 3;
+  effortByModelId: BenchmarkModelEffortMap;
 }): BenchmarkTeamComposition[] {
   if (
     input.roleMode === "default" &&
@@ -795,6 +814,7 @@ function teamIqCompositionsForRun(input: {
     return createTeamIqToolBenchCompositionsFromSelection({
       models: input.models,
       selectedModelIds: input.selectedModelIds,
+      effortByModelId: input.effortByModelId,
     });
   }
   return [
@@ -804,6 +824,7 @@ function teamIqCompositionsForRun(input: {
       strategy: input.strategy,
       roleMode: input.roleMode,
       playerCount: input.playerCount,
+      effortByModelId: input.effortByModelId,
       roleAssignments:
         input.roleMode === "default" &&
         !isTeamIqToolReliabilityAllModesSuite(input.suiteId)
@@ -870,9 +891,10 @@ export function workBenchModelsForRun(
     .filter((model): model is SelectedModel => Boolean(model));
 }
 
-function createWorkBenchTeamComposition(input: {
+export function createWorkBenchTeamComposition(input: {
   models: SelectedModel[];
   roleMode: WorkBenchRoleMode;
+  effortByModelId: BenchmarkModelEffortMap;
 }): BenchmarkTeamComposition {
   if (input.roleMode === "solo") {
     const model = input.models[0];
@@ -880,6 +902,10 @@ function createWorkBenchTeamComposition(input: {
       modelId: model.modelId,
       providerId: model.providerId,
       displayName: model.displayName,
+      reasoningEffort: benchmarkEffortForModel(
+        input.effortByModelId,
+        model.modelId
+      ),
     });
   }
   const roles = input.models.map((model, index): BenchmarkTeamCompositionRole => {
@@ -890,6 +916,10 @@ function createWorkBenchTeamComposition(input: {
       modelId: model.modelId,
       providerId: model.providerId,
       displayName: model.displayName,
+      reasoningEffort: benchmarkEffortForModel(
+        input.effortByModelId,
+        model.modelId
+      ),
       temperature: 0,
     };
   });
@@ -963,6 +993,7 @@ export interface RunPresetContext {
   models: SelectedModel[];
   /** Model ids checked in the shared ModelChecklist; drives every solo leg. */
   soloModelIds: string[];
+  effortByModelId: BenchmarkModelEffortMap;
   /** Team builder's role-ordered model ids, reused for TeamIQ AND WorkBench. */
   teamModelIds: string[];
   teamIqStrategy: TeamIqUiStrategy;
@@ -1095,6 +1126,7 @@ async function runSoloLeg(
       suiteId: leg.suiteId,
       fireworksPlayerCount: ctx.fireworksPlayerCount,
       certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      effortByModelId: ctx.effortByModelId,
       runAbortRef: ctx.runAbortRef,
       setRunning: () => {},
       setRunPhase: () => {},
@@ -1142,6 +1174,7 @@ async function runSoloLeg(
           workBenchRunnerToken: ctx.workBenchRunnerToken,
           effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
           certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+          effortByModelId: ctx.effortByModelId,
           runAbortRef: ctx.runAbortRef,
           setRunning: () => {},
           setRunPhase: () => {},
@@ -1207,6 +1240,7 @@ async function runTeamLeg(
       workBenchRunnerToken: ctx.workBenchRunnerToken,
       effectiveHarnessProfile,
       certification: runHarnessCertification(effectiveHarnessProfile),
+      effortByModelId: ctx.effortByModelId,
       runAbortRef: ctx.runAbortRef,
       setRunning: () => {},
       setRunPhase: () => {},
