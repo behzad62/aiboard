@@ -79,6 +79,7 @@ const variantRow: DecisionRow = {
   providerIds: ["openai"],
   reasoningEfforts: ["low"],
   reasoningEffortDetails: [],
+  failureDetails: [],
 };
 const leaderboardMarkup = renderToStaticMarkup(
   React.createElement(DecisionLeaderboard, {
@@ -155,6 +156,15 @@ const teamDecisionRow: DecisionRow = {
   modelIds: ["openai:architect", "openai:worker"],
   isTeam: true,
   teamLift: 24,
+  trackBreakdown: [
+    {
+      track: "workbench",
+      attempts: 8,
+      passed: 7,
+      verifiedPassRate: 0.875,
+      averageVerifiedQuality: 0.9,
+    },
+  ],
   reasoningEfforts: ["low", "high"],
   reasoningEffortDetails: [
     { role: "architect", displayName: "Architect", effort: "low" },
@@ -173,6 +183,28 @@ check(
     verdictMarkup.includes("worker: Worker · High") &&
     verdictMarkup.includes("reviewer: Legacy · Default"),
   verdictMarkup
+);
+check(
+  "WorkBench verdict renders the team winner and normalized verified quality",
+  verdictMarkup.includes("Best WorkBench team") &&
+    verdictMarkup.includes("Winning team") &&
+    verdictMarkup.includes("90 verified quality"),
+  verdictMarkup
+);
+const emptyTeamVerdictMarkup = renderToStaticMarkup(
+  React.createElement(DecisionVerdicts, {
+    rows: [variantRow],
+  })
+);
+check(
+  "empty WorkBench and team-lift cards request comparable team evidence",
+  emptyTeamVerdictMarkup.includes(
+    "Run a team WorkBench pack to compare verified coding work."
+  ) &&
+    emptyTeamVerdictMarkup.includes(
+      "Run the same certified track solo and as a team to measure added value."
+    ),
+  emptyTeamVerdictMarkup
 );
 
 const rosterRoles: RosterRole[] = [
@@ -497,7 +529,7 @@ check(
 
 for (const label of [
   "Best overall model",
-  "Best WorkBench model",
+  "Best WorkBench team",
   "Most reliable",
   "Leanest successful model",
   "Fastest successful model",

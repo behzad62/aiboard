@@ -106,6 +106,14 @@ export interface CertifiedSummary {
   averageDurationMs: number | null;
 }
 
+export interface CertifiedFailureDetail {
+  attemptId: string;
+  track: string;
+  status: string;
+  code: string;
+  message: string;
+}
+
 export interface CertifiedLeaderboardRow {
   id: string;
   label: string;
@@ -162,6 +170,7 @@ export interface CertifiedLeaderboardRow {
   reasoningEfforts: string[];
   reasoningEffortDetails?: BenchmarkVariantRosterDetail[];
   latestCompletedAt?: string;
+  failureDetails: CertifiedFailureDetail[];
 }
 
 export interface ModelIntelligenceTrackBreakdown {
@@ -294,6 +303,7 @@ export function readLeaderboard(
             reasoningEfforts: meta.reasoningEfforts,
             reasoningEffortDetails: meta.reasoningEffortDetails,
             latestCompletedAt: meta.latestCompletedAt,
+            failureDetails: meta.failureDetails,
             passed: row.passed ?? meta.passed,
             toolReliabilitySamples:
               row.toolReliabilitySamples ?? meta.toolReliabilitySamples,
@@ -469,7 +479,23 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
       row.reasoningEffortDetails
     ),
     latestCompletedAt: readString(row.latestCompletedAt) ?? undefined,
+    failureDetails: readFailureDetails(row.failureDetails),
   };
+}
+
+function readFailureDetails(value: unknown): CertifiedFailureDetail[] {
+  return readArray(value)
+    .map((item) => {
+      const detail = readRecord(item);
+      const attemptId = readString(detail.attemptId);
+      const track = readString(detail.track);
+      const status = readString(detail.status);
+      const code = readString(detail.code);
+      const message = readString(detail.message);
+      if (!attemptId || !track || !status || !code || !message) return null;
+      return { attemptId, track, status, code, message };
+    })
+    .filter((detail): detail is CertifiedFailureDetail => detail !== null);
 }
 
 function readReasoningEffortDetails(
@@ -509,6 +535,9 @@ export function resolveLeaderboardDeleteFields(
     latestAttemptTrack: latest?.track,
     providerUnavailableAttemptIds:
       row.providerUnavailableAttemptIdsByTrack[track] ?? [],
+    failureDetails: row.failureDetails.filter(
+      (detail) => normalizeTrack(detail.track) === track
+    ),
     teamLift: liftIncludesTrack ? row.teamLift : null,
     teamLiftTracks: liftIncludesTrack ? row.teamLiftTracks : [],
   };

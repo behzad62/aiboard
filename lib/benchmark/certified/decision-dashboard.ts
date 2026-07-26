@@ -151,12 +151,12 @@ export function buildDecisionVerdicts(rows: DecisionRow[]): DecisionVerdict[] {
     ),
     verdict(
       "workbench",
-      "Best WorkBench model",
-      pickMaximum(soloRows, workBenchQuality),
+      "Best WorkBench team",
+      pickMaximum(teamRows, workBenchQuality),
       workBenchQuality,
       workBenchAttempts,
       "WorkBench attempt",
-      "Run a solo WorkBench pack to compare verified coding work."
+      "Run a team WorkBench pack to compare verified coding work."
     ),
     verdict(
       "reliability",
@@ -192,7 +192,7 @@ export function buildDecisionVerdicts(rows: DecisionRow[]): DecisionVerdict[] {
       (row) => row.teamLift,
       (row) => row.attempts,
       "team attempt",
-      "Run a team with solo baselines to measure added value."
+      "Run the same certified track solo and as a team to measure added value."
     ),
   ];
 }

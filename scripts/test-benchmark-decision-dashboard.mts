@@ -10,7 +10,10 @@ import {
 import { readLeaderboard } from "../lib/benchmark/certified/dashboard-selectors";
 import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
-import type { BenchmarkTeamComposition } from "../lib/benchmark/types";
+import type {
+  BenchmarkFailure,
+  BenchmarkTeamComposition,
+} from "../lib/benchmark/types";
 
 let failures = 0;
 
@@ -69,6 +72,7 @@ function row(
     providerIds: [],
     reasoningEfforts: [],
     reasoningEffortDetails: [],
+    failureDetails: [],
     ...overrides,
   };
 }
@@ -265,6 +269,75 @@ check(
       .sort()
       .join(",") === "gameiq,teamiq",
   compatibleMetadata
+);
+
+const failedBudgetAttempt = {
+  id: "attempt-failed-budget",
+  runId: "run-failed-budget",
+  caseId: "case-failed-budget",
+  mode: "certified",
+  teamCompositionId: "legacy-default",
+  track: "workbench",
+  status: "failed_budget",
+  startedAt: "2026-07-26T00:02:00.000Z",
+  failureIds: ["failure-failed-budget"],
+} as never;
+const failedBudgetFailure: BenchmarkFailure = {
+  id: "failure-failed-budget",
+  runId: "run-failed-budget",
+  caseId: "case-failed-budget",
+  domain: "build",
+  source: "benchmark",
+  code: "budget_exhausted",
+  severity: "error",
+  message: "Wall-clock budget exceeded (900000ms >= 900000ms).",
+  createdAt: "2026-07-26T00:17:00.000Z",
+};
+const withFailureInput = {
+  leaderboard: [
+    {
+      ...row("legacy-default"),
+      teamCompositionId: "legacy-default",
+      tracks: ["workbench", "gameiq"],
+    },
+  ],
+  overallLeaderboard: [
+    {
+      ...row("legacy-default"),
+      teamCompositionId: "legacy-default",
+      tracks: ["workbench", "gameiq"],
+    },
+  ],
+};
+const failureMetadata = withCertifiedDeleteMetadata(
+  withFailureInput as never,
+  [failedBudgetAttempt],
+  [legacyTeam],
+  [failedBudgetFailure, { ...failedBudgetFailure }]
+);
+const failureRow = readLeaderboard(failureMetadata, "all", "overall")[0];
+check(
+  "certified leaderboard rows expose linked failure provenance across alternate sorts",
+  failureRow?.failureDetails?.length === 1 &&
+    failureRow.failureDetails[0]?.message ===
+      "Wall-clock budget exceeded (900000ms >= 900000ms)." &&
+    failureRow.failureDetails[0]?.code === "budget_exhausted" &&
+    failureRow.failureDetails[0]?.status === "failed_budget" &&
+    failureRow.failureDetails[0]?.attemptId === "attempt-failed-budget" &&
+    failureRow.failureDetails[0]?.track === "workbench",
+  failureRow
+);
+check(
+  "track scoping keeps only failure provenance from the selected track",
+  readLeaderboard(failureMetadata, "gameiq", "overall")[0]?.failureDetails
+    ?.length === 0,
+  readLeaderboard(failureMetadata, "gameiq", "overall")[0]
+);
+check(
+  "legacy leaderboard rows default failure provenance to empty",
+  readLeaderboard({ leaderboard: [row("legacy")] }, "all")[0]?.failureDetails
+    ?.length === 0,
+  readLeaderboard({ leaderboard: [row("legacy")] }, "all")[0]
 );
 
 const disjointSoloA = {
@@ -499,6 +572,8 @@ check(
 const verdictRows: DecisionRow[] = [
   row("overall", { overallScore: 0.94, verifiedQuality: 0.9 }),
   row("workbench", {
+    modelIds: ["architect", "worker"],
+    isTeam: true,
     overallScore: 0.9,
     verifiedQuality: 0.92,
     trackBreakdown: [
@@ -511,6 +586,18 @@ const verdictRows: DecisionRow[] = [
       },
     ],
   }),
+  row("workbench-solo", {
+    verifiedQuality: 0.99,
+    trackBreakdown: [
+      {
+        track: "workbench",
+        attempts: 9,
+        passed: 9,
+        verifiedPassRate: 1,
+        averageVerifiedQuality: 0.99,
+      },
+    ],
+  }),
   row("reliable", { toolReliabilityScore: 99, toolReliabilitySamples: 7 }),
   row("lean", { tokensPerPass: 900, passed: 4 }),
   row("fast", { speedPerPassMs: 750, passed: 5 }),
@@ -519,12 +606,29 @@ const verdictRows: DecisionRow[] = [
 const verdicts = buildDecisionVerdicts(verdictRows);
 const winners = Object.fromEntries(verdicts.map((verdict) => [verdict.key, verdict.winner?.id]));
 check("best overall winner uses solo overall score", winners.overall === "overall", winners);
-check("best WorkBench winner uses WorkBench quality", winners.workbench === "workbench", winners);
+check(
+  "best WorkBench winner uses team quality and ignores a higher-scoring solo row",
+  winners.workbench === "workbench",
+  winners
+);
 check("most reliable winner uses tool reliability", winners.reliability === "reliable", winners);
 check("leanest winner minimizes tokens per pass", winners.leanest === "lean", winners);
 check("fastest winner minimizes time per pass", winners.fastest === "fast", winners);
 check("best team lift only considers teams", winners.teamLift === "lift", winners);
 const verdictByKey = Object.fromEntries(verdicts.map((verdict) => [verdict.key, verdict]));
+check(
+  "WorkBench verdict names teams and requests a team pack when empty",
+  verdictByKey.workbench?.label === "Best WorkBench team" &&
+    verdictByKey.workbench?.emptyHint ===
+      "Run a team WorkBench pack to compare verified coding work.",
+  verdictByKey.workbench
+);
+check(
+  "team-lift verdict requests comparable solo and team tracks when empty",
+  verdictByKey.teamLift?.emptyHint ===
+    "Run the same certified track solo and as a team to measure added value.",
+  verdictByKey.teamLift
+);
 check(
   "verdict cards expose metric-specific supporting evidence counts",
   verdictByKey.workbench?.evidenceCount === 8 &&

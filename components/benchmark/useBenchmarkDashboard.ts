@@ -35,6 +35,7 @@ import {
 } from "@/lib/benchmark/store";
 import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persistence";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
+import type { CertifiedFailureDetail } from "@/lib/benchmark/certified/dashboard-selectors";
 
 export interface BenchmarkDashboardState {
   dashboard: BenchmarkDashboardData | null;
@@ -164,7 +165,8 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       withCertifiedDeleteMetadata(
         certifiedDashboardData,
         benchmarkAttemptsV2,
-        teamCompositions
+        teamCompositions,
+        benchmarkFailures
       )
     );
     setSuiteCount(benchmarkSuites.length);
@@ -235,8 +237,14 @@ type CertifiedDashboardWithLeaderboard = ReturnType<
 export function withCertifiedDeleteMetadata(
   dashboard: CertifiedDashboardWithLeaderboard,
   attempts: BenchmarkAttemptV2[],
-  teams: BenchmarkTeamComposition[]
-): CertifiedDashboardWithLeaderboard & {
+  teams: BenchmarkTeamComposition[],
+  failures: BenchmarkFailure[] = []
+): Omit<CertifiedDashboardWithLeaderboard, "leaderboard"> & {
+  leaderboard: Array<
+    CertifiedDashboardWithLeaderboard["leaderboard"][number] & {
+      failureDetails: CertifiedFailureDetail[];
+    }
+  >;
   providerErrorAttempts: Array<{
     id: string;
     track: string;
@@ -268,6 +276,7 @@ export function withCertifiedDeleteMetadata(
       const team = representedTeamIds
         .map((teamId) => teamById.get(teamId))
         .find((candidate) => candidate !== undefined);
+      const failureDetails = certifiedFailureDetails(teamAttempts, failures);
       return {
         ...row,
         latestAttemptId: latest?.id,
@@ -293,6 +302,7 @@ export function withCertifiedDeleteMetadata(
           effort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
         })),
         latestCompletedAt: latest?.completedAt ?? latest?.startedAt,
+        failureDetails,
       };
     }),
     providerErrorAttempts: certifiedAttempts
@@ -303,6 +313,39 @@ export function withCertifiedDeleteMetadata(
         teamCompositionId: attempt.teamCompositionId,
       })),
   };
+}
+
+function certifiedFailureDetails(
+  attempts: BenchmarkAttemptV2[],
+  failures: BenchmarkFailure[]
+): CertifiedFailureDetail[] {
+  const attemptsById = new Map(attempts.map((attempt) => [attempt.id, attempt]));
+  const attemptsByFailureId = new Map<string, BenchmarkAttemptV2>();
+  for (const attempt of attempts) {
+    for (const failureId of attempt.failureIds ?? []) {
+      if (!attemptsByFailureId.has(failureId)) {
+        attemptsByFailureId.set(failureId, attempt);
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const details: CertifiedFailureDetail[] = [];
+  for (const failure of failures) {
+    if (seen.has(failure.id)) continue;
+    const attempt =
+      (failure.attemptId ? attemptsById.get(failure.attemptId) : undefined) ??
+      attemptsByFailureId.get(failure.id);
+    if (!attempt) continue;
+    seen.add(failure.id);
+    details.push({
+      attemptId: attempt.id,
+      track: attempt.track,
+      status: attempt.status,
+      code: failure.code,
+      message: failure.message,
+    });
+  }
+  return details;
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {

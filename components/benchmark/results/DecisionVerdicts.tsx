@@ -33,7 +33,7 @@ const CARD_META: Record<
     bar: "bg-emerald-500",
   },
   workbench: {
-    label: "Best WorkBench model",
+    label: "Best WorkBench team",
     icon: Gauge,
     accent: "text-violet-600 dark:text-violet-400",
     bar: "bg-violet-500",
@@ -129,8 +129,11 @@ function formatEvidence(verdict: DecisionVerdict): string {
 
 function formatVerdictMetric(verdict: DecisionVerdict): string {
   if (verdict.metric == null) return "Unavailable";
-  if (verdict.key === "overall" || verdict.key === "workbench") {
+  if (verdict.key === "overall") {
     return `${formatNormalizedScore(verdict.metric)} quality`;
+  }
+  if (verdict.key === "workbench") {
+    return `${formatNormalizedScore(verdict.metric)} verified quality`;
   }
   if (verdict.key === "reliability") {
     return `${formatScore(verdict.metric)} reliability`;
