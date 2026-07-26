@@ -1,5 +1,6 @@
 /** Provider reasoning-effort routing checks (run: npx tsx scripts/test-reasoning-routing.mts) */
 import type { ReasoningEffort } from "../lib/db/schema";
+import { supportedBenchmarkReasoningEfforts } from "../lib/benchmark/model-effort";
 import { formatModelId, parseModelId } from "../lib/providers/base";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { providerSupportsReasoningEffortFeature } from "../lib/providers/provider-registry";
@@ -25,6 +26,7 @@ const efforts: ReasoningEffort[] = [
   "low",
   "medium",
   "high",
+  "xhigh",
   "max",
 ];
 
@@ -38,6 +40,7 @@ const expectedOpenAI: Record<ReasoningEffort, string | null> = {
   low: "low",
   medium: "medium",
   high: "high",
+  xhigh: "xhigh",
   max: "xhigh",
 };
 for (const effort of efforts) {
@@ -54,6 +57,7 @@ const expectedOpenRouter: Record<ReasoningEffort, string | null> = {
   low: "low",
   medium: "medium",
   high: "high",
+  xhigh: "xhigh",
   max: "max",
 };
 for (const effort of efforts) {
@@ -63,6 +67,52 @@ for (const effort of efforts) {
     openRouterReasoningEffort(effort)
   );
 }
+
+check(
+  "OpenAI GPT-5.6 preserves its distinct max effort",
+  openAIReasoningEffort("max", "gpt-5.6-sol") === "max",
+  openAIReasoningEffort("max", "gpt-5.6-sol")
+);
+check(
+  "Older OpenAI models do not expose max as a duplicate of xhigh",
+  json(
+    supportedBenchmarkReasoningEfforts({
+      modelId: "openai:gpt-5.4",
+      providerId: "openai",
+    })
+  ) === json(["default", "none", "low", "medium", "high", "xhigh"]),
+  supportedBenchmarkReasoningEfforts({
+    modelId: "openai:gpt-5.4",
+    providerId: "openai",
+  })
+);
+check(
+  "GPT-5.6 exposes distinct xhigh and max choices",
+  json(
+    supportedBenchmarkReasoningEfforts({
+      modelId: "openai:gpt-5.6-sol",
+      providerId: "openai",
+    })
+  ) ===
+    json(["default", "none", "low", "medium", "high", "xhigh", "max"]),
+  supportedBenchmarkReasoningEfforts({
+    modelId: "openai:gpt-5.6-sol",
+    providerId: "openai",
+  })
+);
+check(
+  "Gemini high-ceiling models do not expose duplicate xhigh or max choices",
+  json(
+    supportedBenchmarkReasoningEfforts({
+      modelId: "google:gemini-3.5-flash",
+      providerId: "google",
+    })
+  ) === json(["default", "none", "low", "medium", "high"]),
+  supportedBenchmarkReasoningEfforts({
+    modelId: "google:gemini-3.5-flash",
+    providerId: "google",
+  })
+);
 
 check(
   "Claude off omits adaptive thinking and effort",

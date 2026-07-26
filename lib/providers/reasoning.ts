@@ -31,6 +31,8 @@ export function openAIReasoningEffort(
       return "medium";
     case "high":
       return "high";
+    case "xhigh":
+      return "xhigh";
     case "max":
       return model.trim().toLowerCase().startsWith("gpt-5.6")
         ? "max"
@@ -73,6 +75,8 @@ export function xAIReasoningEffort(
       return "medium";
     case "high":
       return "high";
+    case "xhigh":
+      return supportsXHigh ? "xhigh" : "high";
     case "max":
       return supportsXHigh ? "xhigh" : "high";
     default:
@@ -104,6 +108,8 @@ export function openRouterReasoningEffort(
       return "medium";
     case "high":
       return "high";
+    case "xhigh":
+      return "xhigh";
     case "max":
       return "max";
     default:
@@ -178,6 +184,8 @@ export function anthropicEffort(
       return "medium";
     case "high":
       return "high";
+    case "xhigh":
+      return anthropicSupportsMaxEffort(model) ? "xhigh" : "high";
     case "max":
       return anthropicSupportsMaxEffort(model) ? "max" : "high";
     default:
@@ -265,6 +273,7 @@ function geminiThinkingLevel(
         return "LOW";
       case "medium":
       case "high":
+      case "xhigh":
       case "max":
         return "HIGH";
       default:
@@ -280,6 +289,8 @@ function geminiThinkingLevel(
     case "medium":
       return "MEDIUM";
     case "high":
+      return "HIGH";
+    case "xhigh":
       return "HIGH";
     case "max":
       return "HIGH";
@@ -312,6 +323,8 @@ export function geminiThinkingConfig(
     case "medium":
       return { thinkingBudget: 2048 };
     case "high":
+      return { thinkingBudget: 8192 };
+    case "xhigh":
       return { thinkingBudget: 8192 };
     case "max":
       return { thinkingBudget: -1 }; // dynamic

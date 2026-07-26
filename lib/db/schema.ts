@@ -486,6 +486,7 @@ export type ReasoningEffort =
   | "low"
   | "medium"
   | "high"
+  | "xhigh"
   | "max";
 
 // Legacy schema export for imports

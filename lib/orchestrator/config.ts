@@ -144,9 +144,14 @@ export const REASONING_OPTIONS: ReasoningEffortInfo[] = [
     description: "Deeper reasoning for hard problems.",
   },
   {
+    value: "xhigh",
+    label: "Extra high",
+    description: "Extra-high reasoning where the model supports it.",
+  },
+  {
     value: "max",
     label: "Max",
-    description: "Maximum depth (xhigh / max where the model supports it).",
+    description: "The provider's true maximum where the model supports it.",
   },
 ];
 
