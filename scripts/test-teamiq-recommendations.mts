@@ -114,6 +114,26 @@ check(
   ),
   cards
 );
+const nonDefaultCards = buildTeamIqRecommendationCards([
+  {
+    ...strongRowForBoundary(rows)!,
+    reasoningEffortDetails: [
+      { role: "architect", displayName: "GPT Team", effort: "low" },
+      { role: "worker", displayName: "Gemini Team", effort: "low" },
+      { role: "reviewer", displayName: "Claude Team", effort: "low" },
+    ],
+  },
+]);
+check(
+  "TeamIQ recommendation data retains non-Default role efforts",
+  nonDefaultCards.length > 0 &&
+    nonDefaultCards.every(
+      (card) =>
+        card.reasoningEffortDetails.length === 3 &&
+        card.reasoningEffortDetails.every((detail) => detail.effort === "low")
+    ),
+  nonDefaultCards
+);
 const liftCard = cards.find((card) => card.kind === "best_team_lift");
 const qualityCard = cards.find((card) => card.kind === "best_quality");
 const valueCard = cards.find((card) => card.kind === "best_value");

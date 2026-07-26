@@ -393,6 +393,20 @@ check(
     paretoMarkup.includes("worker: Model · High"),
   paretoMarkup
 );
+const recommendationOnlyMarkup = renderToStaticMarkup(
+  React.createElement(ParetoFrontier, {
+    rows: [],
+    cards: teamIqCards,
+  })
+);
+check(
+  "recommendation cards independently distinguish team effort configs",
+  recommendationOnlyMarkup.includes("architect: Model · Low") &&
+    recommendationOnlyMarkup.includes("worker: Model · Low") &&
+    recommendationOnlyMarkup.includes("architect: Model · High") &&
+    recommendationOnlyMarkup.includes("worker: Model · High"),
+  recommendationOnlyMarkup
+);
 
 const overallMarkup = renderToStaticMarkup(
   React.createElement(CertifiedBenchmarkOverview, {
