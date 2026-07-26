@@ -15,6 +15,7 @@ import {
   completeBenchmarkRunRecord,
   createCertifiedRunSummary,
   benchmarkDomainForTrack,
+  updateRunningBenchmarkRunTeamCompositionIds,
   type CertifiedRunSummary,
 } from "./run-status";
 import {
@@ -51,6 +52,7 @@ export async function runCertifiedBenchmark(
   const selection = await loadAndValidateCertifiedRunSelection(input);
   const runId = input.runId ?? createRunId(input.track);
   const startedAt = new Date().toISOString();
+  let run: ReturnType<typeof createBenchmarkRunRecord>;
   const context = createCertifiedRunContext({
     runId,
     suiteId: input.suiteId,
@@ -60,8 +62,15 @@ export async function runCertifiedBenchmark(
     caseIds: input.caseIds,
     teamCompositionIds: input.teamCompositionIds,
     modelBudget: input.modelBudget,
+    async onTeamCompositionIdsChanged(teamCompositionIds) {
+      run = updateRunningBenchmarkRunTeamCompositionIds(
+        run,
+        teamCompositionIds
+      );
+      await persistCertifiedRunRecord(run);
+    },
   });
-  const run = createBenchmarkRunRecord({
+  run = createBenchmarkRunRecord({
     context,
     name: input.name,
     modelIds: modelIdsForTeams(selection.teamCompositions),
@@ -143,21 +152,33 @@ function createFailedAttemptsForRunError(input: {
   const attempts: BenchmarkAttemptV2[] = [];
   // A trace can only be summed into one synthesized attempt. Without this, a
   // single persisted trace's cost/tokens/modelCalls are multiplied across teams.
-  const usedTraceIds = new Set<string>();
-  const ownerTeamId = input.context.teamCompositionIds[0];
+  const usedTraceIds = new Set(
+    snapshot.attempts.flatMap((attempt) => attempt.traceIds)
+  );
+  const persistedAttemptIds = new Set(
+    snapshot.attempts.map((attempt) => attempt.id)
+  );
+  for (const trace of snapshot.traces) {
+    if (trace.attemptId && persistedAttemptIds.has(trace.attemptId)) {
+      usedTraceIds.add(trace.id);
+    }
+  }
 
   for (const caseId of input.context.caseIds) {
     for (const teamCompositionId of input.context.teamCompositionIds) {
       if (existingKeys.has(attemptKey(caseId, teamCompositionId))) continue;
-      const isOwnerTeam = teamCompositionId === ownerTeamId;
-      const traces = isOwnerTeam
-        ? snapshot.traces.filter(
-            (trace) =>
-              trace.runId === input.context.runId &&
-              (!trace.caseId || trace.caseId === caseId) &&
-              !usedTraceIds.has(trace.id)
-          )
-        : [];
+      const expectedAttemptIds = new Set([
+        `teamiq-attempt:${input.context.runId}:${teamCompositionId}`,
+        `${input.context.runId}:${caseId}:${teamCompositionId}`,
+        `${input.context.runId}:${caseId}:${teamCompositionId}:failed`,
+      ]);
+      const traces = snapshot.traces.filter(
+        (trace) =>
+          trace.runId === input.context.runId &&
+          !!trace.attemptId &&
+          expectedAttemptIds.has(trace.attemptId) &&
+          !usedTraceIds.has(trace.id)
+      );
       for (const trace of traces) usedTraceIds.add(trace.id);
       attempts.push({
         id: `${input.context.runId}:${caseId}:${teamCompositionId}:failed`,

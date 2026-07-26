@@ -48,6 +48,7 @@ export interface CreateCertifiedRunContextInput {
   caseIds: string[];
   teamCompositionIds: string[];
   modelBudget?: CertifiedRunBudget;
+  onTeamCompositionIdsChanged?: (teamCompositionIds: string[]) => Promise<void>;
 }
 
 export function createCertifiedRunContext(
@@ -76,9 +77,10 @@ export function createCertifiedRunContext(
     caseIds: [...input.caseIds],
     teamCompositionIds,
     modelBudget: input.modelBudget ?? {},
-    registerTeamCompositionId(teamCompositionId) {
+    async registerTeamCompositionId(teamCompositionId) {
       if (!teamCompositionIds.includes(teamCompositionId)) {
         teamCompositionIds.push(teamCompositionId);
+        await input.onTeamCompositionIdsChanged?.([...teamCompositionIds]);
       }
     },
     async recordAttempt(attempt) {

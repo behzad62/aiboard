@@ -88,22 +88,27 @@ export function computeComparableTrackTeamLift(
       );
       return sum + bestOnTrack;
     }, 0) / tracks.length;
+  const rowWideEfficiencyIsComparable =
+    teamRow.trackBreakdown.length === tracks.length &&
+    solos.every((solo) => solo.trackBreakdown.length === tracks.length);
   const bestSolo = solos.reduce((best, solo) =>
     solo.jobSuccessScore > best.jobSuccessScore ? solo : best
   );
   const score = scoreTeamLift({
     teamScore,
     memberSoloScores: [bestSoloScore],
-    teamCostUsd: finiteOrNull(teamRow.averageCostUsd ?? teamRow.costUsd),
-    bestSoloCostUsd: finiteOrNull(
-      bestSolo.averageCostUsd ?? bestSolo.costUsd
-    ),
-    teamDurationMs: finiteOrNull(
-      teamRow.durationMs ?? teamRow.averageDurationMs
-    ),
-    bestSoloDurationMs: finiteOrNull(
-      bestSolo.durationMs ?? bestSolo.averageDurationMs
-    ),
+    teamCostUsd: rowWideEfficiencyIsComparable
+      ? finiteOrNull(teamRow.averageCostUsd ?? teamRow.costUsd)
+      : null,
+    bestSoloCostUsd: rowWideEfficiencyIsComparable
+      ? finiteOrNull(bestSolo.averageCostUsd ?? bestSolo.costUsd)
+      : null,
+    teamDurationMs: rowWideEfficiencyIsComparable
+      ? finiteOrNull(teamRow.durationMs ?? teamRow.averageDurationMs)
+      : null,
+    bestSoloDurationMs: rowWideEfficiencyIsComparable
+      ? finiteOrNull(bestSolo.durationMs ?? bestSolo.averageDurationMs)
+      : null,
   });
   return {
     bestSoloScore: score.bestSoloScore,

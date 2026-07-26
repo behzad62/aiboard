@@ -5,7 +5,9 @@ import {
   __resetBenchmarkStoreForTests,
   listBenchmarkAttemptsV2,
   listBenchmarkFailures,
+  listBenchmarkRuns,
   listBenchmarkTeamCompositions,
+  listBenchmarkTraces,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
@@ -142,47 +144,74 @@ await saveBenchmarkCaseV2(benchmarkCase);
 await saveBenchmarkTeamComposition(firstTeam);
 await saveBenchmarkTeamComposition(secondTeam);
 
-await runCertifiedBenchmark({
-  runId: "run-certified-teamiq-partial-persistence",
-  suiteId: "suite-certified-teamiq",
-  track: "teamiq",
-  harnessProfile: "raw-single-model",
-  caseIds: [benchmarkCase.id],
-  teamCompositionIds: [firstTeam.id, secondTeam.id],
-  certification: runHarnessCertification("raw-single-model"),
-  runner: (context) =>
-    runCertifiedTeamIq({
-      context,
-      teamCompositions: [firstTeam, secondTeam],
-      task: {
-        kind: "toolreliability",
-        casePack: [toolCase],
-      },
-      includeSoloBaselines: true,
-      pricing: null,
-      streamChat: async function* ({
-        providerId,
-        params,
-      }): AsyncIterable<StreamChunk> {
-        if (providerId === secondSolo.roles[0]!.providerId) {
-          throw new Error(
-            "Wall-clock budget exceeded (3600000ms >= 3600000ms)."
-          );
-        }
-        const prompt = params.messages
-          .map((message) => message.content)
-          .join("\n");
-        const content =
-          STATEFUL_REFERENCE_TRANSCRIPTS[toolCase.id]?.[turnIndex(prompt)] ??
-          "done";
-        yield { type: "token", content };
-        yield { type: "done" };
-      },
-    }),
-});
+const originalDateNow = Date.now;
+let controlledNowMs = originalDateNow();
+let secondProviderCalls = 0;
+let durableCompositionIdsAtFirstExecution: string[] = [];
+Date.now = () => controlledNowMs;
+try {
+  await runCertifiedBenchmark({
+    runId: "run-certified-teamiq-partial-persistence",
+    suiteId: "suite-certified-teamiq",
+    track: "teamiq",
+    harnessProfile: "raw-single-model",
+    caseIds: [benchmarkCase.id],
+    teamCompositionIds: [firstTeam.id, secondTeam.id],
+    modelBudget: { maxWallClockMs: 3_600_000 },
+    certification: runHarnessCertification("raw-single-model"),
+    runner: (context) =>
+      runCertifiedTeamIq({
+        context,
+        teamCompositions: [firstTeam, secondTeam],
+        task: {
+          kind: "toolreliability",
+          casePack: [toolCase],
+        },
+        includeSoloBaselines: true,
+        pricing: { inputUsdPer1M: 1, outputUsdPer1M: 1 },
+        streamChat: async function* ({
+          providerId,
+          params,
+        }): AsyncIterable<StreamChunk> {
+          if (durableCompositionIdsAtFirstExecution.length === 0) {
+            const durableRun = (await listBenchmarkRuns()).find(
+              (run) => run.id === context.runId && run.status === "running"
+            );
+            const summary = durableRun
+              ? (JSON.parse(durableRun.summaryJson) as {
+                  teamCompositionIds?: string[];
+                })
+              : {};
+            durableCompositionIdsAtFirstExecution =
+              summary.teamCompositionIds ?? [];
+          }
+          if (providerId === secondSolo.roles[0]!.providerId) {
+            secondProviderCalls += 1;
+          }
+          const prompt = params.messages
+            .map((message) => message.content)
+            .join("\n");
+          const content =
+            STATEFUL_REFERENCE_TRANSCRIPTS[toolCase.id]?.[turnIndex(prompt)] ??
+            "done";
+          yield { type: "token", content };
+          yield { type: "done" };
+          if (
+            providerId === secondSolo.roles[0]!.providerId &&
+            secondProviderCalls === 1
+          ) {
+            controlledNowMs += 3_610_000;
+          }
+        },
+      }),
+  });
+} finally {
+  Date.now = originalDateNow;
+}
 
 const attempts = await listBenchmarkAttemptsV2();
 const persistedTeams = await listBenchmarkTeamCompositions();
+const traces = await listBenchmarkTraces();
 const derivedSolos = persistedTeams.filter(
   (team) =>
     team.roles.length === 1 &&
@@ -230,8 +259,37 @@ check(
   { derivedSolos, attempts }
 );
 check(
+  "expanded composition ids are durable before the first composition executes",
+  persistedTeams.every((team) =>
+    durableCompositionIdsAtFirstExecution.includes(team.id)
+  ),
+  { durableCompositionIdsAtFirstExecution, persistedTeams }
+);
+check(
   "completed TeamIQ solo is not recorded twice",
   attempts.filter((attempt) => attempt.id === completed?.id).length === 1
+);
+const failedOwnedTraces = traces.filter(
+  (trace) =>
+    trace.attemptId ===
+    `teamiq-attempt:run-certified-teamiq-partial-persistence:${failed?.teamCompositionId}`
+);
+check(
+  "failed solo owns only its explicit traces and exact token/cost totals",
+  failedOwnedTraces.length > 0 &&
+    failed?.traceIds.length === failedOwnedTraces.length &&
+    failedOwnedTraces.every((trace) => failed.traceIds.includes(trace.id)) &&
+    failed.inputTokens ===
+      failedOwnedTraces.reduce((sum, trace) => sum + (trace.inputTokens ?? 0), 0) &&
+    failed.outputTokens ===
+      failedOwnedTraces.reduce((sum, trace) => sum + (trace.outputTokens ?? 0), 0) &&
+    failed.costUsd ===
+      failedOwnedTraces.reduce(
+        (sum, trace) => sum + (trace.estimatedUsd ?? 0),
+        0
+      ) &&
+    completed?.traceIds.every((traceId) => !failed.traceIds.includes(traceId)),
+  { failed, failedOwnedTraces, completed }
 );
 
 const dashboardWithMetadata = withCertifiedDeleteMetadata(
@@ -257,8 +315,8 @@ const profileMarkup = failedRow
 check(
   "exact all-modes budget provenance reaches row metadata and rendered profile",
   failedRow?.failureDetails.some((detail) =>
-    detail.message.includes("3600000ms >= 3600000ms")
-  ) === true && profileMarkup.includes("3600000ms &gt;= 3600000ms"),
+    detail.message.includes("maxWallClockMs 3600000")
+  ) === true && profileMarkup.includes("maxWallClockMs 3600000"),
   {
     failedCompositionId: failed?.teamCompositionId,
     leaderboard: readLeaderboard(dashboardWithMetadata, "teamiq", "overall"),

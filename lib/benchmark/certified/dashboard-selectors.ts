@@ -27,7 +27,8 @@ export type CertifiedTrackView =
   | "workbench"
   | "gameiq"
   | "teamiq"
-  | "toolreliability";
+  | "toolreliability"
+  | "harnessbench";
 
 export type LeaderboardSortKey =
   | "quality"
@@ -72,7 +73,7 @@ export const SORT_SOURCE_KEY: Record<
 export const SORT_BASIS_TEXT: Record<LeaderboardSortKey, string> = {
   quality: "Ranked by verified quality.",
   overall:
-    "Ranked by overall score — each track's quality weighted equally, then averaged across the tracks the row ran.",
+    "Ranked by overall index — each track's quality weighted equally, then averaged across the tracks the row ran.",
   teamLift: "Ranked by team lift over the best solo member.",
   costPerPass:
     "Ranked by cost per passed case (lowest first). Rows without pricing (account or custom providers) fall back to tokens per passed case and rank after priced rows.",
@@ -814,6 +815,7 @@ export function normalizeTrack(
   if (normalized === "game" || normalized === "gameiq") return "gameiq";
   if (normalized === "teamiq") return "teamiq";
   if (normalized === "toolreliability") return "toolreliability";
+  if (normalized === "harnessbench") return "harnessbench";
   return undefined;
 }
 

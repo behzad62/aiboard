@@ -110,8 +110,10 @@ export function ModelEvidenceProfile({
             <h4 className="text-sm font-semibold">Track coverage</h4>
             <span className="text-xs text-muted-foreground">
               {row.tracks.length} represented track
-              {row.tracks.length === 1 ? "" : "s"} · {failedAttempts} failed
-              attempt{failedAttempts === 1 ? "" : "s"}
+              {row.tracks.length === 1 ? "" : "s"} ·{" "}
+              {failedAttempts == null
+                ? "Failed attempts not measured"
+                : `${failedAttempts} failed attempt${failedAttempts === 1 ? "" : "s"}`}
             </span>
           </div>
           <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
@@ -251,17 +253,20 @@ function budgetFailureCount(row: DecisionRow, track: string): number {
   return attemptIds.size;
 }
 
-function failedAttemptCount(row: DecisionRow): number {
-  if (row.passed != null) {
-    return Math.max(0, row.attempts - row.passed);
-  }
+function failedAttemptCount(row: DecisionRow): number | null {
+  const passed = derivedPasses(row);
+  const aggregateFailures =
+    passed == null ? null : Math.max(0, row.attempts - passed);
   const attemptIds = new Set(
     row.failureDetails.map((detail) => detail.attemptId)
   );
   for (const latest of Object.values(row.latestAttemptsByTrack)) {
     if (latest.status !== "passed") attemptIds.add(latest.id);
   }
-  return attemptIds.size;
+  if (aggregateFailures == null) {
+    return attemptIds.size > 0 ? attemptIds.size : null;
+  }
+  return Math.max(aggregateFailures, attemptIds.size);
 }
 
 function certifiedFailureMessages(row: DecisionRow): string[] {

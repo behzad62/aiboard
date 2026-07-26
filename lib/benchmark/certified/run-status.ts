@@ -66,6 +66,29 @@ export function createBenchmarkRunRecord(input: {
   };
 }
 
+export function updateRunningBenchmarkRunTeamCompositionIds(
+  run: BenchmarkRun,
+  teamCompositionIds: string[]
+): BenchmarkRun {
+  let summary: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(run.summaryJson) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      summary = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // A running record created by this module always has valid JSON. Preserve
+    // the record and repair only the metadata needed for durable recovery.
+  }
+  return {
+    ...run,
+    summaryJson: JSON.stringify({
+      ...summary,
+      teamCompositionIds: [...teamCompositionIds],
+    }),
+  };
+}
+
 export function completeBenchmarkRunRecord(input: {
   run: BenchmarkRun;
   completedAt: string;

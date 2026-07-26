@@ -85,6 +85,29 @@ check(
     comparableLift.tracks.join(",") === "teamiq",
   comparableLift
 );
+const excludedTrackCostLift = computeComparableTrackTeamLift(
+  {
+    ...comparableTeam,
+    averageCostUsd: 1_000,
+    averageDurationMs: 1_000_000,
+  },
+  new Map(
+    Array.from(comparableSolos, ([key, solo]) => [
+      key,
+      {
+        ...solo,
+        averageCostUsd: 0.001,
+        averageDurationMs: 1,
+      },
+    ])
+  )
+);
+check(
+  "comparable lift label ignores cost and duration from excluded tracks",
+  excludedTrackCostLift?.label === comparableLift?.label &&
+    excludedTrackCostLift?.label === "strong_positive",
+  { comparableLift, excludedTrackCostLift }
+);
 
 check(
   "comparable lift is null when team and solo evidence have no overlapping track",

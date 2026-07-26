@@ -539,6 +539,43 @@ check(
     liveTeamIqRows[0]?.failureDetails.length === 0,
   liveTeamIqRows
 );
+const harnessRow = {
+  ...row("harness-live", {
+    tracks: ["harnessbench"],
+    trackBreakdown: [
+      {
+        track: "harnessbench",
+        attempts: 2,
+        passed: 1,
+        verifiedPassRate: 0.5,
+        averageVerifiedQuality: 0.65,
+      },
+    ],
+  }),
+  teamName: "Harness live",
+};
+const liveHarnessRows = readDecisionDashboardRows(
+  {
+    leaderboard: [harnessRow],
+    overallLeaderboard: [harnessRow],
+  },
+  {
+    query: "",
+    track: "harnessbench",
+    kind: "all",
+    provider: "all",
+    effort: "all",
+    evidence: "all",
+  },
+  "overall"
+);
+check(
+  "live Results helper returns HarnessBench rows",
+  liveHarnessRows.length === 1 &&
+    liveHarnessRows[0]?.tracks.join(",") === "harnessbench" &&
+    liveHarnessRows[0]?.attempts === 2,
+  liveHarnessRows
+);
 
 const repeatedModelTeam = row("same-model-team", {
   label: "Sol architect + Sol worker",

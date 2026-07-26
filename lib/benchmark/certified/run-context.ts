@@ -34,7 +34,7 @@ export interface CertifiedRunContext {
   caseIds: string[];
   teamCompositionIds: string[];
   modelBudget: CertifiedRunBudget;
-  registerTeamCompositionId?(teamCompositionId: string): void;
+  registerTeamCompositionId?(teamCompositionId: string): Promise<void>;
   recordAttempt(attempt: BenchmarkAttemptV2): Promise<void>;
   recordVerifier(result: BenchmarkVerifierResult): Promise<void>;
   recordArtifact(artifact: BenchmarkArtifact): Promise<void>;

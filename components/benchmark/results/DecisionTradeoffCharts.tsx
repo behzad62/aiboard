@@ -36,6 +36,7 @@ export interface TradeoffPoint {
   attempts: number;
   color: string;
   marker: ChartMarker;
+  visualKey: string;
   reasoningEffortDetails: DecisionRow["reasoningEffortDetails"];
 }
 
@@ -111,6 +112,12 @@ function TradeoffChart({
                       color={point.color}
                     />
                   </svg>
+                  <span
+                    data-visual-key={point.visualKey}
+                    className="inline-flex min-w-5 items-center justify-center rounded border px-1 font-mono font-semibold"
+                  >
+                    {point.visualKey}
+                  </span>
                   <span className="min-w-0 break-words whitespace-normal font-medium">
                     {decisionTradeoffPointLabel(point)}
                   </span>
@@ -127,7 +134,7 @@ function TradeoffChart({
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart margin={{ top: 8, right: 12, bottom: 12, left: 0 }}>
                   <CartesianGrid
-                    stroke="hsl(var(--border))"
+                    stroke="hsl(var(--muted-foreground))"
                     strokeDasharray="3 3"
                   />
                   <XAxis
@@ -235,6 +242,11 @@ export function projectDecisionTradeoffPoints(
   rows: DecisionRow[],
   basis: "tokens" | "time"
 ): TradeoffPoint[] {
+  const visualKeys = new Map(
+    Array.from(new Set(rows.map((row) => row.id)))
+      .sort()
+      .map((id, index) => [id, String(index + 1)])
+  );
   return rows.flatMap((row) => {
     const quality = row.overallScore ?? row.verifiedQuality;
     const measured =
@@ -251,6 +263,7 @@ export function projectDecisionTradeoffPoints(
         attempts: row.attempts,
         color: chartColorForIdentity(row.id),
         marker: chartMarkerForIdentity(row.id),
+        visualKey: visualKeys.get(row.id)!,
         reasoningEffortDetails: row.reasoningEffortDetails,
       },
     ];
@@ -265,6 +278,7 @@ export function decisionTradeoffPointAriaLabel(
   return [
     decisionTradeoffPointLabel(point),
     point.kind,
+    `Chart key: ${point.visualKey}`,
     `Tracks: ${formatTrackNames(point.tracks)}`,
     `Overall index: ${point.quality.toFixed(1)}`,
     `${xLabel}: ${formatX(point.x)}`,
@@ -293,6 +307,7 @@ export function DecisionTradeoffPointShape({
       aria-label={decisionTradeoffPointAriaLabel(payload, xLabel, formatX)}
       className="group outline-none"
       data-marker={payload.marker}
+      data-visual-key={payload.visualKey}
     >
       <DecisionMarker
         cx={cx}
@@ -301,6 +316,15 @@ export function DecisionTradeoffPointShape({
         marker={payload.marker}
         color={payload.color}
       />
+      <text
+        x={cx + 7}
+        y={cy - 7}
+        fill="hsl(var(--foreground))"
+        fontSize={9}
+        fontWeight={700}
+      >
+        {payload.visualKey}
+      </text>
     </g>
   );
 }

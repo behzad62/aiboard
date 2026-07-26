@@ -44,6 +44,7 @@ export const TRACK_LABELS: Record<CertifiedTrackView, string> = {
   gameiq: "GameIQ",
   teamiq: "TeamIQ",
   toolreliability: "Tool Reliability",
+  harnessbench: "HarnessBench",
 };
 
 export function trackLabelFor(track: string): string {

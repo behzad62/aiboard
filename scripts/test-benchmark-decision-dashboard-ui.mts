@@ -425,9 +425,9 @@ check(
 );
 check(
   "track profile counts passes and budget failures and deduplicates messages",
-  explanatoryProfileMarkup.includes("0 of 1 passed") &&
+    explanatoryProfileMarkup.includes("0 of 1 passed") &&
     explanatoryProfileMarkup.includes("2 budget failures") &&
-    explanatoryProfileMarkup.includes("1 failed attempt") &&
+    explanatoryProfileMarkup.includes("2 failed attempts") &&
     explanatoryProfileMarkup.split("Certified model-call budget was exhausted.").length - 1 === 1,
   explanatoryProfileMarkup
 );
@@ -481,6 +481,70 @@ check(
   missingEvidenceProfileMarkup.includes("3 attempts \u00b7 Pass evidence unavailable") &&
     !missingEvidenceProfileMarkup.includes("0 of 3 passed"),
   missingEvidenceProfileMarkup
+);
+const rateDerivedFailuresMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "rate-derived-failures",
+    row: {
+      ...responsiveRows[0],
+      attempts: 10,
+      passed: null,
+      passRate: 0.8,
+      failureDetails: [],
+      latestAttemptsByTrack: {}
+    },
+    onClose: () => undefined
+  })
+);
+const linkedFailureLowerBoundMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "linked-failure-lower-bound",
+    row: {
+      ...responsiveRows[0],
+      attempts: 1,
+      passed: 1,
+      passRate: 1,
+      failureDetails: [
+        {
+          attemptId: "later-failed-attempt",
+          track: "gameiq",
+          status: "failed_budget",
+          code: "budget_exhausted",
+          message: "Later attempt failed."
+        }
+      ],
+      latestAttemptsByTrack: {}
+    },
+    onClose: () => undefined
+  })
+);
+const unknownFailuresMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "unknown-failures",
+    row: {
+      ...responsiveRows[0],
+      passed: null,
+      passRate: null,
+      failureDetails: [],
+      latestAttemptId: undefined,
+      latestAttemptStatus: undefined,
+      latestAttemptTrack: undefined,
+      latestAttemptsByTrack: {}
+    },
+    onClose: () => undefined
+  })
+);
+check(
+  "failed-attempt count derives from pass rate and honors linked lower bounds",
+  rateDerivedFailuresMarkup.includes("2 failed attempts") &&
+    linkedFailureLowerBoundMarkup.includes("1 failed attempt"),
+  { rateDerivedFailuresMarkup, linkedFailureLowerBoundMarkup }
+);
+check(
+  "failed-attempt count stays unavailable without aggregates or provenance",
+  unknownFailuresMarkup.includes("Failed attempts not measured") &&
+    !unknownFailuresMarkup.includes("0 failed attempts"),
+  unknownFailuresMarkup
 );
 
 const unbrokenProfileIdentity = "model_" + "x".repeat(160);
@@ -605,7 +669,7 @@ const auditOverallMarkup = renderToStaticMarkup(
 check(
   "Audit leaderboard labels the certified aggregate as Overall index",
   auditOverallMarkup.includes("Overall index") &&
-    !auditOverallMarkup.includes("Overall score"),
+    !/overall score/i.test(auditOverallMarkup),
   auditOverallMarkup
 );
 check(
@@ -740,10 +804,24 @@ const reorderedProjection = projectDecisionTradeoffPoints([chartRows[1]!, chartR
 const filteredProjection = projectDecisionTradeoffPoints([chartRows[1]!], "tokens");
 const collisionProjection = projectDecisionTradeoffPoints(
   [
-    { ...chartRows[0]!, id: "a", label: "Identity a" },
-    { ...chartRows[0]!, id: "g", label: "Identity g" }
+    { ...chartRows[0]!, id: "C", label: "Identity C" },
+    { ...chartRows[0]!, id: "a", label: "Identity a" }
   ],
   "tokens"
+);
+const manyIdentityRows = ["C", "a", "b", "d", "e", "f", "g", "h"].map(
+  (id) => ({ ...chartRows[0]!, id, label: `Identity ${id}` })
+);
+const manyIdentityMarkup = renderToStaticMarkup(
+  React.createElement(DecisionTradeoffCharts, { rows: manyIdentityRows })
+);
+const manyTokenProjection = projectDecisionTradeoffPoints(
+  manyIdentityRows,
+  "tokens"
+);
+const manyTimeProjection = projectDecisionTradeoffPoints(
+  manyIdentityRows,
+  "time"
 );
 check(
   "chart identity colors survive row reorder and filtering",
@@ -758,15 +836,37 @@ check(
   { tokenProjection, timeProjection }
 );
 check(
-  "colliding six-color identities retain distinct stable markers",
+  "color-and-marker collisions retain distinct chart-local visual keys",
   collisionProjection[0]?.color === collisionProjection[1]?.color &&
-    collisionProjection[0]?.marker !== collisionProjection[1]?.marker &&
-    collisionProjection[0]?.marker ===
+    collisionProjection[0]?.marker === collisionProjection[1]?.marker &&
+    collisionProjection[0]?.visualKey !== collisionProjection[1]?.visualKey &&
+    collisionProjection[0]?.visualKey ===
       projectDecisionTradeoffPoints(
-        [{ ...chartRows[0]!, id: "a", label: "Identity a" }],
+        [
+          { ...chartRows[0]!, id: "a", label: "Identity a" },
+          { ...chartRows[0]!, id: "C", label: "Identity C" }
+        ],
         "time"
-      )[0]?.marker,
+      ).find((point) => point.id === "C")?.visualKey,
   collisionProjection
+);
+check(
+  "more than six identities have unique visible keys shared by both charts",
+  new Set(manyTokenProjection.map((point) => point.visualKey)).size ===
+    manyIdentityRows.length &&
+    manyTokenProjection.every(
+      (point) =>
+        manyTimeProjection.find((candidate) => candidate.id === point.id)
+          ?.visualKey === point.visualKey
+    ) &&
+    manyTokenProjection.every(
+      (point) =>
+        manyIdentityMarkup.split(`data-visual-key="${point.visualKey}"`).length -
+          1 ===
+          2 &&
+        manyIdentityMarkup.includes(`>${point.visualKey}</span>`)
+    ),
+  { manyTokenProjection, manyTimeProjection, manyIdentityMarkup }
 );
 check(
   "trade-off projections prefer overall index and fall back to verified quality",
@@ -811,7 +911,7 @@ check(
 );
 check(
   "chart theme tokens are valid and marker treatment matches legend and point",
-  charts.includes('stroke="hsl(var(--border))"') &&
+  charts.includes('stroke="hsl(var(--muted-foreground))"') &&
     charts.includes('fill: "hsl(var(--muted-foreground))"') &&
     decisionChartMarkup.includes("hsl(var(--foreground))") &&
     !charts.includes('stroke="var(--') &&
@@ -826,6 +926,15 @@ check(
   {
     light: contrastRatio([222, 45, 12], [213, 38, 97]),
     dark: contrastRatio([210, 40, 98], [222.2, 84, 4.9])
+  }
+);
+check(
+  "grid token exceeds 3:1 against light and dark chart backgrounds",
+  contrastRatio([215.3, 18, 42], [213, 38, 97]) >= 3 &&
+    contrastRatio([215, 20.2, 65.1], [222.2, 84, 4.9]) >= 3,
+  {
+    light: contrastRatio([215.3, 18, 42], [213, 38, 97]),
+    dark: contrastRatio([215, 20.2, 65.1], [222.2, 84, 4.9])
   }
 );
 const longChartIdentity =
@@ -880,7 +989,11 @@ check(
     pointShapeMarkup.includes("Overall index: 77.0") &&
     pointShapeMarkup.includes("Tokens per successful case: 5,678 tokens") &&
     pointShapeMarkup.includes('stroke="hsl(var(--foreground))"') &&
-    pointShapeMarkup.includes('data-marker="'),
+    pointShapeMarkup.includes('data-marker="') &&
+    pointShapeMarkup.includes(
+      `data-visual-key="${tokenProjection[1]!.visualKey}"`
+    ) &&
+    pointShapeMarkup.includes(`>${tokenProjection[1]!.visualKey}</text>`),
   pointShapeMarkup
 );
 const tooltipMarkup = renderToStaticMarkup(
