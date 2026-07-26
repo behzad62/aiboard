@@ -19,6 +19,7 @@ import {
   benchmarkVariantKey,
   benchmarkVariantLabel,
   normalizeBenchmarkReasoningEffort,
+  type BenchmarkVariantRosterDetail,
 } from "@/lib/benchmark/model-effort";
 
 export type CertifiedTrackView =
@@ -158,11 +159,7 @@ export interface CertifiedLeaderboardRow {
    * and legacy bundles may not carry it, so readers always expose empty arrays. */
   providerIds: string[];
   reasoningEfforts: string[];
-  reasoningEffortDetails?: Array<{
-    role: string;
-    displayName: string;
-    effort: string;
-  }>;
+  reasoningEffortDetails?: BenchmarkVariantRosterDetail[];
   latestCompletedAt?: string;
 }
 
@@ -613,6 +610,9 @@ export function readTeamIqComboMatrixRow(value: unknown): TeamIqComboMatrixRow |
     storedVariantKeys,
     modelIds
   );
+  const storedEffortDetails = readReasoningEffortDetails(
+    row.reasoningEffortDetails
+  );
   return {
     id,
     teamCompositionId,
@@ -621,6 +621,10 @@ export function readTeamIqComboMatrixRow(value: unknown): TeamIqComboMatrixRow |
     track: readBenchmarkTrack(track) ?? "teamiq",
     modelIds,
     modelVariantKeys,
+    reasoningEffortDetails:
+      storedEffortDetails.length > 0
+        ? storedEffortDetails
+        : variantDetailsFromKeys(modelVariantKeys),
     isSolo: row.isSolo === true || recommendationLabel === "solo_baseline",
     attempts: readNumber(row.attempts) ?? 0,
     verifiedQuality: readNumber(row.verifiedQuality) ?? 0,
@@ -645,13 +649,30 @@ export function readBenchmarkTrack(value: string | null): BenchmarkTrack | null 
 export function readTeamIqRecommendationCards(
   certified: unknown
 ): TeamIqRecommendationCard[] {
+  const detailsByTeamId = new Map(
+    readTeamIqComboMatrixRows(certified).map((row) => [
+      row.teamCompositionId,
+      row.reasoningEffortDetails,
+    ])
+  );
   return readArray(readRecord(certified).teamIqRecommendationCards)
-    .map(readTeamIqRecommendationCard)
+    .map((value) => {
+      const teamCompositionId = readString(
+        readRecord(value).teamCompositionId
+      );
+      return readTeamIqRecommendationCard(
+        value,
+        teamCompositionId
+          ? detailsByTeamId.get(teamCompositionId)
+          : undefined
+      );
+    })
     .filter((card): card is TeamIqRecommendationCard => card !== null);
 }
 
 export function readTeamIqRecommendationCard(
-  value: unknown
+  value: unknown,
+  fallbackEffortDetails: TeamIqRecommendationCard["reasoningEffortDetails"] = []
 ): TeamIqRecommendationCard | null {
   const card = readRecord(value);
   const kind = readString(card.kind);
@@ -689,7 +710,28 @@ export function readTeamIqRecommendationCard(
     value: readString(card.value) ?? "n/a",
     detail: readString(card.detail) ?? "",
     recommendationLabel,
+    reasoningEffortDetails: (() => {
+      const stored = readReasoningEffortDetails(card.reasoningEffortDetails);
+      return stored.length > 0 ? stored : fallbackEffortDetails;
+    })(),
   };
+}
+
+function variantDetailsFromKeys(
+  variantKeys: string[]
+): TeamIqComboMatrixRow["reasoningEffortDetails"] {
+  return variantKeys.map((variantKey, index) => {
+    const separator = variantKey.indexOf("\u0000");
+    const modelId =
+      separator > 0 ? variantKey.slice(0, separator) : variantKey;
+    const effort =
+      separator > 0 ? variantKey.slice(separator + 1) : "default";
+    return {
+      role: `member ${index + 1}`,
+      displayName: modelId,
+      effort: normalizeBenchmarkReasoningEffort(effort),
+    };
+  });
 }
 
 export function readTeamIqRecommendationLabel(

@@ -10,6 +10,7 @@ import {
 import { duration, formatNormalizedScore, usd } from "@/components/benchmark/format";
 import { trackLabelFor } from "@/components/benchmark/certified/CertifiedResultTables";
 import type { TeamIqComboMatrixRow } from "@/lib/benchmark/teamiq";
+import { VariantRosterBadges } from "@/components/benchmark/results/VariantRosterBadges";
 
 // Rows can come from any track that runs team compositions (TeamIQ,
 // WorkBench, ...) since the benchmark UX overhaul's team-lift generalization
@@ -58,8 +59,10 @@ export function ComboMatrix({ rows }: { rows: TeamIqComboMatrixRow[] }) {
               <tr key={row.id} className="border-b last:border-0">
                 <td className="py-3 pr-3">
                   <div className="font-medium">{row.teamName}</div>
-                  <div className="mt-0.5 max-w-[22rem] truncate text-xs text-muted-foreground">
-                    {row.modelIds.join(" + ")}
+                  <div className="mt-1 max-w-[22rem]">
+                    <VariantRosterBadges
+                      details={row.reasoningEffortDetails}
+                    />
                   </div>
                 </td>
                 <td className="px-3 py-3">

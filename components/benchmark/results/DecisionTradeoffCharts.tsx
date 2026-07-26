@@ -13,6 +13,10 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CHART_COLORS, EmptyChart } from "@/components/benchmark/chart-utils";
 import type { DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
+import {
+  VariantRosterBadges,
+  variantRosterText,
+} from "./VariantRosterBadges";
 
 interface TradeoffPoint {
   id: string;
@@ -20,6 +24,7 @@ interface TradeoffPoint {
   quality: number;
   x: number;
   attempts: number;
+  reasoningEffortDetails: DecisionRow["reasoningEffortDetails"];
 }
 
 export function DecisionTradeoffCharts({ rows }: { rows: DecisionRow[] }) {
@@ -107,9 +112,13 @@ function TradeoffChart({
                         ? [`${numeric.toFixed(1)}`, name]
                         : [formatX(numeric), xLabel];
                     }}
-                    labelFormatter={(_, payload) =>
-                      payload?.[0]?.payload?.label ?? "Result"
-                    }
+                    labelFormatter={(_, payload) => {
+                      const point = payload?.[0]?.payload as
+                        | TradeoffPoint
+                        | undefined;
+                      if (!point) return "Result";
+                      return decisionTradeoffPointLabel(point);
+                    }}
                   />
                   <Scatter name={title} data={points}>
                     {points.map((point, index) => (
@@ -139,7 +148,12 @@ function TradeoffChart({
                   <tbody>
                     {points.map((point) => (
                       <tr key={point.id} className="border-t">
-                        <td className="px-3 py-2">{point.label}</td>
+                        <td className="px-3 py-2">
+                          <div>{point.label}</div>
+                          <VariantRosterBadges
+                            details={point.reasoningEffortDetails}
+                          />
+                        </td>
                         <td className="px-3 py-2 text-right tabular-nums">{point.quality.toFixed(1)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatX(point.x)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{point.attempts}</td>
@@ -158,6 +172,14 @@ function TradeoffChart({
   );
 }
 
+export function decisionTradeoffPointLabel(point: {
+  label: string;
+  reasoningEffortDetails: DecisionRow["reasoningEffortDetails"];
+}): string {
+  const roster = variantRosterText(point.reasoningEffortDetails);
+  return roster ? `${point.label} — ${roster}` : point.label;
+}
+
 function project(
   rows: DecisionRow[],
   metric: "tokens" | "time"
@@ -173,6 +195,7 @@ function project(
         quality: quality * 100,
         x: metric === "time" ? measured / 1000 : measured,
         attempts: row.attempts,
+        reasoningEffortDetails: row.reasoningEffortDetails,
       },
     ];
   });

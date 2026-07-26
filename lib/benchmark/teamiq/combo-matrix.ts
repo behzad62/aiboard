@@ -11,6 +11,10 @@ import {
 } from "./compositions";
 import { linkTeamLiftBaselines } from "./baselines";
 import { MIN_CONFIDENT_ATTEMPTS } from "./recommendations";
+import {
+  benchmarkVariantRosterDetails,
+  type BenchmarkVariantRosterDetail,
+} from "@/lib/benchmark/model-effort";
 
 export type TeamIqRecommendationLabel =
   | "recommended"
@@ -35,6 +39,7 @@ export interface TeamIqComboMatrixRow {
   track: BenchmarkAttemptV2["track"];
   modelIds: string[];
   modelVariantKeys: string[];
+  reasoningEffortDetails: BenchmarkVariantRosterDetail[];
   isSolo: boolean;
   attempts: number;
   verifiedQuality: number;
@@ -57,6 +62,7 @@ interface MutableComboRow {
   track: BenchmarkAttemptV2["track"];
   modelIds: string[];
   modelVariantKeys: string[];
+  reasoningEffortDetails: BenchmarkVariantRosterDetail[];
   attempts: number;
   verifiedQualitySum: number;
   jobSuccessScoreSum: number;
@@ -165,6 +171,13 @@ function groupFor(
     track: attempt.track,
     modelIds,
     modelVariantKeys: getTeamCompositionModelVariantKeys(team),
+    reasoningEffortDetails: benchmarkVariantRosterDetails(
+      team?.roles ??
+        modelIds.map((modelId, index) => ({
+          role: `member ${index + 1}`,
+          modelId,
+        }))
+    ),
     attempts: 0,
     verifiedQualitySum: 0,
     jobSuccessScoreSum: 0,
@@ -191,6 +204,7 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
     track: group.track,
     modelIds: group.modelIds,
     modelVariantKeys: group.modelVariantKeys,
+    reasoningEffortDetails: group.reasoningEffortDetails,
     isSolo: group.isSolo,
     attempts: group.attempts,
     verifiedQuality: average(group.verifiedQualitySum, group.attempts, 4),

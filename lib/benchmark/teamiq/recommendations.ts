@@ -2,6 +2,7 @@ import type {
   TeamIqComboMatrixRow,
   TeamIqRecommendationLabel,
 } from "./combo-matrix";
+import type { BenchmarkVariantRosterDetail } from "@/lib/benchmark/model-effort";
 
 export type TeamIqRecommendationCardKind =
   | "best_team_lift"
@@ -18,6 +19,7 @@ export interface TeamIqRecommendationCard {
   value: string;
   detail: string;
   recommendationLabel: TeamIqRecommendationLabel;
+  reasoningEffortDetails: BenchmarkVariantRosterDetail[];
 }
 
 export const MIN_CONFIDENT_ATTEMPTS = 3;
@@ -77,6 +79,7 @@ function cardFor(
     value: rendered.value,
     detail: rendered.detail,
     recommendationLabel: row.recommendationLabel,
+    reasoningEffortDetails: row.reasoningEffortDetails,
   };
 }
 

@@ -4,7 +4,10 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DecisionLeaderboard } from "../components/benchmark/results/DecisionLeaderboard";
 import { DecisionVerdicts } from "../components/benchmark/results/DecisionVerdicts";
-import { DecisionTradeoffCharts } from "../components/benchmark/results/DecisionTradeoffCharts";
+import {
+  DecisionTradeoffCharts,
+  decisionTradeoffPointLabel,
+} from "../components/benchmark/results/DecisionTradeoffCharts";
 import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
 import {
   CertifiedLeaderboard,
@@ -12,7 +15,14 @@ import {
   type RosterRole,
 } from "../components/benchmark/certified/CertifiedResultTables";
 import { CertifiedBenchmarkOverview } from "../components/benchmark/certified/CertifiedBenchmarkOverview";
+import { ComboMatrix } from "../components/benchmark/teamiq/ComboMatrix";
+import { ParetoFrontier } from "../components/benchmark/teamiq/ParetoFrontier";
 import type { DecisionRow } from "../lib/benchmark/certified/decision-dashboard";
+import type {
+  TeamIqComboMatrixRow,
+  TeamIqRecommendationCard,
+} from "../lib/benchmark/teamiq";
+import type { BenchmarkVariantRosterDetail } from "../lib/benchmark/model-effort";
 
 let failures = 0;
 
@@ -149,7 +159,7 @@ const teamDecisionRow: DecisionRow = {
   reasoningEffortDetails: [
     { role: "architect", displayName: "Architect", effort: "low" },
     { role: "worker", displayName: "Worker", effort: "high" },
-    { role: "reviewer", displayName: "Legacy", effort: "invalid" },
+    { role: "reviewer", displayName: "Legacy", effort: "invalid" as never },
   ],
 };
 const verdictMarkup = renderToStaticMarkup(
@@ -241,21 +251,147 @@ check(
 const chartMarkup = renderToStaticMarkup(
   React.createElement(DecisionTradeoffCharts, {
     rows: [
-      { ...variantRow, tokensPerPass: 1000, speedPerPassMs: 1000 },
       {
-        ...variantRow,
-        id: "variant-high",
-        label: "Model · High",
+        ...teamDecisionRow,
+        id: "same-team-low",
+        label: "Same team",
+        tokensPerPass: 1000,
+        speedPerPassMs: 1000,
+        reasoningEffortDetails: [
+          { role: "architect", displayName: "Model", effort: "low" },
+          { role: "worker", displayName: "Model", effort: "low" },
+        ],
+      },
+      {
+        ...teamDecisionRow,
+        id: "same-team-high",
+        label: "Same team",
         tokensPerPass: 2000,
         speedPerPassMs: 2000,
+        reasoningEffortDetails: [
+          { role: "architect", displayName: "Model", effort: "high" },
+          { role: "worker", displayName: "Model", effort: "high" },
+        ],
       },
     ],
   })
 );
 check(
-  "chart accessible tables preserve same-model variant labels",
-  chartMarkup.includes("Model · Low") && chartMarkup.includes("Model · High"),
+  "chart tooltips and accessible tables distinguish team effort configs",
+  chartMarkup.includes("architect: Model · Low") &&
+    chartMarkup.includes("worker: Model · Low") &&
+    chartMarkup.includes("architect: Model · High") &&
+    chartMarkup.includes("worker: Model · High"),
   chartMarkup
+);
+check(
+  "chart tooltip label includes canonical team roster effort",
+  decisionTradeoffPointLabel({
+    label: "Same team",
+    reasoningEffortDetails: [
+      { role: "architect", displayName: "Model", effort: "low" },
+      { role: "worker", displayName: "Model", effort: "low" },
+    ],
+  }) ===
+    "Same team — architect: Model · Low, worker: Model · Low",
+  decisionTradeoffPointLabel({
+    label: "Same team",
+    reasoningEffortDetails: [
+      { role: "architect", displayName: "Model", effort: "low" },
+      { role: "worker", displayName: "Model", effort: "low" },
+    ],
+  })
+);
+
+const lowTeamDetails: BenchmarkVariantRosterDetail[] = [
+  { role: "architect", displayName: "Model", effort: "low" },
+  { role: "worker", displayName: "Model", effort: "low" },
+];
+const highTeamDetails: BenchmarkVariantRosterDetail[] = [
+  { role: "architect", displayName: "Model", effort: "high" },
+  { role: "worker", displayName: "Model", effort: "high" },
+];
+const teamIqBase: TeamIqComboMatrixRow = {
+  id: "same-team-low:teamiq",
+  teamCompositionId: "same-team-low",
+  teamName: "Same team",
+  comboHash: "same-team-low",
+  track: "teamiq",
+  modelIds: ["openai:model"],
+  modelVariantKeys: ["openai:model\u0000low"],
+  reasoningEffortDetails: lowTeamDetails,
+  isSolo: false,
+  attempts: 3,
+  verifiedQuality: 0.8,
+  jobSuccessScore: 80,
+  costUsd: 1,
+  averageCostUsd: 1,
+  durationMs: 1000,
+  averageDurationMs: 1000,
+  bestSoloScore: 70,
+  teamLift: 10,
+  teamLiftLabel: "positive",
+  isParetoRecommended: true,
+  recommendationLabel: "recommended",
+};
+const teamIqRows: TeamIqComboMatrixRow[] = [
+  teamIqBase,
+  {
+    ...teamIqBase,
+    id: "same-team-high:teamiq",
+    teamCompositionId: "same-team-high",
+    comboHash: "same-team-high",
+    modelVariantKeys: ["openai:model\u0000high"],
+    reasoningEffortDetails: highTeamDetails,
+    verifiedQuality: 0.9,
+  },
+];
+const teamIqCards: TeamIqRecommendationCard[] = [
+  {
+    kind: "best_team_lift",
+    title: "Best team lift",
+    teamCompositionId: "same-team-low",
+    teamName: "Same team",
+    value: "+10",
+    detail: "Low team",
+    recommendationLabel: "recommended",
+    reasoningEffortDetails: lowTeamDetails,
+  },
+  {
+    kind: "best_quality",
+    title: "Best quality",
+    teamCompositionId: "same-team-high",
+    teamName: "Same team",
+    value: "90%",
+    detail: "High team",
+    recommendationLabel: "recommended",
+    reasoningEffortDetails: highTeamDetails,
+  },
+];
+const comboMarkup = renderToStaticMarkup(
+  React.createElement(ComboMatrix, { rows: teamIqRows })
+);
+check(
+  "combo matrix distinguishes otherwise identical team effort configs",
+  comboMarkup.includes("architect: Model · Low") &&
+    comboMarkup.includes("worker: Model · Low") &&
+    comboMarkup.includes("architect: Model · High") &&
+    comboMarkup.includes("worker: Model · High"),
+  comboMarkup
+);
+const paretoMarkup = renderToStaticMarkup(
+  React.createElement(ParetoFrontier, {
+    rows: teamIqRows,
+    cards: teamIqCards,
+  })
+);
+check(
+  "Pareto rows and recommendation cards distinguish team effort configs",
+  paretoMarkup.includes("architect: Model · Low") &&
+    paretoMarkup.includes("worker: Model · Low") &&
+    paretoMarkup.includes("architect: Model · High") &&
+    paretoMarkup.includes("worker: Model · High"),
+  paretoMarkup
 );
 
 const overallMarkup = renderToStaticMarkup(

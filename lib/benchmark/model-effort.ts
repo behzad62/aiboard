@@ -21,6 +21,27 @@ const BENCHMARK_REASONING_EFFORT_SET = new Set<ReasoningEffort>(
 
 type BenchmarkModel = Pick<SelectedModel, "modelId" | "providerId">;
 
+export interface BenchmarkVariantRosterDetail {
+  role: string;
+  displayName: string;
+  effort: ReasoningEffort;
+}
+
+export function benchmarkVariantRosterDetails(
+  roles: Array<{
+    role: string;
+    modelId: string;
+    displayName?: string;
+    reasoningEffort?: unknown;
+  }>
+): BenchmarkVariantRosterDetail[] {
+  return roles.map((role) => ({
+    role: role.role,
+    displayName: role.displayName || role.modelId,
+    effort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+  }));
+}
+
 function providerModelName(modelId: string): string {
   const parsed = parseModelId(modelId);
   return parsed.model || modelId;

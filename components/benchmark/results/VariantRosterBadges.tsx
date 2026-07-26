@@ -1,11 +1,11 @@
 import { Badge } from "@/components/ui/badge";
 import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
-import type { CertifiedLeaderboardRow } from "@/lib/benchmark/certified/dashboard-selectors";
+import type { BenchmarkVariantRosterDetail } from "@/lib/benchmark/model-effort";
 
 export function VariantRosterBadges({
   details,
 }: {
-  details: CertifiedLeaderboardRow["reasoningEffortDetails"];
+  details: BenchmarkVariantRosterDetail[] | undefined;
 }) {
   if (!details || details.length === 0) return null;
   return (
@@ -24,4 +24,18 @@ export function VariantRosterBadges({
       ))}
     </div>
   );
+}
+
+export function variantRosterText(
+  details: BenchmarkVariantRosterDetail[] | undefined
+): string {
+  return (details ?? [])
+    .map(
+      (detail) =>
+        `${detail.role}: ${benchmarkVariantLabel(
+          detail.displayName,
+          detail.effort
+        )}`
+    )
+    .join(", ");
 }

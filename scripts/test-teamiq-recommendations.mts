@@ -7,6 +7,10 @@ import {
 } from "../lib/benchmark/teamiq";
 import type { TeamIqComboMatrixRow } from "../lib/benchmark/teamiq/combo-matrix";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import {
+  readTeamIqComboMatrixRow,
+  readTeamIqRecommendationCards,
+} from "../lib/benchmark/certified/dashboard-selectors";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamCompositionRole,
@@ -99,6 +103,17 @@ check("TeamIQ recommendation cards include best team lift", cards.some((card) =>
 check("TeamIQ recommendation cards include best quality", cards.some((card) => card.kind === "best_quality" && card.teamCompositionId === strongTeam.id), cards);
 check("TeamIQ recommendation cards include watchlist", cards.some((card) => card.kind === "watchlist" && card.teamCompositionId === watchTeam.id), cards);
 check("TeamIQ recommendation cards expose concise values", cards.every((card) => card.title && card.value && card.detail), cards);
+check(
+  "TeamIQ recommendation cards retain role effort details",
+  cards.every(
+    (card) =>
+      (card.reasoningEffortDetails ?? []).length > 0 &&
+      (card.reasoningEffortDetails ?? []).every(
+        (detail) => detail.effort === "default"
+      )
+  ),
+  cards
+);
 const liftCard = cards.find((card) => card.kind === "best_team_lift");
 const qualityCard = cards.find((card) => card.kind === "best_quality");
 const valueCard = cards.find((card) => card.kind === "best_value");
@@ -223,6 +238,42 @@ check(
   "certified dashboard exposes TeamIQ recommendation cards",
   dashboard.teamIqRecommendationCards.some((card) => card.kind === "best_team_lift"),
   dashboard.teamIqRecommendationCards
+);
+const legacyComboRow = readTeamIqComboMatrixRow({
+  ...strongRowForBoundary(rows),
+  modelVariantKeys: undefined,
+  reasoningEffortDetails: undefined,
+});
+check(
+  "legacy TeamIQ rows derive visible Default member effort",
+  (legacyComboRow?.reasoningEffortDetails ?? []).length === 3 &&
+    (legacyComboRow?.reasoningEffortDetails ?? []).every(
+      (detail) => detail.effort === "default"
+    ),
+  legacyComboRow
+);
+const legacyCards = readTeamIqRecommendationCards({
+  teamIqComboMatrixRows: rows.map((row) => ({
+    ...row,
+    modelVariantKeys: undefined,
+    reasoningEffortDetails: undefined,
+  })),
+  teamIqRecommendationCards: cards.map((card) => ({
+    ...card,
+    reasoningEffortDetails: undefined,
+  })),
+});
+check(
+  "legacy TeamIQ cards inherit Default member effort from combo rows",
+  legacyCards.length === cards.length &&
+    legacyCards.every(
+      (card) =>
+        card.reasoningEffortDetails.length > 0 &&
+        card.reasoningEffortDetails.every(
+          (detail) => detail.effort === "default"
+        )
+    ),
+  legacyCards
 );
 
 function attempt(

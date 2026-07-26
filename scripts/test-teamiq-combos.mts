@@ -221,6 +221,55 @@ check(
     mixedCostRow?.averageDurationMs === 10_000,
   mixedCostRow
 );
+check(
+  "combo rows carry normalized role effort details",
+  (strongRow?.reasoningEffortDetails ?? [])
+    .map((detail) => `${detail.role}:${detail.displayName}:${detail.effort}`)
+    .join(",") ===
+    "architect:GPT Test:default,worker:Gemini Test:default",
+  strongRow
+);
+
+const lowEffortTeam = deriveTeamComposition({
+  name: "Same effort team",
+  roles: [
+    { ...gptRole, reasoningEffort: "low" },
+    { ...geminiRole, reasoningEffort: "low" },
+  ],
+});
+const highEffortTeam = deriveTeamComposition({
+  name: "Same effort team",
+  roles: [
+    { ...gptRole, reasoningEffort: "high" },
+    { ...geminiRole, reasoningEffort: "high" },
+  ],
+});
+const effortRows = buildTeamIqComboMatrixRows({
+  attempts: [
+    attempt("low-effort-team", lowEffortTeam.id, "effort-case", 70, 0.7, 1, 1_000, "aiboard-build-multi-worker"),
+    attempt("high-effort-team", highEffortTeam.id, "effort-case", 80, 0.8, 1, 1_000, "aiboard-build-multi-worker"),
+  ],
+  teamCompositions: [lowEffortTeam, highEffortTeam],
+  track: "teamiq",
+});
+check(
+  "otherwise identical team configs retain distinct Low and High role details",
+  effortRows.some(
+    (row) =>
+      (row.reasoningEffortDetails ?? []).length > 0 &&
+      (row.reasoningEffortDetails ?? []).every(
+        (detail) => detail.effort === "low"
+      )
+  ) &&
+    effortRows.some(
+      (row) =>
+        (row.reasoningEffortDetails ?? []).length > 0 &&
+        (row.reasoningEffortDetails ?? []).every(
+          (detail) => detail.effort === "high"
+        )
+    ),
+  effortRows
+);
 
 const tieBreakTeam = deriveTeamComposition({
   name: "Tie break pair",

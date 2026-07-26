@@ -11,6 +11,7 @@ import type {
   TeamIqComboMatrixRow,
   TeamIqRecommendationCard,
 } from "@/lib/benchmark/teamiq";
+import { VariantRosterBadges } from "@/components/benchmark/results/VariantRosterBadges";
 
 export function ParetoFrontier({
   rows,
@@ -40,6 +41,11 @@ export function ParetoFrontier({
               </div>
               <div className="mt-1 truncate text-sm font-semibold">
                 {card.teamName}
+              </div>
+              <div className="mt-1">
+                <VariantRosterBadges
+                  details={card.reasoningEffortDetails}
+                />
               </div>
               <div className="mt-1 text-sm tabular-nums">{card.value}</div>
               <div className="mt-1 text-xs text-muted-foreground">
@@ -99,6 +105,11 @@ function FrontierGroup({
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   {row.modelIds.length} models - {row.attempts} attempt
                   {row.attempts === 1 ? "" : "s"}
+                </div>
+                <div className="mt-1">
+                  <VariantRosterBadges
+                    details={row.reasoningEffortDetails}
+                  />
                 </div>
               </div>
               <div className="shrink-0 rounded-sm border px-2 py-1 text-xs">
