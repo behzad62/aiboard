@@ -1,5 +1,10 @@
 /* Decision dashboard UI contract checks (run: npx tsx scripts/test-benchmark-decision-dashboard-ui.mts) */
 import { existsSync, readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DecisionLeaderboard } from "../components/benchmark/results/DecisionLeaderboard";
+import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
+import type { DecisionRow } from "../lib/benchmark/certified/decision-dashboard";
 
 let failures = 0;
 
@@ -22,6 +27,81 @@ const charts = source("components/benchmark/results/DecisionTradeoffCharts.tsx")
 const page = source("components/BenchmarkPage.tsx");
 const decisionModel = source("lib/benchmark/certified/decision-dashboard.ts");
 const packageJson = source("package.json");
+
+const variantRow: DecisionRow = {
+  id: "variant-low",
+  label: "Model · Low",
+  tracks: ["workbench"],
+  caseTitles: [],
+  attempts: 1,
+  passed: 1,
+  preliminary: true,
+  verifiedQuality: 1,
+  overallScore: 1,
+  trackBreakdown: [],
+  passRate: 1,
+  efficiencyScore: 100,
+  toolReliabilityScore: null,
+  toolReliabilitySamples: null,
+  averageCostUsd: null,
+  costPerPass: null,
+  averageDurationMs: null,
+  durationMs: null,
+  speedPerPassMs: null,
+  totalTokens: null,
+  tokensPerPass: null,
+  costBasis: null,
+  teamLift: null,
+  teamCompositionId: "variant-low",
+  modelIds: ["openai:model"],
+  isTeam: false,
+  latestAttemptsByTrack: {},
+  providerUnavailableAttemptIds: [],
+  providerUnavailableAttemptIdsByTrack: {},
+  providerIds: ["openai"],
+  reasoningEfforts: ["low"],
+  reasoningEffortDetails: [],
+};
+const leaderboardMarkup = renderToStaticMarkup(
+  React.createElement(DecisionLeaderboard, {
+    rows: [variantRow],
+    totalRows: 1,
+    sortKey: "quality",
+    onSortChange: () => undefined,
+    selectedId: null,
+    onSelect: () => undefined,
+  })
+);
+check(
+  "leaderboard renders the effort-aware solo variant label",
+  leaderboardMarkup.includes("Model · Low"),
+  leaderboardMarkup
+);
+
+const teamProfileMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "team-profile",
+    row: {
+      ...variantRow,
+      id: "team",
+      label: "Builder team",
+      modelIds: ["openai:architect", "openai:worker"],
+      isTeam: true,
+      reasoningEfforts: ["low", "high"],
+      reasoningEffortDetails: [
+        { role: "architect", displayName: "Architect", effort: "low" },
+        { role: "worker", displayName: "Worker", effort: "high" },
+      ],
+    },
+    onClose: () => undefined,
+  })
+);
+check(
+  "team profile renders effort beside each roster role",
+  teamProfileMarkup.includes("architect: Architect · Low") &&
+    teamProfileMarkup.includes("worker: Worker · High"),
+  teamProfileMarkup
+);
 
 for (const label of [
   "Best overall model",

@@ -18,6 +18,11 @@ import type {
   BenchmarkVerifierResult,
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
+import {
+  benchmarkVariantKey,
+  benchmarkVariantLabel,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 
 export function formatBenchmarkMarkdownReport(
   bundle: BenchmarkReportBundleV2,
@@ -224,6 +229,7 @@ function appendTopCertifiedTeams(
       return {
         teamId,
         label: team?.name ?? teamId,
+        roster: formatTeamRoster(team),
         attempts: attempts.length,
         passed: attempts.filter((attempt) => attempt.status === "passed").length,
         quality,
@@ -243,7 +249,9 @@ function appendTopCertifiedTeams(
       lines.push(
         `- ${row.label}: quality ${formatNormalizedScore(row.quality)}, pass rate ${formatPct(
           rate(row.passed, row.attempts)
-        )}, ${row.attempts} attempt(s), avg cost ${formatUsd(row.cost)}`
+        )}, ${row.attempts} attempt(s), avg cost ${formatUsd(row.cost)}${
+          row.roster ? `; roster ${row.roster}` : ""
+        }`
       );
     }
   }
@@ -257,8 +265,8 @@ function appendTopCertifiedModels(
 ): void {
   const teamsById = new Map(bundle.teamCompositions.map((team) => [team.id, team]));
   const rows = Array.from(groupAttemptsByModel(certifiedAttempts, teamsById).entries())
-    .map(([modelId, item]) => ({
-      modelId,
+    .map(([variantKey, item]) => ({
+      variantKey,
       displayName: item.displayName,
       attempts: item.attempts.length,
       quality: average(
@@ -342,12 +350,16 @@ function appendTeamLiftMatrix(
     lines.push("- No multi-model certified teams with complete solo baselines recorded.");
   } else {
     for (const row of rows.slice(0, 12)) {
+      const team = bundle.teamCompositions.find(
+        (item) => item.id === row.teamCompositionId
+      );
+      const roster = formatTeamRoster(team);
       lines.push(
         `- ${row.displayName}: team lift ${formatNumber(
           row.teamLift
         )}, best solo ${formatNumber(row.bestSoloScore)}, label ${
           row.teamLiftLabel ?? "n/a"
-        }`
+        }${roster ? `; roster ${roster}` : ""}`
       );
     }
   }
@@ -609,18 +621,42 @@ function groupAttemptsByModel(
 
   for (const attempt of attempts) {
     const team = teamsById.get(attempt.teamCompositionId);
+    const seenVariants = new Set<string>();
     for (const role of team?.roles ?? []) {
+      const variantKey = benchmarkVariantKey(
+        role.modelId,
+        role.reasoningEffort
+      );
+      if (seenVariants.has(variantKey)) continue;
+      seenVariants.add(variantKey);
       const existing =
-        rows.get(role.modelId) ?? {
-          displayName: role.displayName || role.modelId,
+        rows.get(variantKey) ?? {
+          displayName: benchmarkVariantLabel(
+            role.displayName || role.modelId,
+            role.reasoningEffort
+          ),
           attempts: [],
         };
       existing.attempts.push(attempt);
-      rows.set(role.modelId, existing);
+      rows.set(variantKey, existing);
     }
   }
 
   return rows;
+}
+
+function formatTeamRoster(
+  team: BenchmarkTeamComposition | undefined
+): string {
+  return (team?.roles ?? [])
+    .map(
+      (role) =>
+        `${role.role}: ${benchmarkVariantLabel(
+          role.displayName || role.modelId,
+          normalizeBenchmarkReasoningEffort(role.reasoningEffort)
+        )}`
+    )
+    .join(", ");
 }
 
 function countBy(values: string[]): Array<{ label: string; count: number }> {

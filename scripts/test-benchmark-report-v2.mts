@@ -406,6 +406,89 @@ const markdown = formatBenchmarkMarkdownReport(bundle, {
   evidenceByModel: {},
 });
 
+const lowVariantTeam: BenchmarkTeamComposition = {
+  ...team,
+  id: "solo-variant-low",
+  name: "Variant Model low",
+  comboHash: "solo:variant-model:low",
+  roles: [
+    {
+      ...team.roles[0],
+      modelId: "openai:variant-model",
+      displayName: "Variant Model",
+      reasoningEffort: "low",
+    },
+  ],
+};
+const highVariantTeam: BenchmarkTeamComposition = {
+  ...lowVariantTeam,
+  id: "solo-variant-high",
+  name: "Variant Model high",
+  comboHash: "solo:variant-model:high",
+  roles: [
+    {
+      ...lowVariantTeam.roles[0],
+      reasoningEffort: "high",
+    },
+  ],
+};
+const variantMarkdown = formatBenchmarkMarkdownReport(
+  {
+    ...bundle,
+    attemptsV2: [
+      {
+        ...attempt,
+        id: "attempt-variant-low",
+        runId: "run-variant-low",
+        teamCompositionId: lowVariantTeam.id,
+      },
+      {
+        ...attempt,
+        id: "attempt-variant-high",
+        runId: "run-variant-high",
+        teamCompositionId: highVariantTeam.id,
+      },
+    ],
+    verifierResults: [],
+    teamCompositions: [lowVariantTeam, highVariantTeam],
+  },
+  {
+    summary: {
+      totalRuns: 0,
+      totalCases: 0,
+      capturedCases: 0,
+      totalModels: 0,
+      completionRate: null,
+      schemaValidRate: null,
+      legalActionRate: null,
+      fallbackRate: null,
+      averageCostUsd: null,
+      averageLatencyMs: null,
+    },
+    models: [],
+    radarRows: [],
+    rateBars: [],
+    costQualityPoints: [],
+    latencyQualityPoints: [],
+    trendRows: [],
+    failureRows: [],
+    headToHeadRows: [],
+    evidenceByModel: {},
+  }
+);
+check(
+  "markdown keeps model effort variants as separate entries",
+  variantMarkdown.includes("- Variant Model · Low:") &&
+    variantMarkdown.includes("- Variant Model · High:") &&
+    !variantMarkdown.includes("- Variant Model:"),
+  variantMarkdown
+);
+check(
+  "markdown renders legacy missing effort as Default",
+  markdown.includes("- GPT Test · Default:"),
+  markdown
+);
+
 check("markdown report includes certified run summary", markdown.includes("Certified Run Summary"), markdown);
 check("markdown report includes verifier assertion summary", markdown.includes("Verifier Assertion Summary"), markdown);
 check(

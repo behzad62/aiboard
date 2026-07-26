@@ -7,6 +7,8 @@ import {
   type DecisionFilters,
   type DecisionRow,
 } from "../lib/benchmark/certified/decision-dashboard";
+import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
+import type { BenchmarkTeamComposition } from "../lib/benchmark/types";
 
 let failures = 0;
 
@@ -63,6 +65,7 @@ function row(
     providerUnavailableAttemptIdsByTrack: {},
     providerIds: [],
     reasoningEfforts: [],
+    reasoningEffortDetails: [],
     ...overrides,
   };
 }
@@ -76,8 +79,13 @@ check(
 check("Wilson interval preserves no-evidence as null", wilsonInterval(0, 0) === null);
 
 const rows: DecisionRow[] = [
+  row("sol-low", {
+    label: "GPT-5.6 Sol · Low",
+    providerIds: ["chatgpt"],
+    reasoningEfforts: ["low"],
+  }),
   row("sol", {
-    label: "GPT-5.6 Sol",
+    label: "GPT-5.6 Sol · Extra high",
     providerIds: ["chatgpt"],
     reasoningEfforts: ["xhigh"],
   }),
@@ -108,6 +116,22 @@ const rows: DecisionRow[] = [
     teamLift: 14,
   }),
 ];
+
+check(
+  "unfiltered results preserve separate effort variants for one model",
+  filterDecisionRows(rows, {
+    query: "",
+    track: "all",
+    kind: "solo",
+    provider: "all",
+    effort: "all",
+    evidence: "all",
+  })
+    .filter((item) => item.id.startsWith("sol"))
+    .map((item) => item.id)
+    .join(",") === "sol-low,sol",
+  rows
+);
 
 const allFilters: DecisionFilters = {
   query: "",
@@ -141,6 +165,32 @@ check(
 check(
   "reasoning effort filter uses optional metadata",
   filterDecisionRows(rows, { ...allFilters, effort: "high", kind: "solo" }).map((item) => item.id).join(",") === "mini"
+);
+
+const legacyTeam = {
+  id: "legacy-default",
+  name: "Legacy Default",
+  comboHash: "legacy-default",
+  roles: [
+    {
+      role: "single",
+      slot: "single",
+      modelId: "openai:legacy",
+      providerId: "openai",
+      displayName: "Legacy",
+      temperature: 0,
+    },
+  ],
+} as BenchmarkTeamComposition;
+const legacyMetadata = withCertifiedDeleteMetadata(
+  { leaderboard: [row("legacy-default")] } as never,
+  [],
+  [legacyTeam]
+).leaderboard[0];
+check(
+  "legacy dashboard metadata exposes Default reasoning",
+  legacyMetadata?.reasoningEfforts?.join(",") === "default",
+  legacyMetadata
 );
 
 const repeatedModelTeam = row("same-model-team", {

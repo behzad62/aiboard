@@ -13,6 +13,7 @@ import {
   wilsonInterval,
   type DecisionRow,
 } from "@/lib/benchmark/certified/decision-dashboard";
+import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
 
 export function ModelEvidenceProfile({
   id,
@@ -53,9 +54,21 @@ export function ModelEvidenceProfile({
             {(row.providerIds ?? []).map((provider) => (
               <Badge key={provider} variant="outline">{provider}</Badge>
             ))}
-            {(row.reasoningEfforts ?? []).map((effort) => (
-              <Badge key={effort} variant="outline">{effort} reasoning</Badge>
-            ))}
+            {row.isTeam && (row.reasoningEffortDetails?.length ?? 0) > 0
+              ? row.reasoningEffortDetails?.map((detail, index) => (
+                  <Badge
+                    key={`${detail.role}:${detail.effort}:${index}`}
+                    variant="outline"
+                  >
+                    {detail.role}:{" "}
+                    {benchmarkVariantLabel(detail.displayName, detail.effort)}
+                  </Badge>
+                ))
+              : (row.reasoningEfforts ?? []).map((effort) => (
+                  <Badge key={effort} variant="outline">
+                    {benchmarkVariantLabel("Reasoning", effort)}
+                  </Badge>
+                ))}
           </div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onClose} aria-label="Close evidence profile">

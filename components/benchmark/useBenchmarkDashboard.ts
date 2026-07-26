@@ -34,6 +34,7 @@ import {
   listHarnessCertificationResults,
 } from "@/lib/benchmark/store";
 import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persistence";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 
 export interface BenchmarkDashboardState {
   dashboard: BenchmarkDashboardData | null;
@@ -231,7 +232,7 @@ type CertifiedDashboardWithLeaderboard = ReturnType<
   typeof buildCertifiedBenchmarkDashboardData
 >;
 
-function withCertifiedDeleteMetadata(
+export function withCertifiedDeleteMetadata(
   dashboard: CertifiedDashboardWithLeaderboard,
   attempts: BenchmarkAttemptV2[],
   teams: BenchmarkTeamComposition[]
@@ -274,8 +275,15 @@ function withCertifiedDeleteMetadata(
           (team?.roles ?? []).map((role) => role.providerId)
         ),
         reasoningEfforts: uniqueStrings(
-          (team?.roles ?? []).map((role) => role.reasoningEffort)
+          (team?.roles ?? []).map((role) =>
+            normalizeBenchmarkReasoningEffort(role.reasoningEffort)
+          )
         ),
+        reasoningEffortDetails: (team?.roles ?? []).map((role) => ({
+          role: role.role,
+          displayName: role.displayName ?? role.modelId,
+          effort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+        })),
         latestCompletedAt: latest?.completedAt ?? latest?.startedAt,
       };
     }),

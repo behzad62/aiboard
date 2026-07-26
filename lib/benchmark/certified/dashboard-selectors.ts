@@ -158,6 +158,11 @@ export interface CertifiedLeaderboardRow {
    * and legacy bundles may not carry it, so readers always expose empty arrays. */
   providerIds: string[];
   reasoningEfforts: string[];
+  reasoningEffortDetails?: Array<{
+    role: string;
+    displayName: string;
+    effort: string;
+  }>;
   latestCompletedAt?: string;
 }
 
@@ -289,6 +294,7 @@ export function readLeaderboard(
               meta.providerUnavailableAttemptIdsByTrack,
             providerIds: meta.providerIds,
             reasoningEfforts: meta.reasoningEfforts,
+            reasoningEffortDetails: meta.reasoningEffortDetails,
             latestCompletedAt: meta.latestCompletedAt,
             passed: row.passed ?? meta.passed,
             toolReliabilitySamples:
@@ -456,8 +462,32 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     ),
     providerIds: readStringList(row.providerIds),
     reasoningEfforts: readStringList(row.reasoningEfforts),
+    reasoningEffortDetails: readReasoningEffortDetails(
+      row.reasoningEffortDetails
+    ),
     latestCompletedAt: readString(row.latestCompletedAt) ?? undefined,
   };
+}
+
+function readReasoningEffortDetails(
+  value: unknown
+): NonNullable<CertifiedLeaderboardRow["reasoningEffortDetails"]> {
+  const details: NonNullable<
+    CertifiedLeaderboardRow["reasoningEffortDetails"]
+  > = [];
+  for (const item of readArray(value)) {
+    const detail = readRecord(item);
+    const role = readString(detail.role);
+    const displayName = readString(detail.displayName);
+    if (role && displayName) {
+      details.push({
+        role,
+        displayName,
+        effort: normalizeBenchmarkReasoningEffort(detail.effort),
+      });
+    }
+  }
+  return details;
 }
 
 export function resolveLeaderboardDeleteFields(
