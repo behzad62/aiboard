@@ -99,7 +99,7 @@ function TradeoffChart({
                     style={{ backgroundColor: point.color }}
                     aria-hidden="true"
                   />
-                  <span className="truncate font-medium">
+                  <span className="min-w-0 break-words whitespace-normal font-medium">
                     {decisionTradeoffPointLabel(point)}
                   </span>
                   <span className="text-muted-foreground">{point.kind}</span>
@@ -108,7 +108,7 @@ function TradeoffChart({
             </ul>
             <div
               className="h-72"
-              role="img"
+              role="group"
               aria-labelledby={`${id}-title`}
               aria-describedby={`${id}-description`}
             >
@@ -294,7 +294,7 @@ type TradeoffTooltipPayload = TooltipContentProps<
   string
 >["payload"];
 
-function DecisionTradeoffTooltip({
+export function DecisionTradeoffTooltip({
   active,
   payload,
   xLabel,

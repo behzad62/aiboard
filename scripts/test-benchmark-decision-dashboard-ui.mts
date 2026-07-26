@@ -6,6 +6,7 @@ import { DecisionLeaderboard } from "../components/benchmark/results/DecisionLea
 import { DecisionVerdicts } from "../components/benchmark/results/DecisionVerdicts";
 import {
   DecisionTradeoffPointShape,
+  DecisionTradeoffTooltip,
   DecisionTradeoffCharts,
   decisionTradeoffPointAriaLabel,
   decisionTradeoffPointLabel,
@@ -405,6 +406,12 @@ const decisionChartMarkup = renderToStaticMarkup(
   React.createElement(DecisionTradeoffCharts, { rows: chartRows })
 );
 check(
+  "trade-off plot groups preserve semantics for focusable point descendants",
+  decisionChartMarkup.includes('class="h-72" role="group"') &&
+    !decisionChartMarkup.includes('class="h-72" role="img"'),
+  decisionChartMarkup
+);
+check(
   "trade-off charts expose overall-index terminology and full identity legend",
   decisionChartMarkup.includes(
     "Overall index vs tokens per successful case"
@@ -418,6 +425,22 @@ check(
     decisionChartMarkup.includes("Solo model") &&
     decisionChartMarkup.includes("Team"),
   decisionChartMarkup
+);
+const longChartIdentity =
+  "Alpha Model With A Deliberately Long Provider And Reasoning Configuration Name";
+const longLegendMarkup = renderToStaticMarkup(
+  React.createElement(DecisionTradeoffCharts, {
+    rows: [{ ...chartRows[0]!, label: longChartIdentity }],
+  })
+);
+check(
+  "trade-off legend wraps and preserves a full long identity",
+  longLegendMarkup.includes(longChartIdentity) &&
+    longLegendMarkup.includes(
+      'class="min-w-0 break-words whitespace-normal font-medium"'
+    ) &&
+    !longLegendMarkup.includes('class="truncate font-medium"'),
+  longLegendMarkup
 );
 check(
   "trade-off charts retain accessible data values",
@@ -451,6 +474,38 @@ check(
     pointShapeMarkup.includes("Overall index: 77.0") &&
     pointShapeMarkup.includes("Tokens per successful case: 5,678 tokens"),
   pointShapeMarkup
+);
+const tooltipMarkup = renderToStaticMarkup(
+  React.createElement(DecisionTradeoffTooltip, {
+    active: true,
+    payload: [
+      {
+        graphicalItemId: "decision-tradeoff",
+        dataKey: "quality",
+        name: "Overall index",
+        value: tokenProjection[1]!.quality,
+        color: tokenProjection[1]!.color,
+        payload: tokenProjection[1],
+      },
+    ],
+    xLabel: "Tokens per successful case",
+    formatX: (value: number) =>
+      `${Math.round(value).toLocaleString()} tokens`,
+  })
+);
+check(
+  "active trade-off tooltip renders complete identity and decision evidence",
+  tooltipMarkup.includes("Beta Builder Team") &&
+    tooltipMarkup.includes("architect: Architect · Low") &&
+    tooltipMarkup.includes("Team") &&
+    tooltipMarkup.includes("WorkBench, TeamIQ") &&
+    tooltipMarkup.includes("Overall index") &&
+    tooltipMarkup.includes("77.0") &&
+    tooltipMarkup.includes("Tokens per successful case") &&
+    tooltipMarkup.includes("5,678 tokens") &&
+    tooltipMarkup.includes("Attempts") &&
+    tooltipMarkup.includes(">8<"),
+  tooltipMarkup
 );
 check(
   "chart tooltips and accessible tables distinguish team effort configs",
