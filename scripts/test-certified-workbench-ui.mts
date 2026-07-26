@@ -513,10 +513,11 @@ const runExecutionSource = readFileSync(
   "utf8"
 );
 check(
-  "WorkBench runner panel links the generated benchmark runner download",
-  runnerStatusSource.includes('href="/bench-runner.mjs"') &&
-    runnerStatusSource.includes('download="bench-runner.mjs"') &&
-    runnerStatusSource.includes("Download bench runner"),
+  "WorkBench runner panel links the complete generated runner bundle",
+  runnerStatusSource.includes('href="/aiboard-workbench-runner.zip"') &&
+    runnerStatusSource.includes('download="aiboard-workbench-runner.zip"') &&
+    runnerStatusSource.includes("Download WorkBench runner bundle") &&
+    runnerStatusSource.includes("npm run setup:browser"),
   runnerStatusSource
 );
 check(
@@ -532,11 +533,12 @@ check(
   certifiedRunPanelSource
 );
 check(
-  "selected Full certified preset links the bench runner download",
+  "selected Full certified preset links the complete runner bundle",
   presetCardsSource.includes('preset.id === "full-certified" && focused') &&
-    presetCardsSource.includes('href="/bench-runner.mjs"') &&
-    presetCardsSource.includes('download="bench-runner.mjs"') &&
-    presetCardsSource.includes("Download bench runner"),
+    presetCardsSource.includes('href="/aiboard-workbench-runner.zip"') &&
+    presetCardsSource.includes('download="aiboard-workbench-runner.zip"') &&
+    presetCardsSource.includes("Download WorkBench runner bundle") &&
+    presetCardsSource.includes("npm run setup:browser"),
   presetCardsSource
 );
 // RunProgressTimeline (the Certify/Run/Persist step UI this check used to

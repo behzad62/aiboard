@@ -76,12 +76,21 @@ export function PresetCards({
                 <p className="text-xs text-muted-foreground">{gate.note}</p>
               )}
               {preset.id === "full-certified" && focused && (
-                <Button type="button" variant="outline" className="w-full" asChild>
-                  <a href="/bench-runner.mjs" download="bench-runner.mjs">
-                    <Download className="h-4 w-4" />
-                    Download bench runner
-                  </a>
-                </Button>
+                <div className="space-y-1">
+                  <Button type="button" variant="outline" className="w-full" asChild>
+                    <a
+                      href="/aiboard-workbench-runner.zip"
+                      download="aiboard-workbench-runner.zip"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download WorkBench runner bundle
+                    </a>
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Includes Runner V2. After extraction, run <code>npm install</code> and{" "}
+                    <code>npm run setup:browser</code>.
+                  </p>
+                </div>
               )}
               <Button
                 className="w-full"

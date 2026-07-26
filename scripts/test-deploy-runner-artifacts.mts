@@ -43,19 +43,29 @@ const publicManifest = "public/runner-manifest.json";
 const exportedManifest = "out/runner-manifest.json";
 const publicNativeRunner = "public/aiboard-runner-v2.zip";
 const exportedNativeRunner = "out/aiboard-runner-v2.zip";
+const publicWorkBenchRunner = "public/aiboard-workbench-runner.zip";
+const exportedWorkBenchRunner = "out/aiboard-workbench-runner.zip";
 
-function publishNativeRunnerHash(): string {
+function publishRunnerHashes(): { native: string; workBench: string } {
   execFileSync(process.execPath, ["scripts/publish-downloads.mjs"], { stdio: "pipe" });
-  return createHash("sha256").update(readFileSync(publicNativeRunner)).digest("hex");
+  return {
+    native: createHash("sha256").update(readFileSync(publicNativeRunner)).digest("hex"),
+    workBench: createHash("sha256").update(readFileSync(publicWorkBenchRunner)).digest("hex"),
+  };
 }
 
-const firstPublishedNativeRunnerHash = publishNativeRunnerHash();
+const firstPublishedRunnerHashes = publishRunnerHashes();
 Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_100);
-const secondPublishedNativeRunnerHash = publishNativeRunnerHash();
+const secondPublishedRunnerHashes = publishRunnerHashes();
 check(
   "Runner V2 ZIP publication is reproducible",
-  firstPublishedNativeRunnerHash === secondPublishedNativeRunnerHash,
-  { firstPublishedNativeRunnerHash, secondPublishedNativeRunnerHash }
+  firstPublishedRunnerHashes.native === secondPublishedRunnerHashes.native,
+  { firstPublishedRunnerHashes, secondPublishedRunnerHashes }
+);
+check(
+  "WorkBench runner ZIP publication is reproducible",
+  firstPublishedRunnerHashes.workBench === secondPublishedRunnerHashes.workBench,
+  { firstPublishedRunnerHashes, secondPublishedRunnerHashes }
 );
 
 function textFilePaths(directory: string, extension: string): string[] {
@@ -207,6 +217,40 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
   }
 }
 
+async function checkWorkBenchRunnerArchive(path: string): Promise<void> {
+  if (!existsSync(path)) return;
+  try {
+    const archive = await JSZip.loadAsync(readFileSync(path));
+    const benchRunner = archive.file("bench-runner.mjs");
+    const runnerCli = archive.file("aiboard-runner-v2/src/cli.ts");
+    const runnerPackage = archive.file("aiboard-runner-v2/package.json");
+    const readme = archive.file("README.md");
+    check(`${path} contains bench-runner.mjs`, benchRunner !== null);
+    check(`${path} contains nested Runner V2 CLI`, runnerCli !== null);
+    check(`${path} contains nested Runner V2 package`, runnerPackage !== null);
+    check(`${path} contains an installation README`, readme !== null);
+    check(
+      `${path} excludes installed node_modules`,
+      !Object.keys(archive.files).some((name) => name.split("/").includes("node_modules"))
+    );
+    if (benchRunner) {
+      check(
+        `${path} benchmark runner matches source`,
+        await benchRunner.async("nodebuffer").then((content) => content.equals(readFileSync(sourceBenchRunner)))
+      );
+    }
+    if (readme) {
+      const content = await readme.async("string");
+      check(
+        `${path} README documents dependency and browser setup`,
+        content.includes("npm install") && content.includes("npm run setup:browser")
+      );
+    }
+  } catch (error) {
+    check(`${path} is a readable WorkBench runner ZIP`, false, error instanceof Error ? error.message : error);
+  }
+}
+
 async function writeTempFile(archivePath: string, file: { async(type: "nodebuffer"): Promise<Buffer> }): Promise<string> {
   const tempPath = `${archivePath}.sdk-check.mjs`;
   writeFileSync(tempPath, await file.async("nodebuffer"));
@@ -232,10 +276,20 @@ for (const path of [publicNativeRunner, exportedNativeRunner]) {
   check(`${path} exists`, existsSync(path));
   await checkNativeRunnerArchive(path);
 }
+for (const path of [publicWorkBenchRunner, exportedWorkBenchRunner]) {
+  check(`${path} exists`, existsSync(path));
+  await checkWorkBenchRunnerArchive(path);
+}
 if (existsSync(publicNativeRunner) && existsSync(exportedNativeRunner)) {
   check(
     "public and exported Runner V2 ZIPs are byte-identical",
     readFileSync(publicNativeRunner).equals(readFileSync(exportedNativeRunner))
+  );
+}
+if (existsSync(publicWorkBenchRunner) && existsSync(exportedWorkBenchRunner)) {
+  check(
+    "public and exported WorkBench runner ZIPs are byte-identical",
+    readFileSync(publicWorkBenchRunner).equals(readFileSync(exportedWorkBenchRunner))
   );
 }
 

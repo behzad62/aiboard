@@ -57,17 +57,7 @@ function addDirectory(zip, sourceDirectory, archiveDirectory) {
   }
 }
 
-async function publishNativeRunner() {
-  const cli = path.join(runnerDirectory, "src", "cli.ts");
-  const skills = path.join(runnerDirectory, "skills");
-  if (!fs.existsSync(cli)) {
-    throw new Error("Cannot publish Runner V2: missing runner-v2/src/cli.ts.");
-  }
-
-  const zip = new JSZip();
-  addDirectory(zip, path.join(runnerDirectory, "src"), "src");
-  addDirectory(zip, skills, "skills");
-
+function nativeRunnerPackageJson() {
   const tsxVersion = pinnedVersion(rootPackage.devDependencies?.tsx, "tsx");
   const typescriptVersion = pinnedVersion(
     rootPackage.devDependencies?.typescript ?? rootPackage.dependencies?.typescript,
@@ -77,7 +67,7 @@ async function publishNativeRunner() {
     rootPackage.dependencies?.playwright ?? rootPackage.devDependencies?.playwright ?? rootPackage.devDependencies?.["@playwright/test"],
     "playwright"
   );
-  const packageJson = {
+  return {
     name: "aiboard-runner-v2",
     version: rootPackage.version,
     private: true,
@@ -94,9 +84,9 @@ async function publishNativeRunner() {
       typescript: typescriptVersion,
     },
   };
-  zip.file("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, { date: new Date(0), createFolders: false });
-  zip.file("LICENSE", normalizedTextFile(path.join(root, "LICENSE")), { date: new Date(0), createFolders: false });
-  zip.file("README.md", `# AI Board Runner V2
+}
+
+const nativeRunnerReadme = `# AI Board Runner V2
 
 Runner V2 is the native process required by AI Board Build mode.
 
@@ -132,15 +122,90 @@ Default behavior already allows \`https://aiboard.me\` and \`https://www.aiboard
 Run \`npm start -- --help\` to list all options.
 
 Runner V2 prints its localhost URL and control token. Paste both into AI Board Build setup, then test the connection.
-`, { date: new Date(0), createFolders: false });
+`;
 
-  const destination = path.join(publicDirectory, "aiboard-runner-v2.zip");
+function addNativeRunnerFiles(zip, archiveRoot = "") {
+  const cli = path.join(runnerDirectory, "src", "cli.ts");
+  const skills = path.join(runnerDirectory, "skills");
+  if (!fs.existsSync(cli)) {
+    throw new Error("Cannot publish Runner V2: missing runner-v2/src/cli.ts.");
+  }
+
+  const archivePath = (file) => path.posix.join(archiveRoot, file);
+  addDirectory(zip, path.join(runnerDirectory, "src"), archivePath("src"));
+  addDirectory(zip, skills, archivePath("skills"));
+  zip.file(archivePath("package.json"), `${JSON.stringify(nativeRunnerPackageJson(), null, 2)}\n`, {
+    date: new Date(0),
+    createFolders: false,
+  });
+  zip.file(archivePath("LICENSE"), normalizedTextFile(path.join(root, "LICENSE")), {
+    date: new Date(0),
+    createFolders: false,
+  });
+  zip.file(archivePath("README.md"), nativeRunnerReadme, {
+    date: new Date(0),
+    createFolders: false,
+  });
+}
+
+async function writeZip(zip, destination) {
   fs.writeFileSync(destination, await zip.generateAsync({
     type: "nodebuffer",
     compression: "DEFLATE",
     compressionOptions: { level: 9 },
   }));
   console.log(`Published ${path.relative(root, destination)}.`);
+}
+
+async function publishNativeRunner() {
+  const zip = new JSZip();
+  addNativeRunnerFiles(zip);
+
+  const destination = path.join(publicDirectory, "aiboard-runner-v2.zip");
+  await writeZip(zip, destination);
+}
+
+async function publishWorkBenchRunner() {
+  const zip = new JSZip();
+  zip.file("bench-runner.mjs", archiveFileContent(path.join(scripts, "bench-runner.mjs")), {
+    date: new Date(0),
+    createFolders: false,
+  });
+  addNativeRunnerFiles(zip, "aiboard-runner-v2");
+  zip.file("README.md", `# AI Board WorkBench runner bundle
+
+This bundle includes the Bench Runner and its managed Runner V2 source.
+
+## Prerequisites
+
+- Node.js 24.18.0
+- Git installed and available on PATH
+
+## Install and start
+
+1. Extract \`aiboard-workbench-runner.zip\`.
+2. Open PowerShell in the extracted directory.
+3. Install Runner V2 and its Chromium browser:
+
+   \`\`\`powershell
+   Set-Location .\\aiboard-runner-v2
+   npm install
+   npm run setup:browser
+   Set-Location ..
+   \`\`\`
+
+4. Start the Bench Runner:
+
+   \`\`\`powershell
+   node .\\bench-runner.mjs
+   \`\`\`
+
+The startup banner prints the localhost URL, token, and managed Runner V2 readiness.
+Paste the URL and token into Benchmark -> WorkBench. Keep both bundled paths together
+so the Bench Runner can discover \`aiboard-runner-v2\` automatically.
+`, { date: new Date(0), createFolders: false });
+
+  await writeZip(zip, path.join(publicDirectory, "aiboard-workbench-runner.zip"));
 }
 
 async function publishAccountRunner() {
@@ -204,3 +269,4 @@ for (const [source, destination] of downloads) {
 }
 await publishAccountRunner();
 await publishNativeRunner();
+await publishWorkBenchRunner();

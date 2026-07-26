@@ -82,6 +82,13 @@ server.listen(port, host, () => {
   console.log(`URL     : http://${host}:${port}`);
   console.log(`Root    : ${root}`);
   console.log(`Token   : ${token}`);
+  if (runnerV2Launcher) {
+    console.log(`Managed Runner V2: ready (${runnerV2Launcher.source})`);
+  } else {
+    console.log("Managed Runner V2: unavailable");
+    console.log("Place aiboard-runner-v2 beside bench-runner.mjs, or provide its directory explicitly.");
+    console.log("Setup command: node bench-runner.mjs --runner-v2-dir C:\\path\\to\\aiboard-runner-v2");
+  }
   console.log("");
   console.log("Paste the URL and token into Benchmark -> WorkBench.");
   console.log("Temporary attempt workspaces are created under Root and cleaned up after runs.");

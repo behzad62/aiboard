@@ -60,22 +60,31 @@ export function WorkBenchRunnerStatus({
             type="password"
           />
         </div>
-        <div className="flex flex-wrap gap-2 md:justify-end">
-          <Button type="button" variant="outline" asChild>
-            <a href="/bench-runner.mjs" download="bench-runner.mjs">
-              <Download className="h-4 w-4" />
-              Download bench runner
-            </a>
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onCheck}
-            disabled={checking || !url.trim() || !token.trim()}
-          >
-            <RefreshCw className={checking ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            Check
-          </Button>
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2 md:justify-end">
+            <Button type="button" variant="outline" asChild>
+              <a
+                href="/aiboard-workbench-runner.zip"
+                download="aiboard-workbench-runner.zip"
+              >
+                <Download className="h-4 w-4" />
+                Download WorkBench runner bundle
+              </a>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCheck}
+              disabled={checking || !url.trim() || !token.trim()}
+            >
+              <RefreshCw className={checking ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+              Check
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground md:text-right">
+            Includes Runner V2. After extraction, run <code>npm install</code> and{" "}
+            <code>npm run setup:browser</code>.
+          </p>
         </div>
       </div>
       <div className="mt-3 space-y-2 text-sm text-muted-foreground">
