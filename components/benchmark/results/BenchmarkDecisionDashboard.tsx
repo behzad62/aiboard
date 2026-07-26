@@ -31,18 +31,13 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
     () => readLeaderboard(certified, "all", "quality") as DecisionRow[],
     [certified]
   );
-  const rankedRows = useMemo(
-    () => readLeaderboard(certified, "all", sortKey) as DecisionRow[],
-    [certified, sortKey]
-  );
   const filteredRows = useMemo(
-    () => {
-      const filtered = filterDecisionRows(rankedRows, filters);
-      return filters.track === "all"
-        ? filtered
-        : sortDecisionRows(filtered, sortKey);
-    },
-    [rankedRows, filters, sortKey]
+    () => readDecisionDashboardRows(certified, filters, sortKey),
+    [certified, filters, sortKey]
+  );
+  const rankedRowCount = useMemo(
+    () => readLeaderboard(certified, filters.track, sortKey).length,
+    [certified, filters.track, sortKey]
   );
   const selected = filteredRows.find((row) => row.id === selectedId) ?? null;
 
@@ -72,7 +67,7 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
         />
         <DecisionLeaderboard
           rows={filteredRows}
-          totalRows={rankedRows.length}
+          totalRows={rankedRowCount}
           sortKey={sortKey}
           onSortChange={setSortKey}
           selectedId={selected?.id ?? null}
@@ -96,4 +91,20 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
       </section>
     </div>
   );
+}
+
+export function readDecisionDashboardRows(
+  certified: unknown,
+  filters: DecisionFilterState,
+  sortKey: LeaderboardSortKey
+): DecisionRow[] {
+  const scopedRows = readLeaderboard(
+    certified,
+    filters.track,
+    sortKey
+  ) as DecisionRow[];
+  const filtered = filterDecisionRows(scopedRows, filters);
+  return filters.track === "all"
+    ? filtered
+    : sortDecisionRows(filtered, sortKey);
 }

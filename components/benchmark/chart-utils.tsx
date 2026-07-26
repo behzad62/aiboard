@@ -10,13 +10,29 @@ export const CHART_COLORS = [
 ];
 
 export const CHART_DASHES = ["0", "6 3", "2 2", "8 4"] as const;
+export const CHART_MARKERS = [
+  "circle",
+  "square",
+  "diamond",
+  "triangle",
+  "hexagon",
+] as const;
+export type ChartMarker = (typeof CHART_MARKERS)[number];
 
 export function chartColorForIdentity(identity: string): string {
+  return CHART_COLORS[chartIdentityHash(identity) % CHART_COLORS.length]!;
+}
+
+export function chartMarkerForIdentity(identity: string): ChartMarker {
+  return CHART_MARKERS[chartIdentityHash(identity) % CHART_MARKERS.length]!;
+}
+
+function chartIdentityHash(identity: string): number {
   let hash = 0;
   for (const character of identity) {
     hash = (hash * 31 + character.codePointAt(0)!) >>> 0;
   }
-  return CHART_COLORS[hash % CHART_COLORS.length]!;
+  return hash;
 }
 
 export function moveSuccessRate(fallbackRate: number): number {

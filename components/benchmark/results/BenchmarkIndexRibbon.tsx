@@ -44,9 +44,9 @@ export function BenchmarkIndexRibbon({ rows }: { rows: DecisionRow[] }) {
         <div className="flex gap-3 p-4">
           <Scale className="mt-0.5 h-5 w-5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden="true" />
           <div>
-            <p className="text-sm font-semibold">Equal weight per completed track</p>
+            <p className="text-sm font-semibold">Equal weight per represented track</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Quality is averaged within each track, then each completed track contributes equally.
+              Quality is averaged within each track, then each represented track contributes equally.
             </p>
           </div>
         </div>

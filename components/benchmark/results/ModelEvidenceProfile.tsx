@@ -27,6 +27,7 @@ export function ModelEvidenceProfile({
   const interval = passed == null ? null : wilsonInterval(passed, row.attempts);
   const titleId = `${id}-title`;
   const failureMessages = certifiedFailureMessages(row);
+  const failedAttempts = failedAttemptCount(row);
 
   useEffect(() => {
     const profile = profileRef.current;
@@ -108,8 +109,9 @@ export function ModelEvidenceProfile({
           <div className="mb-2 flex items-baseline justify-between gap-3">
             <h4 className="text-sm font-semibold">Track coverage</h4>
             <span className="text-xs text-muted-foreground">
-              {row.tracks.length} completed track
-              {row.tracks.length === 1 ? "" : "s"}
+              {row.tracks.length} represented track
+              {row.tracks.length === 1 ? "" : "s"} · {failedAttempts} failed
+              attempt{failedAttempts === 1 ? "" : "s"}
             </span>
           </div>
           <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
@@ -246,6 +248,19 @@ function budgetFailureCount(row: DecisionRow, track: string): number {
   );
   const latest = row.latestAttemptsByTrack[track];
   if (latest?.status === "failed_budget") attemptIds.add(latest.id);
+  return attemptIds.size;
+}
+
+function failedAttemptCount(row: DecisionRow): number {
+  if (row.passed != null) {
+    return Math.max(0, row.attempts - row.passed);
+  }
+  const attemptIds = new Set(
+    row.failureDetails.map((detail) => detail.attemptId)
+  );
+  for (const latest of Object.values(row.latestAttemptsByTrack)) {
+    if (latest.status !== "passed") attemptIds.add(latest.id);
+  }
   return attemptIds.size;
 }
 

@@ -91,8 +91,9 @@ function VerdictCard({ verdict }: { verdict: DecisionVerdict }) {
         <Icon className={`h-4 w-4 ${meta.accent}`} aria-hidden="true" />
       </CardHeader>
       <CardContent className="space-y-1.5">
-        <div className="truncate text-lg font-semibold">
-          {verdict.winner?.label ?? "Not measured yet"}
+        <div className="break-words text-lg font-semibold">
+          {verdict.winner?.label ??
+            (verdict.key === "teamLift" ? "Not comparable" : "Not measured yet")}
         </div>
         {verdict.winner?.isTeam && (
           <VariantRosterBadges
@@ -130,7 +131,7 @@ function formatEvidence(verdict: DecisionVerdict): string {
 function formatVerdictMetric(verdict: DecisionVerdict): string {
   if (verdict.metric == null) return "Unavailable";
   if (verdict.key === "overall") {
-    return `${formatNormalizedScore(verdict.metric)} quality`;
+    return `${formatNormalizedScore(verdict.metric)} overall index`;
   }
   if (verdict.key === "workbench") {
     return `${formatNormalizedScore(verdict.metric)} verified quality`;

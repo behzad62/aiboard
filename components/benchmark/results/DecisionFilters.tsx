@@ -50,7 +50,12 @@ export function DecisionFilters({
           label="Track"
           value={value.track}
           options={[{ value: "all", label: "All tracks" }, ...tracks.map(option)]}
-          onChange={(track) => onChange({ ...value, track })}
+          onChange={(track) =>
+            onChange({
+              ...value,
+              track: track as DecisionFilterState["track"],
+            })
+          }
         />
         <FilterSelect
           label="Run type"

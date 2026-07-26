@@ -1,4 +1,5 @@
 import type {
+  CertifiedTrackView,
   CertifiedLeaderboardRow,
   LeaderboardSortKey,
 } from "./dashboard-selectors";
@@ -10,7 +11,7 @@ export type DecisionRow = CertifiedLeaderboardRow;
 
 export interface DecisionFilters {
   query: string;
-  track: string;
+  track: CertifiedTrackView;
   kind: "all" | "solo" | "team";
   provider: string;
   effort: string;
@@ -327,7 +328,7 @@ function scopeToTrack(row: DecisionRow, trackId: string): DecisionRow | null {
     totalTokens: alreadySingleTrack ? row.totalTokens : null,
     tokensPerPass: alreadySingleTrack ? row.tokensPerPass : null,
     costBasis: alreadySingleTrack ? row.costBasis : null,
-    teamLift: alreadySingleTrack ? row.teamLift : null,
+    teamLift: row.teamLiftTracks.includes(trackId) ? row.teamLift : null,
   };
 }
 

@@ -16,7 +16,9 @@ import type {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   chartColorForIdentity,
+  chartMarkerForIdentity,
   EmptyChart,
+  type ChartMarker,
 } from "@/components/benchmark/chart-utils";
 import type { DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
 import {
@@ -33,6 +35,7 @@ export interface TradeoffPoint {
   x: number;
   attempts: number;
   color: string;
+  marker: ChartMarker;
   reasoningEffortDetails: DecisionRow["reasoningEffortDetails"];
 }
 
@@ -94,11 +97,20 @@ function TradeoffChart({
             >
               {points.map((point) => (
                 <li key={point.id} className="flex min-w-0 items-center gap-2">
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full border border-border"
-                    style={{ backgroundColor: point.color }}
+                  <svg
+                    viewBox="0 0 16 16"
+                    className="h-3 w-3 shrink-0"
                     aria-hidden="true"
-                  />
+                    data-marker={point.marker}
+                  >
+                    <DecisionMarker
+                      cx={8}
+                      cy={8}
+                      size={5}
+                      marker={point.marker}
+                      color={point.color}
+                    />
+                  </svg>
                   <span className="min-w-0 break-words whitespace-normal font-medium">
                     {decisionTradeoffPointLabel(point)}
                   </span>
@@ -115,7 +127,7 @@ function TradeoffChart({
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart margin={{ top: 8, right: 12, bottom: 12, left: 0 }}>
                   <CartesianGrid
-                    stroke="var(--border)"
+                    stroke="hsl(var(--border))"
                     strokeDasharray="3 3"
                   />
                   <XAxis
@@ -124,7 +136,7 @@ function TradeoffChart({
                     name={xLabel}
                     tickFormatter={(value) => formatX(Number(value))}
                     tick={{
-                      fill: "var(--muted-foreground)",
+                      fill: "hsl(var(--muted-foreground))",
                       fontSize: 12,
                     }}
                   />
@@ -135,7 +147,7 @@ function TradeoffChart({
                     domain={[0, 100]}
                     tickFormatter={(value) => `${value}`}
                     tick={{
-                      fill: "var(--muted-foreground)",
+                      fill: "hsl(var(--muted-foreground))",
                       fontSize: 12,
                     }}
                     width={34}
@@ -238,6 +250,7 @@ export function projectDecisionTradeoffPoints(
         x: basis === "time" ? measured / 1000 : measured,
         attempts: row.attempts,
         color: chartColorForIdentity(row.id),
+        marker: chartMarkerForIdentity(row.id),
         reasoningEffortDetails: row.reasoningEffortDetails,
       },
     ];
@@ -274,19 +287,67 @@ export function DecisionTradeoffPointShape({
 }) {
   if (cx == null || cy == null || !payload) return null;
   return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={5}
-      fill={payload.color}
-      stroke="var(--background)"
-      strokeWidth={1.5}
+    <g
       tabIndex={0}
       role="img"
       aria-label={decisionTradeoffPointAriaLabel(payload, xLabel, formatX)}
-      className="outline-none focus-visible:stroke-ring focus-visible:stroke-[3px]"
-    />
+      className="group outline-none"
+      data-marker={payload.marker}
+    >
+      <DecisionMarker
+        cx={cx}
+        cy={cy}
+        size={5}
+        marker={payload.marker}
+        color={payload.color}
+      />
+    </g>
   );
+}
+
+function DecisionMarker({
+  cx,
+  cy,
+  size,
+  marker,
+  color,
+}: {
+  cx: number;
+  cy: number;
+  size: number;
+  marker: ChartMarker;
+  color: string;
+}) {
+  const common = {
+    fill: color,
+    stroke: "hsl(var(--foreground))",
+    strokeWidth: 2,
+    vectorEffect: "non-scaling-stroke" as const,
+    className:
+      "group-focus-visible:stroke-ring group-focus-visible:stroke-[3px]",
+  };
+  if (marker === "circle") {
+    return <circle cx={cx} cy={cy} r={size} {...common} />;
+  }
+  if (marker === "square") {
+    return (
+      <rect
+        x={cx - size}
+        y={cy - size}
+        width={size * 2}
+        height={size * 2}
+        rx={1}
+        {...common}
+      />
+    );
+  }
+  const points =
+    marker === "diamond"
+      ? `${cx},${cy - size - 1} ${cx + size + 1},${cy} ${cx},${cy + size + 1} ${cx - size - 1},${cy}`
+      : marker === "triangle"
+        ? `${cx},${cy - size - 1} ${cx + size + 1},${cy + size} ${cx - size - 1},${cy + size}`
+        : `${cx - size},${cy} ${cx - size / 2},${cy - size} ${cx + size / 2},${cy - size} ${cx + size},${cy} ${cx + size / 2},${cy + size} ${cx - size / 2},${cy + size}`;
+  return <polygon points={points} {...common} />;
 }
 
 type TradeoffTooltipPayload = TooltipContentProps<

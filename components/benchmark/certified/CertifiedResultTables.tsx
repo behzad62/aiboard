@@ -139,7 +139,7 @@ export function CertifiedLeaderboard({
                 <th className="px-3 py-2 font-medium">Track</th>
                 <th className="px-3 py-2 text-right font-medium">Scored</th>
                 <th className="px-3 py-2 text-right font-medium">
-                  {sortKey === "overall" ? "Overall score" : "Verified quality"}
+                  {sortKey === "overall" ? "Overall index" : "Verified quality"}
                 </th>
                 <th className="px-3 py-2 text-right font-medium">Pass</th>
                 <th className="px-3 py-2 text-right font-medium">Efficiency</th>
@@ -357,12 +357,12 @@ function CaseTitlesCell({ titles }: { titles: string[] }) {
   );
 }
 
-// Tooltip text for the overall-score cell: names the per-track quality figures
+// Tooltip text for the overall-index cell: names the per-track quality figures
 // the equal-weighted mean averages, so the reader sees WHAT the number is made
 // of without opening the leaderboard math.
 function overallScoreTooltip(row: CertifiedLeaderboardRow): string {
   if (row.trackBreakdown.length === 0) {
-    return "Overall score averages each track's quality equally.";
+    return "Overall index averages each track's quality equally.";
   }
   const parts = row.trackBreakdown.map(
     (entry) =>

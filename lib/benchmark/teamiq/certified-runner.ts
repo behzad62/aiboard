@@ -159,10 +159,14 @@ async function expandTeamIqCompositions(
   }
 
   const solos = Array.from(byVariant.values());
+  const expanded = [...solos, ...teams];
+  for (const composition of expanded) {
+    input.context.registerTeamCompositionId?.(composition.id);
+  }
   for (const solo of solos) {
     await saveBenchmarkTeamComposition(solo);
   }
-  return [...solos, ...teams];
+  return expanded;
 }
 
 /**

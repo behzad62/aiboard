@@ -9,6 +9,7 @@ import {
 } from "../lib/benchmark/certified/decision-dashboard";
 import { readLeaderboard } from "../lib/benchmark/certified/dashboard-selectors";
 import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
+import { readDecisionDashboardRows } from "../components/benchmark/results/BenchmarkDecisionDashboard";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import type {
   BenchmarkFailure,
@@ -449,6 +450,42 @@ const selectorLiftRow = {
     isTeam: true,
     teamLift: 10,
     teamLiftTracks: ["teamiq"],
+    latestAttemptId: "workbench-failed",
+    latestAttemptStatus: "failed_budget",
+    latestAttemptTrack: "workbench",
+    latestAttemptsByTrack: {
+      teamiq: { id: "teamiq-passed", status: "passed", track: "teamiq" },
+      workbench: {
+        id: "workbench-failed",
+        status: "failed_budget",
+        track: "workbench",
+      },
+    },
+    failureDetails: [
+      {
+        attemptId: "workbench-failed",
+        track: "workbench",
+        status: "failed_budget",
+        code: "budget_exhausted",
+        message: "WorkBench budget failed.",
+      },
+    ],
+    trackBreakdown: [
+      {
+        track: "teamiq",
+        attempts: 3,
+        passed: 2,
+        verifiedPassRate: 2 / 3,
+        averageVerifiedQuality: 0.8,
+      },
+      {
+        track: "workbench",
+        attempts: 2,
+        passed: 1,
+        verifiedPassRate: 0.5,
+        averageVerifiedQuality: 0.5,
+      },
+    ],
   }),
   teamName: "Selector Lift",
 };
@@ -481,6 +518,26 @@ check(
   workbenchScopedLift?.teamLift === null &&
     workbenchScopedLift.teamLiftTracks.length === 0,
   workbenchScopedLift
+);
+const liveTeamIqRows = readDecisionDashboardRows(
+  selectorCertified,
+  {
+    query: "",
+    track: "teamiq",
+    kind: "all",
+    provider: "all",
+    effort: "all",
+    evidence: "all",
+  },
+  "teamLift"
+);
+check(
+  "live Results helper retains TeamIQ-local lift and track-local metadata",
+  liveTeamIqRows[0]?.teamLift === 10 &&
+    liveTeamIqRows[0]?.teamLiftTracks.join(",") === "teamiq" &&
+    liveTeamIqRows[0]?.latestAttemptId === "teamiq-passed" &&
+    liveTeamIqRows[0]?.failureDetails.length === 0,
+  liveTeamIqRows
 );
 
 const repeatedModelTeam = row("same-model-team", {

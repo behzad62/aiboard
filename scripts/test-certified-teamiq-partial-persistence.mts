@@ -4,9 +4,17 @@
 import {
   __resetBenchmarkStoreForTests,
   listBenchmarkAttemptsV2,
+  listBenchmarkFailures,
+  listBenchmarkTeamCompositions,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
+import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
+import { readLeaderboard } from "../lib/benchmark/certified/dashboard-selectors";
+import { rebuildCertifiedDashboardData } from "../lib/benchmark/certified/run-persistence";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
@@ -92,18 +100,35 @@ function singleModelTeam(input: {
   };
 }
 
-const firstTeam = singleModelTeam({
-  id: "teamiq-partial-first",
+const firstSolo = singleModelTeam({
+  id: "unused-derived-first",
   providerId: "first-provider",
   modelId: "first-provider:first-model",
-  displayName: "First Team",
+  displayName: "First model",
 });
-const secondTeam = singleModelTeam({
-  id: "teamiq-partial-second",
+const secondSolo = singleModelTeam({
+  id: "unused-derived-second",
   providerId: "second-provider",
   modelId: "second-provider:second-model",
-  displayName: "Second Team",
+  displayName: "Second model",
 });
+const firstTeam: BenchmarkTeamComposition = {
+  id: "teamiq-partial-team-round-robin",
+  name: "First + Second round robin",
+  comboHash: "combo:partial-round-robin",
+  strategy: "panel",
+  roles: [
+    { ...firstSolo.roles[0]!, role: "specialist", slot: "specialist-1" },
+    { ...secondSolo.roles[0]!, role: "specialist", slot: "specialist-2" },
+  ],
+};
+const secondTeam: BenchmarkTeamComposition = {
+  ...firstTeam,
+  id: "teamiq-partial-team-specialist",
+  name: "First + Second specialist",
+  comboHash: "combo:partial-specialist",
+  strategy: "debate",
+};
 const toolCase = TOOL_RELIABILITY_CASES.find(
   (candidate) => candidate.kind === "write-scope"
 )!;
@@ -133,15 +158,15 @@ await runCertifiedBenchmark({
         kind: "toolreliability",
         casePack: [toolCase],
       },
-      includeSoloBaselines: false,
+      includeSoloBaselines: true,
       pricing: null,
       streamChat: async function* ({
         providerId,
         params,
       }): AsyncIterable<StreamChunk> {
-        if (providerId === secondTeam.roles[0].providerId) {
+        if (providerId === secondSolo.roles[0]!.providerId) {
           throw new Error(
-            "Wall-clock budget exceeded in simulated later composition."
+            "Wall-clock budget exceeded (3600000ms >= 3600000ms)."
           );
         }
         const prompt = params.messages
@@ -157,25 +182,89 @@ await runCertifiedBenchmark({
 });
 
 const attempts = await listBenchmarkAttemptsV2();
-const completed = attempts.find(
-  (attempt) => attempt.teamCompositionId === firstTeam.id
+const persistedTeams = await listBenchmarkTeamCompositions();
+const derivedSolos = persistedTeams.filter(
+  (team) =>
+    team.roles.length === 1 &&
+    [firstSolo.roles[0]!.modelId, secondSolo.roles[0]!.modelId].includes(
+      team.roles[0]!.modelId
+    )
 );
-const failed = attempts.find(
-  (attempt) => attempt.teamCompositionId === secondTeam.id
-);
+const completed = attempts.find((attempt) => {
+  const composition = derivedSolos.find(
+    (team) => team.id === attempt.teamCompositionId
+  );
+  return composition?.roles[0]?.modelId === firstSolo.roles[0]!.modelId;
+});
+const failed = attempts.find((attempt) => {
+  const composition = derivedSolos.find(
+    (team) => team.id === attempt.teamCompositionId
+  );
+  return composition?.roles[0]?.modelId === secondSolo.roles[0]!.modelId;
+});
 
 check(
-  "first TeamIQ composition survives a later failure",
+  "completed expanded solo survives a later solo failure",
   completed?.status === "passed"
 );
 check(
-  "only the missing TeamIQ composition is synthesized as failed",
-  failed?.status === "failed_budget" && attempts.length === 2,
+  "current and remaining expanded compositions receive budget evidence",
+  failed?.status === "failed_budget" &&
+    attempts.length === 4 &&
+    attempts.filter((attempt) => attempt.status === "failed_budget").length === 3 &&
+    [firstTeam.id, secondTeam.id].every((teamId) =>
+      attempts.some(
+        (attempt) =>
+          attempt.teamCompositionId === teamId &&
+          attempt.status === "failed_budget"
+      )
+    ),
   attempts
 );
 check(
-  "completed TeamIQ attempt is not recorded twice",
+  "every expanded composition is registered before failure synthesis",
+  derivedSolos.length === 2 &&
+    attempts.every((attempt) =>
+      persistedTeams.some((team) => team.id === attempt.teamCompositionId)
+    ),
+  { derivedSolos, attempts }
+);
+check(
+  "completed TeamIQ solo is not recorded twice",
   attempts.filter((attempt) => attempt.id === completed?.id).length === 1
+);
+
+const dashboardWithMetadata = withCertifiedDeleteMetadata(
+  await rebuildCertifiedDashboardData(),
+  attempts,
+  persistedTeams,
+  await listBenchmarkFailures()
+);
+const failedRow = readLeaderboard(
+  dashboardWithMetadata,
+  "teamiq",
+  "overall"
+).find((row) => row.teamCompositionId === failed?.teamCompositionId);
+const profileMarkup = failedRow
+  ? renderToStaticMarkup(
+      createElement(ModelEvidenceProfile, {
+        id: "budget-profile",
+        row: failedRow,
+        onClose: () => undefined,
+      })
+    )
+  : "";
+check(
+  "exact all-modes budget provenance reaches row metadata and rendered profile",
+  failedRow?.failureDetails.some((detail) =>
+    detail.message.includes("3600000ms >= 3600000ms")
+  ) === true && profileMarkup.includes("3600000ms &gt;= 3600000ms"),
+  {
+    failedCompositionId: failed?.teamCompositionId,
+    leaderboard: readLeaderboard(dashboardWithMetadata, "teamiq", "overall"),
+    failureDetails: failedRow?.failureDetails,
+    profileMarkup,
+  }
 );
 
 if (failures === 0) {

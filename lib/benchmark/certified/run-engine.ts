@@ -80,17 +80,19 @@ export async function runCertifiedBenchmark(
   } catch (error) {
     status = "failed";
     errorMessage = error instanceof Error ? error.message : String(error);
-    await context.recordFailure(createRunEngineFailure({
+    const runFailure = createRunEngineFailure({
       runId,
       track: input.track,
       message: errorMessage,
-    }));
+    });
+    await context.recordFailure(runFailure);
     await persistReturnedAttempts(
       context,
       createFailedAttemptsForRunError({
         context,
         track: input.track,
         message: errorMessage,
+        failureId: runFailure.id,
       })
     );
   }
@@ -123,6 +125,7 @@ function createFailedAttemptsForRunError(input: {
   context: ReturnType<typeof createCertifiedRunContext>;
   track: BenchmarkTrack;
   message: string;
+  failureId: string;
 }): BenchmarkAttemptV2[] {
   const snapshot = input.context.snapshot();
   const existingKeys = new Set(
@@ -190,7 +193,7 @@ function createFailedAttemptsForRunError(input: {
         durationMs,
         artifactIds: [],
         traceIds: traces.map((trace) => trace.id),
-        failureIds: [],
+        failureIds: [input.failureId],
         harnessVersion:
           profile?.harnessVersion ?? `${input.context.harnessProfile}-v0.1`,
         promptSetVersion:

@@ -33,6 +33,41 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
+function hslLuminance(h: number, s: number, l: number): number {
+  const saturation = s / 100;
+  const lightness = l / 100;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const segment = ((h % 360) + 360) % 360 / 60;
+  const x = chroma * (1 - Math.abs((segment % 2) - 1));
+  const [red, green, blue] =
+    segment < 1 ? [chroma, x, 0] :
+    segment < 2 ? [x, chroma, 0] :
+    segment < 3 ? [0, chroma, x] :
+    segment < 4 ? [0, x, chroma] :
+    segment < 5 ? [x, 0, chroma] : [chroma, 0, x];
+  const offset = lightness - chroma / 2;
+  return [red + offset, green + offset, blue + offset]
+    .map((channel) =>
+      channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    .reduce(
+      (sum, channel, index) =>
+        sum + channel * [0.2126, 0.7152, 0.0722][index]!,
+      0
+    );
+}
+
+function contrastRatio(
+  foreground: [number, number, number],
+  background: [number, number, number]
+): number {
+  const light = hslLuminance(...foreground);
+  const dark = hslLuminance(...background);
+  return (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
+}
+
 function source(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
@@ -392,6 +427,7 @@ check(
   "track profile counts passes and budget failures and deduplicates messages",
   explanatoryProfileMarkup.includes("0 of 1 passed") &&
     explanatoryProfileMarkup.includes("2 budget failures") &&
+    explanatoryProfileMarkup.includes("1 failed attempt") &&
     explanatoryProfileMarkup.split("Certified model-call budget was exhausted.").length - 1 === 1,
   explanatoryProfileMarkup
 );
@@ -509,6 +545,13 @@ check(
     verdictMarkup.includes("90 verified quality"),
   verdictMarkup
 );
+check(
+  "verdict winner identities wrap and overall support is labelled as an index",
+  verdictMarkup.includes("break-words text-lg font-semibold") &&
+    verdictMarkup.includes("overall index") &&
+    !verdictMarkup.includes("truncate text-lg font-semibold"),
+  verdictMarkup
+);
 const emptyTeamVerdictMarkup = renderToStaticMarkup(
   React.createElement(DecisionVerdicts, {
     rows: [variantRow]
@@ -516,7 +559,8 @@ const emptyTeamVerdictMarkup = renderToStaticMarkup(
 );
 check(
   "empty WorkBench and team-lift cards request comparable team evidence",
-  emptyTeamVerdictMarkup.includes("Run a team WorkBench pack to compare verified coding work.") &&
+    emptyTeamVerdictMarkup.includes("Run a team WorkBench pack to compare verified coding work.") &&
+    emptyTeamVerdictMarkup.includes("Not comparable") &&
     emptyTeamVerdictMarkup.includes(
       "Run the same certified track solo and as a team to measure added value."
     ),
@@ -542,6 +586,27 @@ const auditRosterMarkup = renderToStaticMarkup(
     onDeleteProviderErrors: () => undefined,
     rosterByTeamId: new Map([["team-winner", rosterRoles]])
   })
+);
+const auditOverallMarkup = renderToStaticMarkup(
+  React.createElement(CertifiedLeaderboard, {
+    rows: [teamDecisionRow],
+    track: "all",
+    sortKey: "overall",
+    onSortChange: () => undefined,
+    paretoIds: new Set<string>(),
+    deletingAttemptIds: new Set<string>(),
+    deleteInFlight: false,
+    providerErrorCount: 0,
+    onDeleteAttempt: () => undefined,
+    onDeleteProviderErrors: () => undefined,
+    rosterByTeamId: new Map([["team-winner", rosterRoles]])
+  })
+);
+check(
+  "Audit leaderboard labels the certified aggregate as Overall index",
+  auditOverallMarkup.includes("Overall index") &&
+    !auditOverallMarkup.includes("Overall score"),
+  auditOverallMarkup
 );
 check(
   "audit roster chips render canonical per-role effort labels",
@@ -673,6 +738,13 @@ const tokenProjection = projectDecisionTradeoffPoints(chartRows, "tokens");
 const timeProjection = projectDecisionTradeoffPoints(chartRows, "time");
 const reorderedProjection = projectDecisionTradeoffPoints([chartRows[1]!, chartRows[0]!], "tokens");
 const filteredProjection = projectDecisionTradeoffPoints([chartRows[1]!], "tokens");
+const collisionProjection = projectDecisionTradeoffPoints(
+  [
+    { ...chartRows[0]!, id: "a", label: "Identity a" },
+    { ...chartRows[0]!, id: "g", label: "Identity g" }
+  ],
+  "tokens"
+);
 check(
   "chart identity colors survive row reorder and filtering",
   tokenProjection[1]?.color === reorderedProjection[0]?.color &&
@@ -684,6 +756,17 @@ check(
   tokenProjection[0]?.color === timeProjection[0]?.color &&
     tokenProjection[0]?.color === chartColorForIdentity("solo-alpha"),
   { tokenProjection, timeProjection }
+);
+check(
+  "colliding six-color identities retain distinct stable markers",
+  collisionProjection[0]?.color === collisionProjection[1]?.color &&
+    collisionProjection[0]?.marker !== collisionProjection[1]?.marker &&
+    collisionProjection[0]?.marker ===
+      projectDecisionTradeoffPoints(
+        [{ ...chartRows[0]!, id: "a", label: "Identity a" }],
+        "time"
+      )[0]?.marker,
+  collisionProjection
 );
 check(
   "trade-off projections prefer overall index and fall back to verified quality",
@@ -725,6 +808,25 @@ check(
     decisionChartMarkup.includes("Solo model") &&
     decisionChartMarkup.includes("Team"),
   decisionChartMarkup
+);
+check(
+  "chart theme tokens are valid and marker treatment matches legend and point",
+  charts.includes('stroke="hsl(var(--border))"') &&
+    charts.includes('fill: "hsl(var(--muted-foreground))"') &&
+    decisionChartMarkup.includes("hsl(var(--foreground))") &&
+    !charts.includes('stroke="var(--') &&
+    decisionChartMarkup.includes('data-marker="') &&
+    decisionChartMarkup.match(/data-marker=/g)?.length === chartRows.length * 2,
+  decisionChartMarkup
+);
+check(
+  "foreground marker outlines exceed 3:1 against light and dark chart backgrounds",
+  contrastRatio([222, 45, 12], [213, 38, 97]) >= 3 &&
+    contrastRatio([210, 40, 98], [222.2, 84, 4.9]) >= 3,
+  {
+    light: contrastRatio([222, 45, 12], [213, 38, 97]),
+    dark: contrastRatio([210, 40, 98], [222.2, 84, 4.9])
+  }
 );
 const longChartIdentity =
   "Alpha Model With A Deliberately Long Provider And Reasoning Configuration Name";
@@ -776,7 +878,9 @@ check(
     pointShapeMarkup.includes('aria-label="') &&
     pointShapeMarkup.includes("Beta Builder Team") &&
     pointShapeMarkup.includes("Overall index: 77.0") &&
-    pointShapeMarkup.includes("Tokens per successful case: 5,678 tokens"),
+    pointShapeMarkup.includes("Tokens per successful case: 5,678 tokens") &&
+    pointShapeMarkup.includes('stroke="hsl(var(--foreground))"') &&
+    pointShapeMarkup.includes('data-marker="'),
   pointShapeMarkup
 );
 const tooltipMarkup = renderToStaticMarkup(
@@ -997,6 +1101,13 @@ check(
   overallMarkup
 );
 check(
+  "Audit overview uses Overall index terminology",
+  overallMarkup.includes("Overall index") &&
+    !overallMarkup.includes("Overall scores") &&
+    !overallMarkup.includes("Overall score averages"),
+  overallMarkup
+);
+check(
   "overall ranking keys rows by canonical variant identity",
   source("components/benchmark/certified/CertifiedBenchmarkOverview.tsx").includes(
     "key={row.variantKey}"
@@ -1019,7 +1130,7 @@ check(
   "index ribbon names and explains Certified Index v1.0",
   ribbon.includes("CERTIFIED_INDEX_VERSION") &&
     decisionModel.includes('CERTIFIED_INDEX_VERSION = "Certified Index v1.0"') &&
-    ribbon.includes("Equal weight per completed track") &&
+    ribbon.includes("Equal weight per represented track") &&
     ribbon.includes("Missing tracks are not scored as zero"),
   ribbon
 );

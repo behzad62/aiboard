@@ -64,6 +64,7 @@ export function createCertifiedRunContext(
     budget: input.modelBudget ?? {},
     startedAt: input.startedAt,
   });
+  const teamCompositionIds = [...input.teamCompositionIds];
 
   return {
     runId: input.runId,
@@ -73,8 +74,13 @@ export function createCertifiedRunContext(
     suiteId: input.suiteId,
     startedAt: input.startedAt,
     caseIds: [...input.caseIds],
-    teamCompositionIds: [...input.teamCompositionIds],
+    teamCompositionIds,
     modelBudget: input.modelBudget ?? {},
+    registerTeamCompositionId(teamCompositionId) {
+      if (!teamCompositionIds.includes(teamCompositionId)) {
+        teamCompositionIds.push(teamCompositionId);
+      }
+    },
     async recordAttempt(attempt) {
       assertAttemptBelongsToRun(attempt, input.runId, input.track);
       attempts.set(attempt.id, attempt);
