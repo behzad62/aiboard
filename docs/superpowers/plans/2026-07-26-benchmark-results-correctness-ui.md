@@ -69,8 +69,11 @@ check(
 );
 ```
 
-Add a source-contract assertion that the TeamIQ case record still contains
-`maxModelCalls: 150`.
+Exercise the TeamIQ case-record builder through an exported
+`caseForSelection` and assert that the all-modes case record has
+`budget.maxWallClockSeconds === 3600` and `budget.maxModelCalls === 150`.
+This catches a wrong budget reaching the certified runner rather than merely
+checking a constant or source string.
 
 - [ ] **Step 2: Write a failing partial-persistence test**
 
@@ -436,24 +439,29 @@ git commit -m "fix(benchmark): expose failures and team WorkBench verdict"
 **Interfaces:**
 
 - Produces: `chartColorForIdentity(identity: string): string`
+- Produces: `projectDecisionTradeoffPoints(rows, basis): TradeoffPoint[]`
+- Produces: `decisionTradeoffPointAriaLabel(point, xLabel, formatX): string`
 - Adds to `TradeoffPoint`: `kind`, `tracks`, `color`
 - Keeps the existing `DecisionTradeoffCharts({ rows })` public component API
 
-- [ ] **Step 1: Write failing UI contract tests**
+- [ ] **Step 1: Write failing chart behavior tests**
 
-Add source-contract assertions for:
+Exercise exported projection/label helpers with literal rows and assert:
 
-- Chart titles use `Overall index vs …`.
-- Y axis name is `Overall index`.
-- Every tooltip includes `point.label`, `point.kind`, and `point.tracks`.
-- A visible legend renders the model/team label next to its stable color.
-- Colors come from `chartColorForIdentity(point.id)`, never array index.
-- Custom point shapes have `tabIndex={0}` and an identity-rich `aria-label`.
-- Tick and grid colors use theme tokens instead of Recharts' low-contrast
-  defaults.
-- Accessible table header is `Overall index`.
+- Reordering/filtering rows keeps each row's color unchanged.
+- Both token/time projections use the same color for one row.
+- The projected Y value is `(overallScore ?? verifiedQuality) * 100`.
+- Point labels contain the full model/team identity, kind, tracks, index, and
+  X metric.
 
-- [ ] **Step 2: Run the UI contract and verify failure**
+Render `DecisionTradeoffCharts` with React DOM server and literal rows. Assert
+the rendered HTML includes `Overall index vs tokens per successful case`,
+`Overall index vs time per successful case`, `Overall index`, every full legend
+label, `Solo model`/`Team`, and the accessible data values. Export and render
+the custom point shape directly with fixed SVG coordinates; assert it carries
+`tabindex="0"` and the identity-rich `aria-label`.
+
+- [ ] **Step 2: Run the chart behavior tests and verify failure**
 
 Run:
 
@@ -461,7 +469,8 @@ Run:
 npx tsx scripts/test-benchmark-decision-dashboard-ui.mts
 ```
 
-Expected: the old quality labels, index-based colors, and missing legend fail.
+Expected: the projection/label APIs are absent and rendered output still uses
+the old quality terminology and has no visible identity legend.
 
 - [ ] **Step 3: Add stable color assignment**
 
@@ -546,12 +555,14 @@ git commit -m "fix(benchmark): identify tradeoff chart points accessibly"
 - Keeps: `DecisionLeaderboard({ rows, sortKey, onSortKeyChange })`
 - Consumes: `row.failureDetails` and `row.teamLiftTracks`
 
-- [ ] **Step 1: Write failing responsive/profile contract tests**
+- [ ] **Step 1: Write failing rendered responsive/profile tests**
 
-Add assertions that:
+Render `DecisionLeaderboard` and `ModelEvidenceProfile` with literal solo,
+team, and failed-budget rows. Assert the rendered markup and visible text:
 
-- Desktop table is hidden below `md`.
-- A `md:hidden` stacked-card list renders every row at small widths.
+- The desktop table wrapper carries the responsive desktop class.
+- A mobile stacked-card list carries the complementary mobile class and
+  renders every row.
 - Mobile cards show full wrapping labels, overall index, pass range, coverage,
   reliability, tokens/pass, time/pass, and the profile action.
 - The profile label is `Overall index`, not `Overall quality`.
@@ -561,7 +572,7 @@ Add assertions that:
 - A budget failure renders its certified message.
 - A team with no `teamLiftTracks` renders `Not comparable`.
 
-- [ ] **Step 2: Run the UI contract and verify failure**
+- [ ] **Step 2: Run the rendered UI tests and verify failure**
 
 Run:
 
