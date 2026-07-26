@@ -3,7 +3,15 @@ import { existsSync, readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DecisionLeaderboard } from "../components/benchmark/results/DecisionLeaderboard";
+import { DecisionVerdicts } from "../components/benchmark/results/DecisionVerdicts";
+import { DecisionTradeoffCharts } from "../components/benchmark/results/DecisionTradeoffCharts";
 import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
+import {
+  CertifiedLeaderboard,
+  WorkBenchRoleLeaderboards,
+  type RosterRole,
+} from "../components/benchmark/certified/CertifiedResultTables";
+import { CertifiedBenchmarkOverview } from "../components/benchmark/certified/CertifiedBenchmarkOverview";
 import type { DecisionRow } from "../lib/benchmark/certified/decision-dashboard";
 
 let failures = 0;
@@ -64,8 +72,31 @@ const variantRow: DecisionRow = {
 };
 const leaderboardMarkup = renderToStaticMarkup(
   React.createElement(DecisionLeaderboard, {
-    rows: [variantRow],
-    totalRows: 1,
+    rows: [
+      variantRow,
+      {
+        ...variantRow,
+        id: "variant-high",
+        label: "Model · High",
+        teamCompositionId: "variant-high",
+        reasoningEfforts: ["high"],
+      },
+      {
+        ...variantRow,
+        id: "team",
+        label: "Builder team",
+        teamCompositionId: "team",
+        modelIds: ["openai:architect", "openai:worker"],
+        isTeam: true,
+        teamLift: 12,
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortDetails: [
+          { role: "architect", displayName: "Architect", effort: "low" },
+          { role: "worker", displayName: "Worker", effort: "high" },
+        ],
+      },
+    ],
+    totalRows: 3,
     sortKey: "quality",
     onSortChange: () => undefined,
     selectedId: null,
@@ -73,8 +104,11 @@ const leaderboardMarkup = renderToStaticMarkup(
   })
 );
 check(
-  "leaderboard renders the effort-aware solo variant label",
-  leaderboardMarkup.includes("Model · Low"),
+  "leaderboard renders same-model variants and team member efforts",
+  leaderboardMarkup.includes("Model · Low") &&
+    leaderboardMarkup.includes("Model · High") &&
+    leaderboardMarkup.includes("architect: Architect · Low") &&
+    leaderboardMarkup.includes("worker: Worker · High"),
   leaderboardMarkup
 );
 
@@ -101,6 +135,192 @@ check(
   teamProfileMarkup.includes("architect: Architect · Low") &&
     teamProfileMarkup.includes("worker: Worker · High"),
   teamProfileMarkup
+);
+
+const teamDecisionRow: DecisionRow = {
+  ...variantRow,
+  id: "team-winner",
+  label: "Winning team",
+  teamCompositionId: "team-winner",
+  modelIds: ["openai:architect", "openai:worker"],
+  isTeam: true,
+  teamLift: 24,
+  reasoningEfforts: ["low", "high"],
+  reasoningEffortDetails: [
+    { role: "architect", displayName: "Architect", effort: "low" },
+    { role: "worker", displayName: "Worker", effort: "high" },
+    { role: "reviewer", displayName: "Legacy", effort: "invalid" },
+  ],
+};
+const verdictMarkup = renderToStaticMarkup(
+  React.createElement(DecisionVerdicts, {
+    rows: [variantRow, teamDecisionRow],
+  })
+);
+check(
+  "team verdict card renders each winner role effort",
+  verdictMarkup.includes("architect: Architect · Low") &&
+    verdictMarkup.includes("worker: Worker · High") &&
+    verdictMarkup.includes("reviewer: Legacy · Default"),
+  verdictMarkup
+);
+
+const rosterRoles: RosterRole[] = [
+  { role: "architect", displayName: "Architect", reasoningEffort: "low" },
+  { role: "worker", displayName: "Worker", reasoningEffort: "high" },
+  { role: "reviewer", displayName: "Legacy", reasoningEffort: "default" },
+];
+const auditRosterMarkup = renderToStaticMarkup(
+  React.createElement(CertifiedLeaderboard, {
+    rows: [teamDecisionRow],
+    track: "all",
+    sortKey: "quality",
+    onSortChange: () => undefined,
+    paretoIds: new Set<string>(),
+    deletingAttemptIds: new Set<string>(),
+    deleteInFlight: false,
+    providerErrorCount: 0,
+    onDeleteAttempt: () => undefined,
+    onDeleteProviderErrors: () => undefined,
+    rosterByTeamId: new Map([["team-winner", rosterRoles]]),
+  })
+);
+check(
+  "audit roster chips render canonical per-role effort labels",
+  auditRosterMarkup.includes("architect: Architect · Low") &&
+    auditRosterMarkup.includes("worker: Worker · High") &&
+    auditRosterMarkup.includes("reviewer: Legacy · Default"),
+  auditRosterMarkup
+);
+
+const roleBoardsMarkup = renderToStaticMarkup(
+  React.createElement(WorkBenchRoleLeaderboards, {
+    boards: {
+      architect: [
+        {
+          id: "openai:model\u0000low",
+          modelId: "openai:model",
+          reasoningEffort: "low",
+          variantKey: "openai:model\u0000low",
+          displayName: "Model · Low",
+          attempts: 2,
+          passed: 1,
+          verifiedPassRate: 0.5,
+          verifiedQuality: 0.7,
+          efficiencyScore: 70,
+          averageCostUsd: null,
+          averageDurationMs: null,
+        },
+        {
+          id: "openai:model\u0000high",
+          modelId: "openai:model",
+          reasoningEffort: "high",
+          variantKey: "openai:model\u0000high",
+          displayName: "Model · High",
+          attempts: 2,
+          passed: 2,
+          verifiedPassRate: 1,
+          verifiedQuality: 0.9,
+          efficiencyScore: 80,
+          averageCostUsd: null,
+          averageDurationMs: null,
+        },
+      ],
+      worker: [],
+      reviewer: [],
+    },
+  })
+);
+check(
+  "WorkBench role table renders same-model effort siblings",
+  roleBoardsMarkup.includes("Model · Low") &&
+    roleBoardsMarkup.includes("Model · High"),
+  roleBoardsMarkup
+);
+
+const chartMarkup = renderToStaticMarkup(
+  React.createElement(DecisionTradeoffCharts, {
+    rows: [
+      { ...variantRow, tokensPerPass: 1000, speedPerPassMs: 1000 },
+      {
+        ...variantRow,
+        id: "variant-high",
+        label: "Model · High",
+        tokensPerPass: 2000,
+        speedPerPassMs: 2000,
+      },
+    ],
+  })
+);
+check(
+  "chart accessible tables preserve same-model variant labels",
+  chartMarkup.includes("Model · Low") && chartMarkup.includes("Model · High"),
+  chartMarkup
+);
+
+const overallMarkup = renderToStaticMarkup(
+  React.createElement(CertifiedBenchmarkOverview, {
+    certified: {
+      modelIntelligence: [
+        {
+          modelId: "openai:model",
+          reasoningEffort: "low",
+          variantKey: "openai:model\u0000low",
+          displayName: "Model · Low",
+          attempts: 2,
+          passed: 1,
+          verifiedPassRate: 0.5,
+          combinedScore: 0.7,
+          trackCount: 1,
+          preliminary: true,
+          tracks: [],
+        },
+        {
+          modelId: "openai:model",
+          reasoningEffort: "high",
+          variantKey: "openai:model\u0000high",
+          displayName: "Model · High",
+          attempts: 3,
+          passed: 3,
+          verifiedPassRate: 1,
+          combinedScore: 0.9,
+          trackCount: 1,
+          preliminary: false,
+          tracks: [],
+        },
+      ],
+      leaderboard: [],
+    },
+    counts: {
+      suites: 0,
+      runs: 0,
+      cases: 0,
+      attempts: 0,
+      metricValues: 0,
+      artifacts: 0,
+      failures: 0,
+      traces: 0,
+      certifiedCases: 1,
+      certifiedAttempts: 5,
+      verifierResults: 0,
+      runEvents: 0,
+      toolCallTraces: 0,
+      teamCompositions: 2,
+      harnessCertifications: 0,
+    },
+  })
+);
+check(
+  "overall ranking renders same-model effort siblings",
+  overallMarkup.includes("Model · Low") && overallMarkup.includes("Model · High"),
+  overallMarkup
+);
+check(
+  "overall ranking keys rows by canonical variant identity",
+  source("components/benchmark/certified/CertifiedBenchmarkOverview.tsx").includes(
+    "key={row.variantKey}"
+  ),
+  source("components/benchmark/certified/CertifiedBenchmarkOverview.tsx")
 );
 
 for (const label of [

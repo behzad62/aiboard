@@ -20,6 +20,7 @@ import {
   type DecisionVerdict,
   type DecisionVerdictKey,
 } from "@/lib/benchmark/certified/decision-dashboard";
+import { VariantRosterBadges } from "./VariantRosterBadges";
 
 const CARD_META: Record<
   DecisionVerdictKey,
@@ -93,6 +94,11 @@ function VerdictCard({ verdict }: { verdict: DecisionVerdict }) {
         <div className="truncate text-lg font-semibold">
           {verdict.winner?.label ?? "Not measured yet"}
         </div>
+        {verdict.winner?.isTeam && (
+          <VariantRosterBadges
+            details={verdict.winner.reasoningEffortDetails}
+          />
+        )}
         {verdict.winner ? (
           <p className="text-xs leading-relaxed text-muted-foreground">
             <span className={`font-semibold ${meta.accent}`}>

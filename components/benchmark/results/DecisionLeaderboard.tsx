@@ -18,6 +18,7 @@ import {
   wilsonInterval,
   type DecisionRow,
 } from "@/lib/benchmark/certified/decision-dashboard";
+import { VariantRosterBadges } from "./VariantRosterBadges";
 
 export function DecisionLeaderboard({
   rows,
@@ -113,6 +114,13 @@ export function DecisionLeaderboard({
                         <div className="mt-0.5 text-xs text-muted-foreground">
                           {row.attempts} scored attempt{row.attempts === 1 ? "" : "s"}
                         </div>
+                        {row.isTeam && (
+                          <div className="mt-1">
+                            <VariantRosterBadges
+                              details={row.reasoningEffortDetails}
+                            />
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-right font-semibold tabular-nums">
                         {formatRankMetric(row, sortKey)}

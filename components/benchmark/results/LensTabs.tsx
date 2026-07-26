@@ -26,6 +26,7 @@ import type {
   TeamIqComboMatrixRow,
   TeamIqRecommendationCard,
 } from "@/lib/benchmark/teamiq";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 
 type Lens = "solo" | "teams" | "roles";
 
@@ -185,6 +186,9 @@ function buildRosterByTeamId(
       (team.roles ?? []).map((role) => ({
         role: role.role,
         displayName: role.displayName ?? role.modelId,
+        reasoningEffort: normalizeBenchmarkReasoningEffort(
+          role.reasoningEffort
+        ),
       }))
     );
   }

@@ -14,6 +14,7 @@ import {
   type DecisionRow,
 } from "@/lib/benchmark/certified/decision-dashboard";
 import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
+import { VariantRosterBadges } from "./VariantRosterBadges";
 
 export function ModelEvidenceProfile({
   id,
@@ -55,15 +56,7 @@ export function ModelEvidenceProfile({
               <Badge key={provider} variant="outline">{provider}</Badge>
             ))}
             {row.isTeam && (row.reasoningEffortDetails?.length ?? 0) > 0
-              ? row.reasoningEffortDetails?.map((detail, index) => (
-                  <Badge
-                    key={`${detail.role}:${detail.effort}:${index}`}
-                    variant="outline"
-                  >
-                    {detail.role}:{" "}
-                    {benchmarkVariantLabel(detail.displayName, detail.effort)}
-                  </Badge>
-                ))
+              ? <VariantRosterBadges details={row.reasoningEffortDetails} />
               : (row.reasoningEfforts ?? []).map((effort) => (
                   <Badge key={effort} variant="outline">
                     {benchmarkVariantLabel("Reasoning", effort)}
