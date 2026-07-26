@@ -11,6 +11,7 @@
 import type { TeamLiftScore } from "@/lib/benchmark/scoring/types";
 import { finiteOrNull } from "@/lib/benchmark/scoring/types";
 import { scoreTeamLift } from "@/lib/benchmark/scoring/teamiq";
+import { benchmarkVariantKey } from "@/lib/benchmark/model-effort";
 
 /**
  * The minimal shape computeTeamLift needs from an already-aggregated
@@ -46,10 +47,29 @@ export function computeTeamLift(
     teamRow.modelVariantKeys?.length
       ? teamRow.modelVariantKeys
       : teamRow.modelIds;
+  const usesLegacyModelIds = !teamRow.modelVariantKeys?.length;
   if (memberKeys.length === 0) return null;
-  const soloRows = memberKeys.map((memberKey) =>
-    soloRowsByMemberKey.get(memberKey)
-  );
+  const soloRows = memberKeys.map((memberKey, index) => {
+    const solo = soloRowsByMemberKey.get(memberKey);
+    if (!solo?.modelVariantKeys?.length) {
+      if (!solo || usesLegacyModelIds) return solo;
+      const separator = memberKey.indexOf("\u0000");
+      const modelId =
+        separator > 0
+          ? memberKey.slice(0, separator)
+          : (teamRow.modelIds[index] ?? memberKey);
+      return memberKey === benchmarkVariantKey(modelId, "default")
+        ? solo
+        : undefined;
+    }
+    const expectedVariantKey = usesLegacyModelIds
+      ? benchmarkVariantKey(teamRow.modelIds[index] ?? memberKey, "default")
+      : memberKey;
+    return solo.modelVariantKeys.length === 1 &&
+      solo.modelVariantKeys[0] === expectedVariantKey
+      ? solo
+      : undefined;
+  });
   if (soloRows.some((row) => !row)) return null;
   const solos = soloRows as TeamLiftRowLike[];
   const bestSolo = solos.reduce((best, solo) =>

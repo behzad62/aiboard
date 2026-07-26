@@ -6,6 +6,7 @@ import {
 import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
 import {
   readModelIntelligence,
+  readTeamIqComboMatrixRows,
   readWorkBenchRoleRows,
 } from "../lib/benchmark/certified/dashboard-selectors";
 import type {
@@ -212,5 +213,64 @@ assert.deepEqual(
     averageDurationMs: null,
   }
 );
+
+const importedModelRow = {
+  modelId,
+  reasoningEffort: "invalid",
+  variantKey: "attacker:model\u0000high",
+  displayName: "Model",
+  attempts: 1,
+  tracks: [],
+};
+const importedModelPayload = { modelIntelligence: [importedModelRow] };
+assert.equal(
+  readModelIntelligence(importedModelPayload)[0]?.variantKey,
+  "openai:model\u0000default"
+);
+assert.equal(importedModelRow.variantKey, "attacker:model\u0000high");
+
+const importedRoleRow = {
+  id: "worker:openai:model",
+  modelId,
+  reasoningEffort: "low",
+  variantKey: "openai:model\u0000high",
+  displayName: "Model",
+  attempts: 1,
+};
+assert.equal(
+  readWorkBenchRoleRows([importedRoleRow])[0]?.variantKey,
+  "openai:model\u0000low"
+);
+assert.equal(importedRoleRow.variantKey, "openai:model\u0000high");
+
+const importedComboRow = {
+  id: "combo",
+  teamCompositionId: "team",
+  teamName: "Team",
+  comboHash: "hash",
+  track: "teamiq",
+  modelIds: ["openai:model", "anthropic:model"],
+  modelVariantKeys: [
+    "openai:model\u0000HIGH",
+    "anthropic:model\u0000high",
+    "attacker:model\u0000max",
+    "malformed-key",
+  ],
+  attempts: 1,
+  verifiedQuality: 0.8,
+  jobSuccessScore: 80,
+  recommendationLabel: "recommended",
+};
+const importedComboPayload = { teamIqComboMatrixRows: [importedComboRow] };
+assert.deepEqual(
+  readTeamIqComboMatrixRows(importedComboPayload)[0]?.modelVariantKeys,
+  ["anthropic:model\u0000high", "openai:model\u0000default"]
+);
+assert.deepEqual(importedComboRow.modelVariantKeys, [
+  "openai:model\u0000HIGH",
+  "anthropic:model\u0000high",
+  "attacker:model\u0000max",
+  "malformed-key",
+]);
 
 console.log("PASS benchmark model effort aggregation");

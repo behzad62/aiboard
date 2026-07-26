@@ -348,9 +348,7 @@ export function readModelIntelligence(certified: unknown): ModelIntelligenceRow[
       const reasoningEffort: string = normalizeBenchmarkReasoningEffort(
         row.reasoningEffort
       );
-      const variantKey =
-        readString(row.variantKey) ??
-        benchmarkVariantKey(modelId, reasoningEffort);
+      const variantKey = benchmarkVariantKey(modelId, reasoningEffort);
       const displayName = variantDisplayName(
         readString(row.displayName) ?? modelId,
         reasoningEffort
@@ -496,9 +494,7 @@ export function readWorkBenchRoleRows(value: unknown): WorkBenchRoleRow[] {
       const reasoningEffort: string = normalizeBenchmarkReasoningEffort(
         row.reasoningEffort
       );
-      const variantKey =
-        readString(row.variantKey) ??
-        benchmarkVariantKey(modelId, reasoningEffort);
+      const variantKey = benchmarkVariantKey(modelId, reasoningEffort);
       return {
         id: readString(row.id) ?? modelId,
         modelId,
@@ -525,6 +521,32 @@ function variantDisplayName(displayName: string, effort: unknown): string {
   return displayName.endsWith(suffix)
     ? displayName
     : benchmarkVariantLabel(displayName, effort);
+}
+
+function canonicalComboVariantKeys(
+  storedVariantKeys: string[],
+  modelIds: string[]
+): string[] {
+  const allowedModelIds = new Set(modelIds);
+  const canonicalKeys = new Set<string>();
+  const modelsWithStoredVariants = new Set<string>();
+  for (const storedKey of storedVariantKeys) {
+    const separator = storedKey.indexOf("\u0000");
+    if (separator <= 0 || separator !== storedKey.lastIndexOf("\u0000")) {
+      continue;
+    }
+    const modelId = storedKey.slice(0, separator);
+    if (!allowedModelIds.has(modelId)) continue;
+    const effort = storedKey.slice(separator + 1);
+    canonicalKeys.add(benchmarkVariantKey(modelId, effort));
+    modelsWithStoredVariants.add(modelId);
+  }
+  for (const modelId of modelIds) {
+    if (!modelsWithStoredVariants.has(modelId)) {
+      canonicalKeys.add(benchmarkVariantKey(modelId, "default"));
+    }
+  }
+  return Array.from(canonicalKeys).sort();
 }
 
 export function readTeamIqComboMatrixRows(certified: unknown): TeamIqComboMatrixRow[] {
@@ -557,10 +579,10 @@ export function readTeamIqComboMatrixRow(value: unknown): TeamIqComboMatrixRow |
     (item): item is string => typeof item === "string" && item.length > 0
   );
   const storedVariantKeys = readStringList(row.modelVariantKeys);
-  const modelVariantKeys =
-    storedVariantKeys.length > 0
-      ? storedVariantKeys
-      : modelIds.map((modelId) => benchmarkVariantKey(modelId, "default"));
+  const modelVariantKeys = canonicalComboVariantKeys(
+    storedVariantKeys,
+    modelIds
+  );
   return {
     id,
     teamCompositionId,

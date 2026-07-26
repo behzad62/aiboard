@@ -297,6 +297,66 @@ check(
   computeTeamLift(effortTeamRow, effortSoloRows) === null
 );
 
+const legacyDefaultTeam: TeamLiftRowLike = {
+  modelIds: ["openai:gpt-effort"],
+  jobSuccessScore: 80,
+};
+const explicitHighUnderLegacyKey = new Map<string, TeamLiftRowLike>([
+  [
+    "openai:gpt-effort",
+    {
+      modelIds: ["openai:gpt-effort"],
+      modelVariantKeys: ["openai:gpt-effort\u0000high"],
+      jobSuccessScore: 60,
+    },
+  ],
+]);
+check(
+  "legacy Default team does not match an explicit High solo row",
+  computeTeamLift(legacyDefaultTeam, explicitHighUnderLegacyKey) === null
+);
+const explicitDefaultUnderLegacyKey = new Map<string, TeamLiftRowLike>([
+  [
+    "openai:gpt-effort",
+    {
+      modelIds: ["openai:gpt-effort"],
+      modelVariantKeys: ["openai:gpt-effort\u0000default"],
+      jobSuccessScore: 60,
+    },
+  ],
+]);
+check(
+  "legacy Default team accepts an explicitly identified Default solo row",
+  computeTeamLift(legacyDefaultTeam, explicitDefaultUnderLegacyKey)?.teamLift ===
+    20
+);
+const legacySoloUnderLegacyKey = new Map<string, TeamLiftRowLike>([
+  [
+    "openai:gpt-effort",
+    {
+      modelIds: ["openai:gpt-effort"],
+      jobSuccessScore: 60,
+    },
+  ],
+]);
+check(
+  "legacy Default team remains compatible with a legacy solo row",
+  computeTeamLift(legacyDefaultTeam, legacySoloUnderLegacyKey)?.teamLift === 20
+);
+const legacySoloUnderHighKey = new Map<string, TeamLiftRowLike>([
+  [
+    "openai:gpt-effort\u0000high",
+    {
+      modelIds: ["openai:gpt-effort"],
+      jobSuccessScore: 60,
+    },
+  ],
+]);
+check(
+  "explicit High team does not reinterpret a legacy solo as High",
+  computeTeamLift(effortTeamRow, legacySoloUnderHighKey) === null
+);
+
 const lowEffortSolo = deriveSoloTeamComposition({
   modelId: "openai:gpt-effort",
   displayName: "GPT Effort",
