@@ -2,6 +2,9 @@
 
 import type { SelectedModel } from "@/lib/providers/base";
 import type { TeamIqStrategy } from "@/lib/benchmark/types";
+import type { ReasoningEffort } from "@/lib/db/schema";
+import type { BenchmarkModelEffortMap } from "@/lib/benchmark/model-effort";
+import { ModelEffortSelect } from "@/components/benchmark/run/ModelEffortSelect";
 import {
   TEAM_IQ_STRATEGIES,
   normalizeTeamIqModelSelectionForSlots,
@@ -18,7 +21,9 @@ export function TeamCompositionBuilder({
   roleMode = "default",
   playerCount = 3,
   allModes = false,
+  effortByModelId,
   onChange,
+  onEffortChange,
   onStrategyChange,
 }: {
   models: SelectedModel[];
@@ -27,7 +32,9 @@ export function TeamCompositionBuilder({
   roleMode?: TeamIqRoleMode;
   playerCount?: 2 | 3;
   allModes?: boolean;
+  effortByModelId: BenchmarkModelEffortMap;
   onChange: (modelIds: string[]) => void;
+  onEffortChange: (modelId: string, effort: ReasoningEffort) => void;
   onStrategyChange: (strategy: TeamIqUiStrategy) => void;
 }) {
   if (models.length === 0) {
@@ -93,33 +100,48 @@ export function TeamCompositionBuilder({
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         {roleSlots.map((slot, index) => {
+          const selectedModelId =
+            normalizedSelection[index] ?? models[0]!.modelId;
+          const selectedModel =
+            models.find((model) => model.modelId === selectedModelId) ??
+            models[0]!;
           return (
-            <label
+            <div
               key={slot.slot}
               className="grid min-h-20 gap-1 rounded-md border bg-card px-3 py-2 text-sm"
             >
-              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {slot.label}
-              </span>
-              <select
-                className="h-10 w-full min-w-0 rounded-md border bg-background px-3 text-sm"
-                value={normalizedSelection[index] ?? models[0]!.modelId}
-                onChange={(event) => {
-                  const next = [...normalizedSelection];
-                  next[index] = event.target.value;
-                  onChange(next);
-                }}
-              >
-                {models.map((model) => (
-                  <option key={model.modelId} value={model.modelId}>
-                    {model.displayName || model.modelId}
-                  </option>
-                ))}
-              </select>
+              <label className="grid gap-1">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {slot.label}
+                </span>
+                <select
+                  className="h-10 w-full min-w-0 rounded-md border bg-background px-3 text-sm"
+                  value={selectedModelId}
+                  onChange={(event) => {
+                    const next = [...normalizedSelection];
+                    next[index] = event.target.value;
+                    onChange(next);
+                  }}
+                >
+                  {models.map((model) => (
+                    <option key={model.modelId} value={model.modelId}>
+                      {model.displayName || model.modelId}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <span className="truncate text-xs text-muted-foreground">
-                {providerForModel(models, normalizedSelection[index])}
+                {providerForModel(models, selectedModelId)}
               </span>
-            </label>
+              <ModelEffortSelect
+                model={selectedModel}
+                value={effortByModelId[selectedModelId] ?? "default"}
+                onChange={(effort) =>
+                  onEffortChange(selectedModelId, effort)
+                }
+                compact
+              />
+            </div>
           );
         })}
       </div>

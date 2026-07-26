@@ -17,9 +17,10 @@ import { TeamCompositionBuilder } from "@/components/benchmark/teamiq/TeamCompos
 import { WorkBenchRunPanel } from "@/components/benchmark/workbench/WorkBenchRunPanel";
 import {
   ModelChecklist,
-  persistModelChecklistSelection,
-  readPersistedModelChecklistSelection,
+  persistModelChecklistConfig,
+  readPersistedModelChecklistConfig,
 } from "@/components/benchmark/run/ModelChecklist";
+import { ModelEffortSelect } from "@/components/benchmark/run/ModelEffortSelect";
 import { PresetCards, type PresetCardGate } from "@/components/benchmark/run/PresetCards";
 import {
   RunProgressList,
@@ -77,6 +78,11 @@ import {
   type WorkBenchRoleMode,
 } from "@/lib/benchmark/workbench";
 import type { SelectedModel } from "@/lib/providers/base";
+import type { ReasoningEffort } from "@/lib/db/schema";
+import {
+  normalizeBenchmarkEffortForModel,
+  type BenchmarkModelEffortMap,
+} from "@/lib/benchmark/model-effort";
 
 export function CertifiedRunPanel({
   track,
@@ -96,9 +102,16 @@ export function CertifiedRunPanel({
   // --- New preset-card flow state (2026-07-17 UX overhaul, Task 4 Step 4) --
   // One model checklist, reused by every preset; persisted so repeat runs
   // don't require re-checking models every visit.
-  const [soloModelIds, setSoloModelIds] = useState<string[]>(() =>
-    readPersistedModelChecklistSelection()
+  const [initialModelChecklistConfig] = useState(() =>
+    readPersistedModelChecklistConfig()
   );
+  const [soloModelIds, setSoloModelIds] = useState<string[]>(
+    initialModelChecklistConfig.selectedModelIds
+  );
+  const [effortByModelId, setEffortByModelId] =
+    useState<BenchmarkModelEffortMap>(
+      initialModelChecklistConfig.effortByModelId
+    );
   // One team builder, reused for the TeamIQ leg AND (by model-count mapping;
   // see workBenchRoleModeFromCount below) the WorkBench leg's roles.
   const [sharedTeamModelIds, setSharedTeamModelIds] = useState<string[]>([]);
@@ -176,6 +189,14 @@ export function CertifiedRunPanel({
       contextProfile: model.contextProfile,
     }));
     setModels(enabled);
+    setEffortByModelId((current) =>
+      Object.fromEntries(
+        enabled.map((model) => [
+          model.modelId,
+          normalizeBenchmarkEffortForModel(model, current[model.modelId]),
+        ])
+      )
+    );
     setModelId((current) => current || enabled[0]?.modelId || "");
     setSoloModelIds((current) =>
       current.length > 0
@@ -219,8 +240,8 @@ export function CertifiedRunPanel({
   }, []);
 
   useEffect(() => {
-    persistModelChecklistSelection(soloModelIds);
-  }, [soloModelIds]);
+    persistModelChecklistConfig({ selectedModelIds: soloModelIds, effortByModelId });
+  }, [soloModelIds, effortByModelId]);
 
   useEffect(() => {
     setSuiteId(suites[0]?.id ?? "");
@@ -285,6 +306,15 @@ export function CertifiedRunPanel({
     sharedTeamModelIds,
     workBenchRunnerReady,
   });
+  const handleEffortChange = (
+    changedModelId: string,
+    effort: ReasoningEffort
+  ) => {
+    setEffortByModelId((current) => ({
+      ...current,
+      [changedModelId]: effort,
+    }));
+  };
 
   return (
     <div className="space-y-6">
@@ -300,7 +330,9 @@ export function CertifiedRunPanel({
           <ModelChecklist
             models={models}
             selectedModelIds={soloModelIds}
+            effortByModelId={effortByModelId}
             onChange={setSoloModelIds}
+            onEffortChange={handleEffortChange}
           />
           {focusedPresetHasTeamLeg && (
             <div className="space-y-2 rounded-md border p-3">
@@ -313,8 +345,10 @@ export function CertifiedRunPanel({
               <TeamCompositionBuilder
                 models={models}
                 selectedModelIds={sharedTeamModelIds}
+                effortByModelId={effortByModelId}
                 strategy={sharedTeamIqStrategy}
                 onChange={setSharedTeamModelIds}
+                onEffortChange={handleEffortChange}
                 onStrategyChange={setSharedTeamIqStrategy}
               />
             </div>
@@ -422,11 +456,23 @@ export function CertifiedRunPanel({
                   />
                 )}
               </div>
+              {selectedTrack !== "gameiq" &&
+                selectedTrack !== "teamiq" &&
+                selectedTrack !== "workbench" && (
+                  <AdvancedModelEffortControl
+                    models={models}
+                    modelId={modelId}
+                    effortByModelId={effortByModelId}
+                    onEffortChange={handleEffortChange}
+                  />
+                )}
               {selectedTrack === "gameiq" && (
-                <GameIqModelChecklist
+                <ModelChecklist
                   models={models}
                   selectedModelIds={gameIqModelIds}
+                  effortByModelId={effortByModelId}
                   onChange={setGameIqModelIds}
+                  onEffortChange={handleEffortChange}
                 />
               )}
               {selectedTrack === "teamiq" && (
@@ -434,6 +480,7 @@ export function CertifiedRunPanel({
                   <TeamCompositionBuilder
                     models={models}
                     selectedModelIds={teamModelIds}
+                    effortByModelId={effortByModelId}
                     strategy={teamIqStrategy}
                     roleMode={
                       isFireworksSuite(suiteId) ? "fireworks_players" : "default"
@@ -441,6 +488,7 @@ export function CertifiedRunPanel({
                     playerCount={fireworksPlayerCount}
                     allModes={isTeamIqToolReliabilityAllModesSuite(suiteId)}
                     onChange={setTeamModelIds}
+                    onEffortChange={handleEffortChange}
                     onStrategyChange={setTeamIqStrategy}
                   />
                   {isFireworksSuite(suiteId) && (
@@ -874,67 +922,30 @@ function StaticField({
   );
 }
 
-function GameIqModelChecklist({
+export function AdvancedModelEffortControl({
   models,
-  selectedModelIds,
-  onChange,
+  modelId,
+  effortByModelId,
+  onEffortChange,
 }: {
   models: SelectedModel[];
-  selectedModelIds: string[];
-  onChange: (modelIds: string[]) => void;
+  modelId: string;
+  effortByModelId: BenchmarkModelEffortMap;
+  onEffortChange: (modelId: string, effort: ReasoningEffort) => void;
 }) {
-  if (models.length === 0) {
-    return (
-      <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-        Add and enable at least one provider model in Settings to run GameIQ.
-      </div>
-    );
-  }
+  const model = models.find((candidate) => candidate.modelId === modelId);
+  if (!model) return null;
+
   return (
-    <div className="space-y-2">
-      <div className="grid gap-2 md:grid-cols-3">
-        {models.map((model) => {
-          const checked = selectedModelIds.includes(model.modelId);
-          return (
-            <label
-              key={model.modelId}
-              className={`flex min-h-16 cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm ${
-                checked ? "border-primary bg-primary/5" : "bg-card"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4"
-                checked={checked}
-                onChange={(event) => {
-                  if (event.target.checked) {
-                    onChange([...selectedModelIds, model.modelId]);
-                  } else {
-                    onChange(
-                      selectedModelIds.filter((id) => id !== model.modelId)
-                    );
-                  }
-                }}
-              />
-              <span className="min-w-0">
-                <span className="block truncate font-medium">
-                  {model.displayName || model.modelId}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {model.providerId}
-                </span>
-              </span>
-            </label>
-          );
-        })}
+    <div className="max-w-sm space-y-1">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Reasoning effort
       </div>
-      <p className="text-xs text-muted-foreground">
-        {selectedModelIds.length === 0
-          ? "Select at least one model. Each selected model runs the benchmark on its own, in parallel."
-          : `${selectedModelIds.length} model${
-              selectedModelIds.length === 1 ? "" : "s"
-            } selected. Each runs the benchmark on its own, in parallel.`}
-      </p>
+      <ModelEffortSelect
+        model={model}
+        value={effortByModelId[model.modelId] ?? "default"}
+        onChange={(effort) => onEffortChange(model.modelId, effort)}
+      />
     </div>
   );
 }

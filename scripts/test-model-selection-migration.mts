@@ -146,24 +146,55 @@ Object.defineProperty(globalThis, "window", {
 const checklistKey = "aiboard:benchmark:run:model-checklist";
 storage.set(
   checklistKey,
-  JSON.stringify(["openai:gpt-5.6", "chatgpt:gpt-5.6", "openai:gpt-5.6-mini"])
+  JSON.stringify(["anthropic:claude-opus-5", "openai:gpt-5.6"])
 );
-const { readPersistedModelChecklistSelection } = await import(
+const {
+  readPersistedModelChecklistConfig,
+  readPersistedModelChecklistSelection,
+  persistModelChecklistConfig,
+} = await import(
   "../components/benchmark/run/ModelChecklist"
 );
-assert.deepEqual(readPersistedModelChecklistSelection(), [
-  "openai:gpt-5.6-terra",
-  "chatgpt:gpt-5.6",
-  "openai:gpt-5.6-luna",
-]);
+assert.deepEqual(readPersistedModelChecklistConfig(), {
+  selectedModelIds: ["anthropic:claude-opus-5", "openai:gpt-5.6-terra"],
+  effortByModelId: {
+    "anthropic:claude-opus-5": "default",
+    "openai:gpt-5.6-terra": "default",
+  },
+});
 assert.equal(
   storage.get(checklistKey),
-  JSON.stringify([
-    "openai:gpt-5.6-terra",
-    "chatgpt:gpt-5.6",
-    "openai:gpt-5.6-luna",
-  ]),
+  JSON.stringify({
+    version: 2,
+    selectedModelIds: ["anthropic:claude-opus-5", "openai:gpt-5.6-terra"],
+    effortByModelId: {
+      "anthropic:claude-opus-5": "default",
+      "openai:gpt-5.6-terra": "default",
+    },
+  }),
   "the migrated checklist must be durable immediately"
+);
+assert.deepEqual(readPersistedModelChecklistSelection(), [
+  "anthropic:claude-opus-5",
+  "openai:gpt-5.6-terra",
+]);
+
+persistModelChecklistConfig({
+  selectedModelIds: ["openai:gpt-5.6"],
+  effortByModelId: { "openai:gpt-5.6": "xhigh" },
+});
+assert.deepEqual(readPersistedModelChecklistConfig(), {
+  selectedModelIds: ["openai:gpt-5.6-terra"],
+  effortByModelId: { "openai:gpt-5.6-terra": "xhigh" },
+});
+assert.equal(
+  storage.get(checklistKey),
+  JSON.stringify({
+    version: 2,
+    selectedModelIds: ["openai:gpt-5.6-terra"],
+    effortByModelId: { "openai:gpt-5.6-terra": "xhigh" },
+  }),
+  "version-2 effort configuration must round-trip without losing effort"
 );
 
 console.log("model selection migration: PASS");
