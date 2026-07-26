@@ -469,6 +469,181 @@ try {
   await recoveryRunner.stop();
 }
 
+const conflictingWorkBenchCase: WorkBenchCase = {
+  ...workBenchCase,
+  id: "workbench-certified-runner-conflicting-case",
+  title: "Certified WorkBench conflicting prepared owner fixture",
+  contamination: {
+    ...workBenchCase.contamination,
+    canary: "AIBENCH-CERTIFIED-WORKBENCH-OWNER-CONFLICT",
+  },
+};
+const duplicatePreparedAttemptId = "prepared-workbench-duplicate-attempt";
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(
+  toBenchmarkCaseV2(workBenchCase, "2026-06-28T10:00:00.000Z")
+);
+await saveBenchmarkCaseV2(
+  toBenchmarkCaseV2(conflictingWorkBenchCase, "2026-06-28T10:00:00.000Z")
+);
+await saveBenchmarkTeamComposition(team);
+const duplicatePreparedRunner = await startPassingBenchRunner(
+  duplicatePreparedAttemptId
+);
+let durableFirstPreparedOwner: unknown = null;
+const duplicatePreparedBuildCases: string[] = [];
+try {
+  const duplicatePreparedSummary = await runCertifiedBenchmark({
+    runId: "run-certified-workbench-duplicate-prepared-owner",
+    suiteId: "suite-certified-workbench",
+    track: "workbench",
+    harnessProfile: "aiboard-build-multi-worker",
+    caseIds: [workBenchCase.id, conflictingWorkBenchCase.id],
+    teamCompositionIds: [team.id],
+    certification: runHarnessCertification("aiboard-build-multi-worker"),
+    runner: (context) =>
+      runCertifiedWorkBench({
+        context,
+        cases: [workBenchCase, conflictingWorkBenchCase],
+        runner: {
+          url: duplicatePreparedRunner.url,
+          token: duplicatePreparedRunner.token,
+        },
+        teamCompositionIds: [team.id],
+        runBuild: async (buildInput) => {
+          duplicatePreparedBuildCases.push(buildInput.case.id);
+          const running = (await listBenchmarkRuns()).find(
+            (candidate) => candidate.id === context.runId
+          );
+          durableFirstPreparedOwner = running
+            ? (JSON.parse(running.summaryJson) as { attemptOwners?: unknown })
+                .attemptOwners
+            : null;
+          await context.recordTrace({
+            id: `${buildInput.attemptId}:trace:${buildInput.case.id}`,
+            runId: context.runId,
+            caseId: buildInput.case.id,
+            attemptId: buildInput.attemptId,
+            modelId: "openai:gpt-workbench",
+            providerId: "openai",
+            participantId: team.id,
+            schemaMode: "text",
+            startedAt: context.startedAt,
+            completedAt: new Date().toISOString(),
+            latencyMs: 7,
+            inputTokens: 11,
+            outputTokens: 3,
+            estimatedUsd: 0.01,
+            rawResponse: "first case evidence",
+            retryHistory: [
+              { attempt: 1, status: "parsed", message: "ok" },
+            ],
+          });
+          await context.recordToolCall({
+            id: `${buildInput.attemptId}:tool:${buildInput.case.id}`,
+            attemptId: buildInput.attemptId,
+            caseId: buildInput.case.id,
+            toolName: "run",
+            command: "node verifier.js",
+            status: "ok",
+            exitCode: 0,
+            startedAt: context.startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs: 2,
+          });
+          return {
+            traceIds: [
+              `${buildInput.attemptId}:trace:${buildInput.case.id}`,
+            ],
+            costUsd: 0.01,
+            inputTokens: 11,
+            outputTokens: 3,
+            modelCalls: 1,
+            toolCalls: 1,
+            validToolCalls: 1,
+            durationMs: 7,
+          };
+        },
+      }),
+  });
+  const duplicatePreparedAttempts = (await listBenchmarkAttemptsV2()).filter(
+    (attempt) => attempt.runId === duplicatePreparedSummary.runId
+  );
+  const duplicatePreparedVerifiers =
+    await listBenchmarkVerifierResults();
+  const duplicatePreparedTraces = (await listBenchmarkTraces()).filter(
+    (trace) => trace.runId === duplicatePreparedSummary.runId
+  );
+  const duplicatePreparedTools = (await listBenchmarkToolCallTraces()).filter(
+    (trace) => trace.attemptId === duplicatePreparedAttemptId
+  );
+  const duplicatePreparedArtifacts =
+    exportBenchmarkReportBundleV2().artifacts;
+  const recoveredFirstOwnerAttempt = duplicatePreparedAttempts.find(
+    (attempt) => attempt.id === duplicatePreparedAttemptId
+  );
+  const genericConflictingCaseAttempt = duplicatePreparedAttempts.find(
+    (attempt) => attempt.caseId === conflictingWorkBenchCase.id
+  );
+  check(
+    "duplicate prepared owner aborts the certified WorkBench run fail-closed",
+    duplicatePreparedSummary.status === "failed" &&
+      JSON.stringify(duplicatePreparedBuildCases) ===
+        JSON.stringify([workBenchCase.id]),
+    { duplicatePreparedSummary, duplicatePreparedBuildCases }
+  );
+  check(
+    "duplicate prepared owner preserves the first durable owner mapping",
+    Array.isArray(durableFirstPreparedOwner) &&
+      durableFirstPreparedOwner.length === 1 &&
+      (durableFirstPreparedOwner[0] as {
+        attemptId?: unknown;
+        caseId?: unknown;
+      }).attemptId === duplicatePreparedAttemptId &&
+      (durableFirstPreparedOwner[0] as {
+        attemptId?: unknown;
+        caseId?: unknown;
+      }).caseId === workBenchCase.id,
+    durableFirstPreparedOwner
+  );
+  check(
+    "conflicting case cannot overwrite attempt or verifier evidence under the duplicate id",
+    duplicatePreparedAttempts.length === 2 &&
+      recoveredFirstOwnerAttempt?.caseId === workBenchCase.id &&
+      genericConflictingCaseAttempt?.id !== duplicatePreparedAttemptId &&
+      genericConflictingCaseAttempt?.traceIds.length === 0 &&
+      genericConflictingCaseAttempt?.modelCalls === 0 &&
+      genericConflictingCaseAttempt?.toolCalls === 0 &&
+      duplicatePreparedVerifiers.length === 1 &&
+      duplicatePreparedVerifiers[0]?.attemptId ===
+        duplicatePreparedAttemptId &&
+      duplicatePreparedVerifiers[0]?.caseId === workBenchCase.id &&
+      duplicatePreparedVerifiers[0]?.passed === true,
+    { duplicatePreparedAttempts, duplicatePreparedVerifiers }
+  );
+  check(
+    "conflicting case creates no model, tool, or artifact evidence",
+    duplicatePreparedTraces.length === 1 &&
+      duplicatePreparedTraces[0]?.caseId === workBenchCase.id &&
+      duplicatePreparedTools.length === 1 &&
+      duplicatePreparedTools[0]?.caseId === workBenchCase.id &&
+      duplicatePreparedArtifacts.length === 2 &&
+      duplicatePreparedArtifacts.every(
+        (artifact) =>
+          artifact.attemptId === duplicatePreparedAttemptId &&
+          artifact.caseId === workBenchCase.id
+      ),
+    {
+      duplicatePreparedTraces,
+      duplicatePreparedTools,
+      duplicatePreparedArtifacts,
+    }
+  );
+} finally {
+  await duplicatePreparedRunner.stop();
+}
+
 if (failures === 0) {
   console.log("PASS");
 } else {

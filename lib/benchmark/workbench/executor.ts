@@ -57,9 +57,23 @@ export async function executeWorkBenchVerifierOnly(
       files: input.case.fixtureFiles,
     });
     attemptId = preparedAttempt.attemptId || input.attemptId;
-    await input.onAttemptPrepared?.(attemptId);
-    prepared = true;
+  } catch (error) {
+    const failure = classifyPrepareFailure(error);
+    return createFailedWorkBenchAttempt(input, {
+      attemptId,
+      startedAt,
+      startedMs,
+      harnessProfile,
+      status: failure.status,
+      code: failure.code,
+      message: errorMessage(error),
+    });
+  }
 
+  await input.onAttemptPrepared?.(attemptId);
+  prepared = true;
+
+  try {
     let buildResult: WorkBenchBuildExecutionResult;
     try {
       throwIfCertifiedRunAborted(input.signal);
@@ -237,17 +251,6 @@ export async function executeWorkBenchVerifierOnly(
     };
     cleanupEligible = attempt.status === "passed";
     return { attempt, verifierResult, parsedVerifierResult, score, artifacts };
-  } catch (error) {
-    const failure = classifyPrepareFailure(error);
-    return createFailedWorkBenchAttempt(input, {
-      attemptId,
-      startedAt,
-      startedMs,
-      harnessProfile,
-      status: failure.status,
-      code: failure.code,
-      message: errorMessage(error),
-    });
   } finally {
     if (prepared && cleanupEligible && input.cleanup !== false) {
       await cleanupBenchRun(input.runner, { attemptId }).catch(() => undefined);

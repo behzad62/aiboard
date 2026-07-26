@@ -529,6 +529,55 @@ try {
   await canonicalRunner.stop();
 }
 
+const rejectedPreparedOwnerRunner = await startCanonicalAttemptRunner(
+  "prepared-owner-conflict"
+);
+try {
+  let rejectedOwnerBuildCalls = 0;
+  let rejectedOwnerError: unknown = null;
+  try {
+    await executeWorkBenchVerifierOnly({
+      case: caseRecord,
+      runner: {
+        url: rejectedPreparedOwnerRunner.url,
+        token: rejectedPreparedOwnerRunner.token,
+      },
+      attemptId: "planned-owner-conflict",
+      runId: "run-owner-conflict",
+      teamCompositionId: "team-fixture",
+      cleanup: true,
+      onAttemptPrepared: async () => {
+        throw new Error(
+          "Certified attempt owner prepared-owner-conflict has conflicting metadata."
+        );
+      },
+      runBuild: async () => {
+        rejectedOwnerBuildCalls++;
+        return {
+          traceIds: ["trace-owner-conflict"],
+          modelCalls: 1,
+        };
+      },
+    });
+  } catch (error) {
+    rejectedOwnerError = error;
+  }
+  check(
+    "prepared-owner rejection propagates instead of becoming an invalid_harness result",
+    rejectedOwnerError instanceof Error &&
+      rejectedOwnerError.message ===
+        "Certified attempt owner prepared-owner-conflict has conflicting metadata.",
+    rejectedOwnerError
+  );
+  check(
+    "prepared-owner rejection aborts before build/model/tool work",
+    rejectedOwnerBuildCalls === 0,
+    { rejectedOwnerBuildCalls }
+  );
+} finally {
+  await rejectedPreparedOwnerRunner.stop();
+}
+
 const noToolRunner = await startCanonicalAttemptRunner("no-tool-attempt");
 try {
   const noToolResult = await executeWorkBenchVerifierOnly({
