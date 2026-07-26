@@ -154,10 +154,11 @@ await persistReturnedAttempts(input.context, [attempt]);
 ```
 
 After baseline links update `teamLift`, record linked team attempts again so
-the context's map-by-id snapshot contains the final lift value. Return `[]`
-after successful Tool Reliability completion so the outer run engine does not
-perform redundant persistence. Do not change the delegated Fireworks runner's
-return contract.
+the context's map-by-id snapshot contains the final lift value. Keep returning
+the completed `attempts` array: the outer run engine may record those stable IDs
+again, and the certified context's map-by-id semantics must make that
+idempotent. Do not change the public return contract or the delegated Fireworks
+runner's return contract.
 
 - [ ] **Step 6: Run focused and neighboring TeamIQ tests**
 
