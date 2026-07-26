@@ -206,6 +206,94 @@ check(
   reviewerProviderConfigs
 );
 
+const unsupportedModel: SelectedModel = {
+  modelId: "custom:plain-model",
+  providerId: "custom",
+  displayName: "Plain Model",
+};
+const unsupportedTeamIq = createTeamIqCompositionFromSelection({
+  models: [unsupportedModel],
+  selectedModelIds: [unsupportedModel.modelId],
+  strategy: "architect_worker",
+  effortByModelId: { [unsupportedModel.modelId]: "xhigh" },
+});
+check(
+  "TeamIQ normalizes a supported-vocabulary but unsupported model effort",
+  unsupportedTeamIq.roles.every(
+    (role) => role.reasoningEffort === "default"
+  ),
+  unsupportedTeamIq.roles
+);
+const unsupportedSolo = createWorkBenchTeamComposition({
+  models: [unsupportedModel],
+  roleMode: "solo",
+  effortByModelId: { [unsupportedModel.modelId]: "xhigh" },
+});
+check(
+  "solo execution composition normalizes unsupported model effort",
+  unsupportedSolo.roles[0]?.reasoningEffort === "default",
+  unsupportedSolo
+);
+
+const unsupportedNativeModel: SelectedModel = {
+  modelId: "google:gemini-3.6-flash",
+  providerId: "google",
+  displayName: "Gemini 3.6 Flash",
+};
+const unsupportedNativeTeam = createWorkBenchTeamComposition({
+  models: [unsupportedNativeModel],
+  roleMode: "solo",
+  effortByModelId: { [unsupportedNativeModel.modelId]: "max" },
+});
+const staleUnsupportedNativeTeam = {
+  ...unsupportedNativeTeam,
+  roles: unsupportedNativeTeam.roles.map((role) => ({
+    ...role,
+    reasoningEffort: "max" as const,
+  })),
+};
+const unsupportedNativeConfigs = createNativeWorkBenchProviderConfigs(
+  staleUnsupportedNativeTeam,
+  [unsupportedNativeModel]
+);
+check(
+  "native WorkBench config normalizes unsupported model effort to provider default",
+  unsupportedNativeConfigs[0]?.reasoningEffort === undefined,
+  unsupportedNativeConfigs
+);
+
+const roleMissingEffort = {
+  ...workBenchTeam,
+  roles: workBenchTeam.roles.map((role, index) =>
+    index === 0 ? { ...role, reasoningEffort: undefined } : role
+  ),
+};
+const missingRoleEffortDiscussion = createWorkBenchBuildDiscussion(
+  {
+    attemptId: "attempt-missing-role-effort",
+    runId: "run-missing-role-effort",
+    teamCompositionId: roleMissingEffort.id,
+    harnessProfile: "aiboard-build-multi-worker",
+    allowedCommands: [],
+    runner: { url: "http://127.0.0.1:8787", token: "test-token" },
+    case: {
+      id: "case-missing-role-effort",
+      title: "Missing role effort",
+      description: "Use role default",
+      prompt: { userRequest: "Test" },
+      budget: {},
+    },
+    teamComposition: roleMissingEffort,
+    discussion: { reasoningEffort: "high" },
+  } as never,
+  models.slice(0, 2)
+);
+check(
+  "WorkBench missing role effort resolves to default instead of discussion fallback",
+  missingRoleEffortDiscussion.reasoningEffort === "default",
+  missingRoleEffortDiscussion.reasoningEffort
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {

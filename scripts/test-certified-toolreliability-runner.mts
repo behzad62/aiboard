@@ -92,6 +92,7 @@ const team: BenchmarkTeamComposition = {
       modelId: "openai:gpt-toolrel",
       providerId: "openai",
       displayName: "GPT ToolRel",
+      reasoningEffort: "xhigh",
       temperature: 0,
       maxTokens: 512,
     },
@@ -131,7 +132,10 @@ function callIndexForCase(caseIndex: number): number {
 let callIndex = 0;
 const capturedCalls: Array<{
   providerId: string;
-  params: Pick<ChatParams, "messages" | "structuredOutput" | "maxTokens">;
+  params: Pick<
+    ChatParams,
+    "messages" | "structuredOutput" | "maxTokens" | "reasoningEffort"
+  >;
 }> = [];
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-toolrel",
@@ -146,6 +150,7 @@ const summary = await runCertifiedBenchmark({
       context,
       models: [model],
       teamCompositionIds: [team.id],
+      teamCompositions: [team],
       casePack: TOOL_RELIABILITY_CASES,
       pricing: {
         inputUsdPer1M: 1,
@@ -158,6 +163,7 @@ const summary = await runCertifiedBenchmark({
             messages: input.params.messages,
             structuredOutput: input.params.structuredOutput,
             maxTokens: input.params.maxTokens,
+            reasoningEffort: input.params.reasoningEffort,
           },
         });
         yield { type: "token", content: streamOutputs[callIndex++] ?? "{}" };
@@ -209,6 +215,16 @@ check(
   toolTraces
 );
 check("certified ToolReliability traces export", bundle.traces.length === streamOutputs.length && bundle.toolCallTraces.length === toolTraces.length, bundle);
+check(
+  "certified ToolReliability sends the solo composition effort to every provider turn",
+  capturedCalls.every((call) => call.params.reasoningEffort === "xhigh"),
+  capturedCalls
+);
+check(
+  "certified ToolReliability traces the solo composition effort",
+  bundle.traces.every((trace) => trace.reasoningEffort === "xhigh"),
+  bundle.traces
+);
 // The pack is now stateful-only, so the honest post-cut replacement for the
 // old json-schema/tool-call/patch/repair-loop/forbidden-action per-category
 // prompt-shape assertions is a single set of stateful-contract checks below

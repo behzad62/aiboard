@@ -83,7 +83,7 @@ import {
 import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
-  benchmarkEffortForModel,
+  normalizeBenchmarkEffortForModel,
   type BenchmarkModelEffortMap,
 } from "@/lib/benchmark/model-effort";
 
@@ -242,9 +242,9 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
                   modelId: model!.modelId,
                   providerId: model!.providerId,
                   displayName: model!.displayName,
-                  reasoningEffort: benchmarkEffortForModel(
-                    effortByModelId,
-                    model!.modelId
+                  reasoningEffort: normalizeBenchmarkEffortForModel(
+                    model!,
+                    effortByModelId[model!.modelId]
                   ),
                 }),
           ];
@@ -288,6 +288,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             context,
             models: [model!],
             teamCompositionIds: [primaryTeam.id],
+            teamCompositions: [primaryTeam],
             casePack: TOOL_RELIABILITY_CASES,
             signal: options?.signal,
           });
@@ -435,9 +436,9 @@ export async function runGameIqMultiModel(
         modelId: model.modelId,
         providerId: model.providerId,
         displayName: model.displayName,
-        reasoningEffort: benchmarkEffortForModel(
-          effortByModelId,
-          model.modelId
+        reasoningEffort: normalizeBenchmarkEffortForModel(
+          model,
+          effortByModelId[model.modelId]
         ),
       });
       await saveBenchmarkTeamComposition(team);
@@ -471,6 +472,7 @@ export async function runGameIqMultiModel(
               models: [model],
               scenarioPackIds: [packId],
               teamCompositionIds: [team.id],
+              teamCompositions: [team],
               trials: 1,
               signal: options?.signal,
               // Scenario calls are independent single calls; concurrency 4
@@ -902,9 +904,9 @@ export function createWorkBenchTeamComposition(input: {
       modelId: model.modelId,
       providerId: model.providerId,
       displayName: model.displayName,
-      reasoningEffort: benchmarkEffortForModel(
-        input.effortByModelId,
-        model.modelId
+      reasoningEffort: normalizeBenchmarkEffortForModel(
+        model,
+        input.effortByModelId[model.modelId]
       ),
     });
   }
@@ -916,9 +918,9 @@ export function createWorkBenchTeamComposition(input: {
       modelId: model.modelId,
       providerId: model.providerId,
       displayName: model.displayName,
-      reasoningEffort: benchmarkEffortForModel(
-        input.effortByModelId,
-        model.modelId
+      reasoningEffort: normalizeBenchmarkEffortForModel(
+        model,
+        input.effortByModelId[model.modelId]
       ),
       temperature: 0,
     };

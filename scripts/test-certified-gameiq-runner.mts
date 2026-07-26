@@ -105,6 +105,7 @@ const team: BenchmarkTeamComposition = {
       modelId: "openai:gpt-gameiq",
       providerId: "openai",
       displayName: "GPT GameIQ",
+      reasoningEffort: "xhigh",
       temperature: 0,
       maxTokens: 512,
     },
@@ -143,6 +144,7 @@ const summary = await runCertifiedBenchmark({
       models: [model],
       scenarioPackIds: [pack.id],
       teamCompositionIds: [team.id],
+      teamCompositions: [team],
       trials: 1,
       pricing: {
         inputUsdPer1M: 1,
@@ -195,9 +197,14 @@ check(
   observedStructuredOutput
 );
 check(
-  "certified GameIQ leaves reasoning unset so providers use model defaults",
-  observedReasoningEffort === undefined,
+  "certified GameIQ sends the solo composition effort to the provider",
+  observedReasoningEffort === "xhigh",
   observedReasoningEffort
+);
+check(
+  "certified GameIQ traces the solo composition effort",
+  bundle.traces.every((trace) => trace.reasoningEffort === "xhigh"),
+  bundle.traces
 );
 check(
   "certified GameIQ default output ceiling leaves room for hidden thinking plus JSON",

@@ -242,10 +242,9 @@ function workBenchRoleMapping(
   if (workers.length === 0 && architect) workers = [architect];
   return {
     architectModelId: architect?.modelId ?? null,
-    architectReasoningEffort:
-      architect?.reasoningEffort === undefined
-        ? null
-        : normalizeBenchmarkReasoningEffort(architect.reasoningEffort),
+    architectReasoningEffort: architect
+      ? normalizeBenchmarkReasoningEffort(architect.reasoningEffort)
+      : null,
     reviewerModelId: reviewer?.modelId ?? null,
     workerModelIds: uniqueStrings(workers.map((role) => role.modelId)),
   };

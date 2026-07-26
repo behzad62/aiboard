@@ -35,7 +35,10 @@ import {
 import type { SelectedModel } from "@/lib/providers/base";
 import type { WorkBenchBuildAdapterInput } from "./build-adapter";
 import type { WorkBenchBuildExecutionResult } from "./types";
-import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
+import {
+  normalizeBenchmarkEffortForModel,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 
 const WORKBENCH_HIDDEN_PATHS = [
   "case-meta.json",
@@ -150,8 +153,10 @@ export function createNativeWorkBenchProviderConfigs(
     const storedEffort = team?.roles.find(
       (role) => role.modelId === runtimeId
     )?.reasoningEffort;
-    effortByRuntimeId[runtimeId] =
-      normalizeBenchmarkReasoningEffort(storedEffort);
+    const model = models.find((candidate) => candidate.modelId === runtimeId);
+    effortByRuntimeId[runtimeId] = model
+      ? normalizeBenchmarkEffortForModel(model, storedEffort)
+      : "default";
   }
   return createProviderConfigs(runtimeIds, effortByRuntimeId);
 }

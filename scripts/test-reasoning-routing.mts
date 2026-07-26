@@ -192,6 +192,17 @@ check(
     json({ thinkingLevel: "MEDIUM" }),
   geminiThinkingConfig("gemini-3.6-flash", "low", 4096)
 );
+for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+  check(
+    `Claude Opus 5 preserves distinct ${effort} adaptive effort`,
+    json(anthropicReasoningFields("claude-opus-5", effort)) ===
+      json({
+        thinking: { type: "adaptive" },
+        output_config: { effort },
+      }),
+    anthropicReasoningFields("claude-opus-5", effort)
+  );
+}
 check(
   "Gemini 3.6 xhigh falls back to its highest supported thinking level",
   json(geminiThinkingConfig("gemini-3.6-flash", "xhigh", 4096)) ===

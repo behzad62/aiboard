@@ -8,9 +8,11 @@ import {
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type {
   BenchmarkAttemptV2,
+  BenchmarkTeamComposition,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
@@ -31,6 +33,7 @@ export interface RunCertifiedToolReliabilityInput {
   context: CertifiedRunContext;
   models: SelectedModel[];
   teamCompositionIds: string[];
+  teamCompositions?: BenchmarkTeamComposition[];
   casePack: ToolReliabilityCase[];
   maxTokens?: number;
   streamChat?: CertifiedModelStream;
@@ -137,6 +140,11 @@ async function runCertifiedToolReliabilityAttempt(
         caseId: benchmarkCase.id,
         attemptId,
         participantId: input.teamCompositionId,
+        reasoningEffort: soloReasoningEffort(
+          input.teamCompositions,
+          input.teamCompositionId,
+          input.model.modelId
+        ),
         pricing: input.pricing,
         streamChat: input.streamChat,
         signal: input.signal,
@@ -196,6 +204,19 @@ async function runCertifiedToolReliabilityAttempt(
       calls.reduce((sum, call) => sum + call.latencyMs, 0)
     ),
   };
+}
+
+function soloReasoningEffort(
+  teams: BenchmarkTeamComposition[] | undefined,
+  teamCompositionId: string,
+  modelId: string
+) {
+  const role = teams
+    ?.find((team) => team.id === teamCompositionId)
+    ?.roles.find((candidate) => candidate.modelId === modelId);
+  return role
+    ? normalizeBenchmarkReasoningEffort(role.reasoningEffort)
+    : undefined;
 }
 
 export function createToolReliabilityVerifierResult(

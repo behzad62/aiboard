@@ -52,6 +52,13 @@ assert.deepEqual(
   }),
   ["default", "low", "medium", "high"]
 );
+assert.deepEqual(
+  supportedBenchmarkReasoningEfforts({
+    modelId: "anthropic:claude-opus-5",
+    providerId: "anthropic",
+  }),
+  ["default", "low", "medium", "high", "xhigh", "max"]
+);
 
 const effortMap: BenchmarkModelEffortMap = {
   "openai:gpt-5.6-sol": "max",

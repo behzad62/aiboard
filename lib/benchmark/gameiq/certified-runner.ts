@@ -4,7 +4,12 @@ import {
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
-import type { BenchmarkAttemptV2, BenchmarkVerifierResult } from "@/lib/benchmark/types";
+import type {
+  BenchmarkAttemptV2,
+  BenchmarkTeamComposition,
+  BenchmarkVerifierResult,
+} from "@/lib/benchmark/types";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type {
   JsonSchemaObject,
@@ -96,6 +101,7 @@ export interface RunCertifiedGameIqInput {
   models: SelectedModel[];
   scenarioPackIds: string[];
   teamCompositionIds: string[];
+  teamCompositions?: BenchmarkTeamComposition[];
   trials: number;
   maxTokens?: number;
   streamChat?: CertifiedModelStream;
@@ -190,6 +196,11 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         attemptId: plannedAttemptId,
         scenarioId: scenario.id,
         participantId: input.teamCompositionId,
+        reasoningEffort: soloReasoningEffort(
+          input.teamCompositions,
+          input.teamCompositionId,
+          input.model.modelId
+        ),
         pricing: input.pricing,
         streamChat: input.streamChat,
         signal: input.signal,
@@ -227,6 +238,19 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
       calls.reduce((sum, call) => sum + call.latencyMs, 0)
     ),
   };
+}
+
+function soloReasoningEffort(
+  teams: BenchmarkTeamComposition[] | undefined,
+  teamCompositionId: string,
+  modelId: string
+) {
+  const role = teams
+    ?.find((team) => team.id === teamCompositionId)
+    ?.roles.find((candidate) => candidate.modelId === modelId);
+  return role
+    ? normalizeBenchmarkReasoningEffort(role.reasoningEffort)
+    : undefined;
 }
 
 // Exported so recovery (scripts/recover-gameiq-run.mts) produces a verifier

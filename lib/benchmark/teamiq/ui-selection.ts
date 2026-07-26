@@ -2,7 +2,7 @@ import type { BenchmarkTeamCompositionRole } from "@/lib/benchmark/types";
 import type { TeamIqStrategy } from "@/lib/benchmark/types";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
-  benchmarkEffortForModel,
+  normalizeBenchmarkEffortForModel,
   type BenchmarkModelEffortMap,
 } from "@/lib/benchmark/model-effort";
 import { deriveTeamComposition, inferProviderId } from "./compositions";
@@ -298,9 +298,9 @@ function roleFor(
     modelId: model.modelId,
     providerId: model.providerId || inferProviderId(model.modelId),
     displayName: model.displayName || model.modelId,
-    reasoningEffort: benchmarkEffortForModel(
-      effortByModelId ?? {},
-      model.modelId
+    reasoningEffort: normalizeBenchmarkEffortForModel(
+      model,
+      effortByModelId?.[model.modelId]
     ),
     temperature: 0,
   };

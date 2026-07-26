@@ -141,6 +141,7 @@ function anthropicUsesAdaptiveThinkingField(model: string): boolean {
   return (
     anthropicThinkingAlwaysOn(model) ||
     hasAnthropicModelPrefix(model, "claude-mythos-preview") ||
+    hasAnthropicModelPrefix(model, "claude-opus-5") ||
     hasAnthropicModelPrefix(model, "claude-opus-4-8") ||
     hasAnthropicModelPrefix(model, "claude-opus-4-7") ||
     hasAnthropicModelPrefix(model, "claude-opus-4-6") ||

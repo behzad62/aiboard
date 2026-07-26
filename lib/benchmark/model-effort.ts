@@ -40,6 +40,7 @@ function anthropicEfforts(model: string): ReasoningEffort[] {
     hasModelPrefix(model, "claude-fable-5") ||
     hasModelPrefix(model, "claude-mythos-5") ||
     hasModelPrefix(model, "claude-mythos-preview") ||
+    hasModelPrefix(model, "claude-opus-5") ||
     hasModelPrefix(model, "claude-opus-4-8") ||
     hasModelPrefix(model, "claude-opus-4-7") ||
     hasModelPrefix(model, "claude-opus-4-6") ||
