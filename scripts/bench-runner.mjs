@@ -32,7 +32,8 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const attemptMetaRoot = join(root, ".attempt-meta");
 const runnerStateRoot = join(root, ".runner-v2-state");
 const managedAttemptRunners = new Map();
-const runnerV2Launcher = discoverRunnerV2(runnerV2DirectoryOption);
+const runnerV2Discovery = discoverRunnerV2(runnerV2DirectoryOption);
+const runnerV2Launcher = runnerV2Discovery?.ready ? runnerV2Discovery : null;
 
 if (!isLoopbackHost(host)) {
   console.error("bench-runner refuses to bind non-loopback hosts.");
@@ -86,8 +87,12 @@ server.listen(port, host, () => {
     console.log(`Managed Runner V2: ready (${runnerV2Launcher.source})`);
   } else {
     console.log("Managed Runner V2: unavailable");
-    console.log("Place aiboard-runner-v2 beside bench-runner.mjs, or provide its directory explicitly.");
-    console.log("Setup command: node bench-runner.mjs --runner-v2-dir C:\\path\\to\\aiboard-runner-v2");
+    if (runnerV2Discovery?.error) {
+      console.log(runnerV2Discovery.error);
+    } else {
+      console.log("Place aiboard-runner-v2 beside bench-runner.mjs, or provide its directory explicitly.");
+      console.log("Setup command: node bench-runner.mjs --runner-v2-dir C:\\path\\to\\aiboard-runner-v2");
+    }
   }
   console.log("");
   console.log("Paste the URL and token into Benchmark -> WorkBench.");
@@ -130,7 +135,8 @@ async function route(pathname, body) {
           ? { ready: true, source: runnerV2Launcher.source }
           : {
               ready: false,
-              error:
+              ...(runnerV2Discovery?.source ? { source: runnerV2Discovery.source } : {}),
+              error: runnerV2Discovery?.error ??
                 "Runner V2 was not found. Pass --runner-v2-dir or place aiboard-runner-v2 beside bench-runner.mjs.",
             },
       };
@@ -523,7 +529,11 @@ async function startAttemptRunner(body) {
   const attemptRoot = attemptWorkspacePath(attemptId);
   await readMeta(attemptRoot);
   if (!runnerV2Launcher) {
-    throw new HttpError(503, "Managed Runner V2 is unavailable; configure --runner-v2-dir.");
+    throw new HttpError(
+      503,
+      runnerV2Discovery?.error ??
+        "Managed Runner V2 is unavailable; configure --runner-v2-dir."
+    );
   }
   const existing = managedAttemptRunners.get(attemptId);
   if (existing?.child.exitCode === null) return managedRunnerResult(existing, true);
@@ -760,13 +770,28 @@ function discoverRunnerV2(explicitDirectory) {
     const repositoryCli = join(candidate.directory, "runner-v2", "src", "cli.ts");
     const distributionCli = join(candidate.directory, "src", "cli.ts");
     if (existsSync(repositoryCli)) {
-      return { ...candidate, cli: "runner-v2/src/cli.ts" };
+      return runnerV2Candidate(candidate, "runner-v2/src/cli.ts");
     }
     if (existsSync(distributionCli)) {
-      return { ...candidate, cli: "src/cli.ts" };
+      return runnerV2Candidate(candidate, "src/cli.ts");
     }
   }
   return null;
+}
+
+function runnerV2Candidate(candidate, cli) {
+  const tsxCli = join(candidate.directory, "node_modules", "tsx", "dist", "cli.mjs");
+  if (existsSync(tsxCli)) {
+    return { ...candidate, cli, ready: true };
+  }
+  return {
+    ...candidate,
+    cli,
+    ready: false,
+    error:
+      `Runner V2 source was found at ${candidate.directory}, but launcher dependencies are missing. ` +
+      `Run "npm install" in ${candidate.directory}.`,
+  };
 }
 
 function runnerV2Invocation(launcher, projectPath, statePath, runnerToken) {

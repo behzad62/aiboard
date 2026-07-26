@@ -1,13 +1,15 @@
 /* WorkBench runner bundle checks (run: npx tsx scripts/test-workbench-runner-bundle.tsx) */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PresetCards } from "../components/benchmark/run/PresetCards";
 import { WorkBenchRunnerStatus } from "../components/benchmark/workbench/WorkBenchRunnerStatus";
+import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
+import type { BenchRunnerHealth } from "../lib/client/bench-runner";
 
 let failures = 0;
 
@@ -30,7 +32,11 @@ function stop(child: ChildProcess): Promise<void> {
   });
 }
 
-async function startupOutput(script: string, extraArgs: string[] = []): Promise<string> {
+async function startupOutput(
+  script: string,
+  runnerRoot: string,
+  extraArgs: string[] = []
+): Promise<string> {
   const port = 30_000 + Math.floor(Math.random() * 10_000);
   const child = spawn(process.execPath, [
     script,
@@ -39,7 +45,7 @@ async function startupOutput(script: string, extraArgs: string[] = []): Promise<
     "--token",
     "bundle-test-token",
     "--root",
-    join(tmpdir(), `aiboard-workbench-bundle-${port}`),
+    runnerRoot,
     ...extraArgs,
   ], {
     cwd: repoRoot,
@@ -61,16 +67,75 @@ async function startupOutput(script: string, extraArgs: string[] = []): Promise<
   }
 }
 
+async function runningHealth(
+  script: string,
+  runnerRoot: string
+): Promise<{ health: BenchRunnerHealth; stdout: string }> {
+  const port = 40_000 + Math.floor(Math.random() * 10_000);
+  const token = "bundle-health-test-token";
+  const child = spawn(
+    process.execPath,
+    [
+      script,
+      "--port",
+      String(port),
+      "--token",
+      token,
+      "--root",
+      runnerRoot,
+    ],
+    {
+      cwd: dirname(script),
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  let stdout = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  try {
+    let lastError = "";
+    for (let attempt = 0; attempt < 80; attempt++) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/bench/health`, {
+          headers: { "x-runner-token": token },
+        });
+        if (response.ok) {
+          return {
+            health: (await response.json()) as BenchRunnerHealth,
+            stdout,
+          };
+        }
+        lastError = await response.text();
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      if (child.exitCode !== null) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    throw new Error(`extracted bench runner did not become healthy: ${lastError}`);
+  } finally {
+    await stop(child);
+  }
+}
+
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 async function main(): Promise<void> {
-const publish = spawnSync(process.execPath, ["scripts/publish-downloads.mjs"], {
-  cwd: repoRoot,
-  encoding: "utf8",
-});
-check("download publication succeeds", publish.status === 0, publish.stderr);
+const testRoot = await mkdtemp(join(tmpdir(), "aiboard-workbench-runner-bundle-test-"));
+try {
+const publicationDirectory = join(testRoot, "published");
+const isolatedPublish = spawnSync(
+  process.execPath,
+  ["scripts/publish-downloads.mjs", "--output-dir", publicationDirectory],
+  {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }
+);
+check("download publication succeeds in an isolated directory", isolatedPublish.status === 0, isolatedPublish.stderr);
 
-const bundlePath = join(repoRoot, "public", "aiboard-workbench-runner.zip");
+const bundlePath = join(publicationDirectory, "aiboard-workbench-runner.zip");
 let archive: JSZip | null = null;
 try {
   archive = await JSZip.loadAsync(await readFile(bundlePath));
@@ -103,6 +168,69 @@ if (archive) {
     name.split("/").includes("node_modules")
   );
   check("bundle excludes installed node_modules", installedDependencies.length === 0, installedDependencies);
+
+  const extractedDirectory = join(testRoot, "extracted");
+  for (const [name, entry] of Object.entries(archive.files)) {
+    if (entry.dir) continue;
+    const destination = join(extractedDirectory, ...name.split("/"));
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, await entry.async("nodebuffer"));
+  }
+  const extracted = await runningHealth(
+    join(extractedDirectory, "bench-runner.mjs"),
+    join(testRoot, "extracted-runs")
+  );
+  check(
+    "extracted bundle with source but no dependencies reports managed Runner V2 unavailable",
+    extracted.health.runnerV2?.ready === false &&
+      extracted.health.runnerV2.source === "sibling" &&
+      extracted.health.runnerV2.error?.includes("npm install") === true,
+    extracted
+  );
+  const unavailableMarkup = renderToStaticMarkup(
+    <WorkBenchRunnerStatus
+      url="http://127.0.0.1:8797"
+      token="bundle-health-test-token"
+      health={extracted.health}
+      checking={false}
+      onUrlChange={() => undefined}
+      onTokenChange={() => undefined}
+      onCheck={() => undefined}
+    />
+  );
+  check(
+    "source-present dependencies-absent health does not pass the WorkBench UI readiness status",
+    !unavailableMarkup.includes("Managed Runner V2 ready") &&
+      unavailableMarkup.includes("npm install"),
+    unavailableMarkup
+  );
+  const runGate = getCertifiedRunGate({
+    suiteId: "workbench-all",
+    running: false,
+    selectedTrack: "workbench",
+    modelId: "test-model",
+    teamModelIds: [],
+    workBenchModelIds: ["test-model"],
+    workBenchRoleMode: "solo",
+    workBenchRunnerReady:
+      extracted.health.ok && extracted.health.runnerV2?.ready === true,
+    certification: {
+      id: "bundle-test-certification",
+      createdAt: "2026-07-26T00:00:00.000Z",
+      aiboardVersion: "test",
+      benchmarkEngineVersion: "test",
+      harnessProfile: "aiboard-build-single-worker",
+      harnessVersion: "test",
+      promptSetVersion: "test",
+      passed: true,
+      checks: [],
+    },
+  });
+  check(
+    "source-present dependencies-absent health does not pass the WorkBench run gate",
+    !runGate.canRun && runGate.reason === "Connect the WorkBench bench runner before running.",
+    runGate
+  );
 }
 
 const runnerStatusMarkup = renderToStaticMarkup(
@@ -146,7 +274,10 @@ for (const [surface, markup] of [
   );
 }
 
-const readyOutput = await startupOutput(join(repoRoot, "scripts", "bench-runner.mjs"));
+const readyOutput = await startupOutput(
+  join(repoRoot, "scripts", "bench-runner.mjs"),
+  join(testRoot, "ready-runs")
+);
 check(
   "startup banner identifies the ready managed Runner V2 source",
   /Managed Runner V2: ready \((?:explicit|sibling|repository)\)/.test(readyOutput),
@@ -157,7 +288,10 @@ const isolatedDirectory = await mkdtemp(join(tmpdir(), "aiboard-bench-runner-iso
 try {
   const isolatedScript = join(isolatedDirectory, "bench-runner.mjs");
   await copyFile(join(repoRoot, "scripts", "bench-runner.mjs"), isolatedScript);
-  const unavailableOutput = await startupOutput(isolatedScript);
+  const unavailableOutput = await startupOutput(
+    isolatedScript,
+    join(testRoot, "unavailable-runs")
+  );
   check(
     "startup banner gives the exact Runner V2 setup command when unavailable",
     unavailableOutput.includes("Managed Runner V2: unavailable") &&
@@ -177,6 +311,9 @@ if (failures === 0) {
 }
 
 process.exit(failures === 0 ? 0 : 1);
+} finally {
+  await rm(testRoot, { recursive: true, force: true });
+}
 }
 
 void main().catch((error) => {

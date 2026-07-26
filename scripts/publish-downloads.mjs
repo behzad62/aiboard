@@ -8,7 +8,15 @@ import JSZip from "jszip";
 
 const scripts = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scripts, "..");
-const publicDirectory = path.join(root, "public");
+const outputDirectoryOptionIndex = process.argv.indexOf("--output-dir");
+const outputDirectoryOption =
+  outputDirectoryOptionIndex >= 0 ? process.argv[outputDirectoryOptionIndex + 1] : undefined;
+if (outputDirectoryOptionIndex >= 0 && !outputDirectoryOption) {
+  throw new Error("publish-downloads --output-dir requires a directory.");
+}
+const publicDirectory = outputDirectoryOption
+  ? path.resolve(outputDirectoryOption)
+  : path.join(root, "public");
 const runnerDirectory = path.join(root, "runner-v2");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const accountRunnerSource = path.join(root, "lib", "account-provider-runner.mjs");
