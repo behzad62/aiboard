@@ -403,6 +403,8 @@ const missingEvidenceProfileMarkup = renderToStaticMarkup(
       ...responsiveRows[0],
       overallScore: null,
       verifiedQuality: 0.91,
+      passed: null,
+      passRate: null,
       trackBreakdown: [
         {
           track: "gameiq",
@@ -421,10 +423,22 @@ const overallIndexMetricMarkup = missingEvidenceProfileMarkup.slice(
   overallIndexMetricStart,
   missingEvidenceProfileMarkup.indexOf("</div></div>", overallIndexMetricStart)
 );
+const passRateMetricStart = missingEvidenceProfileMarkup.indexOf(">Verified pass rate<");
+const passRateMetricMarkup = missingEvidenceProfileMarkup.slice(
+  passRateMetricStart,
+  missingEvidenceProfileMarkup.indexOf("</div></div>", passRateMetricStart)
+);
 check(
   "profile does not substitute verified quality for a missing overall index",
   overallIndexMetricMarkup.includes("Unavailable") && !overallIndexMetricMarkup.includes("91"),
   overallIndexMetricMarkup
+);
+check(
+  "profile does not synthesize a pass interval from missing aggregate evidence",
+  passRateMetricMarkup.includes("Unavailable") &&
+    passRateMetricMarkup.includes("Not measured") &&
+    !passRateMetricMarkup.includes("95% range"),
+  passRateMetricMarkup
 );
 check(
   "track profile preserves unavailable pass evidence",

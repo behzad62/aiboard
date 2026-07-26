@@ -24,7 +24,7 @@ export function ModelEvidenceProfile({
 }) {
   const profileRef = useRef<HTMLDivElement>(null);
   const passed = derivedPasses(row);
-  const interval = wilsonInterval(passed, row.attempts);
+  const interval = passed == null ? null : wilsonInterval(passed, row.attempts);
   const titleId = `${id}-title`;
   const failureMessages = certifiedFailureMessages(row);
 
@@ -201,8 +201,10 @@ function ProfileMetric({
   );
 }
 
-function derivedPasses(row: DecisionRow): number {
-  return row.passed ?? (row.passRate == null ? 0 : Math.round(row.passRate * row.attempts));
+function derivedPasses(row: DecisionRow): number | null {
+  if (row.passed != null) return row.passed;
+  if (row.passRate == null) return null;
+  return Math.round(row.passRate * row.attempts);
 }
 
 function formatMaybeScore(value: number | null): string {
