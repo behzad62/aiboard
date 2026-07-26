@@ -5,9 +5,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DecisionLeaderboard } from "../components/benchmark/results/DecisionLeaderboard";
 import { DecisionVerdicts } from "../components/benchmark/results/DecisionVerdicts";
 import {
+  DecisionTradeoffPointShape,
   DecisionTradeoffCharts,
+  decisionTradeoffPointAriaLabel,
   decisionTradeoffPointLabel,
+  projectDecisionTradeoffPoints,
 } from "../components/benchmark/results/DecisionTradeoffCharts";
+import { chartColorForIdentity } from "../components/benchmark/chart-utils";
 import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
 import {
   CertifiedLeaderboard,
@@ -330,6 +334,124 @@ const chartMarkup = renderToStaticMarkup(
     ],
   })
 );
+const chartRows: DecisionRow[] = [
+  {
+    ...variantRow,
+    id: "solo-alpha",
+    label: "Alpha Model · Low",
+    tracks: ["gameiq"],
+    attempts: 4,
+    verifiedQuality: 0.61,
+    overallScore: 0.84,
+    tokensPerPass: 1234,
+    speedPerPassMs: 2500,
+  },
+  {
+    ...teamDecisionRow,
+    id: "team-beta",
+    label: "Beta Builder Team",
+    tracks: ["workbench", "teamiq"],
+    attempts: 8,
+    verifiedQuality: 0.77,
+    overallScore: null,
+    tokensPerPass: 5678,
+    speedPerPassMs: 9250,
+  },
+];
+const tokenProjection = projectDecisionTradeoffPoints(chartRows, "tokens");
+const timeProjection = projectDecisionTradeoffPoints(chartRows, "time");
+const reorderedProjection = projectDecisionTradeoffPoints(
+  [chartRows[1]!, chartRows[0]!],
+  "tokens"
+);
+const filteredProjection = projectDecisionTradeoffPoints(
+  [chartRows[1]!],
+  "tokens"
+);
+check(
+  "chart identity colors survive row reorder and filtering",
+  tokenProjection[1]?.color === reorderedProjection[0]?.color &&
+    tokenProjection[1]?.color === filteredProjection[0]?.color,
+  { tokenProjection, reorderedProjection, filteredProjection }
+);
+check(
+  "token and time projections share the canonical identity color",
+  tokenProjection[0]?.color === timeProjection[0]?.color &&
+    tokenProjection[0]?.color === chartColorForIdentity("solo-alpha"),
+  { tokenProjection, timeProjection }
+);
+check(
+  "trade-off projections prefer overall index and fall back to verified quality",
+  tokenProjection[0]?.quality === 84 && tokenProjection[1]?.quality === 77,
+  tokenProjection
+);
+const teamPointLabel = decisionTradeoffPointAriaLabel(
+  tokenProjection[1]!,
+  "Tokens per successful case",
+  (value) => `${Math.round(value).toLocaleString()} tokens`
+);
+check(
+  "point label carries full identity, kind, tracks, index, attempts, and X metric",
+  teamPointLabel.includes("Beta Builder Team") &&
+    teamPointLabel.includes("Team") &&
+    teamPointLabel.includes("WorkBench") &&
+    teamPointLabel.includes("TeamIQ") &&
+    teamPointLabel.includes("Overall index: 77.0") &&
+    teamPointLabel.includes("Tokens per successful case: 5,678 tokens") &&
+    teamPointLabel.includes("Attempts: 8"),
+  teamPointLabel
+);
+const decisionChartMarkup = renderToStaticMarkup(
+  React.createElement(DecisionTradeoffCharts, { rows: chartRows })
+);
+check(
+  "trade-off charts expose overall-index terminology and full identity legend",
+  decisionChartMarkup.includes(
+    "Overall index vs tokens per successful case"
+  ) &&
+    decisionChartMarkup.includes(
+      "Overall index vs time per successful case"
+    ) &&
+    decisionChartMarkup.includes("Overall index") &&
+    decisionChartMarkup.includes("Alpha Model · Low") &&
+    decisionChartMarkup.includes("Beta Builder Team") &&
+    decisionChartMarkup.includes("Solo model") &&
+    decisionChartMarkup.includes("Team"),
+  decisionChartMarkup
+);
+check(
+  "trade-off charts retain accessible data values",
+  decisionChartMarkup.includes("84.0") &&
+    decisionChartMarkup.includes("77.0") &&
+    decisionChartMarkup.includes("1,234") &&
+    decisionChartMarkup.includes("5,678") &&
+    decisionChartMarkup.includes("2.5s") &&
+    decisionChartMarkup.includes("9.3s"),
+  decisionChartMarkup
+);
+const pointShapeMarkup = renderToStaticMarkup(
+  React.createElement(
+    "svg",
+    null,
+    React.createElement(DecisionTradeoffPointShape, {
+      cx: 24,
+      cy: 36,
+      payload: tokenProjection[1],
+      xLabel: "Tokens per successful case",
+      formatX: (value: number) =>
+        `${Math.round(value).toLocaleString()} tokens`,
+    })
+  )
+);
+check(
+  "trade-off point shape is keyboard focusable and identity-rich",
+  pointShapeMarkup.includes('tabindex="0"') &&
+    pointShapeMarkup.includes('aria-label="') &&
+    pointShapeMarkup.includes("Beta Builder Team") &&
+    pointShapeMarkup.includes("Overall index: 77.0") &&
+    pointShapeMarkup.includes("Tokens per successful case: 5,678 tokens"),
+  pointShapeMarkup
+);
 check(
   "chart tooltips and accessible tables distinguish team effort configs",
   chartMarkup.includes("architect: Model · Low") &&
@@ -586,8 +708,8 @@ check(
 );
 check(
   "understand layer contains both decision trade-off charts",
-  charts.includes("Quality vs tokens per successful case") &&
-    charts.includes("Quality vs time per successful case") &&
+  charts.includes("Overall index vs tokens per successful case") &&
+    charts.includes("Overall index vs time per successful case") &&
     charts.includes("Accessible data"),
   charts
 );

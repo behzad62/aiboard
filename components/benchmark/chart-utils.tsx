@@ -11,6 +11,14 @@ export const CHART_COLORS = [
 
 export const CHART_DASHES = ["0", "6 3", "2 2", "8 4"] as const;
 
+export function chartColorForIdentity(identity: string): string {
+  let hash = 0;
+  for (const character of identity) {
+    hash = (hash * 31 + character.codePointAt(0)!) >>> 0;
+  }
+  return CHART_COLORS[hash % CHART_COLORS.length]!;
+}
+
 export function moveSuccessRate(fallbackRate: number): number {
   return 100 - fallbackRate;
 }

@@ -2,7 +2,6 @@
 
 import {
   CartesianGrid,
-  Cell,
   ResponsiveContainer,
   Scatter,
   ScatterChart,
@@ -10,41 +9,51 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type {
+  ScatterShapeProps,
+  TooltipContentProps,
+} from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CHART_COLORS, EmptyChart } from "@/components/benchmark/chart-utils";
+import {
+  chartColorForIdentity,
+  EmptyChart,
+} from "@/components/benchmark/chart-utils";
 import type { DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
 import {
   VariantRosterBadges,
   variantRosterText,
 } from "./VariantRosterBadges";
 
-interface TradeoffPoint {
+export interface TradeoffPoint {
   id: string;
   label: string;
+  kind: "Solo model" | "Team";
+  tracks: string[];
   quality: number;
   x: number;
   attempts: number;
+  color: string;
   reasoningEffortDetails: DecisionRow["reasoningEffortDetails"];
 }
 
 export function DecisionTradeoffCharts({ rows }: { rows: DecisionRow[] }) {
-  const tokenPoints = project(rows, "tokens");
-  const timePoints = project(rows, "time");
+  const tokenPoints = projectDecisionTradeoffPoints(rows, "tokens");
+  const timePoints = projectDecisionTradeoffPoints(rows, "time");
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <TradeoffChart
-        title="Quality vs tokens per successful case"
-        description="Closer to the upper-left means stronger verified quality with less token use."
+        title="Overall index vs tokens per successful case"
+        description="Closer to the upper-left means a stronger cross-track overall index with less token use."
         points={tokenPoints}
-        xLabel="Tokens per pass"
+        xLabel="Tokens per successful case"
         formatX={(value) => Math.round(value).toLocaleString()}
         empty="No successful results include token measurements."
       />
       <TradeoffChart
-        title="Quality vs time per successful case"
-        description="Closer to the upper-left means stronger verified quality with less elapsed time."
+        title="Overall index vs time per successful case"
+        description="Closer to the upper-left means a stronger cross-track overall index with less elapsed time."
         points={timePoints}
-        xLabel="Seconds per pass"
+        xLabel="Time per successful case"
         formatX={(value) => `${value.toFixed(value >= 10 ? 0 : 1)}s`}
         empty="No successful results include timing measurements."
       />
@@ -79,6 +88,24 @@ function TradeoffChart({
       <CardContent>
         {points.length > 0 ? (
           <>
+            <ul
+              className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-xs"
+              aria-label={`${title} legend`}
+            >
+              {points.map((point) => (
+                <li key={point.id} className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full border border-border"
+                    style={{ backgroundColor: point.color }}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate font-medium">
+                    {decisionTradeoffPointLabel(point)}
+                  </span>
+                  <span className="text-muted-foreground">{point.kind}</span>
+                </li>
+              ))}
+            </ul>
             <div
               className="h-72"
               role="img"
@@ -87,47 +114,56 @@ function TradeoffChart({
             >
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart margin={{ top: 8, right: 12, bottom: 12, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.35} />
+                  <CartesianGrid
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                  />
                   <XAxis
                     dataKey="x"
                     type="number"
                     name={xLabel}
                     tickFormatter={(value) => formatX(Number(value))}
-                    tick={{ fontSize: 11 }}
+                    tick={{
+                      fill: "var(--muted-foreground)",
+                      fontSize: 12,
+                    }}
                   />
                   <YAxis
                     dataKey="quality"
                     type="number"
-                    name="Verified quality"
+                    name="Overall index"
                     domain={[0, 100]}
                     tickFormatter={(value) => `${value}`}
-                    tick={{ fontSize: 11 }}
+                    tick={{
+                      fill: "var(--muted-foreground)",
+                      fontSize: 12,
+                    }}
                     width={34}
                   />
                   <Tooltip
                     cursor={{ strokeDasharray: "3 3" }}
-                    formatter={(value, name) => {
-                      const numeric = Number(value);
-                      return name === "Verified quality"
-                        ? [`${numeric.toFixed(1)}`, name]
-                        : [formatX(numeric), xLabel];
-                    }}
-                    labelFormatter={(_, payload) => {
-                      const point = payload?.[0]?.payload as
-                        | TradeoffPoint
-                        | undefined;
-                      if (!point) return "Result";
-                      return decisionTradeoffPointLabel(point);
-                    }}
-                  />
-                  <Scatter name={title} data={points}>
-                    {points.map((point, index) => (
-                      <Cell
-                        key={point.id}
-                        fill={CHART_COLORS[index % CHART_COLORS.length]}
+                    content={(props) => (
+                      <DecisionTradeoffTooltip
+                        active={props.active}
+                        payload={props.payload as TradeoffTooltipPayload}
+                        xLabel={xLabel}
+                        formatX={formatX}
                       />
-                    ))}
-                  </Scatter>
+                    )}
+                  />
+                  <Scatter
+                    name={title}
+                    data={points}
+                    shape={(props: ScatterShapeProps) => (
+                      <DecisionTradeoffPointShape
+                        cx={props.cx}
+                        cy={props.cy}
+                        payload={props.payload as TradeoffPoint | undefined}
+                        xLabel={xLabel}
+                        formatX={formatX}
+                      />
+                    )}
+                  />
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
@@ -140,7 +176,7 @@ function TradeoffChart({
                   <thead>
                     <tr className="text-left text-muted-foreground">
                       <th className="px-3 py-2 font-medium">Model or team</th>
-                      <th className="px-3 py-2 text-right font-medium">Quality</th>
+                      <th className="px-3 py-2 text-right font-medium">Overall index</th>
                       <th className="px-3 py-2 text-right font-medium">{xLabel}</th>
                       <th className="px-3 py-2 text-right font-medium">Attempts</th>
                     </tr>
@@ -150,6 +186,9 @@ function TradeoffChart({
                       <tr key={point.id} className="border-t">
                         <td className="px-3 py-2">
                           <div>{point.label}</div>
+                          <div className="text-muted-foreground">
+                            {point.kind} · {formatTrackNames(point.tracks)}
+                          </div>
                           <VariantRosterBadges
                             details={point.reasoningEffortDetails}
                           />
@@ -180,23 +219,120 @@ export function decisionTradeoffPointLabel(point: {
   return roster ? `${point.label} — ${roster}` : point.label;
 }
 
-function project(
+export function projectDecisionTradeoffPoints(
   rows: DecisionRow[],
-  metric: "tokens" | "time"
+  basis: "tokens" | "time"
 ): TradeoffPoint[] {
   return rows.flatMap((row) => {
     const quality = row.overallScore ?? row.verifiedQuality;
-    const measured = metric === "tokens" ? row.tokensPerPass : row.speedPerPassMs;
+    const measured =
+      basis === "tokens" ? row.tokensPerPass : row.speedPerPassMs;
     if (quality == null || measured == null || measured < 0) return [];
     return [
       {
         id: row.id,
         label: row.label,
+        kind: row.isTeam ? "Team" : "Solo model",
+        tracks: row.tracks,
         quality: quality * 100,
-        x: metric === "time" ? measured / 1000 : measured,
+        x: basis === "time" ? measured / 1000 : measured,
         attempts: row.attempts,
+        color: chartColorForIdentity(row.id),
         reasoningEffortDetails: row.reasoningEffortDetails,
       },
     ];
   });
+}
+
+export function decisionTradeoffPointAriaLabel(
+  point: TradeoffPoint,
+  xLabel: string,
+  formatX: (value: number) => string
+): string {
+  return [
+    decisionTradeoffPointLabel(point),
+    point.kind,
+    `Tracks: ${formatTrackNames(point.tracks)}`,
+    `Overall index: ${point.quality.toFixed(1)}`,
+    `${xLabel}: ${formatX(point.x)}`,
+    `Attempts: ${point.attempts}`,
+  ].join(". ");
+}
+
+export function DecisionTradeoffPointShape({
+  cx,
+  cy,
+  payload,
+  xLabel,
+  formatX,
+}: {
+  cx?: number;
+  cy?: number;
+  payload?: TradeoffPoint;
+  xLabel: string;
+  formatX: (value: number) => string;
+}) {
+  if (cx == null || cy == null || !payload) return null;
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={5}
+      fill={payload.color}
+      stroke="var(--background)"
+      strokeWidth={1.5}
+      tabIndex={0}
+      role="img"
+      aria-label={decisionTradeoffPointAriaLabel(payload, xLabel, formatX)}
+      className="outline-none focus-visible:stroke-ring focus-visible:stroke-[3px]"
+    />
+  );
+}
+
+type TradeoffTooltipPayload = TooltipContentProps<
+  number,
+  string
+>["payload"];
+
+function DecisionTradeoffTooltip({
+  active,
+  payload,
+  xLabel,
+  formatX,
+}: {
+  active?: boolean;
+  payload?: TradeoffTooltipPayload;
+  xLabel: string;
+  formatX: (value: number) => string;
+}) {
+  const point = payload?.[0]?.payload as TradeoffPoint | undefined;
+  if (!active || !point) return null;
+  return (
+    <div className="max-w-80 rounded-md border bg-background px-3 py-2 text-xs shadow-sm">
+      <div className="font-medium">{decisionTradeoffPointLabel(point)}</div>
+      <div className="mt-1 text-muted-foreground">
+        {point.kind} · {formatTrackNames(point.tracks)}
+      </div>
+      <dl className="mt-2 grid grid-cols-[auto_auto] gap-x-3 gap-y-1">
+        <dt className="text-muted-foreground">Overall index</dt>
+        <dd className="text-right tabular-nums">{point.quality.toFixed(1)}</dd>
+        <dt className="text-muted-foreground">{xLabel}</dt>
+        <dd className="text-right tabular-nums">{formatX(point.x)}</dd>
+        <dt className="text-muted-foreground">Attempts</dt>
+        <dd className="text-right tabular-nums">{point.attempts}</dd>
+      </dl>
+    </div>
+  );
+}
+
+const TRACK_LABELS: Record<string, string> = {
+  gameiq: "GameIQ",
+  harnessbench: "HarnessBench",
+  teamiq: "TeamIQ",
+  toolreliability: "Tool Reliability",
+  workbench: "WorkBench",
+};
+
+function formatTrackNames(tracks: string[]): string {
+  return tracks.map((track) => TRACK_LABELS[track] ?? track).join(", ");
 }
