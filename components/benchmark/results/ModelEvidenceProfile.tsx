@@ -254,6 +254,9 @@ function budgetFailureCount(row: DecisionRow, track: string): number {
 }
 
 function failedAttemptCount(row: DecisionRow): number | null {
+  if (row.failedAttemptCount != null) {
+    return Math.max(0, row.failedAttemptCount);
+  }
   const passed = derivedPasses(row);
   const aggregateFailures =
     passed == null ? null : Math.max(0, row.attempts - passed);

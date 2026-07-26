@@ -185,6 +185,13 @@ async function runTeamIqToolReliabilityAttempt(
   casePack: ToolReliabilityCase[]
 ): Promise<BenchmarkAttemptV2> {
   const attemptId = `teamiq-attempt:${input.context.runId}:${team.id}`;
+  const caseId =
+    input.context.caseIds[0] ?? "teamiq-toolreliability-current-pack";
+  await input.context.registerAttemptOwner({
+    attemptId,
+    caseId,
+    teamCompositionId: team.id,
+  });
   const calls: TeamIqParticipantCall[] = [];
   const outputs: ToolReliabilityCandidate["outputs"] = {};
 
@@ -220,7 +227,7 @@ async function runTeamIqToolReliabilityAttempt(
   const result = runToolReliabilityPack(candidate, casePack);
   const verifier = createTeamIqVerifierResult({
     attemptId,
-    caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-current-pack",
+    caseId,
     caseResults: result.caseResults,
     score: result.score,
   });
@@ -240,7 +247,7 @@ async function runTeamIqToolReliabilityAttempt(
     ...result.attempt,
     id: attemptId,
     runId: input.context.runId,
-    caseId: input.context.caseIds[0] ?? "teamiq-toolreliability-current-pack",
+    caseId,
     teamCompositionId: team.id,
     track: "teamiq",
     harnessProfile: input.context.harnessProfile,

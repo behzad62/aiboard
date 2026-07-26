@@ -58,6 +58,7 @@ export function createBenchmarkRunRecord(input: {
       track: input.context.track,
       harnessProfile: input.context.harnessProfile,
       teamCompositionIds: input.context.teamCompositionIds,
+      attemptOwners: input.context.attemptOwners,
       modelBudget: input.context.modelBudget,
     }),
     metricValueIds: [],
@@ -69,6 +70,24 @@ export function createBenchmarkRunRecord(input: {
 export function updateRunningBenchmarkRunTeamCompositionIds(
   run: BenchmarkRun,
   teamCompositionIds: string[]
+): BenchmarkRun {
+  return updateRunningBenchmarkRunSummary(run, {
+    teamCompositionIds: [...teamCompositionIds],
+  });
+}
+
+export function updateRunningBenchmarkRunAttemptOwners(
+  run: BenchmarkRun,
+  attemptOwners: CertifiedRunContext["attemptOwners"]
+): BenchmarkRun {
+  return updateRunningBenchmarkRunSummary(run, {
+    attemptOwners: attemptOwners.map((owner) => ({ ...owner })),
+  });
+}
+
+function updateRunningBenchmarkRunSummary(
+  run: BenchmarkRun,
+  patch: Record<string, unknown>
 ): BenchmarkRun {
   let summary: Record<string, unknown> = {};
   try {
@@ -82,10 +101,7 @@ export function updateRunningBenchmarkRunTeamCompositionIds(
   }
   return {
     ...run,
-    summaryJson: JSON.stringify({
-      ...summary,
-      teamCompositionIds: [...teamCompositionIds],
-    }),
+    summaryJson: JSON.stringify({ ...summary, ...patch }),
   };
 }
 

@@ -92,6 +92,11 @@ async function runCertifiedToolReliabilityAttempt(
 ): Promise<BenchmarkAttemptV2> {
   const attemptId = `toolrel-attempt:${input.context.runId}:${input.teamCompositionId}:${input.model.modelId}`;
   const caseId = input.context.caseIds[0] ?? "toolreliability-current-pack";
+  await input.context.registerAttemptOwner({
+    attemptId,
+    caseId,
+    teamCompositionId: input.teamCompositionId,
+  });
   const calls: CertifiedModelCallAttemptUsage[] = [];
   const outputs: ToolReliabilityCandidate["outputs"] = {};
 

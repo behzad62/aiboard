@@ -481,11 +481,18 @@ const providerCrashSummary = await runCertifiedBenchmark({
   teamCompositionIds: [team.id],
   certification: passingCertification,
   runner: async (context) => {
+    const attemptId =
+      `gameiq-attempt:${context.runId}:${team.id}:openai:gpt-engine`;
+    await context.registerAttemptOwner({
+      attemptId,
+      caseId: caseOne.id,
+      teamCompositionId: team.id,
+    });
     await context.recordTrace({
       id: `${context.runId}:trace:provider-error`,
       runId: context.runId,
       caseId: caseOne.id,
-      attemptId: `${context.runId}:${caseOne.id}:${team.id}`,
+      attemptId,
       modelId: "openai:gpt-engine",
       providerId: "openai",
       participantId: team.id,
@@ -547,11 +554,18 @@ const multiTeamCrash = await runCertifiedBenchmark({
   teamCompositionIds: [team.id, teamTwo.id],
   certification: passingCertification,
   runner: async (context) => {
+    const attemptId =
+      `gameiq-attempt:${context.runId}:${team.id}:openai:gpt-engine`;
+    await context.registerAttemptOwner({
+      attemptId,
+      caseId: caseOne.id,
+      teamCompositionId: team.id,
+    });
     await context.recordTrace({
       id: `${context.runId}:trace:only`,
       runId: context.runId,
       caseId: caseOne.id,
-      attemptId: `${context.runId}:${caseOne.id}:${team.id}`,
+      attemptId,
       modelId: "openai:gpt-engine",
       providerId: "openai",
       participantId: team.id,

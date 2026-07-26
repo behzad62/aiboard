@@ -277,6 +277,8 @@ export function withCertifiedDeleteMetadata(
         .map((teamId) => teamById.get(teamId))
         .find((candidate) => candidate !== undefined);
       const failureDetails = certifiedFailureDetails(teamAttempts, failures);
+      const failedAttemptCountByTrack =
+        failedAttemptCountsByTrack(teamAttempts);
       return {
         ...row,
         latestAttemptId: latest?.id,
@@ -303,6 +305,8 @@ export function withCertifiedDeleteMetadata(
         })),
         latestCompletedAt: latest?.completedAt ?? latest?.startedAt,
         failureDetails,
+        failedAttemptCount: countFailedAttempts(teamAttempts),
+        failedAttemptCountByTrack,
       };
     }),
     providerErrorAttempts: certifiedAttempts
@@ -313,6 +317,21 @@ export function withCertifiedDeleteMetadata(
         teamCompositionId: attempt.teamCompositionId,
       })),
   };
+}
+
+function countFailedAttempts(attempts: BenchmarkAttemptV2[]): number {
+  return attempts.filter((attempt) => attempt.status !== "passed").length;
+}
+
+function failedAttemptCountsByTrack(
+  attempts: BenchmarkAttemptV2[]
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const attempt of attempts) {
+    if (attempt.status === "passed") continue;
+    counts[attempt.track] = (counts[attempt.track] ?? 0) + 1;
+  }
+  return counts;
 }
 
 function certifiedFailureDetails(

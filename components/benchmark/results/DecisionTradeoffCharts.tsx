@@ -37,8 +37,14 @@ export interface TradeoffPoint {
   color: string;
   marker: ChartMarker;
   visualKey: string;
+  offsetX: number;
+  offsetY: number;
+  clusterSize: number;
   reasoningEffortDetails: DecisionRow["reasoningEffortDetails"];
 }
+
+export const TRADEOFF_CHART_MARGIN_PX = 40;
+const TRADEOFF_CLUSTER_RADIUS_PX = 18;
 
 export function DecisionTradeoffCharts({ rows }: { rows: DecisionRow[] }) {
   const tokenPoints = projectDecisionTradeoffPoints(rows, "tokens");
@@ -126,13 +132,21 @@ function TradeoffChart({
               ))}
             </ul>
             <div
-              className="h-72"
+              className="benchmark-tradeoff-chart h-72"
+              data-tradeoff-chart={id}
               role="group"
               aria-labelledby={`${id}-title`}
               aria-describedby={`${id}-description`}
             >
               <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 8, right: 12, bottom: 12, left: 0 }}>
+                <ScatterChart
+                  margin={{
+                    top: TRADEOFF_CHART_MARGIN_PX,
+                    right: TRADEOFF_CHART_MARGIN_PX,
+                    bottom: TRADEOFF_CHART_MARGIN_PX,
+                    left: TRADEOFF_CHART_MARGIN_PX,
+                  }}
+                >
                   <CartesianGrid
                     stroke="hsl(var(--muted-foreground))"
                     strokeDasharray="3 3"
@@ -247,7 +261,7 @@ export function projectDecisionTradeoffPoints(
       .sort()
       .map((id, index) => [id, String(index + 1)])
   );
-  return rows.flatMap((row) => {
+  const points: TradeoffPoint[] = rows.flatMap((row) => {
     const quality = row.overallScore ?? row.verifiedQuality;
     const measured =
       basis === "tokens" ? row.tokensPerPass : row.speedPerPassMs;
@@ -264,10 +278,59 @@ export function projectDecisionTradeoffPoints(
         color: chartColorForIdentity(row.id),
         marker: chartMarkerForIdentity(row.id),
         visualKey: visualKeys.get(row.id)!,
+        offsetX: 0,
+        offsetY: 0,
+        clusterSize: 1,
         reasoningEffortDetails: row.reasoningEffortDetails,
       },
     ];
   });
+  return clusterDecisionTradeoffPoints(points);
+}
+
+export function clusterDecisionTradeoffPoints(
+  points: TradeoffPoint[]
+): TradeoffPoint[] {
+  const clusters = new Map<string, TradeoffPoint[]>();
+  for (const point of points) {
+    const key = `${point.x}\u0000${point.quality}`;
+    const cluster = clusters.get(key) ?? [];
+    cluster.push(point);
+    clusters.set(key, cluster);
+  }
+  const geometryById = new Map<
+    string,
+    Pick<TradeoffPoint, "offsetX" | "offsetY" | "clusterSize">
+  >();
+  for (const cluster of clusters.values()) {
+    const ordered = [...cluster].sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+    );
+    if (ordered.length === 1) {
+      geometryById.set(ordered[0]!.id, {
+        offsetX: 0,
+        offsetY: 0,
+        clusterSize: 1,
+      });
+      continue;
+    }
+    ordered.forEach((point, index) => {
+      const angle = -Math.PI / 2 + (2 * Math.PI * index) / ordered.length;
+      geometryById.set(point.id, {
+        offsetX: roundGeometry(Math.cos(angle) * TRADEOFF_CLUSTER_RADIUS_PX),
+        offsetY: roundGeometry(Math.sin(angle) * TRADEOFF_CLUSTER_RADIUS_PX),
+        clusterSize: ordered.length,
+      });
+    });
+  }
+  return points.map((point) => ({
+    ...point,
+    ...(geometryById.get(point.id) ?? {
+      offsetX: 0,
+      offsetY: 0,
+      clusterSize: 1,
+    }),
+  }));
 }
 
 export function decisionTradeoffPointAriaLabel(
@@ -300,25 +363,44 @@ export function DecisionTradeoffPointShape({
   formatX: (value: number) => string;
 }) {
   if (cx == null || cy == null || !payload) return null;
+  const markerX = cx + payload.offsetX;
+  const markerY = cy + payload.offsetY;
+  const displaced = payload.offsetX !== 0 || payload.offsetY !== 0;
   return (
     <g
       tabIndex={0}
       role="img"
       aria-label={decisionTradeoffPointAriaLabel(payload, xLabel, formatX)}
-      className="group outline-none"
+      className="benchmark-tradeoff-point group outline-none"
       data-marker={payload.marker}
       data-visual-key={payload.visualKey}
+      data-cluster-size={payload.clusterSize}
+      data-offset-x={payload.offsetX}
+      data-offset-y={payload.offsetY}
     >
+      {displaced && (
+        <line
+          className="benchmark-tradeoff-connector"
+          x1={cx}
+          y1={cy}
+          x2={markerX}
+          y2={markerY}
+          stroke="hsl(var(--muted-foreground))"
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
       <DecisionMarker
-        cx={cx}
-        cy={cy}
+        cx={markerX}
+        cy={markerY}
         size={5}
         marker={payload.marker}
         color={payload.color}
       />
       <text
-        x={cx + 7}
-        y={cy - 7}
+        x={markerX}
+        y={markerY - 8}
+        textAnchor="middle"
         fill="hsl(var(--foreground))"
         fontSize={9}
         fontWeight={700}
@@ -327,6 +409,10 @@ export function DecisionTradeoffPointShape({
       </text>
     </g>
   );
+}
+
+function roundGeometry(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function DecisionMarker({

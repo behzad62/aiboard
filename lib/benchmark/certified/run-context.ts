@@ -24,6 +24,12 @@ export interface CertifiedRunBudget {
   maxModelCallMs?: number;
 }
 
+export interface CertifiedAttemptOwner {
+  attemptId: string;
+  caseId: string;
+  teamCompositionId: string;
+}
+
 export interface CertifiedRunContext {
   runId: string;
   mode: "certified";
@@ -33,8 +39,10 @@ export interface CertifiedRunContext {
   startedAt: string;
   caseIds: string[];
   teamCompositionIds: string[];
+  attemptOwners: CertifiedAttemptOwner[];
   modelBudget: CertifiedRunBudget;
   registerTeamCompositionId?(teamCompositionId: string): Promise<void>;
+  registerAttemptOwner(owner: CertifiedAttemptOwner): Promise<void>;
   recordAttempt(attempt: BenchmarkAttemptV2): Promise<void>;
   recordVerifier(result: BenchmarkVerifierResult): Promise<void>;
   recordArtifact(artifact: BenchmarkArtifact): Promise<void>;

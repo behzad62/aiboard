@@ -3,6 +3,8 @@ import {
   __resetBenchmarkStoreForTests,
   exportBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
+  listBenchmarkRuns,
+  listBenchmarkTraces,
   listBenchmarkToolCallTraces,
   listBenchmarkVerifierResults,
   saveBenchmarkCaseV2,
@@ -287,7 +289,9 @@ const fallbackAttempts = await runCertifiedToolReliability({
     startedAt: now,
     caseIds: [],
     teamCompositionIds: [team.id],
+    attemptOwners: [],
     modelBudget: {},
+    registerAttemptOwner: async () => undefined,
     recordAttempt: async (record) => {
       fallbackAttemptsRecorded.push(record);
     },
@@ -335,6 +339,105 @@ check(
     failures: fallbackFailures.length,
     toolCalls: fallbackToolCalls.length,
   }
+);
+
+__resetBenchmarkStoreForTests();
+const secondTeam: BenchmarkTeamComposition = {
+  ...team,
+  id: "team-certified-toolrel-second",
+  name: "Certified ToolReliability second model",
+  comboHash: "combo:certified-toolrel-second",
+};
+await saveBenchmarkCaseV2(caseV2);
+await saveBenchmarkTeamComposition(team);
+await saveBenchmarkTeamComposition(secondTeam);
+let durableToolRelOwners: unknown = null;
+const fatalToolRelSummary = await runCertifiedBenchmark({
+  runId: "run-certified-toolrel-fatal-owner",
+  suiteId: "suite-certified-toolrel",
+  track: "toolreliability",
+  harnessProfile: "raw-single-model",
+  caseIds: [caseV2.id],
+  teamCompositionIds: [team.id, secondTeam.id],
+  certification: passingCertification,
+  runner: (context) => {
+    const ownerAttemptId =
+      `toolrel-attempt:${context.runId}:${team.id}:${model.modelId}`;
+    let toolRecorded = false;
+    return runCertifiedToolReliability({
+      context,
+      models: [model],
+      teamCompositionIds: [team.id, secondTeam.id],
+      casePack: [TOOL_RELIABILITY_CASES[0]!],
+      pricing: { inputUsdPer1M: 1, outputUsdPer1M: 1 },
+      retryDelaysMs: [],
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        const running = (await listBenchmarkRuns()).find(
+          (candidate) => candidate.id === context.runId
+        );
+        durableToolRelOwners = running
+          ? (JSON.parse(running.summaryJson) as { attemptOwners?: unknown })
+              .attemptOwners
+          : null;
+        if (!toolRecorded) {
+          toolRecorded = true;
+          await context.recordToolCall({
+            id: `${ownerAttemptId}:tool:fatal-fixture`,
+            attemptId: ownerAttemptId,
+            caseId: TOOL_RELIABILITY_CASES[0]!.id,
+            toolName: "toolreliability:fixture",
+            status: "ok",
+            startedAt: context.startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs: 1,
+          });
+        }
+        yield { type: "token", content: '{"action":"inspect","path":"src"}' };
+        yield {
+          type: "error",
+          error: "Your prepayment credits are depleted.",
+        };
+      },
+    });
+  },
+});
+const fatalToolRelAttempts = (await listBenchmarkAttemptsV2()).filter(
+  (candidate) => candidate.runId === fatalToolRelSummary.runId
+);
+const fatalToolRelTraces = (await listBenchmarkTraces()).filter(
+  (candidate) => candidate.runId === fatalToolRelSummary.runId
+);
+const fatalToolRelOwnerAttemptId =
+  `toolrel-attempt:${fatalToolRelSummary.runId}:${team.id}:${model.modelId}`;
+const fatalToolRelOwned = fatalToolRelAttempts.find(
+  (candidate) => candidate.teamCompositionId === team.id
+);
+const fatalToolRelUnowned = fatalToolRelAttempts.find(
+  (candidate) => candidate.teamCompositionId === secondTeam.id
+);
+check(
+  "Tool Reliability durably registers its exact producer attempt owner before provider work",
+  Array.isArray(durableToolRelOwners) &&
+    durableToolRelOwners.some(
+      (owner) =>
+        (owner as { attemptId?: string }).attemptId === fatalToolRelOwnerAttemptId
+    ),
+  durableToolRelOwners
+);
+check(
+  "fatal Tool Reliability trace and tool totals do not leak across teams",
+  fatalToolRelSummary.status === "failed" &&
+    fatalToolRelTraces.length === 1 &&
+    fatalToolRelOwned?.traceIds[0] === fatalToolRelTraces[0]?.id &&
+    fatalToolRelOwned.modelCalls === 1 &&
+    fatalToolRelOwned.toolCalls === 1 &&
+    (fatalToolRelOwned.inputTokens ?? 0) > 0 &&
+    (fatalToolRelOwned.outputTokens ?? 0) > 0 &&
+    (fatalToolRelOwned.costUsd ?? 0) > 0 &&
+    fatalToolRelUnowned?.traceIds.length === 0 &&
+    fatalToolRelUnowned?.modelCalls === 0 &&
+    fatalToolRelUnowned?.toolCalls === 0,
+  { fatalToolRelAttempts, fatalToolRelTraces }
 );
 
 if (failures === 0) {

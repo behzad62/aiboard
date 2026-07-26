@@ -203,7 +203,9 @@ const certifiedContext: CertifiedRunContext = {
   startedAt: "2026-06-29T12:00:00.000Z",
   caseIds: ["toolreliability-current-pack"],
   teamCompositionIds: ["team-toolrel-diagnostics"],
+  attemptOwners: [],
   modelBudget: {},
+  registerAttemptOwner: async () => undefined,
   recordAttempt: async () => {},
   recordVerifier: async (result) => {
     certifiedVerifiers.push(result);

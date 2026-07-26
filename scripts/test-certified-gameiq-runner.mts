@@ -3,6 +3,8 @@ import {
   __resetBenchmarkStoreForTests,
   exportBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
+  listBenchmarkRuns,
+  listBenchmarkTraces,
   listBenchmarkVerifierResults,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
@@ -372,6 +374,88 @@ check(
     malformedJsonAttempt.traceIds.length === pack.scenarios.length &&
     malformedJsonCallCount === pack.scenarios.length,
   { malformedJsonSummary, malformedJsonAttempt, malformedJsonCallCount }
+);
+
+__resetBenchmarkStoreForTests();
+const secondTeam: BenchmarkTeamComposition = {
+  ...team,
+  id: "team-certified-gameiq-second",
+  name: "Certified GameIQ second model",
+  comboHash: "combo:certified-gameiq-second",
+};
+await saveBenchmarkCaseV2(caseV2);
+await saveBenchmarkTeamComposition(team);
+await saveBenchmarkTeamComposition(secondTeam);
+let durableGameIqOwners: unknown = null;
+const fatalGameIqSummary = await runCertifiedBenchmark({
+  runId: "run-certified-gameiq-fatal-owner",
+  suiteId: "suite-certified-gameiq",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [pack.id],
+  teamCompositionIds: [team.id, secondTeam.id],
+  certification: passingCertification,
+  runner: (context) =>
+    runCertifiedGameIq({
+      context,
+      models: [model],
+      scenarioPackIds: [pack.id],
+      teamCompositionIds: [team.id, secondTeam.id],
+      trials: 1,
+      pricing: { inputUsdPer1M: 1, outputUsdPer1M: 1 },
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        const running = (await listBenchmarkRuns()).find(
+          (candidate) => candidate.id === context.runId
+        );
+        durableGameIqOwners = running
+          ? (JSON.parse(running.summaryJson) as { attemptOwners?: unknown })
+              .attemptOwners
+          : null;
+        yield { type: "token", content: '{"action":{"column":3}}' };
+        yield {
+          type: "error",
+          error: "Your prepayment credits are depleted.",
+        };
+      },
+    }),
+});
+const fatalGameIqAttempts = (await listBenchmarkAttemptsV2()).filter(
+  (candidate) => candidate.runId === fatalGameIqSummary.runId
+);
+const fatalGameIqTraces = (await listBenchmarkTraces()).filter(
+  (candidate) => candidate.runId === fatalGameIqSummary.runId
+);
+const fatalGameIqOwnerAttemptId =
+  `gameiq-attempt:${fatalGameIqSummary.runId}:${team.id}:${model.modelId}`;
+const fatalGameIqOwned = fatalGameIqAttempts.find(
+  (candidate) => candidate.teamCompositionId === team.id
+);
+const fatalGameIqUnowned = fatalGameIqAttempts.find(
+  (candidate) => candidate.teamCompositionId === secondTeam.id
+);
+check(
+  "GameIQ durably registers its exact producer attempt owner before provider work",
+  Array.isArray(durableGameIqOwners) &&
+    durableGameIqOwners.some(
+      (owner) =>
+        (owner as { attemptId?: string }).attemptId === fatalGameIqOwnerAttemptId
+    ),
+  durableGameIqOwners
+);
+check(
+  "fatal GameIQ trace totals follow the exact registered producer owner",
+  fatalGameIqSummary.status === "failed" &&
+    fatalGameIqTraces.length === 1 &&
+    fatalGameIqOwned?.traceIds[0] === fatalGameIqTraces[0]?.id &&
+    fatalGameIqOwned.modelCalls === 1 &&
+    (fatalGameIqOwned.inputTokens ?? 0) > 0 &&
+    (fatalGameIqOwned.outputTokens ?? 0) > 0 &&
+    (fatalGameIqOwned.costUsd ?? 0) > 0 &&
+    fatalGameIqOwned.toolCalls === 0 &&
+    fatalGameIqUnowned?.traceIds.length === 0 &&
+    fatalGameIqUnowned?.modelCalls === 0 &&
+    fatalGameIqUnowned?.toolCalls === 0,
+  { fatalGameIqAttempts, fatalGameIqTraces }
 );
 
 function schemaObjectNodes(schema: JsonSchemaObject | undefined): JsonSchemaObject[] {

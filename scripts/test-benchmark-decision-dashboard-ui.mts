@@ -534,6 +534,23 @@ const unknownFailuresMarkup = renderToStaticMarkup(
     onClose: () => undefined
   })
 );
+const authoritativeFailuresMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "authoritative-failures",
+    row: {
+      ...responsiveRows[0],
+      attempts: 1,
+      passed: 1,
+      passRate: 1,
+      failureDetails: [],
+      latestAttemptsByTrack: {
+        gameiq: { id: "newer-pass", status: "passed", track: "gameiq" }
+      },
+      failedAttemptCount: 2
+    } as DecisionRow & { failedAttemptCount: number },
+    onClose: () => undefined
+  })
+);
 check(
   "failed-attempt count derives from pass rate and honors linked lower bounds",
   rateDerivedFailuresMarkup.includes("2 failed attempts") &&
@@ -545,6 +562,12 @@ check(
   unknownFailuresMarkup.includes("Failed attempts not measured") &&
     !unknownFailuresMarkup.includes("0 failed attempts"),
   unknownFailuresMarkup
+);
+check(
+  "evidence profile prefers authoritative persisted-status failure totals",
+  authoritativeFailuresMarkup.includes("2 failed attempts") &&
+    !authoritativeFailuresMarkup.includes("0 failed attempts"),
+  authoritativeFailuresMarkup
 );
 
 const unbrokenProfileIdentity = "model_" + "x".repeat(160);
@@ -823,6 +846,70 @@ const manyTimeProjection = projectDecisionTradeoffPoints(
   manyIdentityRows,
   "time"
 );
+const chartGeometryModule = await import(
+  "../components/benchmark/results/DecisionTradeoffCharts"
+);
+type ClusteredPoint = (typeof manyTokenProjection)[number] & {
+  offsetX: number;
+  offsetY: number;
+  clusterSize: number;
+};
+const clusterTradeoffPoints = (
+  chartGeometryModule as unknown as {
+    clusterDecisionTradeoffPoints?: (
+      points: ClusteredPoint[]
+    ) => ClusteredPoint[];
+  }
+).clusterDecisionTradeoffPoints;
+const chartClusterMargin = (
+  chartGeometryModule as unknown as {
+    TRADEOFF_CHART_MARGIN_PX?: number;
+  }
+).TRADEOFF_CHART_MARGIN_PX;
+const identicalCluster = clusterTradeoffPoints
+  ? clusterTradeoffPoints(manyTokenProjection as ClusteredPoint[])
+  : [];
+const reorderedCluster = clusterTradeoffPoints
+  ? clusterTradeoffPoints(
+      [...manyTokenProjection].reverse() as ClusteredPoint[]
+    )
+  : [];
+const edgeCluster = projectDecisionTradeoffPoints(
+  manyIdentityRows.map((row) => ({
+    ...row,
+    overallScore: 1,
+    tokensPerPass: 0
+  })),
+  "tokens"
+) as ClusteredPoint[];
+const offsetsById = new Map(
+  identicalCluster.map((point) => [
+    point.id,
+    `${point.offsetX.toFixed(6)},${point.offsetY.toFixed(6)}`
+  ])
+);
+check(
+  "eight coincident identities receive distinct deterministic marker centers",
+  identicalCluster.length === 8 &&
+    new Set(offsetsById.values()).size === 8 &&
+    reorderedCluster.every(
+      (point) =>
+        offsetsById.get(point.id) ===
+        `${point.offsetX.toFixed(6)},${point.offsetY.toFixed(6)}`
+    ),
+  { identicalCluster, reorderedCluster }
+);
+check(
+  "cluster offsets stay inside the declared chart margin envelope",
+  typeof chartClusterMargin === "number" &&
+    edgeCluster.length === 8 &&
+    edgeCluster.every(
+      (point) =>
+        Math.abs(point.offsetX) <= chartClusterMargin &&
+        Math.abs(point.offsetY) <= chartClusterMargin
+    ),
+  { chartClusterMargin, edgeCluster }
+);
 check(
   "chart identity colors survive row reorder and filtering",
   tokenProjection[1]?.color === reorderedProjection[0]?.color &&
@@ -868,6 +955,28 @@ check(
     ),
   { manyTokenProjection, manyTimeProjection, manyIdentityMarkup }
 );
+const displacedPointMarkup = renderToStaticMarkup(
+  React.createElement(
+    "svg",
+    null,
+    React.createElement(DecisionTradeoffPointShape, {
+      cx: 0,
+      cy: 0,
+      payload: identicalCluster[0],
+      xLabel: "Tokens per successful case",
+      formatX: (value: number) => `${value}`
+    })
+  )
+);
+check(
+  "displaced points expose measurable geometry and connect back to the true coordinate",
+  displacedPointMarkup.includes("benchmark-tradeoff-point") &&
+    displacedPointMarkup.includes('data-cluster-size="8"') &&
+    displacedPointMarkup.includes("data-offset-x=") &&
+    displacedPointMarkup.includes("data-offset-y=") &&
+    displacedPointMarkup.includes("benchmark-tradeoff-connector"),
+  displacedPointMarkup
+);
 check(
   "trade-off projections prefer overall index and fall back to verified quality",
   tokenProjection[0]?.quality === 84 && tokenProjection[1]?.quality === 77,
@@ -894,8 +1003,11 @@ const decisionChartMarkup = renderToStaticMarkup(
 );
 check(
   "trade-off plot groups preserve semantics for focusable point descendants",
-  decisionChartMarkup.includes('class="h-72" role="group"') &&
-    !decisionChartMarkup.includes('class="h-72" role="img"'),
+  decisionChartMarkup.includes(
+    'class="benchmark-tradeoff-chart h-72"'
+  ) &&
+    decisionChartMarkup.includes('role="group"') &&
+    !decisionChartMarkup.includes('role="img"'),
   decisionChartMarkup
 );
 check(

@@ -29,6 +29,7 @@ import type {
 } from "@/lib/benchmark/types";
 import type {
   CertifiedRunBudget,
+  CertifiedAttemptOwner,
   CertifiedRunPersistenceSnapshot,
   PersistentCertifiedRunContext,
 } from "./run-context";
@@ -49,6 +50,9 @@ export interface CreateCertifiedRunContextInput {
   teamCompositionIds: string[];
   modelBudget?: CertifiedRunBudget;
   onTeamCompositionIdsChanged?: (teamCompositionIds: string[]) => Promise<void>;
+  onAttemptOwnersChanged?: (
+    attemptOwners: CertifiedAttemptOwner[]
+  ) => Promise<void>;
 }
 
 export function createCertifiedRunContext(
@@ -66,6 +70,8 @@ export function createCertifiedRunContext(
     startedAt: input.startedAt,
   });
   const teamCompositionIds = [...input.teamCompositionIds];
+  const attemptOwners = new Map<string, CertifiedAttemptOwner>();
+  const registeredAttemptOwners: CertifiedAttemptOwner[] = [];
 
   return {
     runId: input.runId,
@@ -76,12 +82,35 @@ export function createCertifiedRunContext(
     startedAt: input.startedAt,
     caseIds: [...input.caseIds],
     teamCompositionIds,
+    attemptOwners: registeredAttemptOwners,
     modelBudget: input.modelBudget ?? {},
     async registerTeamCompositionId(teamCompositionId) {
       if (!teamCompositionIds.includes(teamCompositionId)) {
         teamCompositionIds.push(teamCompositionId);
         await input.onTeamCompositionIdsChanged?.([...teamCompositionIds]);
       }
+    },
+    async registerAttemptOwner(owner) {
+      const existing = attemptOwners.get(owner.attemptId);
+      if (
+        existing &&
+        (existing.caseId !== owner.caseId ||
+          existing.teamCompositionId !== owner.teamCompositionId)
+      ) {
+        throw new Error(
+          `Certified attempt owner ${owner.attemptId} was registered with conflicting case/team metadata.`
+        );
+      }
+      if (existing) return;
+      const registered = { ...owner };
+      attemptOwners.set(owner.attemptId, registered);
+      const owners = [...attemptOwners.values()];
+      registeredAttemptOwners.splice(
+        0,
+        registeredAttemptOwners.length,
+        ...owners
+      );
+      await input.onAttemptOwnersChanged?.(owners.map((item) => ({ ...item })));
     },
     async recordAttempt(attempt) {
       assertAttemptBelongsToRun(attempt, input.runId, input.track);

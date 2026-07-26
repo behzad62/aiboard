@@ -15,6 +15,7 @@ import {
   completeBenchmarkRunRecord,
   createCertifiedRunSummary,
   benchmarkDomainForTrack,
+  updateRunningBenchmarkRunAttemptOwners,
   updateRunningBenchmarkRunTeamCompositionIds,
   type CertifiedRunSummary,
 } from "./run-status";
@@ -67,6 +68,10 @@ export async function runCertifiedBenchmark(
         run,
         teamCompositionIds
       );
+      await persistCertifiedRunRecord(run);
+    },
+    async onAttemptOwnersChanged(attemptOwners) {
+      run = updateRunningBenchmarkRunAttemptOwners(run, attemptOwners);
       await persistCertifiedRunRecord(run);
     },
   });
@@ -163,68 +168,109 @@ function createFailedAttemptsForRunError(input: {
       usedTraceIds.add(trace.id);
     }
   }
+  const usedToolCallIds = new Set(
+    snapshot.toolCalls
+      .filter((trace) => persistedAttemptIds.has(trace.attemptId))
+      .map((trace) => trace.id)
+  );
+  const ownersByKey = new Map<string, typeof input.context.attemptOwners>();
+  for (const owner of input.context.attemptOwners) {
+    const key = attemptKey(owner.caseId, owner.teamCompositionId);
+    const owners = ownersByKey.get(key) ?? [];
+    owners.push(owner);
+    ownersByKey.set(key, owners);
+  }
 
   for (const caseId of input.context.caseIds) {
     for (const teamCompositionId of input.context.teamCompositionIds) {
-      if (existingKeys.has(attemptKey(caseId, teamCompositionId))) continue;
-      const expectedAttemptIds = new Set([
-        `teamiq-attempt:${input.context.runId}:${teamCompositionId}`,
-        `${input.context.runId}:${caseId}:${teamCompositionId}`,
-        `${input.context.runId}:${caseId}:${teamCompositionId}:failed`,
-      ]);
-      const traces = snapshot.traces.filter(
-        (trace) =>
-          trace.runId === input.context.runId &&
-          !!trace.attemptId &&
-          expectedAttemptIds.has(trace.attemptId) &&
-          !usedTraceIds.has(trace.id)
+      const key = attemptKey(caseId, teamCompositionId);
+      const owners = ownersByKey.get(key) ?? [];
+      const missingOwners = owners.filter(
+        (owner) => !persistedAttemptIds.has(owner.attemptId)
       );
-      for (const trace of traces) usedTraceIds.add(trace.id);
-      attempts.push({
-        id: `${input.context.runId}:${caseId}:${teamCompositionId}:failed`,
-        runId: input.context.runId,
-        caseId,
-        teamCompositionId,
-        mode: "certified",
-        track: input.track,
-        harnessProfile: input.context.harnessProfile,
-        status,
-        startedAt: input.context.startedAt,
-        completedAt,
-        verifiedQuality: 0,
-        jobSuccessScore: 0,
-        efficiencyScore: 0,
-        ...(input.track === "gameiq" ? { gameIqScore: 0 } : {}),
-        ...(input.track === "toolreliability" || input.track === "teamiq"
-          ? { toolReliabilityScore: 0 }
-          : {}),
-        costUsd: sumNullable(traces.map((trace) => trace.estimatedUsd ?? null)),
-        inputTokens: traces.reduce(
-          (sum, trace) => sum + (trace.inputTokens ?? 0),
-          0
-        ),
-        outputTokens: traces.reduce(
-          (sum, trace) => sum + (trace.outputTokens ?? 0),
-          0
-        ),
-        modelCalls: traces.length,
-        toolCalls: snapshot.toolCalls.filter(
-          (trace) => trace.caseId === caseId
-        ).length,
-        durationMs,
-        artifactIds: [],
-        traceIds: traces.map((trace) => trace.id),
-        failureIds: [input.failureId],
-        harnessVersion:
-          profile?.harnessVersion ?? `${input.context.harnessProfile}-v0.1`,
-        promptSetVersion:
-          profile?.promptSetVersion ?? "certified-run-error-v0.1",
-        scoringVersion: "certified-run-error-v0.1",
-      });
+      if (missingOwners.length > 0) {
+        for (const owner of missingOwners) {
+          attempts.push(
+            createFailedAttempt({
+              attemptId: owner.attemptId,
+              caseId,
+              teamCompositionId,
+            })
+          );
+        }
+        continue;
+      }
+      if (existingKeys.has(key)) continue;
+      attempts.push(
+        createFailedAttempt({
+          attemptId: `${input.context.runId}:${caseId}:${teamCompositionId}:failed`,
+          caseId,
+          teamCompositionId,
+        })
+      );
     }
   }
 
   return attempts;
+
+  function createFailedAttempt(owner: {
+    attemptId: string;
+    caseId: string;
+    teamCompositionId: string;
+  }): BenchmarkAttemptV2 {
+    const traces = snapshot.traces.filter(
+      (trace) =>
+        trace.runId === input.context.runId &&
+        trace.attemptId === owner.attemptId &&
+        !usedTraceIds.has(trace.id)
+    );
+    const toolCalls = snapshot.toolCalls.filter(
+      (trace) =>
+        trace.attemptId === owner.attemptId &&
+        !usedToolCallIds.has(trace.id)
+    );
+    for (const trace of traces) usedTraceIds.add(trace.id);
+    for (const trace of toolCalls) usedToolCallIds.add(trace.id);
+    return {
+      id: owner.attemptId,
+      runId: input.context.runId,
+      caseId: owner.caseId,
+      teamCompositionId: owner.teamCompositionId,
+      mode: "certified",
+      track: input.track,
+      harnessProfile: input.context.harnessProfile,
+      status,
+      startedAt: input.context.startedAt,
+      completedAt,
+      verifiedQuality: 0,
+      jobSuccessScore: 0,
+      efficiencyScore: 0,
+      ...(input.track === "gameiq" ? { gameIqScore: 0 } : {}),
+      ...(input.track === "toolreliability" || input.track === "teamiq"
+        ? { toolReliabilityScore: 0 }
+        : {}),
+      costUsd: sumNullable(traces.map((trace) => trace.estimatedUsd ?? null)),
+      inputTokens: traces.reduce(
+        (sum, trace) => sum + (trace.inputTokens ?? 0),
+        0
+      ),
+      outputTokens: traces.reduce(
+        (sum, trace) => sum + (trace.outputTokens ?? 0),
+        0
+      ),
+      modelCalls: traces.length,
+      toolCalls: toolCalls.length,
+      durationMs,
+      artifactIds: [],
+      traceIds: traces.map((trace) => trace.id),
+      failureIds: [input.failureId],
+      harnessVersion:
+        profile?.harnessVersion ?? `${input.context.harnessProfile}-v0.1`,
+      promptSetVersion:
+        profile?.promptSetVersion ?? "certified-run-error-v0.1",
+      scoringVersion: "certified-run-error-v0.1",
+    };
+  }
 }
 
 function attemptKey(caseId: string, teamCompositionId: string): string {

@@ -172,6 +172,8 @@ export interface CertifiedLeaderboardRow {
   reasoningEffortDetails?: BenchmarkVariantRosterDetail[];
   latestCompletedAt?: string;
   failureDetails: CertifiedFailureDetail[];
+  failedAttemptCount?: number | null;
+  failedAttemptCountByTrack?: Record<string, number>;
 }
 
 export interface ModelIntelligenceTrackBreakdown {
@@ -305,6 +307,8 @@ export function readLeaderboard(
             reasoningEffortDetails: meta.reasoningEffortDetails,
             latestCompletedAt: meta.latestCompletedAt,
             failureDetails: meta.failureDetails,
+            failedAttemptCount: meta.failedAttemptCount,
+            failedAttemptCountByTrack: meta.failedAttemptCountByTrack,
             passed: row.passed ?? meta.passed,
             toolReliabilitySamples:
               row.toolReliabilitySamples ?? meta.toolReliabilitySamples,
@@ -481,6 +485,10 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     ),
     latestCompletedAt: readString(row.latestCompletedAt) ?? undefined,
     failureDetails: readFailureDetails(row.failureDetails),
+    failedAttemptCount: readNumber(row.failedAttemptCount),
+    failedAttemptCountByTrack: readNumberByTrack(
+      row.failedAttemptCountByTrack
+    ),
   };
 }
 
@@ -539,6 +547,7 @@ export function resolveLeaderboardDeleteFields(
     failureDetails: row.failureDetails.filter(
       (detail) => normalizeTrack(detail.track) === track
     ),
+    failedAttemptCount: row.failedAttemptCountByTrack?.[track] ?? null,
     teamLift: liftIncludesTrack ? row.teamLift : null,
     teamLiftTracks: liftIncludesTrack ? row.teamLiftTracks : [],
   };
@@ -895,6 +904,18 @@ function readStringListByTrack(value: unknown): Record<string, string[]> {
     const normalized = normalizeTrack(track);
     if (!normalized) continue;
     byTrack[normalized] = readStringList(ids);
+  }
+  return byTrack;
+}
+
+function readNumberByTrack(value: unknown): Record<string, number> {
+  const source = readRecord(value);
+  const byTrack: Record<string, number> = {};
+  for (const [track, count] of Object.entries(source)) {
+    const normalized = normalizeTrack(track);
+    const number = readNumber(count);
+    if (!normalized || number == null) continue;
+    byTrack[normalized] = number;
   }
   return byTrack;
 }

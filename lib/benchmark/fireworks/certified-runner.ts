@@ -118,6 +118,9 @@ export async function runCertifiedFireworksTeamIq(
   }
 
   const allTeams = await expandFireworksCompositions(input);
+  for (const team of allTeams) {
+    await input.context.registerTeamCompositionId?.(team.id);
+  }
   const attempts: BenchmarkAttemptV2[] = [];
   for (const team of allTeams) {
     throwIfCertifiedRunAborted(input.signal);
@@ -182,6 +185,11 @@ async function runFireworksAttempt(
 ): Promise<BenchmarkAttemptV2> {
   const attemptId = `fireworks-teamiq:${input.context.runId}:${team.id}`;
   const caseId = input.context.caseIds[0] ?? "fireworks-teamiq-v0.1";
+  await input.context.registerAttemptOwner({
+    attemptId,
+    caseId,
+    teamCompositionId: team.id,
+  });
   const startedMs = Date.now();
   const calls: FireworksCallRecord[] = [];
   const failures: BenchmarkFailure[] = [];

@@ -152,6 +152,13 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
 }): Promise<BenchmarkAttemptV2> {
   const trialSuffix = input.trial === 0 ? "" : `:trial-${input.trial + 1}`;
   const plannedAttemptId = `gameiq-attempt:${input.context.runId}:${input.teamCompositionId}:${input.model.modelId}${trialSuffix}`;
+  const caseId =
+    input.context.caseIds[0] ?? "gameiq-v0.1-scenario-pack";
+  await input.context.registerAttemptOwner({
+    attemptId: plannedAttemptId,
+    caseId,
+    teamCompositionId: input.teamCompositionId,
+  });
   const calls: Array<{
     traceId: string;
     latencyMs: number;
@@ -165,7 +172,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
     modelId: input.model.modelId,
     teamCompositionId: input.teamCompositionId,
     scenarios: input.scenarios,
-    caseId: input.context.caseIds[0] ?? "gameiq-v0.1-scenario-pack",
+    caseId,
     startedAt: input.context.startedAt,
     harnessProfile: input.context.harnessProfile,
     concurrency: input.concurrency,

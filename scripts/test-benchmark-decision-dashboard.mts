@@ -341,6 +341,70 @@ check(
   readLeaderboard({ leaderboard: [row("legacy")] }, "all")[0]
 );
 
+const mixedFailureMetadata = withCertifiedDeleteMetadata(
+  withFailureInput as never,
+  [
+    {
+      ...failedBudgetAttempt,
+      id: "mixed-workbench-scored-failure",
+      status: "failed_budget",
+      startedAt: "2026-07-26T00:01:00.000Z",
+      failureIds: [],
+    },
+    {
+      ...failedBudgetAttempt,
+      id: "mixed-workbench-excluded-unlinked",
+      status: "provider_unavailable",
+      startedAt: "2026-07-26T00:00:00.000Z",
+      failureIds: [],
+    },
+    {
+      ...failedBudgetAttempt,
+      id: "mixed-workbench-newer-pass",
+      status: "passed",
+      startedAt: "2026-07-26T00:03:00.000Z",
+      failureIds: [],
+    },
+    {
+      ...failedBudgetAttempt,
+      id: "mixed-gameiq-failure",
+      track: "gameiq",
+      status: "failed_model",
+      startedAt: "2026-07-26T00:02:00.000Z",
+      failureIds: [],
+    },
+  ] as never,
+  [legacyTeam],
+  []
+);
+const mixedAllRow = readLeaderboard(
+  mixedFailureMetadata,
+  "all",
+  "overall"
+)[0] as DecisionRow & {
+  failedAttemptCount?: number | null;
+  failedAttemptCountByTrack?: Record<string, number>;
+};
+const mixedWorkBenchRow = readLeaderboard(
+  mixedFailureMetadata,
+  "workbench",
+  "overall"
+)[0] as DecisionRow & { failedAttemptCount?: number | null };
+const mixedGameIqRow = readLeaderboard(
+  mixedFailureMetadata,
+  "gameiq",
+  "overall"
+)[0] as DecisionRow & { failedAttemptCount?: number | null };
+check(
+  "persisted attempt statuses expose exact failures including older excluded unlinked history",
+  mixedAllRow?.failedAttemptCount === 3 &&
+    mixedAllRow.failedAttemptCountByTrack?.workbench === 2 &&
+    mixedAllRow.failedAttemptCountByTrack?.gameiq === 1 &&
+    mixedWorkBenchRow?.failedAttemptCount === 2 &&
+    mixedGameIqRow?.failedAttemptCount === 1,
+  { mixedAllRow, mixedWorkBenchRow, mixedGameIqRow }
+);
+
 const disjointSoloA = {
   ...legacyTeam,
   id: "disjoint-solo-a",
