@@ -7,6 +7,7 @@ import {
 } from "../components/benchmark/certified/CertifiedRunPanel";
 import { ModelChecklist } from "../components/benchmark/run/ModelChecklist";
 import { TeamCompositionBuilder } from "../components/benchmark/teamiq/TeamCompositionBuilder";
+import { ReasoningControl } from "../components/ReasoningControl";
 import type { SelectedModel } from "../lib/providers/base";
 
 const models: SelectedModel[] = [
@@ -25,6 +26,15 @@ const effortByModelId = {
   "openai:gpt-5.6-terra": "xhigh" as const,
   "custom:plain-chat": "high" as const,
 };
+
+const reasoningControlMarkup = renderToStaticMarkup(
+  <ReasoningControl value="default" onChange={() => undefined} />
+);
+assert.match(
+  reasoningControlMarkup,
+  /grid-cols-2[^"]*sm:grid-cols-3[^"]*lg:grid-cols-4[^"]*xl:grid-cols-7/,
+  "the seven effort choices should reflow without a six-column orphan"
+);
 
 const checklistMarkup = renderToStaticMarkup(
   <ModelChecklist

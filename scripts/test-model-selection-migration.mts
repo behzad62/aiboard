@@ -197,4 +197,23 @@ assert.equal(
   "version-2 effort configuration must round-trip without losing effort"
 );
 
+for (const effortByModelId of [
+  { "openai:gpt-5.6": "low", "openai:gpt-5.6-terra": "xhigh" },
+  { "openai:gpt-5.6-terra": "xhigh", "openai:gpt-5.6": "low" },
+]) {
+  storage.set(checklistKey, JSON.stringify({
+    version: 2,
+    selectedModelIds: [
+      "openai:gpt-5.6",
+      "openai:gpt-5.6-terra",
+      "openai:gpt-5.6",
+    ],
+    effortByModelId,
+  }));
+  assert.deepEqual(readPersistedModelChecklistConfig(), {
+    selectedModelIds: ["openai:gpt-5.6-terra"],
+    effortByModelId: { "openai:gpt-5.6-terra": "xhigh" },
+  }, "canonical checklist values must win over aliases regardless of JSON key order");
+}
+
 console.log("model selection migration: PASS");

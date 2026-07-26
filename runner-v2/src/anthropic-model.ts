@@ -16,12 +16,14 @@ import {
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
+import { anthropicReasoningFields } from "./reasoning-effort.js";
 
 export interface AnthropicModelOptions {
   baseUrl?: string;
   apiKey: string;
   modelId: string;
   maxTokens?: number;
+  reasoningEffort?: string;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -60,6 +62,11 @@ export class AnthropicModel implements AgentModel {
     const body = JSON.stringify({
       model: this.options.modelId,
       max_tokens: this.options.maxTokens ?? 16_384,
+      ...anthropicReasoningFields(
+        this.options.modelId,
+        this.options.reasoningEffort,
+        this.options.maxTokens ?? 16_384
+      ),
       cache_control: { type: "ephemeral" },
       ...(system ? { system } : {}),
       messages: request.messages

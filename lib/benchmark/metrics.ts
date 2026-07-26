@@ -429,7 +429,8 @@ export function buildCertifiedBenchmarkDashboardData(
   // the full scoredAttempts so per-track counts stay intact.
   const mergedSummaryAttempts = dedupeCrossTrackAttempts(
     scoredAttempts,
-    input.caseV2
+    input.caseV2,
+    input.teamCompositions
   );
 
   return {
@@ -1112,7 +1113,7 @@ export function buildModelIntelligenceRows(
       isScoredCertifiedAttempt(attempt) &&
       isSoloTeamComposition(teamById.get(attempt.teamCompositionId))
   );
-  const deduped = dedupeCrossTrackAttempts(soloScored, cases);
+  const deduped = dedupeCrossTrackAttempts(soloScored, cases, teams);
 
   interface TrackAcc {
     attempts: number;

@@ -32,7 +32,10 @@ import {
   type WorkBenchRoleBoards as WorkBenchRoleBoardsData,
   type WorkBenchRoleRow,
 } from "@/lib/benchmark/certified/dashboard-selectors";
-import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
+import {
+  benchmarkVariantLabel,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 import type { ReasoningEffort } from "@/lib/db/schema";
 
 export const TRACK_LABELS: Record<CertifiedTrackView, string> = {
@@ -167,7 +170,18 @@ export function CertifiedLeaderboard({
                         {row.detail}
                       </div>
                     )}
-                    <RosterChips roles={rosterByTeamId?.get(row.teamCompositionId)} />
+                    <RosterChips
+                      roles={
+                        rosterByTeamId?.get(row.teamCompositionId) ??
+                        row.reasoningEffortDetails?.map((detail) => ({
+                          role: detail.role,
+                          displayName: detail.displayName,
+                          reasoningEffort: normalizeBenchmarkReasoningEffort(
+                            detail.effort
+                          ),
+                        }))
+                      }
+                    />
                   </td>
                   <td className="px-3 py-3 align-top">
                     <div>{formatTrackLabel(row.tracks)}</div>

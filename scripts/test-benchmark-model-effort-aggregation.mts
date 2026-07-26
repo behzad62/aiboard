@@ -76,15 +76,17 @@ function attempt(
 const low = solo("solo-low", "low");
 const high = solo("solo-high", "high");
 const legacy = solo("solo-legacy");
+const explicitDefault = solo("solo-explicit-default", "default");
 const attempts = [
   attempt("low", low.id, 0.4),
   attempt("high", high.id, 0.9),
   attempt("legacy", legacy.id, 0.6),
+  attempt("explicit-default", explicitDefault.id, 0.8),
 ];
 
 const aggregateRows = aggregateCertifiedRunScores({
   attempts,
-  teamCompositions: [low, high, legacy],
+  teamCompositions: [low, high, legacy, explicitDefault],
 });
 assert.equal(aggregateRows.length, 3);
 assert.deepEqual(
@@ -98,6 +100,33 @@ assert.deepEqual(
 assert.deepEqual(
   aggregateRows.map((row) => row.modelVariantKeys[0]).sort(),
   ["openai:model\u0000default", "openai:model\u0000high", "openai:model\u0000low"]
+);
+const defaultAggregate = aggregateRows.find(
+  (row) => row.modelVariantKeys[0] === "openai:model\u0000default"
+);
+assert.equal(defaultAggregate?.attempts, 2);
+assert.deepEqual(
+  defaultAggregate?.teamCompositionIds,
+  ["solo-explicit-default", "solo-legacy"]
+);
+const defaultTeam: BenchmarkTeamComposition = {
+  id: "team-default",
+  name: "Default effort team",
+  comboHash: "team-default",
+  strategy: "parallel",
+  roles: [
+    { ...explicitDefault.roles[0], role: "architect", slot: "architect" },
+    { ...explicitDefault.roles[0], role: "worker", slot: "worker" },
+  ],
+};
+const defaultLiftRows = aggregateCertifiedRunScores({
+  attempts: [...attempts, attempt("team-default", defaultTeam.id, 0.9)],
+  teamCompositions: [low, high, legacy, explicitDefault, defaultTeam],
+});
+assert.equal(
+  defaultLiftRows.find((row) => row.teamCompositionId === defaultTeam.id)
+    ?.teamLift,
+  20
 );
 
 const highTeam: BenchmarkTeamComposition = {
@@ -140,7 +169,7 @@ assert.equal(
 
 const intelligenceRows = buildModelIntelligenceRows({
   attempts,
-  teamCompositions: [low, high, legacy],
+  teamCompositions: [low, high, legacy, explicitDefault],
 });
 assert.equal(intelligenceRows.length, 3);
 assert.deepEqual(

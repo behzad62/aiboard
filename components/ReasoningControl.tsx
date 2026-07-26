@@ -22,7 +22,7 @@ export function ReasoningControl({ value, onChange }: ReasoningControlProps) {
   return (
     <div className="space-y-2">
       <Label>Reasoning effort</Label>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {options.map((option) => {
           const selected = option.value === value;
           return (

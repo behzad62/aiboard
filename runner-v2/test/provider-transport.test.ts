@@ -1130,6 +1130,165 @@ test("native Build factory instantiates every provider-neutral transport", () =>
   }) instanceof GoogleModel);
 });
 
+test("factory-created direct transports preserve canonical reasoning effort in provider-native bodies", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    captured.push({
+      url,
+      body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+    });
+    if (url.includes(":generateContent")) {
+      return Response.json({ candidates: [] });
+    }
+    if (url.endsWith("/v1/messages")) {
+      return Response.json({ content: [] });
+    }
+    if (url.endsWith("/responses")) {
+      return Response.json({ output: [] });
+    }
+    return Response.json({ choices: [{ message: {} }] });
+  };
+
+  const complete = async (
+    config: Parameters<typeof createProviderModel>[0]
+  ): Promise<{ url: string; body: Record<string, unknown> }> => {
+    captured.length = 0;
+    await createProviderModel(config).complete({
+      sessionId: `reasoning-${config.runtimeId}`,
+      messages: [],
+      tools: [],
+    });
+    assert.equal(captured.length, 1);
+    return captured[0];
+  };
+  const common = {
+    secret: "secret",
+    capabilities: ["*"],
+    priority: 1,
+  };
+
+  try {
+    const openAiResponses = await complete({
+      ...common,
+      runtimeId: "openai:gpt-5.6",
+      providerId: "openai",
+      modelId: "gpt-5.6",
+      transport: "openai-compatible",
+      baseUrl: "https://openai.example/v1",
+      protocol: "responses",
+      reasoningEffort: "max",
+    });
+    assert.equal(openAiResponses.url, "https://openai.example/v1/responses");
+    assert.deepEqual(openAiResponses.body.reasoning, { effort: "max" });
+
+    const openAiCeiling = await complete({
+      ...common,
+      runtimeId: "openai:gpt-5.5",
+      providerId: "openai",
+      modelId: "gpt-5.5",
+      transport: "openai-compatible",
+      baseUrl: "https://openai.example/v1",
+      reasoningEffort: "max",
+    });
+    assert.equal(openAiCeiling.body.reasoning_effort, "xhigh");
+
+    const openRouterKimi = await complete({
+      ...common,
+      runtimeId: "openrouter:moonshotai/kimi-k3",
+      providerId: "openrouter",
+      modelId: "moonshotai/kimi-k3",
+      transport: "openai-compatible",
+      baseUrl: "https://openrouter.example/api/v1",
+      reasoningEffort: "low",
+    });
+    assert.equal(openRouterKimi.body.reasoning_effort, "max");
+
+    const xai = await complete({
+      ...common,
+      runtimeId: "xai:grok-4",
+      providerId: "xai",
+      modelId: "grok-4",
+      transport: "openai-compatible",
+      baseUrl: "https://xai.example/v1",
+      reasoningEffort: "xhigh",
+    });
+    assert.equal(xai.url, "https://xai.example/v1/responses");
+    assert.deepEqual(xai.body.reasoning, { effort: "high" });
+
+    const xaiUnsupported = await complete({
+      ...common,
+      runtimeId: "xai:grok-non-reasoning",
+      providerId: "xai",
+      modelId: "grok-non-reasoning",
+      transport: "openai-compatible",
+      baseUrl: "https://xai.example/v1",
+      reasoningEffort: "high",
+    });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(xaiUnsupported.body, "reasoning"),
+      false
+    );
+
+    const anthropicCeiling = await complete({
+      ...common,
+      runtimeId: "anthropic:claude-opus-4-5",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-5",
+      transport: "anthropic",
+      reasoningEffort: "xhigh",
+    });
+    assert.deepEqual(anthropicCeiling.body.output_config, { effort: "high" });
+    assert.equal(
+      (anthropicCeiling.body.thinking as { type?: string } | undefined)?.type,
+      "enabled"
+    );
+
+    const foundry = await complete({
+      ...common,
+      runtimeId: "foundry:claude-opus-5",
+      providerId: "foundry",
+      modelId: "claude-opus-5",
+      transport: "anthropic",
+      baseUrl: "https://foundry.example",
+      reasoningEffort: "max",
+    });
+    assert.deepEqual(foundry.body.output_config, { effort: "max" });
+    assert.deepEqual(foundry.body.thinking, { type: "adaptive" });
+
+    const anthropicUnsupported = await complete({
+      ...common,
+      runtimeId: "anthropic:claude-haiku-4-5",
+      providerId: "anthropic",
+      modelId: "claude-haiku-4-5",
+      transport: "anthropic",
+      reasoningEffort: "high",
+    });
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        anthropicUnsupported.body,
+        "output_config"
+      ),
+      false
+    );
+
+    const googleCeiling = await complete({
+      ...common,
+      runtimeId: "google:gemini-3.6-flash",
+      providerId: "google",
+      modelId: "gemini-3.6-flash",
+      transport: "google",
+      reasoningEffort: "xhigh",
+    });
+    assert.deepEqual(googleCeiling.body.generationConfig, {
+      thinkingConfig: { thinkingLevel: "HIGH" },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function toolResult(callId: string, hash: string): ToolResult {
   return {
     callId,

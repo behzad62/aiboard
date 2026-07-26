@@ -14,7 +14,10 @@ import type {
 } from "@/lib/benchmark/types";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
-import type { ReasoningEffort } from "@/lib/db/schema";
+import {
+  benchmarkVariantKey,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 import {
   buildStatefulTurnPrompt,
   createStatefulEnv,
@@ -77,14 +80,6 @@ const TEAMIQ_PROMPT_SET_VERSION = "teamiq-toolreliability-prompts-v0.1";
 // ("teamiq-toolreliability-v2" in CertifiedRunPanel's caseForSelection) so the
 // attempt's VERSIONS stamp and its case record agree.
 const TEAMIQ_SCORING_VERSION = "teamiq-toolreliability-v2";
-const CERTIFIED_REASONING_EFFORTS = new Set<ReasoningEffort>([
-  "default",
-  "low",
-  "medium",
-  "high",
-  "max",
-]);
-
 export async function runCertifiedTeamIq(
   input: RunCertifiedTeamIqInput
 ): Promise<BenchmarkAttemptV2[]> {
@@ -137,10 +132,11 @@ async function expandTeamIqCompositions(
   const teams = [...input.teamCompositions];
   if (!input.includeSoloBaselines) return teams;
 
-  const byModelId = new Map<string, BenchmarkTeamComposition>();
+  const byVariant = new Map<string, BenchmarkTeamComposition>();
   for (const team of input.teamCompositions) {
     for (const role of team.roles) {
-      if (byModelId.has(role.modelId)) continue;
+      const variantKey = benchmarkVariantKey(role.modelId, role.reasoningEffort);
+      if (byVariant.has(variantKey)) continue;
       const solo = deriveSoloTeamComposition({
         modelId: role.modelId,
         providerId: role.providerId,
@@ -149,11 +145,11 @@ async function expandTeamIqCompositions(
         temperature: role.temperature,
         maxTokens: role.maxTokens,
       });
-      byModelId.set(role.modelId, solo);
+      byVariant.set(variantKey, solo);
     }
   }
 
-  const solos = Array.from(byModelId.values());
+  const solos = Array.from(byVariant.values());
   for (const solo of solos) {
     await saveBenchmarkTeamComposition(solo);
   }
@@ -344,10 +340,8 @@ function selectedModelForRole(role: BenchmarkTeamCompositionRole): SelectedModel
 
 function certifiedReasoningEffort(
   value: BenchmarkTeamCompositionRole["reasoningEffort"]
-): ReasoningEffort | undefined {
-  return CERTIFIED_REASONING_EFFORTS.has(value as ReasoningEffort)
-    ? (value as ReasoningEffort)
-    : undefined;
+) {
+  return normalizeBenchmarkReasoningEffort(value);
 }
 
 function teamIqStatefulTurnPrompt(input: {

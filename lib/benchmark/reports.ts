@@ -23,6 +23,7 @@ import {
   benchmarkVariantLabel,
   normalizeBenchmarkReasoningEffort,
 } from "@/lib/benchmark/model-effort";
+import { canonicalTeamCompositionKey } from "@/lib/benchmark/teamiq/compositions";
 
 export function formatBenchmarkMarkdownReport(
   bundle: BenchmarkReportBundleV2,
@@ -220,7 +221,9 @@ function appendTopCertifiedTeams(
   certifiedAttempts: BenchmarkAttemptV2[]
 ): void {
   const teamsById = new Map(bundle.teamCompositions.map((team) => [team.id, team]));
-  const rows = Array.from(groupAttemptsByTeam(certifiedAttempts).entries())
+  const rows = Array.from(
+    groupAttemptsByTeam(certifiedAttempts, bundle.teamCompositions).entries()
+  )
     .map(([teamId, attempts]) => {
       const team = teamsById.get(teamId);
       const quality = average(
@@ -591,14 +594,31 @@ function isCertifiedAttemptComplete(status: string): boolean {
 }
 
 function groupAttemptsByTeam(
-  attempts: BenchmarkAttemptV2[]
+  attempts: BenchmarkAttemptV2[],
+  teams: BenchmarkTeamComposition[]
 ): Map<string, BenchmarkAttemptV2[]> {
-  const rows = new Map<string, BenchmarkAttemptV2[]>();
+  const teamById = new Map(teams.map((team) => [team.id, team]));
+  const groups = new Map<
+    string,
+    { primaryTeamId: string; attempts: BenchmarkAttemptV2[] }
+  >();
   for (const attempt of attempts) {
-    const key = attempt.teamCompositionId || "unknown";
-    rows.set(key, [...(rows.get(key) ?? []), attempt]);
+    const persistedId = attempt.teamCompositionId || "unknown";
+    const team = teamById.get(persistedId);
+    const key = team ? canonicalTeamCompositionKey(team) : persistedId;
+    const group = groups.get(key) ?? {
+      primaryTeamId: persistedId,
+      attempts: [],
+    };
+    group.attempts.push(attempt);
+    groups.set(key, group);
   }
-  return rows;
+  return new Map(
+    Array.from(groups.values()).map((group) => [
+      group.primaryTeamId,
+      group.attempts,
+    ])
+  );
 }
 
 function groupAttemptsByModel(

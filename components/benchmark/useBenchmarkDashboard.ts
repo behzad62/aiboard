@@ -257,9 +257,17 @@ export function withCertifiedDeleteMetadata(
   return {
     ...dashboard,
     leaderboard: dashboard.leaderboard.map((row) => {
-      const teamAttempts = attemptsByTeam.get(row.teamCompositionId) ?? [];
+      const representedTeamIds =
+        row.teamCompositionIds?.length
+          ? row.teamCompositionIds
+          : [row.teamCompositionId];
+      const teamAttempts = representedTeamIds.flatMap(
+        (teamId) => attemptsByTeam.get(teamId) ?? []
+      );
       const latest = newestAttempt(teamAttempts);
-      const team = teamById.get(row.teamCompositionId);
+      const team = representedTeamIds
+        .map((teamId) => teamById.get(teamId))
+        .find((candidate) => candidate !== undefined);
       return {
         ...row,
         latestAttemptId: latest?.id,

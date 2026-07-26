@@ -21,11 +21,14 @@ import type {
 import { linkTeamLiftBaselines } from "@/lib/benchmark/teamiq/baselines";
 import {
   deriveSoloTeamComposition,
-  getTeamCompositionModelIds,
+  isSoloTeamComposition,
 } from "@/lib/benchmark/teamiq/compositions";
 import type { ModelPricing } from "@/lib/providers/pricing";
-import type { ReasoningEffort } from "@/lib/db/schema";
 import type { SelectedModel } from "@/lib/providers/base";
+import {
+  benchmarkVariantKey,
+  normalizeBenchmarkReasoningEffort,
+} from "@/lib/benchmark/model-effort";
 import {
   applyFireworksAction,
   createFireworksGame,
@@ -107,14 +110,6 @@ interface FireworksCaseRunResult {
 const FIREWORKS_HARNESS_VERSION = "fireworks-teamiq-runner-v0.1";
 const FIREWORKS_PROMPT_SET_VERSION = "fireworks-action-prompts-v0.1";
 const FIREWORKS_SCORING_VERSION = "fireworks-teamiq-v0.1";
-const CERTIFIED_REASONING_EFFORTS = new Set<ReasoningEffort>([
-  "default",
-  "low",
-  "medium",
-  "high",
-  "max",
-]);
-
 export async function runCertifiedFireworksTeamIq(
   input: RunCertifiedFireworksTeamIqInput
 ): Promise<BenchmarkAttemptV2[]> {
@@ -157,10 +152,11 @@ async function expandFireworksCompositions(
   const teams = [...input.teamCompositions];
   if (!input.includeSoloBaselines) return teams;
 
-  const byModelId = new Map<string, BenchmarkTeamComposition>();
+  const byVariant = new Map<string, BenchmarkTeamComposition>();
   for (const team of input.teamCompositions) {
     for (const role of team.roles) {
-      if (byModelId.has(role.modelId)) continue;
+      const variantKey = benchmarkVariantKey(role.modelId, role.reasoningEffort);
+      if (byVariant.has(variantKey)) continue;
       const solo = deriveSoloTeamComposition({
         modelId: role.modelId,
         providerId: role.providerId,
@@ -169,11 +165,11 @@ async function expandFireworksCompositions(
         temperature: role.temperature,
         maxTokens: role.maxTokens,
       });
-      byModelId.set(role.modelId, solo);
+      byVariant.set(variantKey, solo);
     }
   }
 
-  const solos = Array.from(byModelId.values());
+  const solos = Array.from(byVariant.values());
   for (const solo of solos) {
     await saveBenchmarkTeamComposition(solo);
   }
@@ -916,10 +912,8 @@ function selectedModelForRole(role: BenchmarkTeamCompositionRole): SelectedModel
 
 function certifiedReasoningEffort(
   value: BenchmarkTeamCompositionRole["reasoningEffort"]
-): ReasoningEffort | undefined {
-  return CERTIFIED_REASONING_EFFORTS.has(value as ReasoningEffort)
-    ? (value as ReasoningEffort)
-    : undefined;
+) {
+  return normalizeBenchmarkReasoningEffort(value);
 }
 
 function createFireworksFailure(input: {
@@ -1016,5 +1010,5 @@ function isSoloComposition(
   teamCompositionId: string
 ): boolean {
   const team = teams.find((candidate) => candidate.id === teamCompositionId);
-  return getTeamCompositionModelIds(team).length === 1;
+  return isSoloTeamComposition(team);
 }

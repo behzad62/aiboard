@@ -153,6 +153,7 @@ function buildDetail(input: {
   assertionResults?: BenchmarkVerifierResult["assertionResults"];
   traces?: BenchmarkModelCallTrace[];
   toolCalls?: BenchmarkToolCallTrace[];
+  teamReasoningEffort?: "xhigh";
 }): AttemptDetailViewModel | null {
   const attempt: BenchmarkAttemptV2 = {
     id: `attempt-${input.status}`,
@@ -216,7 +217,25 @@ function buildDetail(input: {
     },
     cases: [],
     attempts: [attempt],
-    teams: [],
+    teams: input.teamReasoningEffort
+      ? [{
+          id: "team-viewmodel",
+          name: "Opus team",
+          strategy: "panel",
+          roles: [{
+            role: "reviewer",
+            slot: "reviewer",
+            modelId: "foundry:claude-opus-4-5",
+            providerId: "foundry",
+            displayName: "Claude Opus",
+            reasoningEffort: input.teamReasoningEffort,
+            temperature: 0,
+          }],
+          compositionHash: "team-viewmodel",
+          createdAt: attempt.startedAt,
+          updatedAt: attempt.startedAt,
+        }]
+      : [],
     verifiers: [verifier],
     traces: input.traces ?? [],
     runEvents: [],
@@ -258,6 +277,7 @@ check(
 
 const traceDetail = buildDetail({
   status: "failed_model",
+  teamReasoningEffort: "xhigh",
   traces: [
     {
       id: "trace-json-001",
@@ -267,6 +287,7 @@ const traceDetail = buildDetail({
       modelId: "foundry:claude-opus-4-5",
       providerId: "foundry",
       participantId: "team-opus",
+      reasoningEffort: "xhigh",
       schemaMode: "structured",
       startedAt: "2026-06-30T08:00:00.000Z",
       completedAt: "2026-06-30T08:00:01.000Z",
@@ -284,6 +305,36 @@ check(
     traceDetail.modelTraceRows[0].rawResponsePreview.includes("\"decision\"") &&
     traceDetail.modelTraceRows[0].schemaMode === "structured",
   traceDetail?.modelTraceRows
+);
+check(
+  "attempt detail normalizes role and trace effort into canonical display metadata",
+  traceDetail?.teamRoleDetails?.[0]?.effort === "xhigh" &&
+    traceDetail.modelTraceRows[0]?.label.includes("Extra high") &&
+    traceDetail.modelTraceRows[0]?.reasoningEffort === "xhigh",
+  { teamRoleDetails: traceDetail?.teamRoleDetails, modelTraceRows: traceDetail?.modelTraceRows }
+);
+
+const legacyTraceDetail = buildDetail({
+  status: "failed_model",
+  traces: [{
+    id: "trace-legacy-default",
+    runId: "run-failed_model",
+    caseId: "case-viewmodel",
+    attemptId: "attempt-failed_model",
+    modelId: "openai:gpt-legacy",
+    providerId: "openai",
+    startedAt: "2026-06-30T08:00:00.000Z",
+    completedAt: "2026-06-30T08:00:01.000Z",
+    error: "provider failed",
+    retryHistory: [],
+  }],
+});
+check(
+  "attempt detail labels missing legacy effort as Default and retains trace failures",
+  legacyTraceDetail?.modelTraceRows[0]?.label.includes("Default") === true &&
+    legacyTraceDetail.modelTraceRows[0]?.reasoningEffort === "default" &&
+    legacyTraceDetail.modelTraceRows[0]?.error === "provider failed",
+  legacyTraceDetail?.modelTraceRows
 );
 
 const toolReliabilityDiagnosticsJson = JSON.stringify({

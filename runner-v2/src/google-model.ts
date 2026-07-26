@@ -15,11 +15,13 @@ import {
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
+import { geminiThinkingConfig } from "./reasoning-effort.js";
 
 export interface GoogleModelOptions {
   baseUrl?: string;
   apiKey: string;
   modelId: string;
+  reasoningEffort?: string;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -58,7 +60,18 @@ export class GoogleModel implements AgentModel {
       this.options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta",
       `models/${encodeURIComponent(this.options.modelId)}:generateContent`
     );
+    const thinkingConfig = geminiThinkingConfig(
+      this.options.modelId,
+      this.options.reasoningEffort
+    );
     const body = JSON.stringify({
+      ...(thinkingConfig
+        ? {
+            generationConfig: {
+              thinkingConfig,
+            },
+          }
+        : {}),
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
       contents: request.messages
         .filter((message) => message.role !== "system")

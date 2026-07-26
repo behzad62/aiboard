@@ -72,6 +72,13 @@ const team: BenchmarkTeamComposition = {
   ],
 };
 
+const explicitDefaultTeam: BenchmarkTeamComposition = {
+  ...team,
+  id: "solo-gpt-explicit-default",
+  comboHash: "solo:gpt:explicit-default",
+  roles: [{ ...team.roles[0], reasoningEffort: "default" }],
+};
+
 const verifier: BenchmarkVerifierResult = {
   id: "verifier-tool-1",
   attemptId: "attempt-tool-1",
@@ -144,6 +151,7 @@ const failedAttemptWithPartialQuality: BenchmarkAttemptV2 = {
   ...attempt,
   id: "attempt-tool-failed",
   runId: "run-tool-2",
+  teamCompositionId: explicitDefaultTeam.id,
   status: "failed_verifier",
   verifiedQuality: 0.5,
   jobSuccessScore: 50,
@@ -196,7 +204,7 @@ const bundle: BenchmarkReportBundleV2 = {
   verifierResults: [verifier, publishVerifier],
   runEvents: [],
   toolCallTraces: [],
-  teamCompositions: [team],
+  teamCompositions: [team, explicitDefaultTeam],
   harnessCertifications: [],
   bundleHash: "test-hash",
   redactionSummary: {

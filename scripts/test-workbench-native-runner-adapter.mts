@@ -101,6 +101,7 @@ const traces = mapNativeUsageToBenchmarkTraces({
   runId: "run_1",
   caseId: "case_1",
   usage,
+  effortByRuntimeId: { "chatgpt:gpt-5.4-mini": "xhigh" },
 });
 assert.equal(traces.length, 1);
 assert.deepEqual(traces[0], {
@@ -122,6 +123,7 @@ assert.deepEqual(traces[0], {
   providerCostUnit: "usd",
   estimatedUsd: 0.0025,
   retryHistory: [],
+  reasoningEffort: "xhigh",
 });
 
 const tools = mapNativeToolsToBenchmarkTraces({
@@ -209,6 +211,16 @@ const result = await runNativeWorkBenchBuild(
       },
     },
     models: [{ modelId: "chatgpt:gpt-5.4-mini", providerId: "chatgpt", displayName: "GPT" }],
+    teamComposition: {
+      roles: [{
+        role: "worker",
+        slot: "worker",
+        modelId: "chatgpt:gpt-5.4-mini",
+        providerId: "chatgpt",
+        displayName: "GPT",
+        reasoningEffort: "xhigh",
+      }],
+    },
     context: {
       recordTrace: async (trace: unknown) => { recordedTraces.push(trace); },
       recordToolCall: async (trace: unknown) => { recordedTools.push(trace); },
@@ -322,6 +334,7 @@ assert.equal(result.modelCalls, 1);
 assert.equal(result.toolCalls, 2);
 assert.equal(result.validToolCalls, 1);
 assert.equal(recordedTraces.length, 1);
+assert.equal((recordedTraces[0] as { reasoningEffort?: unknown }).reasoningEffort, "xhigh");
 assert.equal(recordedTools.length, 2);
 assert.equal(recordedArtifacts.length, 1);
 
@@ -348,6 +361,16 @@ try {
         budget: { maxModelCalls: 10, maxInputTokens: 10_000 },
       },
       models: [{ modelId: "chatgpt:gpt-5.4-mini", providerId: "chatgpt", displayName: "GPT" }],
+      teamComposition: {
+        roles: [{
+          role: "worker",
+          slot: "worker",
+          modelId: "chatgpt:gpt-5.4-mini",
+          providerId: "chatgpt",
+          displayName: "GPT",
+          reasoningEffort: "xhigh",
+        }],
+      },
       context: {
         recordTrace: async (trace: unknown) => {
           failureTraces.push(trace);
@@ -417,6 +440,7 @@ assert.deepEqual(failureCalls, [
   "stop-child",
 ]);
 assert.equal(failureTraces.length, 1);
+assert.equal((failureTraces[0] as { reasoningEffort?: unknown }).reasoningEffort, "xhigh");
 assert.equal(failureTools.length, 2);
 assert.equal(failureArtifacts.length, 1);
 

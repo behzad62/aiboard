@@ -15,11 +15,14 @@ import {
   serializedInputUsage,
   toolResultText,
 } from "./provider-model-utils.js";
+import { openAICompatibleReasoningFields } from "./reasoning-effort.js";
 
 export interface OpenAICompatibleModelOptions {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  providerId?: string;
+  reasoningEffort?: string;
   protocol?: "chat-completions" | "responses";
   promptCaching?: boolean;
   fetch?: typeof globalThis.fetch;
@@ -81,6 +84,12 @@ export class OpenAICompatibleModel implements AgentModel {
     }
     const body = JSON.stringify({
       model: this.options.modelId,
+      ...openAICompatibleReasoningFields({
+        providerId: this.options.providerId ?? "openai-compatible",
+        modelId: this.options.modelId,
+        protocol: "chat-completions",
+        effort: this.options.reasoningEffort,
+      }),
       ...(this.options.promptCaching
         ? {
             prompt_cache_key: request.sessionId,
@@ -145,6 +154,12 @@ export class OpenAICompatibleModel implements AgentModel {
   ): Promise<ModelTurn> {
     const body = JSON.stringify({
       model: this.options.modelId,
+      ...openAICompatibleReasoningFields({
+        providerId: this.options.providerId ?? "openai-compatible",
+        modelId: this.options.modelId,
+        protocol: "responses",
+        effort: this.options.reasoningEffort,
+      }),
       ...(this.options.promptCaching
         ? {
             prompt_cache_key: request.sessionId,

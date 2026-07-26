@@ -10,6 +10,7 @@ import {
 } from "@/lib/benchmark/model-effort";
 import type { CertifiedAggregateInput, CertifiedRunScore } from "./types";
 import { finiteOrNull, round } from "./types";
+import { canonicalTeamCompositionKey } from "@/lib/benchmark/teamiq/compositions";
 
 const MIN_CONFIDENT_ATTEMPTS = 3;
 
@@ -81,9 +82,13 @@ function underlyingDecisionId(
  */
 export function dedupeCrossTrackAttempts(
   attempts: BenchmarkAttemptV2[],
-  cases: BenchmarkCaseV2[] = []
+  cases: BenchmarkCaseV2[] = [],
+  teams: BenchmarkTeamComposition[] = []
 ): BenchmarkAttemptV2[] {
   const caseById = new Map(cases.map((item) => [item.id, item]));
+  const teamIdentityById = new Map(
+    teams.map((team) => [team.id, canonicalTeamCompositionKey(team)])
+  );
   const passthrough: BenchmarkAttemptV2[] = [];
   // key -> attempts grouped by (team, decision), tracking which track wins.
   const groups = new Map<
@@ -97,7 +102,8 @@ export function dedupeCrossTrackAttempts(
       passthrough.push(attempt);
       continue;
     }
-    const teamId = attempt.teamCompositionId ?? "unknown";
+    const persistedTeamId = attempt.teamCompositionId ?? "unknown";
+    const teamId = teamIdentityById.get(persistedTeamId) ?? persistedTeamId;
     const key = `${teamId}::${decisionId}`;
     const group = groups.get(key);
     if (!group) {
@@ -162,6 +168,7 @@ type TeamLike = BenchmarkTeamComposition & {
 interface MutableCertifiedRunScore {
   id: string;
   teamCompositionId: string;
+  teamCompositionIds: Set<string>;
   teamName: string;
   comboHash: string;
   displayName: string;
@@ -209,15 +216,24 @@ export function aggregateCertifiedRunScores(
   const cases = Array.isArray(input) ? [] : input.cases ?? [];
   // Leaderboard rows MERGE all tracks for a team into one row, so the same
   // underlying decision reached via two tracks must be counted once.
-  const attempts = dedupeCrossTrackAttempts(rawAttempts, cases);
+  const attempts = dedupeCrossTrackAttempts(rawAttempts, cases, teams);
   const teamById = new Map(teams.map((team) => [team.id, team as TeamLike]));
+  const teamIdentityById = new Map(
+    teams.map((team) => [team.id, canonicalTeamCompositionKey(team)])
+  );
   const caseById = new Map(cases.map((item) => [item.id, item]));
   const groups = new Map<string, MutableCertifiedRunScore>();
 
   for (const attempt of attempts as AttemptLike[]) {
     const teamId = attempt.teamCompositionId ?? "unknown";
     const team = teamById.get(teamId);
-    const group = groupFor(groups, teamId, team);
+    const group = groupFor(
+      groups,
+      teamIdentityById.get(teamId) ?? teamId,
+      teamId,
+      team
+    );
+    group.teamCompositionIds.add(teamId);
     const verifiedQuality = readScore(attempt.verifiedQuality, 0, 1);
     const jobSuccessScore = readScore(
       attempt.jobSuccessScore,
@@ -406,10 +422,11 @@ export function rankByToolReliability<T extends Partial<CertifiedRunScore>>(
 
 function groupFor(
   groups: Map<string, MutableCertifiedRunScore>,
+  groupKey: string,
   teamId: string,
   team: TeamLike | undefined
 ): MutableCertifiedRunScore {
-  const existing = groups.get(teamId);
+  const existing = groups.get(groupKey);
   if (existing) return existing;
 
   const roles = team?.roles ?? [];
@@ -434,6 +451,7 @@ function groupFor(
   const created: MutableCertifiedRunScore = {
     id: team?.comboHash ?? teamId,
     teamCompositionId: teamId,
+    teamCompositionIds: new Set([teamId]),
     teamName: isTeam ? (team?.name ?? displayName) : displayName,
     comboHash: team?.comboHash ?? teamId,
     displayName,
@@ -460,7 +478,7 @@ function groupFor(
     outputTokens: 0,
     tokenSamples: 0,
   };
-  groups.set(teamId, created);
+  groups.set(groupKey, created);
   return created;
 }
 
@@ -515,6 +533,7 @@ function finalizeGroup(
   return {
     id: group.id,
     teamCompositionId: group.teamCompositionId,
+    teamCompositionIds: Array.from(group.teamCompositionIds).sort(),
     teamName: group.teamName,
     comboHash: group.comboHash,
     displayName: group.displayName,

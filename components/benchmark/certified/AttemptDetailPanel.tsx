@@ -17,6 +17,7 @@ import {
 import { FireworksBenchmarkSummary } from "@/components/benchmark/fireworks/FireworksBenchmarkSummary";
 import { formatNormalizedScore } from "@/components/benchmark/format";
 import { VerifierAssertionTable } from "./VerifierAssertionTable";
+import { VariantRosterBadges } from "@/components/benchmark/results/VariantRosterBadges";
 
 export function AttemptDetailPanel({
   summary,
@@ -93,6 +94,7 @@ export function AttemptDetailPanel({
 
         <Section title="Team composition">
           <p className="font-medium">{team?.name ?? attempt.teamCompositionId}</p>
+          <VariantRosterBadges details={detail.teamRoleDetails} />
           <div className="mt-2 grid gap-2">
             {(team?.roles ?? []).map((role) => (
               <div key={`${role.slot}:${role.modelId}`} className="rounded-md border px-3 py-2">
@@ -103,6 +105,36 @@ export function AttemptDetailPanel({
               </div>
             ))}
           </div>
+        </Section>
+
+        <Section title="Model calls">
+          <TraceList
+            title="Model calls"
+            rows={detail.modelTraceRows.map((trace) => ({
+              id: trace.id,
+              label: trace.label,
+              meta: [
+                trace.meta,
+                trace.caseId,
+                trace.schemaMode,
+                trace.error ? `Error: ${trace.error}` : "",
+              ]
+                .filter(Boolean)
+                .join(" - "),
+              detail: [
+                trace.error ? `Error\n${trace.error}` : "",
+                trace.rawResponsePreview
+                  ? `Raw response\n${trace.rawResponsePreview}`
+                  : "",
+                trace.parsedResponsePreview
+                  ? `Parsed response\n${trace.parsedResponsePreview}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n\n"),
+            }))}
+            empty="No model-call traces."
+          />
         </Section>
 
         <Section title="Verifier assertions">

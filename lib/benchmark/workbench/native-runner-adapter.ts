@@ -148,7 +148,19 @@ export function createNativeWorkBenchProviderConfigs(
       ? team.roles.map((role) => role.modelId)
       : [roleMapping.architectRuntimeId, ...roleMapping.workerRuntimeIds]
   );
+  const effortByRuntimeId = nativeWorkBenchEffortByRuntimeId(team, models);
+  return createProviderConfigs(runtimeIds, effortByRuntimeId);
+}
+
+function nativeWorkBenchEffortByRuntimeId(
+  team: BenchmarkTeamComposition | undefined,
+  models: SelectedModel[]
+): Record<string, string> {
   const effortByRuntimeId: Record<string, string> = {};
+  const runtimeIds = uniqueStrings([
+    ...models.map((model) => model.modelId),
+    ...(team?.roles.map((role) => role.modelId) ?? []),
+  ]);
   for (const runtimeId of runtimeIds) {
     const storedEffort = team?.roles.find(
       (role) => role.modelId === runtimeId
@@ -158,7 +170,7 @@ export function createNativeWorkBenchProviderConfigs(
       ? normalizeBenchmarkEffortForModel(model, storedEffort)
       : "default";
   }
-  return createProviderConfigs(runtimeIds, effortByRuntimeId);
+  return effortByRuntimeId;
 }
 
 export async function runNativeWorkBenchBuild(
@@ -479,6 +491,10 @@ async function recordNativeAudit(
     runId: input.runId,
     caseId: input.case.id,
     usage: audit.usage,
+    effortByRuntimeId: nativeWorkBenchEffortByRuntimeId(
+      input.teamComposition,
+      input.models
+    ),
   });
   const toolTraces = mapNativeToolsToBenchmarkTraces({
     attemptId: input.attemptId,
@@ -505,6 +521,10 @@ function nativeAuditResult(
     runId: input.runId,
     caseId: input.case.id,
     usage: audit.usage,
+    effortByRuntimeId: nativeWorkBenchEffortByRuntimeId(
+      input.teamComposition,
+      input.models
+    ),
   });
   const toolTraces = mapNativeToolsToBenchmarkTraces({
     attemptId: input.attemptId,
@@ -533,6 +553,7 @@ export function mapNativeUsageToBenchmarkTraces(input: {
   runId: string;
   caseId: string;
   usage: NativeBuildUsageProjection;
+  effortByRuntimeId?: Readonly<Record<string, unknown>>;
 }): BenchmarkModelCallTrace[] {
   return Object.entries(input.usage.reservations)
     .filter(([, reservation]) =>
@@ -559,6 +580,9 @@ export function mapNativeUsageToBenchmarkTraces(input: {
         modelId: attribution.runtimeId,
         providerId: attribution.providerId,
         participantId: `${attribution.role}:${attribution.sessionId}`,
+        reasoningEffort: normalizeBenchmarkReasoningEffort(
+          input.effortByRuntimeId?.[attribution.runtimeId]
+        ),
         startedAt: settledAt,
         completedAt: settledAt,
         inputTokens,

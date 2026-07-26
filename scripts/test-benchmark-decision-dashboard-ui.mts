@@ -202,6 +202,28 @@ check(
     auditRosterMarkup.includes("reviewer: Legacy · Default"),
   auditRosterMarkup
 );
+const singleTrackRosterMarkup = renderToStaticMarkup(
+  React.createElement(CertifiedLeaderboard, {
+    rows: [teamDecisionRow],
+    track: "teamiq",
+    sortKey: "quality",
+    onSortChange: () => undefined,
+    paretoIds: new Set<string>(),
+    deletingAttemptIds: new Set<string>(),
+    deleteInFlight: false,
+    providerErrorCount: 0,
+    onDeleteAttempt: () => undefined,
+    onDeleteProviderErrors: () => undefined,
+  })
+);
+check(
+  "single-track certified leaderboard falls back to row effort roster metadata",
+  singleTrackRosterMarkup.includes("architect: Architect") &&
+    singleTrackRosterMarkup.includes("worker: Worker") &&
+    singleTrackRosterMarkup.includes("reviewer: Legacy") &&
+    singleTrackRosterMarkup.includes("Default"),
+  singleTrackRosterMarkup
+);
 
 const roleBoardsMarkup = renderToStaticMarkup(
   React.createElement(WorkBenchRoleLeaderboards, {

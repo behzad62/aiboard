@@ -16,6 +16,13 @@ import type {
   ToolReliabilityDiagnosticSummary,
 } from "@/lib/benchmark/toolreliability/diagnostics";
 import type { CertifiedRunSummary } from "./run-status";
+import {
+  benchmarkVariantLabel,
+  benchmarkVariantRosterDetails,
+  normalizeBenchmarkReasoningEffort,
+  type BenchmarkVariantRosterDetail,
+} from "@/lib/benchmark/model-effort";
+import type { ReasoningEffort } from "@/lib/db/schema";
 
 const TOOL_RELIABILITY_ACCOUNTABILITIES = [
   "provider",
@@ -67,6 +74,7 @@ export interface AttemptDetailViewModel {
   attempt: BenchmarkAttemptV2;
   caseRecord: BenchmarkCaseV2 | null;
   team: BenchmarkTeamComposition | null;
+  teamRoleDetails: BenchmarkVariantRosterDetail[];
   verifier: BenchmarkVerifierResult | null;
   scoreUse: {
     kind: "scored" | "excluded";
@@ -132,6 +140,7 @@ export interface AttemptDetailViewModel {
     rawResponsePreview: string;
     parsedResponsePreview: string;
     error: string;
+    reasoningEffort: ReasoningEffort;
   }>;
   runEvents: BenchmarkRunEvent[];
   toolCalls: BenchmarkToolCallTrace[];
@@ -185,12 +194,15 @@ export function buildAttemptDetailViewModel(
     (trace) => trace.attemptId === attempt.id || attempt.traceIds.includes(trace.id)
   );
   const toolCalls = input.toolCalls.filter((trace) => trace.attemptId === attempt.id);
+  const team =
+    input.teams.find((candidate) => candidate.id === attempt.teamCompositionId) ??
+    null;
   return {
     attempt,
     caseRecord:
       input.cases.find((caseRecord) => caseRecord.id === attempt.caseId) ?? null,
-    team:
-      input.teams.find((team) => team.id === attempt.teamCompositionId) ?? null,
+    team,
+    teamRoleDetails: benchmarkVariantRosterDetails(team?.roles ?? []),
     verifier,
     scoreUse,
     summary: {
@@ -247,15 +259,25 @@ export function buildAttemptDetailViewModel(
 }
 
 function modelTraceRow(trace: BenchmarkModelCallTrace): AttemptDetailViewModel["modelTraceRows"][number] {
+  const reasoningEffort = normalizeBenchmarkReasoningEffort(
+    trace.reasoningEffort
+  );
   return {
     id: trace.id,
-    label: trace.participantId ?? trace.modelId,
-    meta: `${trace.providerId} - ${trace.inputTokens ?? 0}/${trace.outputTokens ?? 0} tokens`,
+    label: benchmarkVariantLabel(trace.modelId, reasoningEffort),
+    meta: [
+      trace.participantId,
+      trace.providerId,
+      `${trace.inputTokens ?? 0}/${trace.outputTokens ?? 0} tokens`,
+    ]
+      .filter(Boolean)
+      .join(" - "),
     caseId: trace.caseId ?? "unknown-case",
     schemaMode: trace.schemaMode ?? "unknown",
     rawResponsePreview: previewTraceText(trace.rawResponse),
     parsedResponsePreview: previewTraceText(trace.parsedResponseJson),
     error: trace.error ?? "",
+    reasoningEffort,
   };
 }
 

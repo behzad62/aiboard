@@ -219,6 +219,23 @@ try {
   );
 
   // ── 2. fence stripping on the chat-completions response ──────────────────
+  for (const effort of ["low", "medium", "high"]) {
+    await copilotChat({
+      runtimeMode: "discussion",
+      stream: true,
+      model: "gemini-3.5-flash",
+      messages: [{ role: "user", content: `Use ${effort} reasoning.` }],
+      structuredOutput,
+      reasoningEffort: effort,
+    });
+    const effortRequest = capturedRequests.at(-1);
+    check(
+      `structured Copilot Gemini forwards ${effort} reasoning effort`,
+      effortRequest?.body.reasoning_effort === effort,
+      effortRequest
+    );
+  }
+
   check("fenced ```json reply is stripped to bare JSON", chatResult.data.content === '{"answer":42}', chatResult);
 
   const bareFenceResult = await copilotChat({

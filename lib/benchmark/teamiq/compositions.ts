@@ -119,6 +119,30 @@ export function getTeamCompositionModelVariantKeys(
   ).sort();
 }
 
+/**
+ * Read-time identity for semantically compatible persisted compositions.
+ * Historical records can omit reasoningEffort while newer records persist the
+ * equivalent explicit "default"; both must aggregate together without
+ * rewriting either durable record.
+ */
+export function canonicalTeamCompositionKey(
+  team: BenchmarkTeamComposition
+): string {
+  const roles = normalizeTeamRoles(team.roles);
+  return stableStringify({
+    strategy: team.strategy ?? null,
+    roles: roles.map((role) => ({
+      role: role.role,
+      slot: role.slot,
+      modelId: role.modelId,
+      providerId: role.providerId,
+      reasoningEffort: role.reasoningEffort,
+      temperature: role.temperature,
+      maxTokens: role.maxTokens ?? null,
+    })),
+  });
+}
+
 export function isSoloTeamComposition(
   team: BenchmarkTeamComposition | undefined
 ): boolean {

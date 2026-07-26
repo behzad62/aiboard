@@ -193,6 +193,50 @@ check(
   legacyMetadata
 );
 
+const explicitDefaultTeam = {
+  ...legacyTeam,
+  id: "explicit-default",
+  comboHash: "explicit-default",
+  roles: [{ ...legacyTeam.roles[0], reasoningEffort: "default" as const }],
+} as BenchmarkTeamComposition;
+const compatibleMetadata = withCertifiedDeleteMetadata(
+  {
+    leaderboard: [{
+      ...row("legacy-default"),
+      teamCompositionIds: ["explicit-default", "legacy-default"],
+    }],
+  } as never,
+  [
+    {
+      id: "attempt-legacy",
+      mode: "certified",
+      teamCompositionId: "legacy-default",
+      track: "gameiq",
+      status: "passed",
+      startedAt: "2026-07-26T00:00:00.000Z",
+    },
+    {
+      id: "attempt-explicit",
+      mode: "certified",
+      teamCompositionId: "explicit-default",
+      track: "workbench",
+      status: "provider_unavailable",
+      startedAt: "2026-07-26T00:01:00.000Z",
+    },
+  ] as never,
+  [legacyTeam, explicitDefaultTeam]
+).leaderboard[0];
+check(
+  "canonical default rows retain delete metadata across persisted composition aliases",
+  compatibleMetadata?.latestAttemptId === "attempt-explicit" &&
+    compatibleMetadata.providerUnavailableAttemptIds?.join(",") ===
+      "attempt-explicit" &&
+    Object.keys(compatibleMetadata.latestAttemptsByTrack ?? {})
+      .sort()
+      .join(",") === "gameiq,workbench",
+  compatibleMetadata
+);
+
 const repeatedModelTeam = row("same-model-team", {
   label: "Sol architect + Sol worker",
   modelIds: ["sol"],

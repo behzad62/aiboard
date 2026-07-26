@@ -246,14 +246,16 @@ const roles: BenchmarkTeamCompositionRole[] = [
     modelId: "openai:perfect-fireworks-p1",
     providerId: "openai",
     displayName: "Perfect Fireworks P1",
+    reasoningEffort: "none",
     temperature: 0,
   },
   {
     role: "player",
     slot: "P2",
-    modelId: "google:perfect-fireworks-p2",
-    providerId: "google",
+    modelId: "openai:perfect-fireworks-p1",
+    providerId: "openai",
     displayName: "Perfect Fireworks P2",
+    reasoningEffort: "xhigh",
     temperature: 0,
   },
 ];
@@ -262,6 +264,7 @@ const team = deriveTeamComposition({
   roles,
   strategy: "panel",
 });
+const capturedReasoningEfforts: Array<string | undefined> = [];
 
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
@@ -285,7 +288,8 @@ const summary = await runCertifiedBenchmark({
         inputUsdPer1M: 1,
         outputUsdPer1M: 1,
       },
-      streamChat: async function* (): AsyncIterable<StreamChunk> {
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        capturedReasoningEfforts.push(params.reasoningEffort);
         yield { type: "token", content: '{"action":"play","cardIndex":0}' };
         yield { type: "done" };
       },
@@ -354,6 +358,19 @@ check(
   { traceCount: bundle.traces.length, teamAttempt }
 );
 check(
+  "certified Fireworks preserves none and xhigh through calls, solo baselines, and traces",
+  capturedReasoningEfforts.includes("none") &&
+    capturedReasoningEfforts.includes("xhigh") &&
+    teamCompositions.filter(
+      (composition) =>
+        composition.roles.length === 1 &&
+        composition.roles[0]?.modelId === "openai:perfect-fireworks-p1"
+    ).length === 2 &&
+    bundle.traces.some((trace) => trace.reasoningEffort === "none") &&
+    bundle.traces.some((trace) => trace.reasoningEffort === "xhigh"),
+  { capturedReasoningEfforts, teamCompositions, traces: bundle.traces }
+);
+check(
   "certified Fireworks computes team lift from baselines",
   teamAttempt?.status === "passed" &&
     teamAttempt.teamLift === 0 &&
@@ -403,6 +420,7 @@ const illegalTeam = deriveTeamComposition({
       modelId: "openai:illegal-fireworks",
       providerId: "openai",
       displayName: "Illegal Fireworks",
+      reasoningEffort: "xhigh",
       temperature: 0,
     },
   ],
@@ -434,11 +452,17 @@ await runCertifiedBenchmark({
 });
 const illegalAttempts = await listBenchmarkAttemptsV2();
 const illegalFailures = await listBenchmarkFailures();
+const illegalBundle = exportBenchmarkReportBundleV2();
 check(
   "illegal Fireworks clue records failed_tool_use and classified failure",
   illegalAttempts[0]?.status === "failed_tool_use" &&
     illegalFailures.some((failure) => failure.code === "fireworks_illegal_clue"),
   { illegalAttempts, illegalFailures }
+);
+check(
+  "failed Fireworks attempts retain xhigh on their model trace",
+  illegalBundle.traces.some((trace) => trace.reasoningEffort === "xhigh"),
+  illegalBundle.traces
 );
 check(
   "illegal Fireworks output is not scored via the deterministic fallback",

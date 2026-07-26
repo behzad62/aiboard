@@ -575,6 +575,7 @@ export function createProviderModel(
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
       apiKey: config.secret,
       modelId: config.modelId,
+      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     });
   }
   if (config.transport === "google") {
@@ -582,6 +583,7 @@ export function createProviderModel(
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
       apiKey: config.secret,
       modelId: config.modelId,
+      ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     });
   }
   if (!config.baseUrl) {
@@ -591,7 +593,13 @@ export function createProviderModel(
     baseUrl: config.baseUrl,
     apiKey: config.secret,
     modelId: config.modelId,
-    ...(config.protocol ? { protocol: config.protocol } : {}),
+    providerId: config.providerId,
+    ...(config.protocol
+      ? { protocol: config.protocol }
+      : config.providerId === "xai"
+        ? { protocol: "responses" as const }
+        : {}),
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.providerId === "openai" ? { promptCaching: true } : {}),
   });
 }

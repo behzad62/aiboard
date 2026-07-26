@@ -100,6 +100,8 @@ export interface CertifiedAggregateInput {
 export interface CertifiedRunScore {
   id: string;
   teamCompositionId: string;
+  /** All persisted composition ids represented by this canonical read-time row. */
+  teamCompositionIds?: string[];
   teamName: string;
   comboHash: string;
   displayName: string;

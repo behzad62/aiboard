@@ -76,6 +76,7 @@ const roles: BenchmarkTeamCompositionRole[] = [
     modelId: "openai:gpt-team-architect",
     providerId: "openai",
     displayName: "GPT Team Architect",
+    reasoningEffort: "none",
     temperature: 0,
   },
   {
@@ -84,14 +85,16 @@ const roles: BenchmarkTeamCompositionRole[] = [
     modelId: "google:gemini-team-worker",
     providerId: "google",
     displayName: "Gemini Team Worker",
+    reasoningEffort: "high",
     temperature: 0,
   },
   {
     role: "reviewer",
     slot: "reviewer",
-    modelId: "anthropic:claude-team-reviewer",
-    providerId: "anthropic",
-    displayName: "Claude Team Reviewer",
+    modelId: "openai:gpt-team-architect",
+    providerId: "openai",
+    displayName: "GPT Team Reviewer",
+    reasoningEffort: "xhigh",
     temperature: 0,
   },
 ];
@@ -113,7 +116,7 @@ const callsByProvider = new Map<string, number>();
 const capturedCalls: Array<{
   providerId: string;
   caseId: string;
-  params: Pick<ChatParams, "messages" | "structuredOutput">;
+  params: Pick<ChatParams, "messages" | "structuredOutput" | "reasoningEffort">;
 }> = [];
 
 /**
@@ -194,6 +197,7 @@ const summary = await runCertifiedBenchmark({
           params: {
             messages: params.messages,
             structuredOutput: params.structuredOutput,
+            reasoningEffort: params.reasoningEffort,
           },
         });
         const content =
@@ -236,6 +240,14 @@ check(
           composition.roles[0]?.modelId === role.modelId
       )
     ),
+  { soloAttempts, teamCompositions }
+);
+check(
+  "certified TeamIQ keeps same-model solo baselines distinct by reasoning effort",
+  soloAttempts.filter((attempt) => {
+    const composition = teamCompositions.find((candidate) => candidate.id === attempt.teamCompositionId);
+    return composition?.roles[0]?.modelId === "openai:gpt-team-architect";
+  }).length === 2,
   { soloAttempts, teamCompositions }
 );
 check(
@@ -288,6 +300,17 @@ check(
   "certified TeamIQ never requests provider structured-output enforcement on stateful turns",
   capturedCalls.every((call) => call.params.structuredOutput === undefined),
   capturedCalls.map((call) => call.params.structuredOutput)
+);
+check(
+  "certified TeamIQ propagates none and xhigh effort to calls and traces",
+  capturedCalls.some((call) => call.params.reasoningEffort === "none") &&
+    capturedCalls.some((call) => call.params.reasoningEffort === "xhigh") &&
+    bundle.traces.some((trace) => trace.reasoningEffort === "none") &&
+    bundle.traces.some((trace) => trace.reasoningEffort === "xhigh"),
+  {
+    calls: capturedCalls.map((call) => call.params.reasoningEffort),
+    traces: bundle.traces.map((trace) => trace.reasoningEffort),
+  }
 );
 check(
   "certified TeamIQ carries every case's canary into its prompts",

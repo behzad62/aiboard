@@ -199,13 +199,22 @@ function isPersistedBenchmarkModelSelectionV2(
 function normalizePersistedModelChecklistConfig(
   config: PersistedBenchmarkModelSelectionV2
 ): BenchmarkModelChecklistConfig {
-  const selectedModelIds = config.selectedModelIds
-    .filter((id): id is string => typeof id === "string")
-    .map(migrateFullModelId);
+  const selectedModelIds = Array.from(
+    new Set(
+      config.selectedModelIds
+        .filter((id): id is string => typeof id === "string")
+        .map(migrateFullModelId)
+    )
+  );
   const effortByModelId: BenchmarkModelEffortMap = {};
-  for (const [modelId, effort] of Object.entries(config.effortByModelId)) {
-    effortByModelId[migrateFullModelId(modelId)] =
-      normalizeBenchmarkReasoningEffort(effort);
+  const effortEntries = Object.entries(config.effortByModelId);
+  for (const canonicalPass of [false, true]) {
+    for (const [modelId, effort] of effortEntries) {
+      const migratedId = migrateFullModelId(modelId);
+      if ((migratedId === modelId) !== canonicalPass) continue;
+      effortByModelId[migratedId] =
+        normalizeBenchmarkReasoningEffort(effort);
+    }
   }
   for (const modelId of selectedModelIds) {
     effortByModelId[modelId] ??= "default";
