@@ -18,12 +18,16 @@
 import {
   __resetBenchmarkStoreForTests,
   listBenchmarkAttemptsV2,
+  listBenchmarkRuns,
+  listBenchmarkToolCallTraces,
+  listBenchmarkTraces,
   listBenchmarkVerifierResults,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import { persistReturnedAttempts } from "../lib/benchmark/certified/model-runner";
 import { certifiedRunBudgetForCase } from "../lib/benchmark/certified/run-budget";
 import {
   GAMEIQ_ALL_PACKS_SUITE_ID,
@@ -296,6 +300,153 @@ check(
     runId: attempt.runId,
     gameIqScore: attempt.gameIqScore,
   }))
+);
+
+// Production-shaped partial recovery: run-execution reuses the same
+// run/team/model/trial identity for every pack, wraps the context per pack,
+// and persists each re-IDed pack attempt before advancing. The second pack
+// fails after registering its owner and recording exact-owned evidence.
+const partialPacks = bundlePacks.slice(0, 2);
+const partialCaseRecords = partialPacks.map((pack) =>
+  caseForPack(pack.id, pack.label)
+);
+const partialRunId = "run-gameiq-multi-pack-owner-recovery";
+const rawAttemptId =
+  `gameiq-attempt:${partialRunId}:${team.id}:${model.modelId}`;
+const packAttemptId = (packId: string) => `${rawAttemptId}:pack:${packId}`;
+let durableMultiPackOwners: unknown = null;
+
+__resetBenchmarkStoreForTests();
+for (const caseRecord of partialCaseRecords) {
+  await saveBenchmarkCaseV2(caseRecord);
+}
+await saveBenchmarkTeamComposition(team);
+
+const partialSummary = await runCertifiedBenchmark({
+  runId: partialRunId,
+  suiteId: "suite-gameiq",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: partialCaseRecords.map((caseRecord) => caseRecord.id),
+  teamCompositionIds: [team.id],
+  certification: passingCertification,
+  runner: async (context, options) => {
+    for (const [packIndex, pack] of partialPacks.entries()) {
+      const packContext = gameIqPackRunContext(context, pack.id);
+      let scenarioIndex = 0;
+      let toolRecorded = false;
+      const packAttempts = await runCertifiedGameIq({
+        context: packContext,
+        models: [model],
+        scenarioPackIds: [pack.id],
+        teamCompositionIds: [team.id],
+        trials: 1,
+        pricing: { inputUsdPer1M: 1, outputUsdPer1M: 1 },
+        signal: options?.signal,
+        streamChat: async function* (): AsyncIterable<StreamChunk> {
+          if (packIndex === 0) {
+            const action =
+              pack.scenarios[scenarioIndex++]?.expectedActions[0]?.action;
+            yield { type: "token", content: JSON.stringify({ action }) };
+            yield { type: "done" };
+            return;
+          }
+          const running = (await listBenchmarkRuns()).find(
+            (candidate) => candidate.id === context.runId
+          );
+          durableMultiPackOwners = running
+            ? (JSON.parse(running.summaryJson) as { attemptOwners?: unknown })
+                .attemptOwners
+            : null;
+          if (!toolRecorded) {
+            toolRecorded = true;
+            await packContext.recordToolCall({
+              id: `${rawAttemptId}:tool:pack-two`,
+              attemptId: rawAttemptId,
+              caseId: pack.id,
+              toolName: "gameiq:pack-fixture",
+              status: "ok",
+              startedAt: context.startedAt,
+              completedAt: new Date().toISOString(),
+              durationMs: 1,
+            });
+          }
+          yield { type: "token", content: '{"action":{"column":3}}' };
+          yield {
+            type: "error",
+            error: "Your prepayment credits are depleted.",
+          };
+        },
+      });
+      const reidd = packAttempts.map((attempt) =>
+        reidGameIqPackAttempt(attempt, pack.id)
+      );
+      await persistReturnedAttempts(context, reidd);
+    }
+    return [];
+  },
+});
+
+const partialAttempts = (await listBenchmarkAttemptsV2()).filter(
+  (attempt) => attempt.runId === partialRunId
+);
+const partialTraces = (await listBenchmarkTraces()).filter(
+  (trace) => trace.runId === partialRunId
+);
+const partialToolCalls = (await listBenchmarkToolCallTraces()).filter(
+  (trace) =>
+    partialPacks.some((pack) => trace.caseId === pack.id) &&
+    trace.id.endsWith(":tool:pack-two")
+);
+const firstPackAttempt = partialAttempts.find(
+  (attempt) => attempt.caseId === partialPacks[0]?.id
+);
+const secondPackAttempt = partialAttempts.find(
+  (attempt) => attempt.caseId === partialPacks[1]?.id
+);
+const durableOwnerIds = Array.isArray(durableMultiPackOwners)
+  ? durableMultiPackOwners.map(
+      (owner) => (owner as { attemptId?: unknown }).attemptId
+    )
+  : [];
+
+check(
+  "multi-pack wrapper durably registers two pack-scoped owners without conflict",
+  partialSummary.status === "failed" &&
+    !partialSummary.error?.includes("conflicting case/team metadata") &&
+    durableOwnerIds.length === 2 &&
+    partialPacks.every((pack) => durableOwnerIds.includes(packAttemptId(pack.id))),
+  { summary: partialSummary, durableMultiPackOwners }
+);
+check(
+  "completed pack one and fatal pack two recover as exactly two canonical attempts",
+  partialAttempts.length === 2 &&
+    firstPackAttempt?.id === packAttemptId(partialPacks[0]!.id) &&
+    firstPackAttempt.status === "passed" &&
+    secondPackAttempt?.id === packAttemptId(partialPacks[1]!.id) &&
+    secondPackAttempt.status === "provider_unavailable" &&
+    !partialAttempts.some((attempt) => attempt.id === rawAttemptId),
+  partialAttempts
+);
+check(
+  "multi-pack trace, token, cost, and tool evidence remains exact-owned",
+  partialTraces.length === partialPacks[0]!.scenarios.length + 1 &&
+    partialTraces.every((trace) =>
+      partialPacks.some(
+        (pack) =>
+          trace.caseId === pack.id &&
+          trace.attemptId === packAttemptId(pack.id)
+      )
+    ) &&
+    partialToolCalls.length === 1 &&
+    partialToolCalls[0]?.attemptId === packAttemptId(partialPacks[1]!.id) &&
+    secondPackAttempt?.traceIds.length === 1 &&
+    secondPackAttempt.modelCalls === 1 &&
+    secondPackAttempt.toolCalls === 1 &&
+    secondPackAttempt.inputTokens > 0 &&
+    secondPackAttempt.outputTokens > 0 &&
+    (secondPackAttempt.costUsd ?? 0) > 0,
+  { partialAttempts, partialTraces, partialToolCalls }
 );
 
 if (failures === 0) {

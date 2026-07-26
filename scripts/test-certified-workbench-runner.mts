@@ -4,6 +4,9 @@ import {
   __resetBenchmarkStoreForTests,
   exportBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
+  listBenchmarkRuns,
+  listBenchmarkToolCallTraces,
+  listBenchmarkTraces,
   listBenchmarkVerifierResults,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
@@ -344,6 +347,126 @@ try {
   );
 } finally {
   await roleRunner.stop();
+}
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(
+  toBenchmarkCaseV2(workBenchCase, "2026-06-28T10:00:00.000Z")
+);
+await saveBenchmarkTeamComposition(team);
+const preparedRecoveryAttemptId = "prepared-workbench-recovery-attempt";
+const recoveryRunner = await startPassingBenchRunner(preparedRecoveryAttemptId);
+let durablePreparedOwners: unknown = null;
+try {
+  const recoverySummary = await runCertifiedBenchmark({
+    runId: "run-certified-workbench-prepared-recovery",
+    suiteId: "suite-certified-workbench",
+    track: "workbench",
+    harnessProfile: "aiboard-build-multi-worker",
+    caseIds: [workBenchCase.id],
+    teamCompositionIds: [team.id],
+    certification: runHarnessCertification("aiboard-build-multi-worker"),
+    runner: async (context) => {
+      await runCertifiedWorkBench({
+        context,
+        cases: [workBenchCase],
+        runner: { url: recoveryRunner.url, token: recoveryRunner.token },
+        teamCompositionIds: [team.id],
+        runBuild: async (buildInput) => {
+          const running = (await listBenchmarkRuns()).find(
+            (candidate) => candidate.id === context.runId
+          );
+          durablePreparedOwners = running
+            ? (JSON.parse(running.summaryJson) as { attemptOwners?: unknown })
+                .attemptOwners
+            : null;
+          await context.recordTrace({
+            id: `${buildInput.attemptId}:trace:model`,
+            runId: context.runId,
+            caseId: workBenchCase.id,
+            attemptId: buildInput.attemptId,
+            modelId: "openai:gpt-workbench",
+            providerId: "openai",
+            participantId: team.id,
+            schemaMode: "text",
+            startedAt: context.startedAt,
+            completedAt: new Date().toISOString(),
+            latencyMs: 12,
+            inputTokens: 17,
+            outputTokens: 5,
+            estimatedUsd: 0.02,
+            rawResponse: "patched",
+            retryHistory: [
+              { attempt: 1, status: "parsed", message: "ok" },
+            ],
+          });
+          await context.recordToolCall({
+            id: `${buildInput.attemptId}:tool:run`,
+            attemptId: buildInput.attemptId,
+            caseId: workBenchCase.id,
+            toolName: "run",
+            command: "node verifier.js",
+            status: "ok",
+            exitCode: 0,
+            startedAt: context.startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs: 3,
+          });
+          return {
+            traceIds: [`${buildInput.attemptId}:trace:model`],
+            costUsd: 0.02,
+            inputTokens: 17,
+            outputTokens: 5,
+            modelCalls: 1,
+            toolCalls: 1,
+            validToolCalls: 1,
+            durationMs: 12,
+          };
+        },
+      });
+      throw new Error("Fatal after prepared WorkBench execution.");
+    },
+  });
+  const recoveredAttempts = (await listBenchmarkAttemptsV2()).filter(
+    (attempt) => attempt.runId === recoverySummary.runId
+  );
+  const recoveredTraces = (await listBenchmarkTraces()).filter(
+    (trace) => trace.runId === recoverySummary.runId
+  );
+  const recoveredTools = (await listBenchmarkToolCallTraces()).filter(
+    (trace) => trace.attemptId === preparedRecoveryAttemptId
+  );
+  const recoveredAttempt = recoveredAttempts[0];
+  check(
+    "WorkBench durably registers only the authoritative prepared owner before build work",
+    Array.isArray(durablePreparedOwners) &&
+      durablePreparedOwners.length === 1 &&
+      (durablePreparedOwners[0] as { attemptId?: unknown }).attemptId ===
+        preparedRecoveryAttemptId,
+    durablePreparedOwners
+  );
+  check(
+    "fatal post-preparation recovery creates exactly one prepared-id attempt",
+    recoverySummary.status === "failed" &&
+      recoveredAttempts.length === 1 &&
+      recoveredAttempt?.id === preparedRecoveryAttemptId,
+    { recoverySummary, recoveredAttempts }
+  );
+  check(
+    "recovered WorkBench usage and tools remain exact-owned by the prepared id",
+    recoveredTraces.length === 1 &&
+      recoveredTraces[0]?.attemptId === preparedRecoveryAttemptId &&
+      recoveredTools.length === 1 &&
+      recoveredAttempt?.traceIds[0] === recoveredTraces[0]?.id &&
+      recoveredAttempt.modelCalls === 1 &&
+      recoveredAttempt.toolCalls === 1 &&
+      recoveredAttempt.inputTokens === 17 &&
+      recoveredAttempt.outputTokens === 5 &&
+      recoveredAttempt.costUsd === 0.02,
+    { recoveredAttempt, recoveredTraces, recoveredTools }
+  );
+} finally {
+  await recoveryRunner.stop();
 }
 
 if (failures === 0) {

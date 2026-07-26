@@ -47,25 +47,26 @@ export async function runCertifiedWorkBench(
     const models = modelsForWorkBenchTeam(teamComposition, input.models ?? []);
     for (const workBenchCase of input.cases) {
       throwIfCertifiedRunAborted(input.signal);
-      const attemptId = attemptIdFor(
+      const plannedAttemptId = attemptIdFor(
         input.context.runId,
         workBenchCase.id,
         teamCompositionId
       );
-      await input.context.registerAttemptOwner({
-        attemptId,
-        caseId: workBenchCase.id,
-        teamCompositionId,
-      });
       const result = await executeWorkBenchVerifierOnly({
         case: workBenchCase,
         runner: input.runner,
-        attemptId,
+        attemptId: plannedAttemptId,
         runId: input.context.runId,
         teamCompositionId,
         harnessProfile: input.context.harnessProfile,
         cleanup: input.cleanup,
         signal: input.signal,
+        onAttemptPrepared: (attemptId) =>
+          input.context.registerAttemptOwner({
+            attemptId,
+            caseId: workBenchCase.id,
+            teamCompositionId,
+          }),
         runBuild:
           input.runBuild ??
           ((buildInput) =>

@@ -57,6 +57,7 @@ export async function executeWorkBenchVerifierOnly(
       files: input.case.fixtureFiles,
     });
     attemptId = preparedAttempt.attemptId || input.attemptId;
+    await input.onAttemptPrepared?.(attemptId);
     prepared = true;
 
     let buildResult: WorkBenchBuildExecutionResult;

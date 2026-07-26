@@ -44,14 +44,43 @@ export function gameIqPackRunContext(
   context: CertifiedRunContext,
   packId: string
 ): CertifiedRunContext {
+  const packAttemptId = (attemptId: string) =>
+    gameIqPackAttemptId(attemptId, packId);
   return {
     ...context,
+    registerAttemptOwner: (owner) =>
+      context.registerAttemptOwner({
+        ...owner,
+        attemptId: packAttemptId(owner.attemptId),
+        caseId: packId,
+      }),
     caseIds: [packId],
     recordVerifier: (result) =>
       context.recordVerifier({
         ...result,
         id: gameIqPackVerifierId(result.id, packId),
-        attemptId: gameIqPackAttemptId(result.attemptId, packId),
+        attemptId: packAttemptId(result.attemptId),
+        caseId: packId,
+      }),
+    recordTrace: (trace) =>
+      context.recordTrace({
+        ...trace,
+        attemptId:
+          trace.attemptId == null
+            ? trace.attemptId
+            : packAttemptId(trace.attemptId),
+        caseId: packId,
+      }),
+    recordEvent: (event) =>
+      context.recordEvent({
+        ...event,
+        attemptId: packAttemptId(event.attemptId),
+        caseId: packId,
+      }),
+    recordToolCall: (trace) =>
+      context.recordToolCall({
+        ...trace,
+        attemptId: packAttemptId(trace.attemptId),
         caseId: packId,
       }),
   };

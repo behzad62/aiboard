@@ -172,6 +172,7 @@ export interface WorkBenchExecutionInput {
   runBuild?: (
     input: WorkBenchBuildExecutionInput
   ) => Promise<WorkBenchBuildExecutionResult>;
+  onAttemptPrepared?: (attemptId: string) => Promise<void>;
   signal?: AbortSignal;
   costUsd?: number | null;
   inputTokens?: number;

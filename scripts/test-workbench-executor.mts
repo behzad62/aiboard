@@ -480,6 +480,8 @@ try {
 
 const canonicalRunner = await startCanonicalAttemptRunner("prepared-attempt-id");
 try {
+  const preparedHookIds: string[] = [];
+  let preparedHookCompleted = false;
   const canonicalResult = await executeWorkBenchVerifierOnly({
     case: caseRecord,
     runner: { url: canonicalRunner.url, token: canonicalRunner.token },
@@ -487,7 +489,17 @@ try {
     runId: "run-canonical-attempt-id",
     teamCompositionId: "team-fixture",
     cleanup: true,
+    onAttemptPrepared: async (attemptId) => {
+      await Promise.resolve();
+      preparedHookIds.push(attemptId);
+      preparedHookCompleted = true;
+    },
     runBuild: async (context) => {
+      check(
+        "executor awaits prepared-attempt hook before canonical build callback",
+        preparedHookCompleted,
+        { preparedHookCompleted, preparedHookIds }
+      );
       check("executor passes prepared attempt id to canonical build callback", context.attemptId === "prepared-attempt-id", context);
       return {
         traceIds: ["trace-canonical-attempt"],
@@ -501,6 +513,11 @@ try {
     },
   });
   check("attempt record uses prepared attempt id", canonicalResult.attempt.id === "prepared-attempt-id", canonicalResult.attempt);
+  check(
+    "executor publishes the authoritative prepared attempt id exactly once",
+    JSON.stringify(preparedHookIds) === JSON.stringify(["prepared-attempt-id"]),
+    preparedHookIds
+  );
   check("verifier record uses prepared attempt id", canonicalResult.verifierResult.id === "prepared-attempt-id:verifier" && canonicalResult.verifierResult.attemptId === "prepared-attempt-id", canonicalResult.verifierResult);
   check("artifact records use prepared attempt id", canonicalResult.artifacts.every((artifact) => artifact.id.startsWith("prepared-attempt-id:") && artifact.attemptId === "prepared-attempt-id"), canonicalResult.artifacts);
   check("attempt artifact ids use prepared attempt id", canonicalResult.attempt.artifactIds.includes("prepared-attempt-id:verifier-result") && canonicalResult.attempt.artifactIds.includes("prepared-attempt-id:patch"), canonicalResult.attempt.artifactIds);
