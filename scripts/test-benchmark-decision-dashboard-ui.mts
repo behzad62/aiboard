@@ -10,23 +10,20 @@ import {
   DecisionTradeoffCharts,
   decisionTradeoffPointAriaLabel,
   decisionTradeoffPointLabel,
-  projectDecisionTradeoffPoints,
+  projectDecisionTradeoffPoints
 } from "../components/benchmark/results/DecisionTradeoffCharts";
 import { chartColorForIdentity } from "../components/benchmark/chart-utils";
 import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
 import {
   CertifiedLeaderboard,
   WorkBenchRoleLeaderboards,
-  type RosterRole,
+  type RosterRole
 } from "../components/benchmark/certified/CertifiedResultTables";
 import { CertifiedBenchmarkOverview } from "../components/benchmark/certified/CertifiedBenchmarkOverview";
 import { ComboMatrix } from "../components/benchmark/teamiq/ComboMatrix";
 import { ParetoFrontier } from "../components/benchmark/teamiq/ParetoFrontier";
 import type { DecisionRow } from "../lib/benchmark/certified/decision-dashboard";
-import type {
-  TeamIqComboMatrixRow,
-  TeamIqRecommendationCard,
-} from "../lib/benchmark/teamiq";
+import type { TeamIqComboMatrixRow, TeamIqRecommendationCard } from "../lib/benchmark/teamiq";
 import type { BenchmarkVariantRosterDetail } from "../lib/benchmark/model-effort";
 
 let failures = 0;
@@ -75,6 +72,7 @@ const variantRow: DecisionRow = {
   tokensPerPass: null,
   costBasis: null,
   teamLift: null,
+  teamLiftTracks: [],
   teamCompositionId: "variant-low",
   modelIds: ["openai:model"],
   isTeam: false,
@@ -84,7 +82,7 @@ const variantRow: DecisionRow = {
   providerIds: ["openai"],
   reasoningEfforts: ["low"],
   reasoningEffortDetails: [],
-  failureDetails: [],
+  failureDetails: []
 };
 const leaderboardMarkup = renderToStaticMarkup(
   React.createElement(DecisionLeaderboard, {
@@ -95,7 +93,7 @@ const leaderboardMarkup = renderToStaticMarkup(
         id: "variant-high",
         label: "Model · High",
         teamCompositionId: "variant-high",
-        reasoningEfforts: ["high"],
+        reasoningEfforts: ["high"]
       },
       {
         ...variantRow,
@@ -108,15 +106,15 @@ const leaderboardMarkup = renderToStaticMarkup(
         reasoningEfforts: ["low", "high"],
         reasoningEffortDetails: [
           { role: "architect", displayName: "Architect", effort: "low" },
-          { role: "worker", displayName: "Worker", effort: "high" },
-        ],
-      },
+          { role: "worker", displayName: "Worker", effort: "high" }
+        ]
+      }
     ],
     totalRows: 3,
     sortKey: "quality",
     onSortChange: () => undefined,
     selectedId: null,
-    onSelect: () => undefined,
+    onSelect: () => undefined
   })
 );
 check(
@@ -140,10 +138,10 @@ const teamProfileMarkup = renderToStaticMarkup(
       reasoningEfforts: ["low", "high"],
       reasoningEffortDetails: [
         { role: "architect", displayName: "Architect", effort: "low" },
-        { role: "worker", displayName: "Worker", effort: "high" },
-      ],
+        { role: "worker", displayName: "Worker", effort: "high" }
+      ]
     },
-    onClose: () => undefined,
+    onClose: () => undefined
   })
 );
 check(
@@ -151,6 +149,232 @@ check(
   teamProfileMarkup.includes("architect: Architect · Low") &&
     teamProfileMarkup.includes("worker: Worker · High"),
   teamProfileMarkup
+);
+
+const responsiveRows: DecisionRow[] = [
+  {
+    ...variantRow,
+    id: "responsive-solo",
+    label: "A deliberately long solo model identity that must wrap in full",
+    tracks: ["gameiq"],
+    caseTitles: ["Solo evidence case"],
+    attempts: 4,
+    passed: 3,
+    preliminary: false,
+    verifiedQuality: 0.75,
+    overallScore: 0.72,
+    passRate: 0.75,
+    toolReliabilityScore: 84,
+    tokensPerPass: 1234,
+    speedPerPassMs: 2500,
+    trackBreakdown: [
+      {
+        track: "gameiq",
+        attempts: 4,
+        passed: 3,
+        verifiedPassRate: 0.75,
+        averageVerifiedQuality: 0.72
+      }
+    ]
+  },
+  {
+    ...variantRow,
+    id: "responsive-team",
+    label: "Architect and worker evidence team",
+    tracks: ["workbench"],
+    caseTitles: ["Team evidence case"],
+    attempts: 2,
+    passed: 1,
+    preliminary: true,
+    verifiedQuality: 0.5,
+    overallScore: 0.48,
+    passRate: 0.5,
+    isTeam: true,
+    modelIds: ["openai:architect", "openai:worker"],
+    teamCompositionId: "responsive-team",
+    teamLift: null,
+    teamLiftTracks: [],
+    trackBreakdown: [
+      {
+        track: "workbench",
+        attempts: 2,
+        passed: 1,
+        verifiedPassRate: 0.5,
+        averageVerifiedQuality: 0.48
+      }
+    ]
+  },
+  {
+    ...variantRow,
+    id: "responsive-failed-budget",
+    label: "Budget-limited model",
+    tracks: ["harnessbench"],
+    caseTitles: ["Budget evidence case"],
+    attempts: 1,
+    passed: 0,
+    verifiedQuality: 0,
+    overallScore: 0,
+    passRate: 0,
+    latestAttemptStatus: "failed_budget",
+    latestAttemptTrack: "harnessbench",
+    latestAttemptsByTrack: {
+      harnessbench: {
+        id: "budget-attempt",
+        status: "failed_budget",
+        track: "harnessbench"
+      }
+    },
+    failureDetails: [],
+    trackBreakdown: [
+      {
+        track: "harnessbench",
+        attempts: 1,
+        passed: 0,
+        verifiedPassRate: 0,
+        averageVerifiedQuality: 0
+      }
+    ]
+  },
+  {
+    ...variantRow,
+    id: "responsive-failed-tool",
+    label: "Tool-failed model",
+    tracks: ["toolreliability"],
+    attempts: 2,
+    passed: 1,
+    failureDetails: [
+      {
+        attemptId: "tool-attempt",
+        track: "toolreliability",
+        status: "failed_tool_use",
+        code: "tool_contract",
+        message: "Required tool output was malformed."
+      },
+      {
+        attemptId: "tool-attempt-repeat",
+        track: "toolreliability",
+        status: "failed_tool_use",
+        code: "tool_contract",
+        message: "Required tool output was malformed."
+      }
+    ]
+  }
+];
+const responsiveLeaderboardMarkup = renderToStaticMarkup(
+  React.createElement(DecisionLeaderboard, {
+    rows: responsiveRows,
+    totalRows: responsiveRows.length,
+    sortKey: "teamLift",
+    onSortChange: () => undefined,
+    selectedId: null,
+    onSelect: () => undefined
+  })
+);
+check(
+  "leaderboard renders complementary desktop table and mobile evidence list",
+  responsiveLeaderboardMarkup.includes('class="hidden overflow-x-auto md:block"') &&
+    responsiveLeaderboardMarkup.includes('class="md:hidden"') &&
+    responsiveRows.every((row) => responsiveLeaderboardMarkup.split(row.label).length - 1 === 2),
+  responsiveLeaderboardMarkup
+);
+check(
+  "mobile evidence cards preserve full identities and core decision metrics",
+  responsiveLeaderboardMarkup.includes(
+    '<h3 class="break-words text-base font-semibold">A deliberately long solo model identity that must wrap in full</h3>'
+  ) &&
+    [
+      "Overall index",
+      "Pass \u00b7 95% range",
+      "Coverage",
+      "Reliability",
+      "Tokens/pass",
+      "Time/pass",
+      "View profile"
+    ].every((label) => responsiveLeaderboardMarkup.includes(label)),
+  responsiveLeaderboardMarkup
+);
+check(
+  "failed rows surface persisted and certified budget evidence",
+  responsiveLeaderboardMarkup.includes("Failure evidence") &&
+    responsiveLeaderboardMarkup.includes("Tool Reliability") &&
+    responsiveLeaderboardMarkup.includes("Required tool output was malformed.") &&
+    responsiveLeaderboardMarkup.includes("Certified budget exhausted before this track completed."),
+  responsiveLeaderboardMarkup
+);
+check(
+  "team lift without comparable tracks stays unavailable and directional",
+  responsiveLeaderboardMarkup.includes("Not comparable") &&
+    responsiveLeaderboardMarkup.includes("Run the same track solo and as a team.") &&
+    !responsiveLeaderboardMarkup.includes("+0.0"),
+  responsiveLeaderboardMarkup
+);
+
+const selectedResponsiveMarkup = renderToStaticMarkup(
+  React.createElement(DecisionLeaderboard, {
+    rows: [responsiveRows[0]],
+    totalRows: 1,
+    sortKey: "overall",
+    onSortChange: () => undefined,
+    selectedId: responsiveRows[0].id,
+    onSelect: () => undefined
+  })
+);
+check(
+  "responsive profile copies have distinct controls and region ids",
+  selectedResponsiveMarkup.includes('aria-controls="benchmark-evidence-desktop-responsive-solo"') &&
+    selectedResponsiveMarkup.includes('id="benchmark-evidence-desktop-responsive-solo"') &&
+    selectedResponsiveMarkup.includes(
+      'aria-controls="benchmark-evidence-mobile-responsive-solo"'
+    ) &&
+    selectedResponsiveMarkup.includes('id="benchmark-evidence-mobile-responsive-solo"') &&
+    selectedResponsiveMarkup.match(/role="region"/g)?.length === 2 &&
+    selectedResponsiveMarkup.match(/id="benchmark-evidence-desktop-responsive-solo"/g)?.length ===
+      1 &&
+    selectedResponsiveMarkup.match(/id="benchmark-evidence-mobile-responsive-solo"/g)?.length === 1,
+  selectedResponsiveMarkup
+);
+
+const explanatoryProfileMarkup = renderToStaticMarkup(
+  React.createElement(ModelEvidenceProfile, {
+    id: "explanatory-profile",
+    row: {
+      ...responsiveRows[2],
+      failureDetails: [
+        {
+          attemptId: "budget-attempt",
+          track: "harnessbench",
+          status: "failed_budget",
+          code: "budget_exhausted",
+          message: "Certified model-call budget was exhausted."
+        },
+        {
+          attemptId: "budget-attempt-repeat",
+          track: "harnessbench",
+          status: "failed_budget",
+          code: "budget_exhausted",
+          message: "Certified model-call budget was exhausted."
+        }
+      ]
+    },
+    onClose: () => undefined
+  })
+);
+check(
+  "evidence profile names and explains the certified index",
+  explanatoryProfileMarkup.includes("Overall index") &&
+    !explanatoryProfileMarkup.includes("Overall quality") &&
+    explanatoryProfileMarkup.includes(
+      "Certified Index v1.0 averages these per-track scores with equal weight."
+    ) &&
+    explanatoryProfileMarkup.includes("Missing tracks are not scored as zero."),
+  explanatoryProfileMarkup
+);
+check(
+  "track profile counts passes and budget failures and deduplicates messages",
+  explanatoryProfileMarkup.includes("0 of 1 passed") &&
+    explanatoryProfileMarkup.includes("2 budget failures") &&
+    explanatoryProfileMarkup.split("Certified model-call budget was exhausted.").length - 1 === 1,
+  explanatoryProfileMarkup
 );
 
 const teamDecisionRow: DecisionRow = {
@@ -167,19 +391,19 @@ const teamDecisionRow: DecisionRow = {
       attempts: 8,
       passed: 7,
       verifiedPassRate: 0.875,
-      averageVerifiedQuality: 0.9,
-    },
+      averageVerifiedQuality: 0.9
+    }
   ],
   reasoningEfforts: ["low", "high"],
   reasoningEffortDetails: [
     { role: "architect", displayName: "Architect", effort: "low" },
     { role: "worker", displayName: "Worker", effort: "high" },
-    { role: "reviewer", displayName: "Legacy", effort: "invalid" as never },
-  ],
+    { role: "reviewer", displayName: "Legacy", effort: "invalid" as never }
+  ]
 };
 const verdictMarkup = renderToStaticMarkup(
   React.createElement(DecisionVerdicts, {
-    rows: [variantRow, teamDecisionRow],
+    rows: [variantRow, teamDecisionRow]
   })
 );
 check(
@@ -198,14 +422,12 @@ check(
 );
 const emptyTeamVerdictMarkup = renderToStaticMarkup(
   React.createElement(DecisionVerdicts, {
-    rows: [variantRow],
+    rows: [variantRow]
   })
 );
 check(
   "empty WorkBench and team-lift cards request comparable team evidence",
-  emptyTeamVerdictMarkup.includes(
-    "Run a team WorkBench pack to compare verified coding work."
-  ) &&
+  emptyTeamVerdictMarkup.includes("Run a team WorkBench pack to compare verified coding work.") &&
     emptyTeamVerdictMarkup.includes(
       "Run the same certified track solo and as a team to measure added value."
     ),
@@ -215,7 +437,7 @@ check(
 const rosterRoles: RosterRole[] = [
   { role: "architect", displayName: "Architect", reasoningEffort: "low" },
   { role: "worker", displayName: "Worker", reasoningEffort: "high" },
-  { role: "reviewer", displayName: "Legacy", reasoningEffort: "default" },
+  { role: "reviewer", displayName: "Legacy", reasoningEffort: "default" }
 ];
 const auditRosterMarkup = renderToStaticMarkup(
   React.createElement(CertifiedLeaderboard, {
@@ -229,7 +451,7 @@ const auditRosterMarkup = renderToStaticMarkup(
     providerErrorCount: 0,
     onDeleteAttempt: () => undefined,
     onDeleteProviderErrors: () => undefined,
-    rosterByTeamId: new Map([["team-winner", rosterRoles]]),
+    rosterByTeamId: new Map([["team-winner", rosterRoles]])
   })
 );
 check(
@@ -250,7 +472,7 @@ const singleTrackRosterMarkup = renderToStaticMarkup(
     deleteInFlight: false,
     providerErrorCount: 0,
     onDeleteAttempt: () => undefined,
-    onDeleteProviderErrors: () => undefined,
+    onDeleteProviderErrors: () => undefined
   })
 );
 check(
@@ -278,7 +500,7 @@ const roleBoardsMarkup = renderToStaticMarkup(
           verifiedQuality: 0.7,
           efficiencyScore: 70,
           averageCostUsd: null,
-          averageDurationMs: null,
+          averageDurationMs: null
         },
         {
           id: "openai:model\u0000high",
@@ -292,18 +514,17 @@ const roleBoardsMarkup = renderToStaticMarkup(
           verifiedQuality: 0.9,
           efficiencyScore: 80,
           averageCostUsd: null,
-          averageDurationMs: null,
-        },
+          averageDurationMs: null
+        }
       ],
       worker: [],
-      reviewer: [],
-    },
+      reviewer: []
+    }
   })
 );
 check(
   "WorkBench role table renders same-model effort siblings",
-  roleBoardsMarkup.includes("Model · Low") &&
-    roleBoardsMarkup.includes("Model · High"),
+  roleBoardsMarkup.includes("Model · Low") && roleBoardsMarkup.includes("Model · High"),
   roleBoardsMarkup
 );
 
@@ -318,8 +539,8 @@ const chartMarkup = renderToStaticMarkup(
         speedPerPassMs: 1000,
         reasoningEffortDetails: [
           { role: "architect", displayName: "Model", effort: "low" },
-          { role: "worker", displayName: "Model", effort: "low" },
-        ],
+          { role: "worker", displayName: "Model", effort: "low" }
+        ]
       },
       {
         ...teamDecisionRow,
@@ -329,10 +550,10 @@ const chartMarkup = renderToStaticMarkup(
         speedPerPassMs: 2000,
         reasoningEffortDetails: [
           { role: "architect", displayName: "Model", effort: "high" },
-          { role: "worker", displayName: "Model", effort: "high" },
-        ],
-      },
-    ],
+          { role: "worker", displayName: "Model", effort: "high" }
+        ]
+      }
+    ]
   })
 );
 const chartRows: DecisionRow[] = [
@@ -345,7 +566,7 @@ const chartRows: DecisionRow[] = [
     verifiedQuality: 0.61,
     overallScore: 0.84,
     tokensPerPass: 1234,
-    speedPerPassMs: 2500,
+    speedPerPassMs: 2500
   },
   {
     ...teamDecisionRow,
@@ -356,19 +577,13 @@ const chartRows: DecisionRow[] = [
     verifiedQuality: 0.77,
     overallScore: null,
     tokensPerPass: 5678,
-    speedPerPassMs: 9250,
-  },
+    speedPerPassMs: 9250
+  }
 ];
 const tokenProjection = projectDecisionTradeoffPoints(chartRows, "tokens");
 const timeProjection = projectDecisionTradeoffPoints(chartRows, "time");
-const reorderedProjection = projectDecisionTradeoffPoints(
-  [chartRows[1]!, chartRows[0]!],
-  "tokens"
-);
-const filteredProjection = projectDecisionTradeoffPoints(
-  [chartRows[1]!],
-  "tokens"
-);
+const reorderedProjection = projectDecisionTradeoffPoints([chartRows[1]!, chartRows[0]!], "tokens");
+const filteredProjection = projectDecisionTradeoffPoints([chartRows[1]!], "tokens");
 check(
   "chart identity colors survive row reorder and filtering",
   tokenProjection[1]?.color === reorderedProjection[0]?.color &&
@@ -413,12 +628,8 @@ check(
 );
 check(
   "trade-off charts expose overall-index terminology and full identity legend",
-  decisionChartMarkup.includes(
-    "Overall index vs tokens per successful case"
-  ) &&
-    decisionChartMarkup.includes(
-      "Overall index vs time per successful case"
-    ) &&
+  decisionChartMarkup.includes("Overall index vs tokens per successful case") &&
+    decisionChartMarkup.includes("Overall index vs time per successful case") &&
     decisionChartMarkup.includes("Overall index") &&
     decisionChartMarkup.includes("Alpha Model · Low") &&
     decisionChartMarkup.includes("Beta Builder Team") &&
@@ -430,15 +641,13 @@ const longChartIdentity =
   "Alpha Model With A Deliberately Long Provider And Reasoning Configuration Name";
 const longLegendMarkup = renderToStaticMarkup(
   React.createElement(DecisionTradeoffCharts, {
-    rows: [{ ...chartRows[0]!, label: longChartIdentity }],
+    rows: [{ ...chartRows[0]!, label: longChartIdentity }]
   })
 );
 check(
   "trade-off legend wraps and preserves a full long identity",
   longLegendMarkup.includes(longChartIdentity) &&
-    longLegendMarkup.includes(
-      'class="min-w-0 break-words whitespace-normal font-medium"'
-    ) &&
+    longLegendMarkup.includes('class="min-w-0 break-words whitespace-normal font-medium"') &&
     !longLegendMarkup.includes('class="truncate font-medium"'),
   longLegendMarkup
 );
@@ -461,8 +670,7 @@ const pointShapeMarkup = renderToStaticMarkup(
       cy: 36,
       payload: tokenProjection[1],
       xLabel: "Tokens per successful case",
-      formatX: (value: number) =>
-        `${Math.round(value).toLocaleString()} tokens`,
+      formatX: (value: number) => `${Math.round(value).toLocaleString()} tokens`
     })
   )
 );
@@ -485,12 +693,11 @@ const tooltipMarkup = renderToStaticMarkup(
         name: "Overall index",
         value: tokenProjection[1]!.quality,
         color: tokenProjection[1]!.color,
-        payload: tokenProjection[1],
-      },
+        payload: tokenProjection[1]
+      }
     ],
     xLabel: "Tokens per successful case",
-    formatX: (value: number) =>
-      `${Math.round(value).toLocaleString()} tokens`,
+    formatX: (value: number) => `${Math.round(value).toLocaleString()} tokens`
   })
 );
 check(
@@ -521,26 +728,25 @@ check(
     label: "Same team",
     reasoningEffortDetails: [
       { role: "architect", displayName: "Model", effort: "low" },
-      { role: "worker", displayName: "Model", effort: "low" },
-    ],
-  }) ===
-    "Same team — architect: Model · Low, worker: Model · Low",
+      { role: "worker", displayName: "Model", effort: "low" }
+    ]
+  }) === "Same team — architect: Model · Low, worker: Model · Low",
   decisionTradeoffPointLabel({
     label: "Same team",
     reasoningEffortDetails: [
       { role: "architect", displayName: "Model", effort: "low" },
-      { role: "worker", displayName: "Model", effort: "low" },
-    ],
+      { role: "worker", displayName: "Model", effort: "low" }
+    ]
   })
 );
 
 const lowTeamDetails: BenchmarkVariantRosterDetail[] = [
   { role: "architect", displayName: "Model", effort: "low" },
-  { role: "worker", displayName: "Model", effort: "low" },
+  { role: "worker", displayName: "Model", effort: "low" }
 ];
 const highTeamDetails: BenchmarkVariantRosterDetail[] = [
   { role: "architect", displayName: "Model", effort: "high" },
-  { role: "worker", displayName: "Model", effort: "high" },
+  { role: "worker", displayName: "Model", effort: "high" }
 ];
 const teamIqBase: TeamIqComboMatrixRow = {
   id: "same-team-low:teamiq",
@@ -563,7 +769,7 @@ const teamIqBase: TeamIqComboMatrixRow = {
   teamLift: 10,
   teamLiftLabel: "positive",
   isParetoRecommended: true,
-  recommendationLabel: "recommended",
+  recommendationLabel: "recommended"
 };
 const teamIqRows: TeamIqComboMatrixRow[] = [
   teamIqBase,
@@ -574,8 +780,8 @@ const teamIqRows: TeamIqComboMatrixRow[] = [
     comboHash: "same-team-high",
     modelVariantKeys: ["openai:model\u0000high"],
     reasoningEffortDetails: highTeamDetails,
-    verifiedQuality: 0.9,
-  },
+    verifiedQuality: 0.9
+  }
 ];
 const teamIqCards: TeamIqRecommendationCard[] = [
   {
@@ -586,7 +792,7 @@ const teamIqCards: TeamIqRecommendationCard[] = [
     value: "+10",
     detail: "Low team",
     recommendationLabel: "recommended",
-    reasoningEffortDetails: lowTeamDetails,
+    reasoningEffortDetails: lowTeamDetails
   },
   {
     kind: "best_quality",
@@ -596,12 +802,10 @@ const teamIqCards: TeamIqRecommendationCard[] = [
     value: "90%",
     detail: "High team",
     recommendationLabel: "recommended",
-    reasoningEffortDetails: highTeamDetails,
-  },
+    reasoningEffortDetails: highTeamDetails
+  }
 ];
-const comboMarkup = renderToStaticMarkup(
-  React.createElement(ComboMatrix, { rows: teamIqRows })
-);
+const comboMarkup = renderToStaticMarkup(React.createElement(ComboMatrix, { rows: teamIqRows }));
 check(
   "combo matrix distinguishes otherwise identical team effort configs",
   comboMarkup.includes("architect: Model · Low") &&
@@ -613,7 +817,7 @@ check(
 const paretoMarkup = renderToStaticMarkup(
   React.createElement(ParetoFrontier, {
     rows: teamIqRows,
-    cards: teamIqCards,
+    cards: teamIqCards
   })
 );
 check(
@@ -627,7 +831,7 @@ check(
 const recommendationOnlyMarkup = renderToStaticMarkup(
   React.createElement(ParetoFrontier, {
     rows: [],
-    cards: teamIqCards,
+    cards: teamIqCards
   })
 );
 check(
@@ -654,7 +858,7 @@ const overallMarkup = renderToStaticMarkup(
           combinedScore: 0.7,
           trackCount: 1,
           preliminary: true,
-          tracks: [],
+          tracks: []
         },
         {
           modelId: "openai:model",
@@ -667,10 +871,10 @@ const overallMarkup = renderToStaticMarkup(
           combinedScore: 0.9,
           trackCount: 1,
           preliminary: false,
-          tracks: [],
-        },
+          tracks: []
+        }
       ],
-      leaderboard: [],
+      leaderboard: []
     },
     counts: {
       suites: 0,
@@ -687,8 +891,8 @@ const overallMarkup = renderToStaticMarkup(
       runEvents: 0,
       toolCallTraces: 0,
       teamCompositions: 2,
-      harnessCertifications: 0,
-    },
+      harnessCertifications: 0
+    }
   })
 );
 check(
@@ -710,7 +914,7 @@ for (const label of [
   "Most reliable",
   "Leanest successful model",
   "Fastest successful model",
-  "Best team lift",
+  "Best team lift"
 ]) {
   check(`decision verdict exposes ${label}`, verdicts.includes(label), label);
 }
@@ -770,8 +974,7 @@ check(
 );
 check(
   "dashboard separates Decide and Understand layers",
-  dashboard.includes("What the evidence says") &&
-    dashboard.includes("Understand the trade-offs"),
+  dashboard.includes("What the evidence says") && dashboard.includes("Understand the trade-offs"),
   dashboard
 );
 check(
