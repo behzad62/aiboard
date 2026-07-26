@@ -109,6 +109,45 @@ assert.deepEqual(
   defaultAggregate?.teamCompositionIds,
   ["solo-explicit-default", "solo-legacy"]
 );
+const sameDecisionLegacyAttempt = {
+  ...attempt("same-decision-legacy", legacy.id, 0.4, "teamiq"),
+  caseId: "same-default-decision",
+};
+const sameDecisionExplicitAttempt = {
+  ...attempt(
+    "same-decision-explicit",
+    explicitDefault.id,
+    0.8,
+    "gameiq"
+  ),
+  caseId: "same-default-decision",
+};
+const sameDecisionHighAttempt = {
+  ...attempt("same-decision-high", high.id, 0.9, "gameiq"),
+  caseId: "same-default-decision",
+};
+const sameDecisionRows = aggregateCertifiedRunScores({
+  attempts: [
+    sameDecisionLegacyAttempt,
+    sameDecisionExplicitAttempt,
+    sameDecisionHighAttempt,
+  ],
+  teamCompositions: [legacy, explicitDefault, high],
+});
+const sameDecisionDefaultRow = sameDecisionRows.find(
+  (row) => row.modelVariantKeys[0] === "openai:model\u0000default"
+);
+const sameDecisionHighRow = sameDecisionRows.find(
+  (row) => row.modelVariantKeys[0] === "openai:model\u0000high"
+);
+assert.equal(sameDecisionRows.length, 2);
+assert.equal(sameDecisionDefaultRow?.attempts, 1);
+assert.equal(sameDecisionDefaultRow?.verifiedQuality, 0.8);
+assert.deepEqual(sameDecisionDefaultRow?.teamCompositionIds, [
+  "solo-explicit-default",
+  "solo-legacy",
+]);
+assert.deepEqual(sameDecisionHighRow?.teamCompositionIds, ["solo-high"]);
 const defaultTeam: BenchmarkTeamComposition = {
   id: "team-default",
   name: "Default effort team",

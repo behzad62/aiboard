@@ -214,26 +214,43 @@ export function aggregateCertifiedRunScores(
   );
   const teams = Array.isArray(input) ? [] : input.teamCompositions ?? [];
   const cases = Array.isArray(input) ? [] : input.cases ?? [];
+  const teamIdentityById = new Map(
+    teams.map((team) => [team.id, canonicalTeamCompositionKey(team)])
+  );
+  // Scoring dedupe may discard one cross-track sample, but that must not erase
+  // which persisted composition ids the semantic row represents. Delete and
+  // audit metadata need the complete pre-dedupe provenance set.
+  const teamCompositionIdsByIdentity = new Map<string, Set<string>>();
+  for (const attempt of rawAttempts as AttemptLike[]) {
+    const persistedTeamId = attempt.teamCompositionId ?? "unknown";
+    const identity =
+      teamIdentityById.get(persistedTeamId) ?? persistedTeamId;
+    const representedIds =
+      teamCompositionIdsByIdentity.get(identity) ?? new Set<string>();
+    representedIds.add(persistedTeamId);
+    teamCompositionIdsByIdentity.set(identity, representedIds);
+  }
   // Leaderboard rows MERGE all tracks for a team into one row, so the same
   // underlying decision reached via two tracks must be counted once.
   const attempts = dedupeCrossTrackAttempts(rawAttempts, cases, teams);
   const teamById = new Map(teams.map((team) => [team.id, team as TeamLike]));
-  const teamIdentityById = new Map(
-    teams.map((team) => [team.id, canonicalTeamCompositionKey(team)])
-  );
   const caseById = new Map(cases.map((item) => [item.id, item]));
   const groups = new Map<string, MutableCertifiedRunScore>();
 
   for (const attempt of attempts as AttemptLike[]) {
     const teamId = attempt.teamCompositionId ?? "unknown";
     const team = teamById.get(teamId);
+    const groupKey = teamIdentityById.get(teamId) ?? teamId;
     const group = groupFor(
       groups,
-      teamIdentityById.get(teamId) ?? teamId,
+      groupKey,
       teamId,
       team
     );
-    group.teamCompositionIds.add(teamId);
+    for (const representedId of
+      teamCompositionIdsByIdentity.get(groupKey) ?? [teamId]) {
+      group.teamCompositionIds.add(representedId);
+    }
     const verifiedQuality = readScore(attempt.verifiedQuality, 0, 1);
     const jobSuccessScore = readScore(
       attempt.jobSuccessScore,

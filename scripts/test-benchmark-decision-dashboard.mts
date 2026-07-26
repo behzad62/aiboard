@@ -8,6 +8,7 @@ import {
   type DecisionRow,
 } from "../lib/benchmark/certified/decision-dashboard";
 import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
+import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import type { BenchmarkTeamComposition } from "../lib/benchmark/types";
 
 let failures = 0;
@@ -200,27 +201,53 @@ const explicitDefaultTeam = {
   roles: [{ ...legacyTeam.roles[0], reasoningEffort: "default" as const }],
 } as BenchmarkTeamComposition;
 const compatibleMetadata = withCertifiedDeleteMetadata(
-  {
-    leaderboard: [{
-      ...row("legacy-default"),
-      teamCompositionIds: ["explicit-default", "legacy-default"],
-    }],
-  } as never,
+  buildCertifiedBenchmarkDashboardData({
+    caseV2: [],
+    attemptsV2: [
+      {
+        id: "attempt-legacy",
+        runId: "run-compatible",
+        caseId: "same-default-decision",
+        mode: "certified",
+        teamCompositionId: "legacy-default",
+        track: "teamiq",
+        status: "passed",
+        startedAt: "2026-07-26T00:00:00.000Z",
+      },
+      {
+        id: "attempt-explicit",
+        runId: "run-compatible",
+        caseId: "same-default-decision",
+        mode: "certified",
+        teamCompositionId: "explicit-default",
+        track: "gameiq",
+        status: "passed",
+        startedAt: "2026-07-26T00:01:00.000Z",
+      },
+    ] as never,
+    verifierResults: [],
+    teamCompositions: [legacyTeam, explicitDefaultTeam],
+    harnessCertifications: [],
+  }),
   [
     {
       id: "attempt-legacy",
+      runId: "run-compatible",
+      caseId: "same-default-decision",
       mode: "certified",
       teamCompositionId: "legacy-default",
-      track: "gameiq",
+      track: "teamiq",
       status: "passed",
       startedAt: "2026-07-26T00:00:00.000Z",
     },
     {
       id: "attempt-explicit",
+      runId: "run-compatible",
+      caseId: "same-default-decision",
       mode: "certified",
       teamCompositionId: "explicit-default",
-      track: "workbench",
-      status: "provider_unavailable",
+      track: "gameiq",
+      status: "passed",
       startedAt: "2026-07-26T00:01:00.000Z",
     },
   ] as never,
@@ -229,11 +256,12 @@ const compatibleMetadata = withCertifiedDeleteMetadata(
 check(
   "canonical default rows retain delete metadata across persisted composition aliases",
   compatibleMetadata?.latestAttemptId === "attempt-explicit" &&
-    compatibleMetadata.providerUnavailableAttemptIds?.join(",") ===
-      "attempt-explicit" &&
+    compatibleMetadata.attempts === 1 &&
+    compatibleMetadata.teamCompositionIds?.slice().sort().join(",") ===
+      "explicit-default,legacy-default" &&
     Object.keys(compatibleMetadata.latestAttemptsByTrack ?? {})
       .sort()
-      .join(",") === "gameiq,workbench",
+      .join(",") === "gameiq,teamiq",
   compatibleMetadata
 );
 
