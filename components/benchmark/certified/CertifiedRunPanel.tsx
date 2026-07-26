@@ -559,6 +559,7 @@ export function CertifiedRunPanel({
                     models={models}
                     roleMode={workBenchRoleMode}
                     selectedModelIds={workBenchModelIds}
+                    effortByModelId={effortByModelId}
                     onRoleModeChange={(next) => {
                       setWorkBenchRoleMode(next);
                       setWorkBenchModelIds((current) =>
@@ -570,6 +571,7 @@ export function CertifiedRunPanel({
                       );
                     }}
                     onChange={setWorkBenchModelIds}
+                    onEffortChange={handleEffortChange}
                   />
                 </div>
               )}
@@ -1062,18 +1064,22 @@ function GameIqModelRunSummaryPanel({
   );
 }
 
-function WorkBenchTeamBuilder({
+export function WorkBenchTeamBuilder({
   models,
   roleMode,
   selectedModelIds,
+  effortByModelId,
   onRoleModeChange,
   onChange,
+  onEffortChange,
 }: {
   models: SelectedModel[];
   roleMode: WorkBenchRoleMode;
   selectedModelIds: string[];
+  effortByModelId: BenchmarkModelEffortMap;
   onRoleModeChange: (value: WorkBenchRoleMode) => void;
   onChange: (value: string[]) => void;
+  onEffortChange: (modelId: string, effort: ReasoningEffort) => void;
 }) {
   const roleCount = workBenchRoleCount(roleMode);
   const selected = normalizeWorkBenchModelSelection({
@@ -1101,27 +1107,42 @@ function WorkBenchTeamBuilder({
           </option>
         </select>
       </label>
-      {selected.map((modelId, index) => (
-        <label key={`${roleMode}-${index}`} className="space-y-1">
-          <span className="font-medium">{workBenchRoleLabel(roleMode, index)}</span>
-          <select
-            value={modelId}
-            onChange={(event) => {
-              const next = [...selected];
-              next[index] = event.target.value;
-              onChange(next);
-            }}
-            className="w-full rounded-md border bg-background px-3 py-2"
-          >
-            <option value="">Select model</option>
-            {models.map((model) => (
-              <option key={model.modelId} value={model.modelId}>
-                {model.displayName}
-              </option>
-            ))}
-          </select>
-        </label>
-      ))}
+      {selected.map((modelId, index) => {
+        const model = models.find((candidate) => candidate.modelId === modelId);
+        return (
+          <div key={`${roleMode}-${index}`} className="space-y-2">
+            <label className="space-y-1">
+              <span className="font-medium">
+                {workBenchRoleLabel(roleMode, index)}
+              </span>
+              <select
+                value={modelId}
+                onChange={(event) => {
+                  const next = [...selected];
+                  next[index] = event.target.value;
+                  onChange(next);
+                }}
+                className="w-full rounded-md border bg-background px-3 py-2"
+              >
+                <option value="">Select model</option>
+                {models.map((candidate) => (
+                  <option key={candidate.modelId} value={candidate.modelId}>
+                    {candidate.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {model && (
+              <ModelEffortSelect
+                model={model}
+                value={effortByModelId[model.modelId] ?? "default"}
+                onChange={(effort) => onEffortChange(model.modelId, effort)}
+                compact
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

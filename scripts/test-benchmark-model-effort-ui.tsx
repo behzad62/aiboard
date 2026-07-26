@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { AdvancedModelEffortControl } from "../components/benchmark/certified/CertifiedRunPanel";
+import {
+  AdvancedModelEffortControl,
+  WorkBenchTeamBuilder,
+} from "../components/benchmark/certified/CertifiedRunPanel";
 import { ModelChecklist } from "../components/benchmark/run/ModelChecklist";
 import { TeamCompositionBuilder } from "../components/benchmark/teamiq/TeamCompositionBuilder";
 import type { SelectedModel } from "../lib/providers/base";
@@ -77,5 +80,51 @@ const advancedMarkup = renderToStaticMarkup(
 );
 assert.match(advancedMarkup, /Reasoning effort for GPT-5\.6/);
 assert.match(advancedMarkup, />Extra high<\/option>/);
+
+const workBenchTeamMarkup = renderToStaticMarkup(
+  <WorkBenchTeamBuilder
+    models={models}
+    roleMode="architect_worker_reviewer"
+    selectedModelIds={[
+      "openai:gpt-5.6-terra",
+      "custom:plain-chat",
+      "openai:gpt-5.6-terra",
+    ]}
+    effortByModelId={effortByModelId}
+    onRoleModeChange={() => undefined}
+    onChange={() => undefined}
+    onEffortChange={() => undefined}
+  />
+);
+assert.equal(
+  workBenchTeamMarkup.match(/aria-label="Reasoning effort for /g)?.length,
+  3,
+  "every occupied WorkBench role must render an effort selector"
+);
+assert.equal(
+  workBenchTeamMarkup.match(/aria-label="Reasoning effort for GPT-5\.6"/g)
+    ?.length,
+  2,
+  "repeated WorkBench models must render from the same model-keyed effort"
+);
+assert.match(workBenchTeamMarkup, />Extra high<\/option>/);
+
+const workBenchSoloMarkup = renderToStaticMarkup(
+  <WorkBenchTeamBuilder
+    models={models}
+    roleMode="solo"
+    selectedModelIds={["openai:gpt-5.6-terra"]}
+    effortByModelId={effortByModelId}
+    onRoleModeChange={() => undefined}
+    onChange={() => undefined}
+    onEffortChange={() => undefined}
+  />
+);
+assert.match(
+  workBenchSoloMarkup,
+  /aria-label="Reasoning effort for GPT-5\.6"/,
+  "an Advanced WorkBench solo model remains configurable without preset checklist membership"
+);
+assert.match(workBenchSoloMarkup, />Extra high<\/option>/);
 
 console.log("benchmark model effort UI: PASS");
