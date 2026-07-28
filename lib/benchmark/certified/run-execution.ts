@@ -18,6 +18,7 @@ import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget"
 import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
 import type { BenchmarkAttemptV2 as BenchmarkAttempt } from "@/lib/benchmark/types";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
+import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call";
 import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import {
   classifyGameIqModelRunOutcome,
@@ -560,6 +561,27 @@ export async function runGameIqMultiModel(
       selectedModels,
       MAX_PARALLEL_GAMEIQ_MODELS,
       async (model, index) => {
+        // A worker that just finished an active model can claim the next queued
+        // index after the shared batch was cancelled. Resolve that row before
+        // runOneModel marks it running or persists its team/run/attempt.
+        if (abortController.signal.aborted) {
+          let cancellationError = "Certified run aborted by user.";
+          try {
+            throwIfCertifiedRunAborted(abortController.signal);
+          } catch (error) {
+            cancellationError =
+              error instanceof Error ? error.message : String(error);
+          }
+          const state: GameIqModelRunState = {
+            modelId: model.modelId,
+            displayName: model.displayName,
+            providerId: model.providerId,
+            status: "failed",
+            error: cancellationError,
+          };
+          updateGameIqModelRun(model.modelId, state);
+          return state;
+        }
         try {
           return await runOneModel(model, index);
         } catch (error) {

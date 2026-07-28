@@ -205,6 +205,71 @@ check(
 }
 
 // ---------------------------------------------------------------------------
+// Behavior: a timed-out physical attempt is aborted before retry admission,
+// and the retry owns a distinct fresh provider signal.
+// ---------------------------------------------------------------------------
+
+{
+  const providerSignals: AbortSignal[] = [];
+  let firstSignalAbortedBeforeRetry = false;
+  async function* timeoutThenSucceed(input: {
+    params: { signal?: AbortSignal };
+  }): AsyncIterable<StreamChunk> {
+    const signal = input.params.signal;
+    if (!signal) throw new Error("Certified provider did not receive a signal.");
+    providerSignals.push(signal);
+    if (providerSignals.length === 1) {
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return;
+    }
+    firstSignalAbortedBeforeRetry = providerSignals[0]!.aborted;
+    yield { type: "token", content: '{"action":{"column":4}}' };
+    yield { type: "done" };
+  }
+
+  const context = makeTestContext();
+  context.modelBudget.maxModelCallMs = 10;
+  const result = await callCertifiedModel({
+    model,
+    system: "s",
+    user: "u",
+    maxTokens: 128,
+    temperature: 0,
+    context,
+    caseId: context.caseIds[0],
+    attemptId: "attempt-timeout-fresh-retry-signal",
+    participantId: "p",
+    streamChat: timeoutThenSucceed,
+    retryDelaysMs: [0],
+  });
+  check(
+    "timed-out physical attempt is aborted before retry stream starts",
+    firstSignalAbortedBeforeRetry,
+    providerSignals.map((signal) => signal.aborted)
+  );
+  check(
+    "retry receives a distinct fresh provider signal",
+    providerSignals.length === 2 &&
+      providerSignals[0] !== providerSignals[1] &&
+      providerSignals[0]!.aborted &&
+      !providerSignals[1]!.aborted,
+    providerSignals.map((signal) => signal.aborted)
+  );
+  check(
+    "retry after timeout succeeds without changing retry policy",
+    result.rawResponse === '{"action":{"column":4}}' &&
+      result.retryAttempts?.length === 1,
+    result
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Behavior: fatal failure throws immediately (exactly 1 invocation, typed error)
 // ---------------------------------------------------------------------------
 
