@@ -49,13 +49,23 @@ try {
     done: false,
     value: { type: "token", content: "one" },
   });
-  await iterator.return?.();
-  await Promise.race([
-    requestCloseObserved,
-    new Promise<void>((_, reject) =>
-      setTimeout(() => reject(new Error("Timed out waiting for account-runner request closure.")), 2_000)
-    ),
-  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      (async () => {
+        await iterator.return?.();
+        await requestCloseObserved;
+      })(),
+      new Promise<void>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Timed out waiting for account-runner request closure.")),
+          2_000
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
   assert.equal(requestClosed, true);
   console.log("PASS");
 } finally {

@@ -369,6 +369,7 @@ check(
 {
   let calls = 0;
   let retryCountWhenIteratorNeverConfirmsClose = 0;
+  let teardownStartedAt = 0;
   let notifyFirstNextStarted!: () => void;
   let rejectFirstNext!: (error: Error) => void;
   const firstNextStarted = new Promise<void>((resolve) => {
@@ -397,7 +398,10 @@ check(
                 rejectFirstNext = reject;
               });
             },
-            return: () => new Promise<IteratorResult<StreamChunk>>(() => undefined),
+            return: () => {
+              teardownStartedAt = Date.now();
+              return new Promise<IteratorResult<StreamChunk>>(() => undefined);
+            },
           };
         },
       };
@@ -414,12 +418,111 @@ check(
       candidate.classification !== "transient" &&
       /retry was suppressed to avoid overlapping paid calls/i.test(candidate.message)
   );
+  const teardownElapsedMs = Date.now() - teardownStartedAt;
   assert.equal(retryCountWhenIteratorNeverConfirmsClose, 0);
   check(
     "unconfirmed iterator teardown surfaces fail-closed provider error",
     error instanceof CertifiedProviderError &&
       error.classification !== "transient" &&
-      calls === 1,
+      calls === 1 &&
+      teardownElapsedMs >= 4_900 &&
+      teardownElapsedMs <= 6_500,
+    {
+      calls,
+      teardownElapsedMs,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  );
+}
+
+{
+  let calls = 0;
+  const context = makeTestContext();
+  const error = await expectReject(
+    "missing iterator return suppresses a transient retry",
+    () =>
+      callCertifiedModel({
+        model,
+        system: "s",
+        user: "u",
+        maxTokens: 128,
+        temperature: 0,
+        context,
+        caseId: context.caseIds[0],
+        attemptId: "attempt-retry-suppressed-missing-return",
+        participantId: "p",
+        streamChat: (): AsyncIterable<StreamChunk> => {
+          calls++;
+          return {
+            [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+              return {
+                next: async () => {
+                  throw new Error("ChatGPT request failed: 503");
+                },
+              };
+            },
+          };
+        },
+        retryDelaysMs: [0],
+      }),
+    (candidate) =>
+      candidate instanceof CertifiedProviderError &&
+      candidate.classification !== "transient" &&
+      /retry was suppressed to avoid overlapping paid calls/i.test(candidate.message)
+  );
+  check(
+    "missing iterator return fails closed without attempt 2",
+    calls === 1 &&
+      error instanceof CertifiedProviderError &&
+      error.classification !== "transient",
+    { calls, error: error instanceof Error ? error.message : String(error) }
+  );
+}
+
+{
+  let calls = 0;
+  const context = makeTestContext();
+  const error = await expectReject(
+    "iterator return done false suppresses a transient retry",
+    () =>
+      callCertifiedModel({
+        model,
+        system: "s",
+        user: "u",
+        maxTokens: 128,
+        temperature: 0,
+        context,
+        caseId: context.caseIds[0],
+        attemptId: "attempt-retry-suppressed-return-done-false",
+        participantId: "p",
+        streamChat: (): AsyncIterable<StreamChunk> => {
+          calls++;
+          return {
+            [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+              return {
+                next: async () => {
+                  throw new Error("ChatGPT request failed: 503");
+                },
+                return: async () => ({
+                  done: false,
+                  value: { type: "token", content: "still open" },
+                }),
+              };
+            },
+          };
+        },
+        retryDelaysMs: [0],
+      }),
+    (candidate) =>
+      candidate instanceof CertifiedProviderError &&
+      candidate.classification !== "transient" &&
+      /retry was suppressed to avoid overlapping paid calls/i.test(candidate.message)
+  );
+  check(
+    "iterator return done false fails closed without attempt 2",
+    calls === 1 &&
+      error instanceof CertifiedProviderError &&
+      error.classification !== "transient",
     { calls, error: error instanceof Error ? error.message : String(error) }
   );
 }

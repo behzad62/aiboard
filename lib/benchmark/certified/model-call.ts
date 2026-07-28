@@ -683,10 +683,12 @@ async function closeIteratorBeforeRetry(
   iterator: AsyncIterator<StreamChunk>,
   originalError: unknown
 ): Promise<CertifiedProviderError | undefined> {
-  if (!iterator.return) return undefined;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    if (!iterator.return) {
+      throw new Error("Certified provider iterator does not expose return().");
+    }
+    const result = await Promise.race([
       iterator.return(),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
@@ -695,6 +697,9 @@ async function closeIteratorBeforeRetry(
         );
       }),
     ]);
+    if (result.done !== true) {
+      throw new Error("Certified provider iterator return() did not report done.");
+    }
     return undefined;
   } catch {
     return new CertifiedProviderError(
