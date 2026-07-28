@@ -228,8 +228,8 @@ try {
   const healthResponse = await fetch(`${baseUrl}/health`);
   const health = await healthResponse.json();
   check(
-    "GPT-5.6-capable account-provider runner reports version 18",
-    healthResponse.ok && health.version === 18,
+    "GPT-5.6-capable account-provider runner reports version 19",
+    healthResponse.ok && health.version === 19,
     health
   );
 

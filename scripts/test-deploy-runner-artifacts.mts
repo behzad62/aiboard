@@ -30,6 +30,7 @@ function nodeCheck(path: string): boolean {
 }
 
 const sourceAccountRunner = "lib/account-provider-runner.mjs";
+const sourceAccountSdk = "lib/account-provider-copilot-sdk.mjs";
 const sourceBenchRunner = "scripts/bench-runner.mjs";
 const publicAccountRunner = "public/account-provider-runner.mjs";
 const exportedAccountRunner = "out/account-provider-runner.mjs";
@@ -205,9 +206,16 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
       check(`${path} starts the account runner`, packageJson.scripts?.start === "node account-provider-runner.mjs", packageJson);
     }
     if (runnerFile && existsSync(sourceAccountRunner)) {
-      check(`${path} account runner source matches`, await runnerFile.async("string") === read(sourceAccountRunner));
+      check(
+        `${path} account runner bytes match source`,
+        await runnerFile.async("nodebuffer").then((content) => content.equals(readFileSync(sourceAccountRunner)))
+      );
     }
-    if (sdkFile) {
+    if (sdkFile && existsSync(sourceAccountSdk)) {
+      check(
+        `${path} SDK adapter bytes match source`,
+        await sdkFile.async("nodebuffer").then((content) => content.equals(readFileSync(sourceAccountSdk)))
+      );
       const tempPath = await writeTempFile(path, sdkFile);
       check(`${path} SDK adapter is valid JavaScript`, nodeCheck(tempPath), path);
       unlinkSync(tempPath);
@@ -295,15 +303,15 @@ if (existsSync(publicWorkBenchRunner) && existsSync(exportedWorkBenchRunner)) {
 
 if (existsSync(publicAccountRunner) && existsSync(sourceAccountRunner)) {
   check(
-    "public account runner matches source",
-    read(publicAccountRunner) === read(sourceAccountRunner)
+    "public account runner bytes match source",
+    readFileSync(publicAccountRunner).equals(readFileSync(sourceAccountRunner))
   );
 }
 
 if (existsSync(exportedAccountRunner) && existsSync(sourceAccountRunner)) {
   check(
-    "exported account runner matches source",
-    read(exportedAccountRunner) === read(sourceAccountRunner)
+    "exported account runner bytes match source",
+    readFileSync(exportedAccountRunner).equals(readFileSync(sourceAccountRunner))
   );
 }
 

@@ -42,6 +42,18 @@ async function readRequestBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 2_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return condition();
+}
+
 function sseData(payload: unknown): string {
   return `data: ${typeof payload === "string" ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -87,6 +99,10 @@ const capturedRequests: Array<{
   headers: http.IncomingHttpHeaders;
   body: Record<string, unknown>;
 }> = [];
+let streamingDisconnectReceived = false;
+let streamingDisconnectClosed = false;
+let nonStreamingDisconnectReceived = false;
+let nonStreamingDisconnectClosed = false;
 
 fs.writeFileSync(authFile, "{}");
 
@@ -100,6 +116,30 @@ const fakeBackend = http.createServer(async (req, res) => {
     headers: capturedHeaders,
     body: capturedBody,
   });
+  if (capturedBody.model === "nvidia/disconnect-stream") {
+    streamingDisconnectReceived = true;
+    const observeClose = () => {
+      streamingDisconnectClosed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    res.write(sseData({ choices: [{ delta: { content: "waiting" } }] }));
+    return;
+  }
+  if (capturedBody.model === "nvidia/disconnect-nonstream") {
+    nonStreamingDisconnectReceived = true;
+    const observeClose = () => {
+      nonStreamingDisconnectClosed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
+    return;
+  }
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -363,6 +403,70 @@ try {
       chatTemplateKwargs?.enable_thinking === true &&
       chatTemplateKwargs.force_nonempty_content === true,
     nemotronBody
+  );
+
+  const disconnectHeaders = {
+    "content-type": "application/json",
+    "x-runner-token": token,
+  };
+  const streamingController = new AbortController();
+  const streamingRequest = fetch(`${baseUrl}/providers/nvidia/chat`, {
+    method: "POST",
+    headers: disconnectHeaders,
+    signal: streamingController.signal,
+    body: JSON.stringify({
+      apiKey: "fake-nvidia-api-key",
+      model: "nvidia/disconnect-stream",
+      messages: [{ role: "user", content: "Keep this stream open." }],
+      stream: true,
+    }),
+  })
+    .then((streamingResponse) => streamingResponse.text())
+    .catch(() => undefined);
+  const streamingReceived = await waitForCondition(
+    () => streamingDisconnectReceived
+  );
+  check(
+    "fake NVIDIA backend receives the streaming disconnect test request",
+    streamingReceived
+  );
+  streamingController.abort();
+  await streamingRequest;
+  const streamingClosed = await waitForCondition(
+    () => streamingDisconnectClosed
+  );
+  check(
+    "disconnecting the runner client closes the streaming NVIDIA request",
+    streamingClosed
+  );
+
+  const nonStreamingController = new AbortController();
+  const nonStreamingRequest = fetch(`${baseUrl}/providers/nvidia/chat`, {
+    method: "POST",
+    headers: disconnectHeaders,
+    signal: nonStreamingController.signal,
+    body: JSON.stringify({
+      apiKey: "fake-nvidia-api-key",
+      model: "nvidia/disconnect-nonstream",
+      messages: [{ role: "user", content: "Keep this request open." }],
+      stream: false,
+    }),
+  }).catch(() => undefined);
+  const nonStreamingReceived = await waitForCondition(
+    () => nonStreamingDisconnectReceived
+  );
+  check(
+    "fake NVIDIA backend receives the non-streaming disconnect test request",
+    nonStreamingReceived
+  );
+  nonStreamingController.abort();
+  await nonStreamingRequest;
+  const nonStreamingClosed = await waitForCondition(
+    () => nonStreamingDisconnectClosed
+  );
+  check(
+    "disconnecting the runner client closes the non-streaming NVIDIA request",
+    nonStreamingClosed
   );
 } catch (err) {
   check(

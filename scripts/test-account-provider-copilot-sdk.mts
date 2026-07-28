@@ -111,4 +111,79 @@ check("SDK adapter forwards streaming deltas", emitted.join("") === "SDK result"
 check("SDK adapter passes the account token to the client", capturedClientOptions?.gitHubToken === "test-token", capturedClientOptions);
 check("SDK adapter creates a web-search session", Boolean(capturedSessionConfig?.availableTools), capturedSessionConfig);
 
+const cancellationController = new AbortController();
+const cleanupOrder: string[] = [];
+let abortCalls = 0;
+let disconnectCalls = 0;
+let stopCalls = 0;
+let releasePendingSend: (() => void) | undefined;
+const pendingSend = new Promise<void>((resolve) => {
+  releasePendingSend = resolve;
+});
+const cancellingSession = {
+  on() {
+    return () => undefined;
+  },
+  async sendAndWait() {
+    await pendingSend;
+    throw new Error("SDK session aborted");
+  },
+  async abort() {
+    abortCalls += 1;
+    cleanupOrder.push("abort");
+    releasePendingSend?.();
+  },
+  async disconnect() {
+    disconnectCalls += 1;
+    cleanupOrder.push("disconnect");
+  },
+};
+const cancellingRun = sdk.runCopilotSdkChat(
+  {
+    model: "gpt-5.4",
+    messages: [{ role: "user", content: "Keep this session open." }],
+  },
+  "test-token",
+  "C:\\aiboard-sdk-cancellation-test",
+  undefined,
+  {
+    signal: cancellationController.signal,
+    clientFactory() {
+      return {
+        async start() {},
+        async createSession() {
+          return cancellingSession;
+        },
+        async stop() {
+          stopCalls += 1;
+          cleanupOrder.push("stop");
+        },
+      };
+    },
+  }
+).catch(() => undefined);
+await new Promise((resolve) => setTimeout(resolve, 0));
+cancellationController.abort();
+const cancellationSettled =
+  (await Promise.race([
+    cancellingRun.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+  ])) === true;
+check(
+  "aborting the supplied signal settles the pending Copilot SDK send",
+  cancellationSettled
+);
+check("Copilot SDK cancellation calls session.abort once", abortCalls === 1, abortCalls);
+check(
+  "Copilot SDK cancellation disconnects the session once",
+  disconnectCalls === 1,
+  disconnectCalls
+);
+check("Copilot SDK cancellation stops the client once", stopCalls === 1, stopCalls);
+check(
+  "Copilot SDK aborts before disconnecting and stopping",
+  JSON.stringify(cleanupOrder) === JSON.stringify(["abort", "disconnect", "stop"]),
+  cleanupOrder
+);
+
 process.exit(failed === 0 ? 0 : 1);

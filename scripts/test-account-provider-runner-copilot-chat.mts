@@ -38,6 +38,18 @@ async function readRequestBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 2_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return condition();
+}
+
 interface CapturedRequest {
   url: string | undefined;
   headers: http.IncomingHttpHeaders;
@@ -50,6 +62,8 @@ const runnerPort = await getFreePort();
 const fakeBackendPort = await getFreePort();
 const authFile = path.join(tmp, "auth.json");
 const capturedRequests: CapturedRequest[] = [];
+let disconnectFallbackReceived = false;
+let disconnectFallbackClosed = false;
 
 fs.writeFileSync(
   authFile,
@@ -72,6 +86,20 @@ const fakeBackend = http.createServer(async (req, res) => {
   const raw = await readRequestBody(req);
   const body = raw ? JSON.parse(raw) : {};
   capturedRequests.push({ url: req.url, headers: req.headers, body });
+  if (body.model === "gpt-5.4-disconnect-test") {
+    if (req.url === "/responses") {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Use fallback" } }));
+      return;
+    }
+    disconnectFallbackReceived = true;
+    const observeClose = () => {
+      disconnectFallbackClosed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
+    return;
+  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }));
 });
@@ -290,6 +318,47 @@ try {
       effortCaptured?.body
     );
   }
+
+  const downstreamController = new AbortController();
+  const downstreamRequest = fetch(
+    `${baseUrl}/providers/github-copilot/chat`,
+    {
+      method: "POST",
+      headers,
+      signal: downstreamController.signal,
+      body: JSON.stringify({
+        runtimeMode: "build",
+        model: "gpt-5.4-disconnect-test",
+        structuredOutput: {
+          name: "disconnect_test",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["ok"],
+            properties: { ok: { type: "boolean" } },
+          },
+        },
+        messages: [{ role: "user", content: "Keep this request open." }],
+      }),
+    }
+  ).catch(() => undefined);
+  const fallbackReceived = await waitForCondition(
+    () => disconnectFallbackReceived
+  );
+  check(
+    "fake Copilot responses fallback receives the disconnect test request",
+    fallbackReceived
+  );
+  downstreamController.abort();
+  await downstreamRequest;
+  const fallbackClosed = await waitForCondition(
+    () => disconnectFallbackClosed
+  );
+  check(
+    "disconnecting the runner client closes the Copilot responses fallback request",
+    fallbackClosed
+  );
 } catch (err) {
   check("account-provider runner GitHub Copilot chat integration", false, err instanceof Error ? err.message : String(err));
 } finally {
