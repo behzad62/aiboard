@@ -506,7 +506,7 @@ await expectReject(
         });
       },
     }),
-  /timed out|timeout|budget/i
+  /^Certified model call timed out after 25ms\.$/
 );
 check(
   "timeout provider receives a cancellation signal",
@@ -564,23 +564,28 @@ await expectReject(
       participantId: "single",
       retryDelaysMs: [],
       signal: parentController.signal,
-      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
-        const signal = params.signal;
-        releaseParentProviderStarted?.();
-        await new Promise<void>((resolve) => {
-          if (!signal) return;
-          const onAbort = () => {
-            parentProviderSignalAborted =
-              signal.aborted && signal.reason === parentAbortReason;
-            resolve();
+      streamChat: ({ params }): AsyncIterable<StreamChunk> => ({
+        [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+          return {
+            next: () =>
+              new Promise<IteratorResult<StreamChunk>>((_, reject) => {
+                const signal = params.signal;
+                releaseParentProviderStarted?.();
+                if (!signal) return;
+                const onAbort = () => {
+                  parentProviderSignalAborted =
+                    signal.aborted && signal.reason === parentAbortReason;
+                  reject(new Error("Provider SDK rejected the aborted stream."));
+                };
+                if (signal.aborted) {
+                  onAbort();
+                  return;
+                }
+                signal.addEventListener("abort", onAbort, { once: true });
+              }),
           };
-          if (signal.aborted) {
-            onAbort();
-            return;
-          }
-          signal.addEventListener("abort", onAbort, { once: true });
-        });
-      },
+        },
+      }),
     });
     await parentProviderStarted;
     parentController.abort(parentAbortReason);

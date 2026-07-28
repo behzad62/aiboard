@@ -242,8 +242,17 @@ async function callCertifiedModelOnce(
   const wallClockBudgetMs = input.context.modelBudget.maxWallClockMs;
   const runStartedMs = new Date(input.context.startedAt).getTime();
   const attemptController = new AbortController();
+  let attemptAbortSource: "parent" | "timeout" | undefined;
+  const abortAttempt = (
+    source: "parent" | "timeout",
+    reason: unknown
+  ): void => {
+    if (attemptController.signal.aborted) return;
+    attemptAbortSource = source;
+    attemptController.abort(reason);
+  };
   const abortAttemptFromParent = input.signal
-    ? () => attemptController.abort(input.signal?.reason)
+    ? () => abortAttempt("parent", input.signal?.reason)
     : undefined;
   if (input.signal?.aborted) {
     abortAttemptFromParent?.();
@@ -272,7 +281,7 @@ async function callCertifiedModelOnce(
       streamChat({ providerId, params }),
       certifiedModelCallTimeoutMs(input),
       input.signal,
-      (timeoutError) => attemptController.abort(timeoutError)
+      (timeoutError) => abortAttempt("timeout", timeoutError)
     )) {
       throwIfCertifiedRunAborted(input.signal);
       if (
@@ -403,10 +412,14 @@ async function callCertifiedModelOnce(
       providerCostUnit: usage.providerCostUnit,
     };
   } catch (error) {
-    if (error instanceof CertifiedBudgetExceededError) {
-      throw error;
+    const effectiveError =
+      attemptAbortSource === "parent" && input.signal?.aborted
+        ? abortedError(input.signal)
+        : error;
+    if (effectiveError instanceof CertifiedBudgetExceededError) {
+      throw effectiveError;
     }
-    const message = errorMessage(error);
+    const message = errorMessage(effectiveError);
     const usage = resolveModelCallUsage({
       messages,
       output: rawResponse,
