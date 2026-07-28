@@ -108,6 +108,7 @@ export interface GameIqMoveProviderRequest {
   scenario: GameIqScenario;
   scenarioIndex: number;
   totalScenarios: number;
+  signal?: AbortSignal;
 }
 
 export interface GameIqProviderResult {
@@ -182,6 +183,7 @@ export interface RunGameIqScenariosInput {
   teamCompositionId: string;
   scenarios: GameIqScenario[];
   moveProvider: GameIqMoveProvider;
+  signal?: AbortSignal;
   caseId?: string;
   startedAt?: string;
   harnessProfile?: BenchmarkAttemptV2["harnessProfile"];

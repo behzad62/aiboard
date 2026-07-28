@@ -176,7 +176,13 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
     startedAt: input.context.startedAt,
     harnessProfile: input.context.harnessProfile,
     concurrency: input.concurrency,
-    moveProvider: async ({ scenario, scenarioIndex, totalScenarios }) => {
+    signal: input.signal,
+    moveProvider: async ({
+      scenario,
+      scenarioIndex,
+      totalScenarios,
+      signal,
+    }) => {
       const system =
         "You are a certified GameIQ benchmark participant. Return only the requested structured JSON.";
       // Fireworks memory-recall scenarios are delivered as a multi-turn episode:
@@ -210,7 +216,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         ),
         pricing: input.pricing,
         streamChat: input.streamChat,
-        signal: input.signal,
+        signal,
       });
       calls.push({
         traceId: call.traceId,

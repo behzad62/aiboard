@@ -136,7 +136,8 @@ async function evaluateScenario(
   scenario: GameIqScenario,
   scenarioIndex: number,
   totalScenarios: number,
-  input: RunGameIqScenariosInput
+  input: RunGameIqScenariosInput,
+  signal: AbortSignal
 ): Promise<GameIqScenarioResult> {
   const started =
     typeof performance !== "undefined" && performance.now
@@ -145,7 +146,12 @@ async function evaluateScenario(
   let providerResult: GameIqProviderResult;
   try {
     providerResult = normalizeProviderResult(
-      await input.moveProvider({ scenario, scenarioIndex, totalScenarios })
+      await input.moveProvider({
+        scenario,
+        scenarioIndex,
+        totalScenarios,
+        signal,
+      })
     );
   } catch (error) {
     if (isCertifiedProviderError(error) && error.classification === "transient") {
@@ -250,47 +256,54 @@ export async function runGameIqScenarios(
   const concurrency = Math.max(1, Math.floor(input.concurrency ?? 1));
   const caseResults: GameIqScenarioResult[] = new Array(input.scenarios.length);
   let cursor = 0;
-  // Doubles as the stop-sentinel (truthy → stop pulling work) and the error
-  // to rethrow. Invariant: every value ever assigned here is a truthy thrown
-  // error (evaluateScenario contains all transients and only ever rethrows a
-  // real Error / CertifiedBudgetExceededError), so `if (firstFatal)` is a
-  // sound guard. A future refactor that could `throw 0`/`throw ""` must add a
-  // separate boolean flag rather than rely on this truthiness.
+  // One controller per model/pack attempt links the optional parent signal to
+  // every request in this pool. It never escapes this invocation, so a fatal
+  // attempt cannot cancel a sibling model's run.
   let firstFatal: unknown = null;
-  const workers = Array.from(
-    { length: Math.min(concurrency, input.scenarios.length) },
-    async () => {
-      for (;;) {
-        if (firstFatal) return;
-        const index = cursor++;
-        if (index >= input.scenarios.length) return;
-        try {
-          caseResults[index] = await evaluateScenario(
-            input.scenarios[index],
-            index,
-            input.scenarios.length,
-            input
-          );
-        } catch (error) {
-          // Fatal/budget: evaluateScenario already contained every transient
-          // provider error into an "unscored" result, so only a fatal/budget
-          // throw reaches here. Record the first one and stop pulling new
-          // work; other in-flight workers finish their current scenario (its
-          // slot fills normally) then exit on the next `firstFatal` check.
-          firstFatal = firstFatal ?? error;
-          return;
+  const attemptController = new AbortController();
+  const abortAttempt = (error: unknown) => {
+    firstFatal ??= error;
+    if (!attemptController.signal.aborted) {
+      attemptController.abort(firstFatal);
+    }
+  };
+  const abortFromParent = () => abortAttempt(input.signal?.reason);
+  if (input.signal?.aborted) {
+    abortFromParent();
+  } else {
+    input.signal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  try {
+    const workers = Array.from(
+      { length: Math.min(concurrency, input.scenarios.length) },
+      async () => {
+        for (;;) {
+          if (attemptController.signal.aborted) return;
+          const index = cursor++;
+          if (index >= input.scenarios.length) return;
+          try {
+            caseResults[index] = await evaluateScenario(
+              input.scenarios[index],
+              index,
+              input.scenarios.length,
+              input,
+              attemptController.signal
+            );
+          } catch (error) {
+            abortAttempt(error);
+            return;
+          }
         }
       }
-    }
-  );
-  await Promise.all(workers);
-  // Rethrow before any metrics are computed: `caseResults` can have empty
-  // slots at this point (scenarios never picked up by a worker once
-  // firstFatal was set), but that can never reach the `scored` filter below
-  // because we throw first — there is no scenario where a hole survives to
-  // the metrics computation.
-  if (firstFatal) throw firstFatal;
-
+    );
+    await Promise.all(workers);
+    if (attemptController.signal.aborted) throw firstFatal;
+  } finally {
+    input.signal?.removeEventListener("abort", abortFromParent);
+  }
+  // Aborted attempts rethrow before metrics, so unclaimed slots cannot reach
+  // aggregation.
   const metrics = aggregateGameIqMetrics(caseResults);
   const score = scoreGameIqAttempt(metrics);
   // Validity rule: too many transport gaps (or none scored at all) means this

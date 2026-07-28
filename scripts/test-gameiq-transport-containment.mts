@@ -11,6 +11,7 @@
 // boundary a real .mts caller hits.
 import { CertifiedProviderError } from "../lib/benchmark/certified/model-call";
 import { CertifiedBudgetExceededError } from "../lib/benchmark/certified/budget";
+import assert from "node:assert/strict";
 import {
   classifyProviderFailure,
   isCertifiedProviderError,
@@ -44,6 +45,169 @@ const perfectAction = (scenario: GameIqScenario) =>
   scenario.expectedActions[0]?.action;
 const genericOpenAiProcessingError =
   "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 12857d04-3d48-4f42-821c-7ef7eba4efc3 in your message.";
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function assertFatalAbortsStartedSiblings(
+  label: string,
+  originalFatalError: CertifiedProviderError | CertifiedBudgetExceededError
+): Promise<void> {
+  const allInitialScenariosStarted = deferred();
+  const releasePendingSiblings = deferred();
+  const abortedSiblingIndexes: number[] = [];
+  let startedScenarioCount = 0;
+  let anyLaterScenarioStarted = false;
+
+  const run = runGameIqScenarios({
+    runId: `t-${label}-siblings`,
+    modelId: "m",
+    teamCompositionId: "team",
+    scenarios: scenarios.slice(0, 5),
+    concurrency: 4,
+    moveProvider: async ({ scenario, scenarioIndex, signal }) => {
+      startedScenarioCount++;
+      if (scenarioIndex >= 4) anyLaterScenarioStarted = true;
+      if (startedScenarioCount === 4) allInitialScenariosStarted.resolve();
+      await allInitialScenariosStarted.promise;
+      if (scenarioIndex === 0) throw originalFatalError;
+
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          abortedSiblingIndexes.push(scenarioIndex);
+          reject(signal?.reason);
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+        releasePendingSiblings.promise.then(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve({ action: perfectAction(scenario) });
+        });
+      });
+    },
+  });
+
+  await allInitialScenariosStarted.promise;
+  const completion = await Promise.race([
+    run.then(
+      () => ({ kind: "resolved" as const, error: null }),
+      (error: unknown) => ({ kind: "rejected" as const, error })
+    ),
+    new Promise<{ kind: "timed-out"; error: null }>((resolve) => {
+      setTimeout(() => resolve({ kind: "timed-out", error: null }), 50);
+    }),
+  ]);
+  if (completion.kind === "timed-out") {
+    // RED-only escape hatch: without sibling abort propagation the attempt
+    // cannot settle until the test manually releases the three pending calls.
+    releasePendingSiblings.resolve();
+  }
+  const fatalErrorSurfaced =
+    completion.kind === "timed-out"
+      ? await run.then(
+          () => null,
+          (error: unknown) => error
+        )
+      : completion.error;
+
+  assert.equal(fatalErrorSurfaced, originalFatalError, `${label}: first error identity`);
+  assert.deepEqual(
+    abortedSiblingIndexes.sort((left, right) => left - right),
+    [1, 2, 3],
+    `${label}: aborts all started siblings`
+  );
+  assert.equal(startedScenarioCount, 4, `${label}: started count after fatal`);
+  assert.equal(anyLaterScenarioStarted, false, `${label}: no later cursor claim`);
+}
+
+await assertFatalAbortsStartedSiblings(
+  "fatal",
+  new CertifiedProviderError("credits depleted", "fatal")
+);
+await assertFatalAbortsStartedSiblings(
+  "budget",
+  new CertifiedBudgetExceededError("budget exceeded")
+);
+
+// The controller belongs to one runGameIqScenarios attempt. A fatal attempt
+// running alongside another model must not abort the other model's request.
+{
+  const isolatedModelStarted = deferred();
+  const releaseIsolatedModel = deferred();
+  let isolatedModelAborted = false;
+  const isolatedModelRun = runGameIqScenarios({
+    runId: "t-isolated-model",
+    modelId: "isolated-model",
+    teamCompositionId: "isolated-team",
+    scenarios: scenarios.slice(0, 1),
+    moveProvider: async ({ scenario, signal }) => {
+      const onAbort = () => {
+        isolatedModelAborted = true;
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      isolatedModelStarted.resolve();
+      await releaseIsolatedModel.promise;
+      signal?.removeEventListener("abort", onAbort);
+      return { action: perfectAction(scenario) };
+    },
+  });
+  await isolatedModelStarted.promise;
+  await assertFatalAbortsStartedSiblings(
+    "fatal-alongside-isolated-model",
+    new CertifiedProviderError("credits depleted", "fatal")
+  );
+  assert.equal(
+    isolatedModelAborted,
+    false,
+    "fatal attempt does not abort another model attempt"
+  );
+  releaseIsolatedModel.resolve();
+  const isolatedModelResult = await isolatedModelRun;
+  assert.equal(isolatedModelResult.attempt.status, "passed");
+}
+
+// A transient is deliberately contained. It must neither abort the three
+// in-flight siblings nor prevent them from completing successfully.
+{
+  const allScenariosStarted = deferred();
+  const releasePendingSiblings = deferred();
+  const abortedSiblingIndexes: number[] = [];
+  let startedScenarioCount = 0;
+  const transientRun = runGameIqScenarios({
+    runId: "t-transient-siblings",
+    modelId: "m",
+    teamCompositionId: "team",
+    scenarios: scenarios.slice(0, 4),
+    concurrency: 4,
+    moveProvider: async ({ scenario, scenarioIndex, signal }) => {
+      startedScenarioCount++;
+      if (startedScenarioCount === 4) allScenariosStarted.resolve();
+      await allScenariosStarted.promise;
+      if (scenarioIndex === 0) {
+        throw new CertifiedProviderError("timed out", "transient");
+      }
+      const onAbort = () => abortedSiblingIndexes.push(scenarioIndex);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      await releasePendingSiblings.promise;
+      signal?.removeEventListener("abort", onAbort);
+      return { action: perfectAction(scenario) };
+    },
+  });
+  await allScenariosStarted.promise;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.deepEqual(abortedSiblingIndexes, [], "transient: does not abort siblings");
+  releasePendingSiblings.resolve();
+  const transientResult = await transientRun;
+  assert.equal(transientResult.metrics.unscoredTransport, 1);
+  assert.equal(transientResult.metrics.scoredScenarioCount, 3);
+}
 
 // --- 1/10 transient (index 3): excluded from scoring, attempt still passes ---
 const one = await runGameIqScenarios({
