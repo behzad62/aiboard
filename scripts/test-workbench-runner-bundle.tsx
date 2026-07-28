@@ -260,7 +260,7 @@ const advancedRunnerStatusMarkup = renderToStaticMarkup(
 );
 const presetMarkup = renderToStaticMarkup(
   <PresetCards
-    running={false}
+    busy={false}
     runningPresetId={null}
     focusedPresetId="full-certified"
     gates={{

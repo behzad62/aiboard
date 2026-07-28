@@ -43,6 +43,7 @@ import {
   getCertifiedRunGate,
   isFireworksSuite,
 } from "@/lib/benchmark/certified/ui-gates";
+import { createCertifiedRunLock } from "@/lib/benchmark/certified/run-lock";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import {
   DIRECT_MODEL_HARNESS,
@@ -157,6 +158,8 @@ export function CertifiedRunPanel({
     []
   );
   const runAbortRef = useRef<AbortController | null>(null);
+  const runLockRef = useRef(createCertifiedRunLock());
+  const busy = running || presetRunning;
 
   const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
   const selectedWorkBenchPack = useMemo(
@@ -267,7 +270,7 @@ export function CertifiedRunPanel({
 
   const runGate = getCertifiedRunGate({
     suiteId,
-    running,
+    running: busy,
     selectedTrack,
     modelId,
     gameIqModelIds,
@@ -355,7 +358,7 @@ export function CertifiedRunPanel({
             </div>
           )}
           <PresetCards
-            running={presetRunning}
+            busy={busy}
             runningPresetId={runningPresetId}
             focusedPresetId={focusedPresetId}
             gates={presetGates}
@@ -598,7 +601,7 @@ export function CertifiedRunPanel({
                 <GameIqModelRunProgress runs={gameIqModelRuns} />
               )}
               <div className="flex flex-wrap gap-2">
-                <Button disabled={!canRun} onClick={() => void runSelected()}>
+                <Button disabled={!canRun || busy} onClick={() => void runSelected()}>
                   {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   Run selected benchmark
                 </Button>
@@ -635,21 +638,21 @@ export function CertifiedRunPanel({
   // Sequences runPreset (run-execution.ts) against the shared checklist/team
   // builder above, translating its progress events into RunProgressList rows.
   async function runPresetFromUi(preset: BenchmarkPreset) {
-    if (presetRunning) return;
-    setFocusedPresetId(preset.id);
-    setRunningPresetId(preset.id);
-    setPresetRunning(true);
-    presetCancelledRef.current = false;
-    setPresetLegRows(
-      preset.legs.map((leg, legIndex) => ({
-        legIndex,
-        leg,
-        status: "queued",
-        models: [],
-      }))
-    );
-    setMessage(null);
+    if (!runLockRef.current.tryAcquire("preset")) return;
     try {
+      setFocusedPresetId(preset.id);
+      setRunningPresetId(preset.id);
+      setPresetRunning(true);
+      presetCancelledRef.current = false;
+      setPresetLegRows(
+        preset.legs.map((leg, legIndex) => ({
+          legIndex,
+          leg,
+          status: "queued",
+          models: [],
+        }))
+      );
+      setMessage(null);
       await runPreset(
         preset,
         {
@@ -673,6 +676,7 @@ export function CertifiedRunPanel({
     } finally {
       setPresetRunning(false);
       setRunningPresetId(null);
+      runLockRef.current.release("preset");
     }
   }
 
@@ -722,51 +726,56 @@ export function CertifiedRunPanel({
   // wrapper (rather than inlining the dispatch at the button callsite) so the
   // JSX above is untouched by the Step 1 extraction.
   async function runSelected() {
-    if (!suiteId) return;
-    if (selectedTrack === "gameiq") {
-      await runGameIqMultiModelExec({
-        models,
-        gameIqModelIds,
+    if (!runLockRef.current.tryAcquire("advanced")) return;
+    try {
+      if (!suiteId) return;
+      if (selectedTrack === "gameiq") {
+        await runGameIqMultiModelExec({
+          models,
+          gameIqModelIds,
+          suiteId,
+          fireworksPlayerCount,
+          certification,
+          effortByModelId,
+          runAbortRef,
+          setRunning,
+          // The Advanced flow no longer renders a phase timeline (deleted with
+          // RunProgressTimeline); running/summary/message state still drives
+          // the button + AttemptDetailPanel.
+          setRunPhase: () => {},
+          setSummary,
+          setMessage,
+          setGameIqModelRuns,
+          onComplete,
+        });
+        return;
+      }
+      await runSelectedTrack({
+        selectedTrack,
         suiteId,
+        models,
+        modelId,
+        teamModelIds,
+        teamIqStrategy,
         fireworksPlayerCount,
+        includeSoloBaselines,
+        workBenchModelIds,
+        workBenchRoleMode,
+        workBenchRunnerUrl,
+        workBenchRunnerToken,
+        effectiveHarnessProfile,
         certification,
         effortByModelId,
         runAbortRef,
         setRunning,
-        // The Advanced flow no longer renders a phase timeline (deleted with
-        // RunProgressTimeline); running/summary/message state still drives
-        // the button + AttemptDetailPanel.
         setRunPhase: () => {},
         setSummary,
         setMessage,
-        setGameIqModelRuns,
         onComplete,
       });
-      return;
+    } finally {
+      runLockRef.current.release("advanced");
     }
-    await runSelectedTrack({
-      selectedTrack,
-      suiteId,
-      models,
-      modelId,
-      teamModelIds,
-      teamIqStrategy,
-      fireworksPlayerCount,
-      includeSoloBaselines,
-      workBenchModelIds,
-      workBenchRoleMode,
-      workBenchRunnerUrl,
-      workBenchRunnerToken,
-      effectiveHarnessProfile,
-      certification,
-      effortByModelId,
-      runAbortRef,
-      setRunning,
-      setRunPhase: () => {},
-      setSummary,
-      setMessage,
-      onComplete,
-    });
   }
 
   function cancelRun() {

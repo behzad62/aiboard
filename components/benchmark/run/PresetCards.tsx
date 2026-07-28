@@ -30,14 +30,14 @@ export interface PresetCardGate {
 // checklist / team selection / runner health this depends on) and passed in
 // as `gates` so this component stays presentational.
 export function PresetCards({
-  running,
+  busy,
   runningPresetId,
   focusedPresetId,
   gates,
   onFocus,
   onRun,
 }: {
-  running: boolean;
+  busy: boolean;
   runningPresetId: BenchmarkPreset["id"] | null;
   focusedPresetId: BenchmarkPreset["id"];
   gates: Record<BenchmarkPreset["id"], PresetCardGate>;
@@ -49,7 +49,7 @@ export function PresetCards({
       {BENCHMARK_PRESETS.map((preset) => {
         const gate = gates[preset.id];
         const focused = preset.id === focusedPresetId;
-        const isRunningThis = running && runningPresetId === preset.id;
+        const isRunningThis = busy && runningPresetId === preset.id;
         return (
           <Card
             key={preset.id}
@@ -77,7 +77,7 @@ export function PresetCards({
               )}
               <Button
                 className="w-full"
-                disabled={gate.disabled || running}
+                disabled={gate.disabled || busy}
                 onClick={(event) => {
                   event.stopPropagation();
                   onFocus(preset.id);
