@@ -513,6 +513,15 @@ const runExecutionSource = readFileSync(
   "utf8"
 );
 check(
+  "certified panel uses the tab-lifetime coordinator",
+  certifiedRunPanelSource.includes("useSyncExternalStore") &&
+    certifiedRunPanelSource.includes("certifiedTabRunCoordinator.tryStart") &&
+    certifiedRunPanelSource.includes("certifiedTabRunCoordinator.cancel") &&
+    !certifiedRunPanelSource.includes("useRef(createCertifiedRunLock())") &&
+    !certifiedRunPanelSource.includes("presetCancelledRef"),
+  certifiedRunPanelSource
+);
+check(
   "WorkBench runner panel links the complete generated runner bundle",
   runnerStatusSource.includes('href="/aiboard-workbench-runner.zip"') &&
     runnerStatusSource.includes('download="aiboard-workbench-runner.zip"') &&

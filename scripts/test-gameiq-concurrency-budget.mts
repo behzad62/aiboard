@@ -231,7 +231,7 @@ function configureTestOpenAiKey(): void {
       ),
     },
     {
-      visibleStatuses: ["queued", "failed"],
+      visibleStatuses: ["queued", "cancelled"],
       visibleReasonIsUserCancellation: true,
       enteredProviderWork: false,
       persistedTeamCount: 0,
@@ -299,8 +299,7 @@ function configureTestOpenAiKey(): void {
         workBenchRunnerUrl: "",
         workBenchRunnerToken: "",
         fireworksPlayerCount: 2,
-        cancelledRef: { current: false },
-        runAbortRef: { current: null },
+        signal: new AbortController().signal,
         onComplete: async () => {},
       },
       (event) => progress.push(event)

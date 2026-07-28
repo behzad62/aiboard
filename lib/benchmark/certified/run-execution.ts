@@ -120,7 +120,8 @@ export type GameIqModelRunStatus =
   | "running"
   | "passed"
   | "partial"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export interface GameIqModelRunState {
   modelId: string;
@@ -140,12 +141,28 @@ export interface GameIqModelRunState {
 // write to: the abort ref, run phase/message/summary state, and the
 // dashboard-refresh callback fired once persistence completes.
 export interface CertifiedRunActions {
+  signal?: AbortSignal;
   setRunning: (running: boolean) => void;
   setRunPhase: (phase: CertifiedRunPhase) => void;
   setSummary: (summary: CertifiedRunSummary | null) => void;
   setMessage: (message: string | null) => void;
   runAbortRef: MutableRefObject<AbortController | null>;
   onComplete: () => Promise<void>;
+}
+
+function linkRunController(parent?: AbortSignal): {
+  controller: AbortController;
+  unlink: () => void;
+} {
+  const controller = new AbortController();
+  if (!parent) return { controller, unlink: () => {} };
+  const abort = () => controller.abort(parent.reason);
+  if (parent.aborted) abort();
+  else parent.addEventListener("abort", abort, { once: true });
+  return {
+    controller,
+    unlink: () => parent.removeEventListener("abort", abort),
+  };
 }
 
 export interface RunSelectedContext extends CertifiedRunActions {
@@ -183,6 +200,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     effectiveHarnessProfile,
     certification,
     effortByModelId,
+    signal,
     runAbortRef,
     setRunning,
     setRunPhase,
@@ -213,7 +231,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   const selectedWorkBenchPack =
     selectedTrack === "workbench" ? getWorkBenchCasePack(suiteId) : null;
   if (selectedTrack === "workbench" && !selectedWorkBenchPack) return;
-  const abortController = new AbortController();
+  const { controller: abortController, unlink } = linkRunController(signal);
   runAbortRef.current = abortController;
   setRunning(true);
   setRunPhase("certifying");
@@ -343,7 +361,10 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     setMessage(error instanceof Error ? error.message : String(error));
   } finally {
     setRunning(false);
-    runAbortRef.current = null;
+    if (runAbortRef.current === abortController) {
+      runAbortRef.current = null;
+    }
+    unlink();
   }
 }
 
@@ -373,6 +394,7 @@ export async function runGameIqMultiModel(
     setMessage,
     setGameIqModelRuns,
     effortByModelId,
+    signal,
     onComplete,
   } = ctx;
   const selectedModels = gameIqModelIds
@@ -391,7 +413,7 @@ export async function runGameIqMultiModel(
     );
   }
 
-  const abortController = new AbortController();
+  const { controller: abortController, unlink } = linkRunController(signal);
   runAbortRef.current = abortController;
   setRunning(true);
   setRunPhase("certifying");
@@ -576,20 +598,30 @@ export async function runGameIqMultiModel(
             modelId: model.modelId,
             displayName: model.displayName,
             providerId: model.providerId,
-            status: "failed",
+            status: "cancelled",
             error: cancellationError,
           };
           updateGameIqModelRun(model.modelId, state);
           return state;
         }
         try {
-          return await runOneModel(model, index);
+          const state = await runOneModel(model, index);
+          if (!abortController.signal.aborted) return state;
+          const cancelledState: GameIqModelRunState = {
+            modelId: model.modelId,
+            displayName: model.displayName,
+            providerId: model.providerId,
+            status: "cancelled",
+            error: "Certified run aborted by user.",
+          };
+          updateGameIqModelRun(model.modelId, cancelledState);
+          return cancelledState;
         } catch (error) {
           const state: GameIqModelRunState = {
             modelId: model.modelId,
             displayName: model.displayName,
             providerId: model.providerId,
-            status: "failed",
+            status: abortController.signal.aborted ? "cancelled" : "failed",
             error: error instanceof Error ? error.message : String(error),
           };
           updateGameIqModelRun(model.modelId, state);
@@ -601,10 +633,12 @@ export async function runGameIqMultiModel(
     const passed = settled.filter((run) => run.status === "passed").length;
     const partial = settled.filter((run) => run.status === "partial").length;
     const failed = settled.filter((run) => run.status === "failed").length;
+    const cancelled = settled.filter((run) => run.status === "cancelled").length;
     const tally = [
       `${passed} passed`,
       ...(partial > 0 ? [`${partial} partial`] : []),
       `${failed} failed`,
+      ...(cancelled > 0 ? [`${cancelled} cancelled`] : []),
     ].join(", ");
     setRunPhase("persisting");
     setMessage(
@@ -619,7 +653,10 @@ export async function runGameIqMultiModel(
     setMessage(error instanceof Error ? error.message : String(error));
   } finally {
     setRunning(false);
-    runAbortRef.current = null;
+    if (runAbortRef.current === abortController) {
+      runAbortRef.current = null;
+    }
+    unlink();
   }
 }
 
@@ -1031,12 +1068,7 @@ export interface RunPresetContext {
   workBenchRunnerUrl: string;
   workBenchRunnerToken: string;
   fireworksPlayerCount: 2 | 3;
-  /** Cancel flag the panel's Cancel button flips; checked between legs AND
-   * before starting each model within a leg so a cancel takes effect promptly
-   * without needing a second AbortController plumbed through every helper. */
-  cancelledRef: MutableRefObject<boolean>;
-  /** Whichever leg/model call is currently in flight; Cancel aborts this. */
-  runAbortRef: MutableRefObject<AbortController | null>;
+  signal: AbortSignal;
   onComplete: () => Promise<void>;
 }
 
@@ -1045,10 +1077,9 @@ export async function runPreset(
   ctx: RunPresetContext,
   onProgress: (event: PresetProgressEvent) => void
 ): Promise<void> {
-  ctx.cancelledRef.current = false;
   for (let legIndex = 0; legIndex < preset.legs.length; legIndex++) {
     const leg = preset.legs[legIndex]!;
-    if (ctx.cancelledRef.current) {
+    if (ctx.signal.aborted) {
       onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
       continue;
     }
@@ -1057,6 +1088,10 @@ export async function runPreset(
         url: ctx.workBenchRunnerUrl,
         token: ctx.workBenchRunnerToken,
       });
+      if (ctx.signal.aborted) {
+        onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
+        continue;
+      }
       if (!health.ok) {
         onProgress({
           type: "leg",
@@ -1070,6 +1105,10 @@ export async function runPreset(
         continue;
       }
     }
+    if (ctx.signal.aborted) {
+      onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
+      continue;
+    }
     onProgress({ type: "leg", legIndex, leg, status: "running" });
     try {
       const result =
@@ -1082,8 +1121,10 @@ export async function runPreset(
         type: "leg",
         legIndex,
         leg,
-        status: "failed",
-        detail: error instanceof Error ? error.message : String(error),
+        status: ctx.signal.aborted ? "skipped" : "failed",
+        detail: ctx.signal.aborted
+          ? "Cancelled."
+          : error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -1157,7 +1198,8 @@ async function runSoloLeg(
       fireworksPlayerCount: ctx.fireworksPlayerCount,
       certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
       effortByModelId: ctx.effortByModelId,
-      runAbortRef: ctx.runAbortRef,
+      signal: ctx.signal,
+      runAbortRef: { current: null },
       setRunning: () => {},
       setRunPhase: () => {},
       setSummary: () => {},
@@ -1171,10 +1213,16 @@ async function runSoloLeg(
   // Every other solo track (currently only ToolReliability) runs one model
   // at a time via runSelected — there is no multi-model batch entry point
   // for it the way GameIQ has — so loop with the same concurrency cap.
-  const modelStatuses = await mapWithConcurrency(
-    selectedModels,
-    MAX_PARALLEL_PRESET_LEG_MODELS,
-    async (model): Promise<GameIqModelRunStatus> => {
+  const modelStatuses = new Array<GameIqModelRunStatus>(selectedModels.length);
+  let cursor = 0;
+  const worker = async () => {
+    for (;;) {
+      if (ctx.signal.aborted) return;
+      const index = cursor;
+      if (index >= selectedModels.length) return;
+      cursor++;
+      if (ctx.signal.aborted) return;
+      const model = selectedModels[index]!;
       onProgress({
         type: "model",
         legIndex,
@@ -1205,7 +1253,8 @@ async function runSoloLeg(
           effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
           certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
           effortByModelId: ctx.effortByModelId,
-          runAbortRef: ctx.runAbortRef,
+          signal: ctx.signal,
+          runAbortRef: { current: null },
           setRunning: () => {},
           setRunPhase: () => {},
           setSummary: (summary) => {
@@ -1220,7 +1269,12 @@ async function runSoloLeg(
         outcome.error = error instanceof Error ? error.message : String(error);
       }
       const status: GameIqModelRunStatus =
-        outcome.summary?.status === "completed" ? "passed" : "failed";
+        ctx.signal.aborted
+          ? "cancelled"
+          : outcome.summary?.status === "completed"
+            ? "passed"
+            : "failed";
+      modelStatuses[index] = status;
       onProgress({
         type: "model",
         legIndex,
@@ -1228,11 +1282,40 @@ async function runSoloLeg(
         modelId: model.modelId,
         displayName: model.displayName,
         status,
-        detail: status === "failed" ? outcome.error : undefined,
+        detail:
+          status === "cancelled"
+            ? "Cancelled."
+            : status === "failed"
+              ? outcome.error
+              : undefined,
       });
-      return status;
     }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.max(
+          1,
+          Math.min(MAX_PARALLEL_PRESET_LEG_MODELS, selectedModels.length)
+        ),
+      },
+      () => worker()
+    )
   );
+  for (let index = 0; index < selectedModels.length; index++) {
+    if (modelStatuses[index]) continue;
+    const model = selectedModels[index]!;
+    modelStatuses[index] = "cancelled";
+    onProgress({
+      type: "model",
+      legIndex,
+      leg,
+      modelId: model.modelId,
+      displayName: model.displayName,
+      status: "cancelled",
+      detail: "Cancelled.",
+    });
+  }
   return { status: legStatusFromStatuses(modelStatuses) };
 }
 
@@ -1271,7 +1354,8 @@ async function runTeamLeg(
       effectiveHarnessProfile,
       certification: runHarnessCertification(effectiveHarnessProfile),
       effortByModelId: ctx.effortByModelId,
-      runAbortRef: ctx.runAbortRef,
+      signal: ctx.signal,
+      runAbortRef: { current: null },
       setRunning: () => {},
       setRunPhase: () => {},
       setSummary: (summary) => {
@@ -1286,7 +1370,12 @@ async function runTeamLeg(
     outcome.error = error instanceof Error ? error.message : String(error);
   }
   const status: PresetLegStatus =
-    outcome.summary?.status === "completed" ? "passed" : "failed";
+    ctx.signal.aborted
+      ? "skipped"
+      : outcome.summary?.status === "completed"
+        ? "passed"
+        : "failed";
+  if (ctx.signal.aborted) return { status, detail: "Cancelled." };
   return { status, detail: status === "failed" ? outcome.error : undefined };
 }
 
@@ -1299,6 +1388,7 @@ function legStatusFromStatuses(
   statuses: GameIqModelRunStatus[]
 ): PresetLegStatus {
   if (statuses.length === 0) return "skipped";
+  if (statuses.every((status) => status === "cancelled")) return "skipped";
   const passed = statuses.filter((status) => status === "passed").length;
   const partial = statuses.filter((status) => status === "partial").length;
   if (passed === statuses.length) return "passed";

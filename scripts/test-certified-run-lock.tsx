@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PresetCards } from "../components/benchmark/run/PresetCards";
+import { RunProgressList } from "../components/benchmark/run/RunProgressList";
 import { createCertifiedTabRunCoordinator } from "../lib/benchmark/certified/run-session";
 
 function deferred<T>() {
@@ -157,6 +158,12 @@ async function main() {
   const runButtons = markup.match(/<button\b[^>]*>/g) ?? [];
   assert.equal(runButtons.length, 3);
   assert.ok(runButtons.every((button) => button.includes("disabled=\"\"")));
+
+  const emptyRunningMarkup = renderToStaticMarkup(
+    <RunProgressList rows={[]} running onCancel={() => undefined} />
+  );
+  assert.match(emptyRunningMarkup, /continues/i);
+  assert.match(emptyRunningMarkup, />Cancel<\/button>/);
 
   console.log("PASS");
 }

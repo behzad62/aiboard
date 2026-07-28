@@ -40,8 +40,18 @@ export function RunProgressList({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
-        Run a preset above to see live progress here.
+      <div className="space-y-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
+        <p>
+          {running
+            ? "The certified run continues in this tab."
+            : "Run a preset above to see live progress here."}
+        </p>
+        {running && (
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            <Square className="h-4 w-4" />
+            Cancel
+          </Button>
+        )}
       </div>
     );
   }
@@ -104,8 +114,10 @@ function StatusBadge({
         ? "Running"
         : status === "passed"
           ? "Passed"
-          : status === "partial"
+        : status === "partial"
             ? "Partial"
+            : status === "cancelled"
+              ? "Cancelled"
             : status === "skipped"
               ? "Skipped"
               : "Failed";
@@ -118,7 +130,7 @@ function StatusBadge({
           ? "border-destructive/40 bg-destructive/10 text-destructive"
           : status === "running"
             ? "border-border bg-muted text-foreground"
-            : status === "skipped"
+            : status === "skipped" || status === "cancelled"
               ? "border-border bg-muted/40 text-muted-foreground"
               : "border-border bg-muted/50 text-muted-foreground";
   return (

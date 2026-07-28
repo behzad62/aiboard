@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Play, RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,7 +49,7 @@ import {
   getCertifiedRunGate,
   isFireworksSuite,
 } from "@/lib/benchmark/certified/ui-gates";
-import { createCertifiedRunLock } from "@/lib/benchmark/certified/run-lock";
+import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import {
   DIRECT_MODEL_HARNESS,
@@ -125,9 +131,6 @@ export function CertifiedRunPanel({
   const [runningPresetId, setRunningPresetId] =
     useState<BenchmarkPreset["id"] | null>(null);
   const [presetLegRows, setPresetLegRows] = useState<RunProgressLegRow[]>([]);
-  const presetCancelledRef = useRef(false);
-  const presetAbortRef = useRef<AbortController | null>(null);
-
   // --- Advanced (old single-suite/pack flow) state — UNCHANGED behavior ----
   const [selectedTrack, setSelectedTrack] = useState<RunnableTrack>(initialTrack);
   const [modelId, setModelId] = useState("");
@@ -158,8 +161,12 @@ export function CertifiedRunPanel({
     []
   );
   const runAbortRef = useRef<AbortController | null>(null);
-  const runLockRef = useRef(createCertifiedRunLock());
-  const busy = running || presetRunning;
+  const tabRun = useSyncExternalStore(
+    certifiedTabRunCoordinator.subscribe,
+    certifiedTabRunCoordinator.getSnapshot,
+    certifiedTabRunCoordinator.getSnapshot
+  );
+  const busy = tabRun.owner !== null;
 
   const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
   const selectedWorkBenchPack = useMemo(
@@ -184,6 +191,10 @@ export function CertifiedRunPanel({
       setSelectedTrack(lockedTrack);
     }
   }, [lockedTrack, selectedTrack]);
+
+  useEffect(() => {
+    if (tabRun.error) setMessage(tabRun.error);
+  }, [setMessage, tabRun.error]);
 
   useEffect(() => {
     const enabled = getEnabledModels().map((model) => ({
@@ -359,7 +370,11 @@ export function CertifiedRunPanel({
           )}
           <PresetCards
             busy={busy}
-            runningPresetId={runningPresetId}
+            runningPresetId={
+              tabRun.owner === "preset"
+                ? tabRun.presetId ?? runningPresetId
+                : null
+            }
             focusedPresetId={focusedPresetId}
             gates={presetGates}
             onFocus={setFocusedPresetId}
@@ -385,9 +400,17 @@ export function CertifiedRunPanel({
           )}
           <RunProgressList
             rows={presetLegRows}
-            running={presetRunning}
+            running={tabRun.owner === "preset"}
             onCancel={cancelPresetRun}
           />
+          {tabRun.owner !== null && !running && !presetRunning && (
+            <div role="status" className="flex items-center gap-2 text-sm">
+              <span>A certified {tabRun.owner} run continues in this tab.</span>
+              <Button variant="outline" size="sm" onClick={cancelActiveTabRun}>
+                Cancel
+              </Button>
+            </div>
+          )}
           {models.length === 0 && (
             <p className="text-sm text-muted-foreground">
               Add and enable at least one provider key in Settings to run
@@ -601,11 +624,11 @@ export function CertifiedRunPanel({
                 <GameIqModelRunProgress runs={gameIqModelRuns} />
               )}
               <div className="flex flex-wrap gap-2">
-                <Button disabled={!canRun || busy} onClick={() => void runSelected()}>
-                  {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                <Button disabled={!canRun || busy} onClick={runSelected}>
+                  {tabRun.owner === "advanced" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   Run selected benchmark
                 </Button>
-                {running && (
+                {tabRun.owner === "advanced" && (
                   <Button variant="outline" onClick={cancelRun}>
                     <Square className="h-4 w-4" />
                     Cancel
@@ -637,47 +660,49 @@ export function CertifiedRunPanel({
 
   // Sequences runPreset (run-execution.ts) against the shared checklist/team
   // builder above, translating its progress events into RunProgressList rows.
-  async function runPresetFromUi(preset: BenchmarkPreset) {
-    if (!runLockRef.current.tryAcquire("preset")) return;
-    try {
-      setFocusedPresetId(preset.id);
-      setRunningPresetId(preset.id);
-      setPresetRunning(true);
-      presetCancelledRef.current = false;
-      setPresetLegRows(
-        preset.legs.map((leg, legIndex) => ({
-          legIndex,
-          leg,
-          status: "queued",
-          models: [],
-        }))
-      );
-      setMessage(null);
-      await runPreset(
-        preset,
-        {
-          models,
-          soloModelIds,
-          effortByModelId,
-          teamModelIds: sharedTeamModelIds,
-          teamIqStrategy: sharedTeamIqStrategy,
-          workBenchRoleMode: workBenchRoleModeFromCount(
-            sharedTeamModelIds.length
-          ),
-          workBenchRunnerUrl,
-          workBenchRunnerToken,
-          fireworksPlayerCount: 2,
-          cancelledRef: presetCancelledRef,
-          runAbortRef: presetAbortRef,
-          onComplete,
-        },
-        handlePresetProgress
-      );
-    } finally {
-      setPresetRunning(false);
-      setRunningPresetId(null);
-      runLockRef.current.release("preset");
-    }
+  function runPresetFromUi(preset: BenchmarkPreset) {
+    certifiedTabRunCoordinator.tryStart(
+      "preset",
+      { presetId: preset.id },
+      async (signal) => {
+        setFocusedPresetId(preset.id);
+        setRunningPresetId(preset.id);
+        setPresetRunning(true);
+        setPresetLegRows(
+          preset.legs.map((leg, legIndex) => ({
+            legIndex,
+            leg,
+            status: "queued",
+            models: [],
+          }))
+        );
+        setMessage(null);
+        try {
+          await runPreset(
+            preset,
+            {
+              models,
+              soloModelIds,
+              effortByModelId,
+              teamModelIds: sharedTeamModelIds,
+              teamIqStrategy: sharedTeamIqStrategy,
+              workBenchRoleMode: workBenchRoleModeFromCount(
+                sharedTeamModelIds.length
+              ),
+              workBenchRunnerUrl,
+              workBenchRunnerToken,
+              fireworksPlayerCount: 2,
+              signal,
+              onComplete,
+            },
+            handlePresetProgress
+          );
+        } finally {
+          setPresetRunning(false);
+          setRunningPresetId(null);
+        }
+      }
+    );
   }
 
   function handlePresetProgress(event: PresetProgressEvent) {
@@ -715,8 +740,7 @@ export function CertifiedRunPanel({
   }
 
   function cancelPresetRun() {
-    presetCancelledRef.current = true;
-    presetAbortRef.current?.abort("Cancelled from preset run.");
+    certifiedTabRunCoordinator.cancel("Cancelled from preset run.");
     setMessage("Cancelling preset run...");
   }
 
@@ -725,9 +749,8 @@ export function CertifiedRunPanel({
   // batch, every other track ran the single-selection flow. Kept as a thin
   // wrapper (rather than inlining the dispatch at the button callsite) so the
   // JSX above is untouched by the Step 1 extraction.
-  async function runSelected() {
-    if (!runLockRef.current.tryAcquire("advanced")) return;
-    try {
+  function runSelected() {
+    certifiedTabRunCoordinator.tryStart("advanced", {}, async (signal) => {
       if (!suiteId) return;
       if (selectedTrack === "gameiq") {
         await runGameIqMultiModelExec({
@@ -737,6 +760,7 @@ export function CertifiedRunPanel({
           fireworksPlayerCount,
           certification,
           effortByModelId,
+          signal,
           runAbortRef,
           setRunning,
           // The Advanced flow no longer renders a phase timeline (deleted with
@@ -766,6 +790,7 @@ export function CertifiedRunPanel({
         effectiveHarnessProfile,
         certification,
         effortByModelId,
+        signal,
         runAbortRef,
         setRunning,
         setRunPhase: () => {},
@@ -773,13 +798,22 @@ export function CertifiedRunPanel({
         setMessage,
         onComplete,
       });
-    } finally {
-      runLockRef.current.release("advanced");
-    }
+    });
   }
 
   function cancelRun() {
-    runAbortRef.current?.abort("Cancelled from certified benchmark panel.");
+    certifiedTabRunCoordinator.cancel(
+      "Cancelled from certified benchmark panel."
+    );
+    setMessage("Cancelling certified run...");
+  }
+
+  function cancelActiveTabRun() {
+    certifiedTabRunCoordinator.cancel(
+      tabRun.owner === "preset"
+        ? "Cancelled from preset run."
+        : "Cancelled from certified benchmark panel."
+    );
     setMessage("Cancelling certified run...");
   }
 
