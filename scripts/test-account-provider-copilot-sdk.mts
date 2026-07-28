@@ -1,5 +1,6 @@
 /** Copilot SDK adapter contract checks (run: npx tsx scripts/test-account-provider-copilot-sdk.mts) */
 
+import assert from "node:assert/strict";
 import { supportedBenchmarkReasoningEfforts } from "../lib/benchmark/model-effort";
 
 const sdk = await import("../lib/account-provider-copilot-sdk.mjs") as typeof import("../lib/account-provider-copilot-sdk.mjs");
@@ -111,12 +112,121 @@ check("SDK adapter forwards streaming deltas", emitted.join("") === "SDK result"
 check("SDK adapter passes the account token to the client", capturedClientOptions?.gitHubToken === "test-token", capturedClientOptions);
 check("SDK adapter creates a web-search session", Boolean(capturedSessionConfig?.availableTools), capturedSessionConfig);
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function cancellationBody() {
+  return {
+    model: "gpt-5.4",
+    messages: [{ role: "user", content: "Keep this session open." }],
+  };
+}
+
+const preStartController = new AbortController();
+const preStartReason = new Error("pre-start cancellation");
+const preStartCounts = { start: 0, create: 0, send: 0 };
+preStartController.abort(preStartReason);
+await assert.rejects(
+  sdk.runCopilotSdkChat(cancellationBody(), "test-token", "C:\\aiboard-sdk-pre-start-test", undefined, {
+    signal: preStartController.signal,
+    clientFactory() {
+      return {
+        async start() { preStartCounts.start += 1; },
+        async createSession() {
+          preStartCounts.create += 1;
+          return {
+            on() { return () => undefined; },
+            async sendAndWait() { preStartCounts.send += 1; return { data: { content: "" } }; },
+          };
+        },
+        async stop() {},
+      };
+    },
+  }),
+  (error) => error === preStartReason
+);
+assert.deepEqual(preStartCounts, { start: 0, create: 0, send: 0 });
+check("Copilot SDK does not begin setup when already cancelled", true);
+
+const startController = new AbortController();
+const startReason = new Error("start cancellation");
+const startEntered = deferred<void>();
+const startGate = deferred<void>();
+const startCounts = { create: 0, send: 0 };
+const startCleanup: string[] = [];
+const duringStart = sdk.runCopilotSdkChat(cancellationBody(), "test-token", "C:\\aiboard-sdk-start-test", undefined, {
+  signal: startController.signal,
+  clientFactory() {
+    return {
+      async start() { startEntered.resolve(); await startGate.promise; },
+      async createSession() {
+        startCounts.create += 1;
+        return {
+          on() { return () => undefined; },
+          async sendAndWait() { startCounts.send += 1; return { data: { content: "" } }; },
+        };
+      },
+      async stop() { startCleanup.push("stop"); },
+    };
+  },
+});
+await startEntered.promise;
+startController.abort(startReason);
+startGate.resolve();
+await assert.rejects(duringStart, (error) => error === startReason);
+assert.deepEqual(startCounts, { create: 0, send: 0 });
+assert.deepEqual(startCleanup, ["stop"]);
+check("Copilot SDK stops after cancellation during client startup", true);
+
+const createController = new AbortController();
+const createReason = new Error("session creation cancellation");
+const createEntered = deferred<void>();
+const createGate = deferred<{
+  on(): () => undefined;
+  sendAndWait(): Promise<{ data: { content: string } }>;
+  abort(): Promise<void>;
+  disconnect(): Promise<void>;
+}>();
+const createCounts = { send: 0 };
+const createCleanup: string[] = [];
+const sessionCreatedDuringCancellation = {
+  on() { return () => undefined; },
+  async sendAndWait() { createCounts.send += 1; return { data: { content: "" } }; },
+  async abort() { createCleanup.push("abort"); },
+  async disconnect() { createCleanup.push("disconnect"); },
+};
+const duringCreate = sdk.runCopilotSdkChat(cancellationBody(), "test-token", "C:\\aiboard-sdk-create-test", undefined, {
+  signal: createController.signal,
+  clientFactory() {
+    return {
+      async start() {},
+      async createSession() { createEntered.resolve(); return createGate.promise; },
+      async stop() { createCleanup.push("stop"); },
+    };
+  },
+});
+await createEntered.promise;
+createController.abort(createReason);
+createGate.resolve(sessionCreatedDuringCancellation);
+await assert.rejects(duringCreate, (error) => error === createReason);
+assert.deepEqual(createCounts, { send: 0 });
+assert.deepEqual(createCleanup, ["abort", "disconnect", "stop"]);
+check("Copilot SDK cleans up a session created after cancellation", true);
+
 const cancellationController = new AbortController();
 const cleanupOrder: string[] = [];
 let abortCalls = 0;
 let disconnectCalls = 0;
 let stopCalls = 0;
 let releasePendingSend: (() => void) | undefined;
+const sendEntered = deferred<void>();
 const pendingSend = new Promise<void>((resolve) => {
   releasePendingSend = resolve;
 });
@@ -125,8 +235,9 @@ const cancellingSession = {
     return () => undefined;
   },
   async sendAndWait() {
+    sendEntered.resolve();
     await pendingSend;
-    throw new Error("SDK session aborted");
+    throw inFlightReason;
   },
   async abort() {
     abortCalls += 1;
@@ -138,6 +249,7 @@ const cancellingSession = {
     cleanupOrder.push("disconnect");
   },
 };
+const inFlightReason = new Error("in-flight cancellation");
 const cancellingRun = sdk.runCopilotSdkChat(
   {
     model: "gpt-5.4",
@@ -161,12 +273,15 @@ const cancellingRun = sdk.runCopilotSdkChat(
       };
     },
   }
-).catch(() => undefined);
-await new Promise((resolve) => setTimeout(resolve, 0));
-cancellationController.abort();
+);
+await sendEntered.promise;
+cancellationController.abort(inFlightReason);
 const cancellationSettled =
   (await Promise.race([
-    cancellingRun.then(() => true),
+    cancellingRun.then(
+      () => false,
+      (error) => error === inFlightReason
+    ),
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
   ])) === true;
 check(
