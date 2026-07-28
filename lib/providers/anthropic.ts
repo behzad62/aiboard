@@ -252,14 +252,17 @@ export async function* streamAnthropicChat(
             ...(combinedToolChoice ? { tool_choice: combinedToolChoice } : {}),
           }
         : {};
-    const requestOptions =
-      isAnthropicManualThinkingEnabled(reasoningField) && combinedTools.length > 0
+    const requestOptions = {
+      ...(isAnthropicManualThinkingEnabled(reasoningField) &&
+      combinedTools.length > 0
         ? {
             headers: {
               "anthropic-beta": "interleaved-thinking-2025-05-14",
             },
           }
-        : undefined;
+        : {}),
+      signal: params.signal,
+    };
 
     try {
       const pendingToolCalls = new Map<

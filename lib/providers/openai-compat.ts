@@ -362,18 +362,21 @@ export async function* streamOpenAICompatibleChat(
     let reportedInputAudioTokens: number | undefined;
     let reportedOutputAudioTokens: number | undefined;
     let reportedProviderCost: number | undefined;
-    const stream = await client.chat.completions.create({
-      model: params.model,
-      messages,
-      ...tokenField,
-      ...temperatureField,
-      ...openAIPromptCaching,
-      ...(reasoningField as Record<string, never>),
-      ...(structuredOutputField as Record<string, never>),
-      ...(combinedToolField as Record<string, never>),
-      ...(streamOptionsField as Record<string, never>),
-      stream: true,
-    });
+    const stream = await client.chat.completions.create(
+      {
+        model: params.model,
+        messages,
+        ...tokenField,
+        ...temperatureField,
+        ...openAIPromptCaching,
+        ...(reasoningField as Record<string, never>),
+        ...(structuredOutputField as Record<string, never>),
+        ...(combinedToolField as Record<string, never>),
+        ...(streamOptionsField as Record<string, never>),
+        stream: true,
+      },
+      { signal: params.signal }
+    );
 
     for await (const chunk of stream) {
       const usage = (

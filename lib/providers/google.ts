@@ -207,7 +207,7 @@ export const googleProvider: AIProvider = {
       const stream = await genAI.models.generateContentStream({
         model: params.model,
         contents,
-        config: generationConfig,
+        config: { ...generationConfig, abortSignal: params.signal },
       });
       const pendingToolCalls: NativeToolCall[] = [];
       let reportedInputTokens: number | undefined;

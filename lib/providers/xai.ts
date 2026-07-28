@@ -89,24 +89,31 @@ async function* streamXAIResponses(
     let reportedTotalTokens: number | undefined;
     let reportedReasoningTokens: number | undefined;
     let reportedCachedInputTokens: number | undefined;
-    const stream = await client.responses.create({
-      model: params.model,
-      ...(instructions ? { instructions } : {}),
-      input: input as never,
-      store: false,
-      ...(params.maxTokens != null ? { max_output_tokens: params.maxTokens } : {}),
-      ...(params.temperature != null ? { temperature: params.temperature } : {}),
-      ...(reasoningValue
-        ? {
-            reasoning: {
-              effort: reasoningValue,
-            } as never,
-          }
-        : {}),
-      ...(structuredOutputField as Record<string, never>),
-      ...(combinedToolField as Record<string, never>),
-      stream: true,
-    });
+    const stream = await client.responses.create(
+      {
+        model: params.model,
+        ...(instructions ? { instructions } : {}),
+        input: input as never,
+        store: false,
+        ...(params.maxTokens != null
+          ? { max_output_tokens: params.maxTokens }
+          : {}),
+        ...(params.temperature != null
+          ? { temperature: params.temperature }
+          : {}),
+        ...(reasoningValue
+          ? {
+              reasoning: {
+                effort: reasoningValue,
+              } as never,
+            }
+          : {}),
+        ...(structuredOutputField as Record<string, never>),
+        ...(combinedToolField as Record<string, never>),
+        stream: true,
+      },
+      { signal: params.signal }
+    );
 
     for await (const event of stream) {
       const rawEvent = event as unknown as {
