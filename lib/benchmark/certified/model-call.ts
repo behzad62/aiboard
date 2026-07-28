@@ -38,6 +38,7 @@ import {
 } from "./classify-provider-failure";
 
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
+const CERTIFIED_ITERATOR_TEARDOWN_TIMEOUT_MS = 5_000;
 
 /**
  * Default backoff policy for transient provider failures: one retry per entry,
@@ -242,9 +243,9 @@ async function callCertifiedModelOnce(
   const wallClockBudgetMs = input.context.modelBudget.maxWallClockMs;
   const runStartedMs = new Date(input.context.startedAt).getTime();
   const attemptController = new AbortController();
-  let attemptAbortSource: "parent" | "timeout" | undefined;
+  let attemptAbortSource: "parent" | "timeout" | "failure" | undefined;
   const abortAttempt = (
-    source: "parent" | "timeout",
+    source: "parent" | "timeout" | "failure",
     reason: unknown
   ): void => {
     if (attemptController.signal.aborted) return;
@@ -275,15 +276,23 @@ async function callCertifiedModelOnce(
     signal: attemptController.signal,
     contextProfile: input.model.contextProfile,
   };
+  let iterator: AsyncIterator<StreamChunk> | undefined;
+  let attemptSucceeded = false;
+  let surfacedError: unknown;
 
   try {
-    for await (const chunk of withCertifiedModelCallTimeout(
-      streamChat({ providerId, params }),
-      certifiedModelCallTimeoutMs(input),
-      input.signal,
-      (timeoutError) => abortAttempt("timeout", timeoutError)
-    )) {
+    iterator = streamChat({ providerId, params })[Symbol.asyncIterator]();
+    for (;;) {
       throwIfCertifiedRunAborted(input.signal);
+      const next = await withTimeout(
+        iterator.next(),
+        certifiedModelCallTimeoutMs(input),
+        `Certified model call timed out after ${certifiedModelCallTimeoutMs(input)}ms.`,
+        input.signal,
+        (timeoutError) => abortAttempt("timeout", timeoutError)
+      );
+      if (next.done) break;
+      const chunk = next.value;
       if (
         typeof wallClockBudgetMs === "number" &&
         Number.isFinite(runStartedMs) &&
@@ -394,6 +403,7 @@ async function callCertifiedModelOnce(
       await recordCertifiedBudgetEvent(input, error);
       throw error;
     }
+    attemptSucceeded = true;
     return {
       rawResponse,
       parsedJson: parsed.value,
@@ -416,7 +426,11 @@ async function callCertifiedModelOnce(
       attemptAbortSource === "parent" && input.signal?.aborted
         ? abortedError(input.signal)
         : error;
-    if (effectiveError instanceof CertifiedBudgetExceededError) {
+    surfacedError = effectiveError;
+    if (
+      (attemptAbortSource === "parent" && input.signal?.aborted) ||
+      effectiveError instanceof CertifiedBudgetExceededError
+    ) {
       throw effectiveError;
     }
     const message = errorMessage(effectiveError);
@@ -485,6 +499,7 @@ async function callCertifiedModelOnce(
     } catch (recordError) {
       if (recordError instanceof CertifiedBudgetExceededError) {
         await recordCertifiedBudgetEvent(input, recordError);
+        surfacedError = recordError;
         throw recordError;
       }
       // Otherwise preserve the provider/parser error that caused the failed model call.
@@ -494,16 +509,42 @@ async function callCertifiedModelOnce(
     // the original error) so message-text consumers — `statusForRunError` in
     // run-engine.ts and `isProviderFailureMessage` — keep matching exactly
     // what they always have.
-    throw new CertifiedProviderError(message, classifyProviderFailure(message), {
-      traceId,
-      latencyMs,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      estimatedUsd: trace.estimatedUsd ?? null,
-    });
+    const providerError = new CertifiedProviderError(
+      message,
+      classifyProviderFailure(message),
+      {
+        traceId,
+        latencyMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedUsd: trace.estimatedUsd ?? null,
+      }
+    );
+    surfacedError = providerError;
+    throw providerError;
   } finally {
-    if (input.signal && abortAttemptFromParent) {
-      input.signal.removeEventListener("abort", abortAttemptFromParent);
+    try {
+      if (!attemptSucceeded) {
+        const winningError =
+          surfacedError ?? new Error("Certified provider attempt exited without success.");
+        abortAttempt("failure", winningError);
+        const teardownError = iterator
+          ? await closeIteratorBeforeRetry(iterator, winningError)
+          : undefined;
+        const parentCancellationWon =
+          attemptAbortSource === "parent" && input.signal?.aborted === true;
+        if (
+          teardownError &&
+          !parentCancellationWon &&
+          !(winningError instanceof CertifiedBudgetExceededError)
+        ) {
+          throw teardownError;
+        }
+      }
+    } finally {
+      if (input.signal && abortAttemptFromParent) {
+        input.signal.removeEventListener("abort", abortAttemptFromParent);
+      }
     }
   }
 }
@@ -638,28 +679,33 @@ async function* defaultCertifiedModelStream(
   yield* provider.streamChat(input.params);
 }
 
-async function* withCertifiedModelCallTimeout<T>(
-  iterable: AsyncIterable<T>,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  onTimeout?: (error: Error) => void
-): AsyncIterable<T> {
-  const iterator = iterable[Symbol.asyncIterator]();
+async function closeIteratorBeforeRetry(
+  iterator: AsyncIterator<StreamChunk>,
+  originalError: unknown
+): Promise<CertifiedProviderError | undefined> {
+  if (!iterator.return) return undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    for (;;) {
-      throwIfCertifiedRunAborted(signal);
-      const next = await withTimeout(
-        iterator.next(),
-        timeoutMs,
-        `Certified model call timed out after ${timeoutMs}ms.`,
-        signal,
-        onTimeout
-      );
-      if (next.done) return;
-      yield next.value;
-    }
+    await Promise.race([
+      iterator.return(),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Certified provider iterator teardown timed out.")),
+          CERTIFIED_ITERATOR_TEARDOWN_TIMEOUT_MS
+        );
+      }),
+    ]);
+    return undefined;
+  } catch {
+    return new CertifiedProviderError(
+      `Certified provider iterator teardown was not confirmed within ${CERTIFIED_ITERATOR_TEARDOWN_TIMEOUT_MS}ms; retry was suppressed to avoid overlapping paid calls.`,
+      "other",
+      originalError instanceof CertifiedProviderError
+        ? originalError.attemptUsage
+        : undefined
+    );
   } finally {
-    void iterator.return?.().catch(() => undefined);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 

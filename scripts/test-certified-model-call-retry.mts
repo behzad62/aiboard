@@ -1,4 +1,5 @@
 /* Retry behavior for certified model calls (run: npx tsx scripts/test-certified-model-call-retry.mts) */
+import assert from "node:assert/strict";
 import { __resetBenchmarkStoreForTests } from "../lib/benchmark/store";
 import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persistence";
 import {
@@ -266,6 +267,160 @@ check(
     result.rawResponse === '{"action":{"column":4}}' &&
       result.retryAttempts?.length === 1,
     result
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Behavior: retry admission waits for the prior provider iterator to confirm
+// teardown, and suppresses retry if that confirmation never arrives.
+// ---------------------------------------------------------------------------
+
+{
+  let calls = 0;
+  let firstSignal!: AbortSignal;
+  let firstReturnResolved = false;
+  let secondAttemptStartedBeforeFirstReturnResolved = false;
+  let rejectFirstNext!: (error: Error) => void;
+  let resolveFirstReturn!: () => void;
+  let notifyFirstNextStarted!: () => void;
+  let notifyFirstReturnStarted!: () => void;
+  let notifySecondAttemptStarted!: () => void;
+  const firstNextStarted = new Promise<void>((resolve) => {
+    notifyFirstNextStarted = resolve;
+  });
+  const firstReturnStarted = new Promise<void>((resolve) => {
+    notifyFirstReturnStarted = resolve;
+  });
+  const secondAttemptStarted = new Promise<void>((resolve) => {
+    notifySecondAttemptStarted = resolve;
+  });
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const context = makeTestContext();
+    const pending = callCertifiedModel({
+      model,
+      system: "s",
+      user: "u",
+      maxTokens: 128,
+      temperature: 0,
+      context,
+      caseId: context.caseIds[0],
+      attemptId: "attempt-retry-awaits-teardown",
+      participantId: "p",
+      streamChat: ({ params }): AsyncIterable<StreamChunk> => {
+        calls++;
+        if (calls === 1) {
+          if (!params.signal) throw new Error("Certified provider did not receive a signal.");
+          firstSignal = params.signal;
+          return {
+            [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+              return {
+                next: () => {
+                  notifyFirstNextStarted();
+                  return new Promise<IteratorResult<StreamChunk>>((_, reject) => {
+                    rejectFirstNext = reject;
+                  });
+                },
+                return: () => {
+                  notifyFirstReturnStarted();
+                  return new Promise<IteratorResult<StreamChunk>>((resolve) => {
+                    resolveFirstReturn = () => {
+                      firstReturnResolved = true;
+                      resolve({ done: true, value: undefined });
+                    };
+                  });
+                },
+              };
+            },
+          };
+        }
+        secondAttemptStartedBeforeFirstReturnResolved = !firstReturnResolved;
+        notifySecondAttemptStarted();
+        return (async function* (): AsyncIterable<StreamChunk> {
+          yield { type: "token", content: '{"action":{"column":5}}' };
+          yield { type: "done" };
+        })();
+      },
+      retryDelaysMs: [0],
+    });
+
+    await firstNextStarted;
+    rejectFirstNext(new Error("ChatGPT request failed: 503"));
+    await firstReturnStarted;
+    await Promise.race([
+      secondAttemptStarted,
+      new Promise<void>((resolve) => setTimeout(resolve, 50)),
+    ]);
+    assert.equal(firstSignal.aborted, true);
+    assert.equal(secondAttemptStartedBeforeFirstReturnResolved, false);
+    resolveFirstReturn();
+    const result = await pending;
+    check(
+      "retry starts only after the prior iterator confirms teardown",
+      calls === 2 && result.rawResponse === '{"action":{"column":5}}',
+      { calls, rawResponse: result.rawResponse }
+    );
+  } finally {
+    Math.random = originalRandom;
+  }
+}
+
+{
+  let calls = 0;
+  let retryCountWhenIteratorNeverConfirmsClose = 0;
+  let notifyFirstNextStarted!: () => void;
+  let rejectFirstNext!: (error: Error) => void;
+  const firstNextStarted = new Promise<void>((resolve) => {
+    notifyFirstNextStarted = resolve;
+  });
+  const context = makeTestContext();
+  const pending = callCertifiedModel({
+    model,
+    system: "s",
+    user: "u",
+    maxTokens: 128,
+    temperature: 0,
+    context,
+    caseId: context.caseIds[0],
+    attemptId: "attempt-retry-suppressed-unconfirmed-teardown",
+    participantId: "p",
+    streamChat: (): AsyncIterable<StreamChunk> => {
+      calls++;
+      if (calls > 1) retryCountWhenIteratorNeverConfirmsClose++;
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+          return {
+            next: () => {
+              notifyFirstNextStarted();
+              return new Promise<IteratorResult<StreamChunk>>((_, reject) => {
+                rejectFirstNext = reject;
+              });
+            },
+            return: () => new Promise<IteratorResult<StreamChunk>>(() => undefined),
+          };
+        },
+      };
+    },
+    retryDelaysMs: [0],
+  });
+  await firstNextStarted;
+  rejectFirstNext(new Error("ChatGPT request failed: 503"));
+  const error = await expectReject(
+    "unconfirmed iterator teardown suppresses a transient retry",
+    () => pending,
+    (candidate) =>
+      candidate instanceof CertifiedProviderError &&
+      candidate.classification !== "transient" &&
+      /retry was suppressed to avoid overlapping paid calls/i.test(candidate.message)
+  );
+  assert.equal(retryCountWhenIteratorNeverConfirmsClose, 0);
+  check(
+    "unconfirmed iterator teardown surfaces fail-closed provider error",
+    error instanceof CertifiedProviderError &&
+      error.classification !== "transient" &&
+      calls === 1,
+    { calls, error: error instanceof Error ? error.message : String(error) }
   );
 }
 

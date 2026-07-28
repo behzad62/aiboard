@@ -147,46 +147,51 @@ async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChun
   if (!reader) return;
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
     for (;;) {
-      const match = buffer.match(/\r?\n\r?\n/);
-      if (!match) break;
-      const index = match.index ?? 0;
-      const end = index + match[0].length;
-      const block = buffer.slice(0, index);
-      buffer = buffer.slice(end);
-      const event = parseSseBlock(block);
-      if (!event) continue;
-      if (event.type === "token" && event.content) {
-        yield { type: "token", content: event.content };
-      } else if (event.type === "tool_call" && event.toolCall) {
-        yield { type: "tool_call", toolCall: event.toolCall };
-      } else if (event.type === "usage" && event.usage) {
-        yield { type: "usage", usage: event.usage };
-      } else if (event.type === "error") {
-        yield { type: "error", error: event.error ?? "Account runner stream failed" };
-        return;
-      } else if (event.type === "done") {
-        yield { type: "done" };
-        return;
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const match = buffer.match(/\r?\n\r?\n/);
+        if (!match) break;
+        const index = match.index ?? 0;
+        const end = index + match[0].length;
+        const block = buffer.slice(0, index);
+        buffer = buffer.slice(end);
+        const event = parseSseBlock(block);
+        if (!event) continue;
+        if (event.type === "token" && event.content) {
+          yield { type: "token", content: event.content };
+        } else if (event.type === "tool_call" && event.toolCall) {
+          yield { type: "tool_call", toolCall: event.toolCall };
+        } else if (event.type === "usage" && event.usage) {
+          yield { type: "usage", usage: event.usage };
+        } else if (event.type === "error") {
+          yield { type: "error", error: event.error ?? "Account runner stream failed" };
+          return;
+        } else if (event.type === "done") {
+          yield { type: "done" };
+          return;
+        }
       }
     }
+    const tail = parseSseBlock(buffer);
+    if (tail?.type === "token" && tail.content) {
+      yield { type: "token", content: tail.content };
+    } else if (tail?.type === "tool_call" && tail.toolCall) {
+      yield { type: "tool_call", toolCall: tail.toolCall };
+    } else if (tail?.type === "usage" && tail.usage) {
+      yield { type: "usage", usage: tail.usage };
+    } else if (tail?.type === "error") {
+      yield { type: "error", error: tail.error ?? "Account runner stream failed" };
+      return;
+    }
+    yield { type: "done" };
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-  const tail = parseSseBlock(buffer);
-  if (tail?.type === "token" && tail.content) {
-    yield { type: "token", content: tail.content };
-  } else if (tail?.type === "tool_call" && tail.toolCall) {
-    yield { type: "tool_call", toolCall: tail.toolCall };
-  } else if (tail?.type === "usage" && tail.usage) {
-    yield { type: "usage", usage: tail.usage };
-  } else if (tail?.type === "error") {
-    yield { type: "error", error: tail.error ?? "Account runner stream failed" };
-    return;
-  }
-  yield { type: "done" };
 }
 
 export function createAccountRunnerProvider(

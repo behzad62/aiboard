@@ -1,4 +1,5 @@
 /* Certified model-call checks (run: npx tsx scripts/test-certified-model-call.mts) */
+import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
@@ -22,13 +23,15 @@ async function expectReject(
   name: string,
   action: () => Promise<unknown>,
   messagePattern: RegExp
-): Promise<void> {
+): Promise<unknown> {
   try {
     await action();
     check(name, false, "resolved");
+    return undefined;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     check(name, messagePattern.test(message), message);
+    return error;
   }
 }
 
@@ -299,10 +302,10 @@ const usdStreamingBudgetContext = createCertifiedRunContext({
   teamCompositionIds: ["team-budget-usd-streaming"],
   modelBudget: { maxUsd: 0.0005 },
 });
-await expectReject(
-  "certified budget blocks projected USD during provider streaming",
-  () =>
-    callCertifiedModel({
+let budgetSignal!: AbortSignal;
+let budgetError: unknown;
+try {
+  await callCertifiedModel({
       model,
       system: "System",
       user: "User",
@@ -316,13 +319,24 @@ await expectReject(
         inputUsdPer1M: 0,
         outputUsdPer1M: 1000,
       },
-      streamChat: async function* (): AsyncIterable<StreamChunk> {
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        if (!params.signal) throw new Error("Certified provider did not receive a signal.");
+        budgetSignal = params.signal;
         yield { type: "token", content: "This streamed response exceeds the USD cap." };
         yield { type: "token", content: "The second chunk should not be needed." };
       },
-    }),
-  /projected USD|maxUsd|budget/i
-);
+    });
+  check("certified budget blocks projected USD during provider streaming", false, "resolved");
+} catch (error) {
+  budgetError = error;
+  check(
+    "certified budget blocks projected USD during provider streaming",
+    error instanceof Error && /projected USD|maxUsd|budget/i.test(error.message),
+    error instanceof Error ? error.message : String(error)
+  );
+}
+assert.equal(budgetSignal.aborted, true);
+assert.equal(budgetSignal.reason, budgetError);
 check(
   "streaming USD budget emits a budget event before completion",
   usdStreamingBudgetContext
@@ -543,13 +557,13 @@ const parentAbortContext = createCertifiedRunContext({
   teamCompositionIds: ["team-parent-abort"],
 });
 const parentController = new AbortController();
-const parentAbortReason = "User cancelled the certified model call.";
+const parentAbortReason = new Error("User cancelled the certified model call.");
 let parentProviderSignalAborted = false;
 let releaseParentProviderStarted: (() => void) | undefined;
 const parentProviderStarted = new Promise<void>((resolve) => {
   releaseParentProviderStarted = resolve;
 });
-await expectReject(
+const parentAbortError = await expectReject(
   "parent abort preserves the caller cancellation reason",
   async () => {
     const call = callCertifiedModel({
@@ -593,6 +607,7 @@ await expectReject(
   },
   /User cancelled the certified model call\./
 );
+assert.equal(parentAbortError, parentAbortReason);
 check(
   "parent abort reaches the provider signal with the caller reason",
   parentProviderSignalAborted,
