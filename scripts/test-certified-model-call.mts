@@ -466,6 +466,9 @@ const timeoutContext = createCertifiedRunContext({
   teamCompositionIds: ["team-timeout"],
   modelBudget: { maxModelCallMs: 25 },
 });
+let timeoutProviderReceivedSignal = false;
+let timeoutProviderSignalAborted = false;
+let timeoutProviderSignalReason = "";
 await expectReject(
   "certified model call times out stalled provider streams",
   () =>
@@ -482,11 +485,43 @@ await expectReject(
       // Timeout classifies transient; disable retries so this asserts a single
       // timed-out attempt rather than recording 3 timeout traces + real backoff.
       retryDelaysMs: [],
-      streamChat: async function* (): AsyncIterable<StreamChunk> {
-        await new Promise<void>(() => undefined);
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        const signal = params.signal;
+        timeoutProviderReceivedSignal = signal !== undefined;
+        await new Promise<void>((resolve) => {
+          if (!signal) return;
+          const onAbort = () => {
+            timeoutProviderSignalAborted = signal.aborted;
+            timeoutProviderSignalReason =
+              signal.reason instanceof Error
+                ? signal.reason.message
+                : String(signal.reason ?? "");
+            resolve();
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
       },
     }),
   /timed out|timeout|budget/i
+);
+check(
+  "timeout provider receives a cancellation signal",
+  timeoutProviderReceivedSignal,
+  timeoutProviderReceivedSignal
+);
+check(
+  "timeout aborts the provider cancellation signal",
+  timeoutProviderSignalAborted,
+  timeoutProviderSignalAborted
+);
+check(
+  "timeout provider cancellation reason identifies the timeout",
+  /timed out|timeout/i.test(timeoutProviderSignalReason),
+  timeoutProviderSignalReason
 );
 const timeoutTrace = timeoutContext
   .snapshot()
@@ -496,6 +531,67 @@ check(
   timeoutTrace?.error?.toLowerCase().includes("timed out") === true &&
     timeoutTrace.retryHistory.some((attempt) => attempt.status === "provider_error"),
   timeoutTrace
+);
+
+const parentAbortContext = createCertifiedRunContext({
+  runId: "run-certified-model-call-parent-abort",
+  suiteId: "suite-model-call",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  startedAt: new Date().toISOString(),
+  caseIds: ["case-parent-abort"],
+  teamCompositionIds: ["team-parent-abort"],
+});
+const parentController = new AbortController();
+const parentAbortReason = "User cancelled the certified model call.";
+let parentProviderSignalAborted = false;
+let releaseParentProviderStarted: (() => void) | undefined;
+const parentProviderStarted = new Promise<void>((resolve) => {
+  releaseParentProviderStarted = resolve;
+});
+await expectReject(
+  "parent abort preserves the caller cancellation reason",
+  async () => {
+    const call = callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 16,
+      temperature: 0,
+      context: parentAbortContext,
+      caseId: "case-parent-abort",
+      attemptId: "attempt-parent-abort",
+      participantId: "single",
+      retryDelaysMs: [],
+      signal: parentController.signal,
+      streamChat: async function* ({ params }): AsyncIterable<StreamChunk> {
+        const signal = params.signal;
+        releaseParentProviderStarted?.();
+        await new Promise<void>((resolve) => {
+          if (!signal) return;
+          const onAbort = () => {
+            parentProviderSignalAborted =
+              signal.aborted && signal.reason === parentAbortReason;
+            resolve();
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+      },
+    });
+    await parentProviderStarted;
+    parentController.abort(parentAbortReason);
+    return call;
+  },
+  /User cancelled the certified model call\./
+);
+check(
+  "parent abort reaches the provider signal with the caller reason",
+  parentProviderSignalAborted,
+  parentProviderSignalAborted
 );
 
 if (failures === 0) {

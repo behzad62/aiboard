@@ -211,21 +211,6 @@ async function callCertifiedModelOnce(
     throw new Error(`No API key configured for certified provider ${providerId}.`);
   }
 
-  const params: ChatParams = {
-    apiKey,
-    model: customModel?.model ?? providerModel,
-    messages,
-    maxTokens: input.maxTokens,
-    temperature: input.temperature,
-    reasoningEffort: input.reasoningEffort,
-    structuredOutput: input.structuredOutput,
-    baseURL:
-      input.baseURL ??
-      customModel?.baseURL ??
-      (input.streamChat ? undefined : getProviderBaseURL(providerId)),
-    capabilities: customModel?.capabilities,
-    contextProfile: input.model.contextProfile,
-  };
   const preflightUsage = estimateModelCallUsage({
     messages,
     output: "",
@@ -256,12 +241,38 @@ async function callCertifiedModelOnce(
   let reportedUsage: StreamUsage | undefined;
   const wallClockBudgetMs = input.context.modelBudget.maxWallClockMs;
   const runStartedMs = new Date(input.context.startedAt).getTime();
+  const attemptController = new AbortController();
+  const abortAttemptFromParent = input.signal
+    ? () => attemptController.abort(input.signal?.reason)
+    : undefined;
+  if (input.signal?.aborted) {
+    abortAttemptFromParent?.();
+  } else if (input.signal && abortAttemptFromParent) {
+    input.signal.addEventListener("abort", abortAttemptFromParent, { once: true });
+  }
+  const params: ChatParams = {
+    apiKey,
+    model: customModel?.model ?? providerModel,
+    messages,
+    maxTokens: input.maxTokens,
+    temperature: input.temperature,
+    reasoningEffort: input.reasoningEffort,
+    structuredOutput: input.structuredOutput,
+    baseURL:
+      input.baseURL ??
+      customModel?.baseURL ??
+      (input.streamChat ? undefined : getProviderBaseURL(providerId)),
+    capabilities: customModel?.capabilities,
+    signal: attemptController.signal,
+    contextProfile: input.model.contextProfile,
+  };
 
   try {
     for await (const chunk of withCertifiedModelCallTimeout(
       streamChat({ providerId, params }),
       certifiedModelCallTimeoutMs(input),
-      input.signal
+      input.signal,
+      (timeoutError) => attemptController.abort(timeoutError)
     )) {
       throwIfCertifiedRunAborted(input.signal);
       if (
@@ -477,6 +488,10 @@ async function callCertifiedModelOnce(
       outputTokens: usage.outputTokens,
       estimatedUsd: trace.estimatedUsd ?? null,
     });
+  } finally {
+    if (input.signal && abortAttemptFromParent) {
+      input.signal.removeEventListener("abort", abortAttemptFromParent);
+    }
   }
 }
 
@@ -613,7 +628,8 @@ async function* defaultCertifiedModelStream(
 async function* withCertifiedModelCallTimeout<T>(
   iterable: AsyncIterable<T>,
   timeoutMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTimeout?: (error: Error) => void
 ): AsyncIterable<T> {
   const iterator = iterable[Symbol.asyncIterator]();
   try {
@@ -623,7 +639,8 @@ async function* withCertifiedModelCallTimeout<T>(
         iterator.next(),
         timeoutMs,
         `Certified model call timed out after ${timeoutMs}ms.`,
-        signal
+        signal,
+        onTimeout
       );
       if (next.done) return;
       yield next.value;
@@ -637,7 +654,8 @@ async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   message: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTimeout?: (error: Error) => void
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
@@ -646,7 +664,11 @@ async function withTimeout<T>(
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timeoutId = setTimeout(() => {
+          const timeoutError = new Error(message);
+          reject(timeoutError);
+          onTimeout?.(timeoutError);
+        }, timeoutMs);
       }),
       new Promise<T>((_, reject) => {
         if (!signal) return;
