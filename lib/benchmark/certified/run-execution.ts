@@ -165,6 +165,15 @@ function linkRunController(parent?: AbortSignal): {
   };
 }
 
+function abortReasonMessage(signal: AbortSignal): string {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string" && reason.length > 0) return reason;
+  return reason === undefined
+    ? "Certified run aborted by user."
+    : String(reason);
+}
+
 export interface RunSelectedContext extends CertifiedRunActions {
   selectedTrack: RunnableTrack;
   suiteId: string;
@@ -238,6 +247,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   setSummary(null);
   setMessage(null);
   try {
+    throwIfCertifiedRunAborted(abortController.signal);
     const teams =
       selectedTrack === "teamiq"
         ? teamIqCompositionsForRun({
@@ -270,9 +280,13 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
           ];
     const primaryTeam = teams[0]!;
     for (const team of teams) {
+      throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkTeamComposition(team);
+      throwIfCertifiedRunAborted(abortController.signal);
     }
+    throwIfCertifiedRunAborted(abortController.signal);
     await saveHarnessCertificationResult(certification);
+    throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("running");
     const runId = `ui-${selectedTrack}-${Date.now()}`;
     const caseRecords =
@@ -284,8 +298,11 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
           : []
         : [caseForSelection(selectedTrack, suiteId, fireworksPlayerCount)];
     for (const caseRecord of caseRecords) {
+      throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkCaseV2(caseRecord);
+      throwIfCertifiedRunAborted(abortController.signal);
     }
+    throwIfCertifiedRunAborted(abortController.signal);
     const result = await runCertifiedBenchmark({
       runId,
       suiteId: selectedTrack === "workbench" ? suiteId : `suite-${selectedTrack}`,
@@ -347,14 +364,19 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
         });
       },
     });
+    throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("persisting");
     setSummary(result);
     setMessage(
-      selectedTrack === "workbench"
-        ? `Certified WorkBench pack completed (${caseRecords.length} cases).`
-        : `Certified ${trackLabel(selectedTrack)} run completed.`
+      result.status === "completed"
+        ? selectedTrack === "workbench"
+          ? `Certified WorkBench pack completed (${caseRecords.length} cases).`
+          : `Certified ${trackLabel(selectedTrack)} run completed.`
+        : result.error ?? `Certified ${trackLabel(selectedTrack)} run failed.`
     );
+    throwIfCertifiedRunAborted(abortController.signal);
     await onComplete();
+    throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("done");
   } catch (error) {
     setRunPhase("idle");
@@ -439,9 +461,13 @@ export async function runGameIqMultiModel(
   );
 
   try {
+    throwIfCertifiedRunAborted(abortController.signal);
     await saveHarnessCertificationResult(certification);
+    throwIfCertifiedRunAborted(abortController.signal);
     for (const caseRecord of caseRecords) {
+      throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkCaseV2(caseRecord);
+      throwIfCertifiedRunAborted(abortController.signal);
     }
     setRunPhase("running");
 
@@ -450,6 +476,7 @@ export async function runGameIqMultiModel(
       model: SelectedModel,
       index: number
     ): Promise<GameIqModelRunState> => {
+      throwIfCertifiedRunAborted(abortController.signal);
       updateGameIqModelRun(model.modelId, { status: "running" });
       // Unique per model even if two runs start in the same millisecond: the
       // batch index disambiguates the shared timestamp.
@@ -465,7 +492,9 @@ export async function runGameIqMultiModel(
           effortByModelId[model.modelId]
         ),
       });
+      throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkTeamComposition(team);
+      throwIfCertifiedRunAborted(abortController.signal);
       // Capture this model's pack attempts from inside the runner so the
       // per-model badge reflects the real scores, not just run completion.
       let capturedAttempts: BenchmarkAttempt[] = [];
@@ -490,6 +519,7 @@ export async function runGameIqMultiModel(
           // attempts and their verifiers by pack.
           const attempts: BenchmarkAttempt[] = [];
           for (const packId of gameIqPackIds) {
+            throwIfCertifiedRunAborted(options?.signal);
             const packContext = gameIqPackRunContext(context, packId);
             const packAttempts = await runCertifiedGameIq({
               context: packContext,
@@ -503,6 +533,7 @@ export async function runGameIqMultiModel(
               // cap combines with the two-model cap above for eight calls.
               concurrency: MAX_PARALLEL_GAMEIQ_SCENARIOS_PER_MODEL,
             });
+            throwIfCertifiedRunAborted(options?.signal);
             const reidd = packAttempts.map((attempt) =>
               reidGameIqPackAttempt(attempt, packId)
             );
@@ -513,7 +544,9 @@ export async function runGameIqMultiModel(
             // against the OUTER context — reidGameIqPackAttempt already
             // scopes the id/caseId/verifierResultId by pack, so no
             // packContext is needed here.
+            throwIfCertifiedRunAborted(options?.signal);
             await persistReturnedAttempts(context, reidd);
+            throwIfCertifiedRunAborted(options?.signal);
             attempts.push(...reidd);
             capturedAttempts = [...attempts];
           }
@@ -525,6 +558,7 @@ export async function runGameIqMultiModel(
           return [];
         },
       });
+      throwIfCertifiedRunAborted(abortController.signal);
       // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
       // the provider/budget error into the summary status; treat that as a
       // failure for the batch tally too.
@@ -587,13 +621,7 @@ export async function runGameIqMultiModel(
         // index after the shared batch was cancelled. Resolve that row before
         // runOneModel marks it running or persists its team/run/attempt.
         if (abortController.signal.aborted) {
-          let cancellationError = "Certified run aborted by user.";
-          try {
-            throwIfCertifiedRunAborted(abortController.signal);
-          } catch (error) {
-            cancellationError =
-              error instanceof Error ? error.message : String(error);
-          }
+          const cancellationError = abortReasonMessage(abortController.signal);
           const state: GameIqModelRunState = {
             modelId: model.modelId,
             displayName: model.displayName,
@@ -612,7 +640,7 @@ export async function runGameIqMultiModel(
             displayName: model.displayName,
             providerId: model.providerId,
             status: "cancelled",
-            error: "Certified run aborted by user.",
+            error: abortReasonMessage(abortController.signal),
           };
           updateGameIqModelRun(model.modelId, cancelledState);
           return cancelledState;
@@ -622,13 +650,18 @@ export async function runGameIqMultiModel(
             displayName: model.displayName,
             providerId: model.providerId,
             status: abortController.signal.aborted ? "cancelled" : "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: abortController.signal.aborted
+              ? abortReasonMessage(abortController.signal)
+              : error instanceof Error
+                ? error.message
+                : String(error),
           };
           updateGameIqModelRun(model.modelId, state);
           return state;
         }
       }
     );
+    throwIfCertifiedRunAborted(abortController.signal);
 
     const passed = settled.filter((run) => run.status === "passed").length;
     const partial = settled.filter((run) => run.status === "partial").length;
@@ -646,11 +679,31 @@ export async function runGameIqMultiModel(
         settled.length === 1 ? "" : "s"
       } on ${gameIqSuiteLabel(suiteId)}: ${tally}`
     );
+    throwIfCertifiedRunAborted(abortController.signal);
     await onComplete();
+    throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("done");
   } catch (error) {
     setRunPhase("idle");
-    setMessage(error instanceof Error ? error.message : String(error));
+    if (abortController.signal.aborted) {
+      const cancellationError = abortReasonMessage(abortController.signal);
+      setGameIqModelRuns((current) =>
+        current.map((run) =>
+          run.status === "passed" ||
+          run.status === "partial" ||
+          run.status === "failed"
+            ? run
+            : {
+                ...run,
+                status: "cancelled",
+                error: cancellationError,
+              }
+        )
+      );
+      setMessage(cancellationError);
+    } else {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
   } finally {
     setRunning(false);
     if (runAbortRef.current === abortController) {
@@ -1087,7 +1140,7 @@ export async function runPreset(
       const health = await checkBenchRunnerForLeg({
         url: ctx.workBenchRunnerUrl,
         token: ctx.workBenchRunnerToken,
-      });
+      }, ctx.signal);
       if (ctx.signal.aborted) {
         onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
         continue;
@@ -1132,12 +1185,13 @@ export async function runPreset(
 }
 
 async function checkBenchRunnerForLeg(
-  config: BenchRunnerConfig
+  config: BenchRunnerConfig,
+  signal?: AbortSignal
 ): Promise<{ ok: boolean; error?: string }> {
   if (!config.url.trim() || !config.token.trim()) {
     return { ok: false, error: "Bench runner not configured." };
   }
-  const health = await checkBenchRunner(config);
+  const health = await checkBenchRunner(config, signal);
   if (!health.ok) return { ok: false, error: health.error };
   if (!health.runnerV2?.ready) {
     return {

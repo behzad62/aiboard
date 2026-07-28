@@ -7,6 +7,7 @@ import {
   CertifiedProviderError,
 } from "../lib/benchmark/certified/model-call";
 import { classifyProviderFailure } from "../lib/benchmark/certified/classify-provider-failure";
+import { createCertifiedTabRunCoordinator } from "../lib/benchmark/certified/run-session";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
 import type { PersistentCertifiedRunContext } from "../lib/benchmark/certified/run-context";
 
@@ -205,6 +206,14 @@ check(
   );
 }
 
+async function waitFor(check2: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 1_000; attempt++) {
+    if (check2()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("Timed out waiting for certified model-call state.");
+}
+
 // ---------------------------------------------------------------------------
 // Behavior: a timed-out physical attempt is aborted before retry admission,
 // and the retry owns a distinct fresh provider signal.
@@ -372,66 +381,79 @@ check(
   let teardownStartedAt = 0;
   let notifyFirstNextStarted!: () => void;
   let rejectFirstNext!: (error: Error) => void;
+  let resolveFirstReturn!: () => void;
   const firstNextStarted = new Promise<void>((resolve) => {
     notifyFirstNextStarted = resolve;
   });
+  const coordinator = createCertifiedTabRunCoordinator();
   const context = makeTestContext();
-  const pending = callCertifiedModel({
-    model,
-    system: "s",
-    user: "u",
-    maxTokens: 128,
-    temperature: 0,
-    context,
-    caseId: context.caseIds[0],
-    attemptId: "attempt-retry-suppressed-unconfirmed-teardown",
-    participantId: "p",
-    streamChat: (): AsyncIterable<StreamChunk> => {
-      calls++;
-      if (calls > 1) retryCountWhenIteratorNeverConfirmsClose++;
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+  assert.equal(
+    coordinator.tryStart("advanced", {}, async () => {
+      await callCertifiedModel({
+        model,
+        system: "s",
+        user: "u",
+        maxTokens: 128,
+        temperature: 0,
+        context,
+        caseId: context.caseIds[0],
+        attemptId: "attempt-retry-suppressed-unconfirmed-teardown",
+        participantId: "p",
+        streamChat: (): AsyncIterable<StreamChunk> => {
+          calls++;
+          if (calls > 1) retryCountWhenIteratorNeverConfirmsClose++;
           return {
-            next: () => {
-              notifyFirstNextStarted();
-              return new Promise<IteratorResult<StreamChunk>>((_, reject) => {
-                rejectFirstNext = reject;
-              });
-            },
-            return: () => {
-              teardownStartedAt = Date.now();
-              return new Promise<IteratorResult<StreamChunk>>(() => undefined);
+            [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+              return {
+                next: () => {
+                  notifyFirstNextStarted();
+                  return new Promise<IteratorResult<StreamChunk>>((_, reject) => {
+                    rejectFirstNext = reject;
+                  });
+                },
+                return: () => {
+                  teardownStartedAt = Date.now();
+                  return new Promise<IteratorResult<StreamChunk>>((resolve) => {
+                    resolveFirstReturn = () =>
+                      resolve({ done: true, value: undefined });
+                  });
+                },
+              };
             },
           };
         },
-      };
-    },
-    retryDelaysMs: [0],
-  });
+        retryDelaysMs: [0],
+      });
+    }),
+    true
+  );
   await firstNextStarted;
   rejectFirstNext(new Error("ChatGPT request failed: 503"));
-  const error = await expectReject(
-    "unconfirmed iterator teardown suppresses a transient retry",
-    () => pending,
-    (candidate) =>
-      candidate instanceof CertifiedProviderError &&
-      candidate.classification !== "transient" &&
-      /retry was suppressed to avoid overlapping paid calls/i.test(candidate.message)
-  );
+  await waitFor(() => teardownStartedAt > 0);
+  await new Promise((resolve) => setTimeout(resolve, 5_100));
   const teardownElapsedMs = Date.now() - teardownStartedAt;
   assert.equal(retryCountWhenIteratorNeverConfirmsClose, 0);
   check(
-    "unconfirmed iterator teardown surfaces fail-closed provider error",
-    error instanceof CertifiedProviderError &&
-      error.classification !== "transient" &&
+    "unconfirmed iterator teardown retains tab ownership beyond the teardown limit",
+    coordinator.getSnapshot().owner === "advanced" &&
       calls === 1 &&
       teardownElapsedMs >= 4_900 &&
-      teardownElapsedMs <= 6_500,
+      coordinator.tryStart("preset", { presetId: "model-iq" }, async () => undefined) === false,
     {
       calls,
       teardownElapsedMs,
-      error: error instanceof Error ? error.message : String(error),
+      snapshot: coordinator.getSnapshot(),
     }
+  );
+  resolveFirstReturn();
+  await waitFor(() => coordinator.getSnapshot().owner === null);
+  check(
+    "ownership releases only after physical teardown settles and the fail-closed error remains explicit",
+    /retry was suppressed to avoid overlapping paid calls/i.test(
+      coordinator.getSnapshot().error ?? ""
+    ) &&
+      coordinator.tryStart("preset", { presetId: "model-iq" }, async () => undefined) === true,
+    coordinator.getSnapshot()
   );
 }
 

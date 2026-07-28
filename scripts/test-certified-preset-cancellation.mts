@@ -1,16 +1,25 @@
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import {
+  DIRECT_MODEL_HARNESS,
+  runGameIqMultiModel,
   runPreset,
+  runSelected,
+  type GameIqModelRunState,
   type PresetProgressEvent,
 } from "../lib/benchmark/certified/run-execution";
 import { BENCHMARK_PRESETS } from "../lib/benchmark/certified/run-presets";
+import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import {
   __resetBenchmarkStoreForTests,
+  __setAdapterForTests,
   listBenchmarkAttemptsV2,
+  listBenchmarkCaseV2,
   listBenchmarkRuns,
   listBenchmarkTeamCompositions,
+  listHarnessCertificationResults,
 } from "../lib/benchmark/store";
+import type { StorageAdapter } from "../lib/client/storage-adapter";
 import {
   __resetClientStoreForTests,
   upsertProviderKey,
@@ -28,6 +37,43 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function deferredWriteAdapter(blockAtWrite: number): {
+  adapter: StorageAdapter;
+  entered: Promise<void>;
+  release: () => void;
+  writes: () => number;
+} {
+  const entered = deferred<void>();
+  const gate = deferred<void>();
+  let writes = 0;
+  const write = async () => {
+    writes++;
+    if (writes !== blockAtWrite) return;
+    entered.resolve();
+    await gate.promise;
+  };
+  return {
+    adapter: {
+      kind: "indexeddb",
+      load: async () => null,
+      save: write,
+      listDiscussionIds: async () => [],
+      loadDiscussionFile: async () => null,
+      saveDiscussionFile: async () => {},
+      deleteDiscussionFile: async () => {},
+      deleteDiscussion: async () => {},
+      listBenchmarkRunIds: async () => [],
+      loadBenchmarkRun: async () => null,
+      saveBenchmarkRun: async () => write(),
+      deleteBenchmarkRun: async () => {},
+      label: () => "deferred certified persistence",
+    },
+    entered: entered.promise,
+    release: () => gate.resolve(),
+    writes: () => writes,
+  };
+}
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 500; attempt++) {
     if (predicate()) return;
@@ -37,6 +83,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 function configureStore(): void {
+  __setAdapterForTests(null);
   __resetBenchmarkStoreForTests();
   __resetClientStoreForTests();
   upsertProviderKey({
@@ -87,6 +134,194 @@ async function persistedFor(modelName: string) {
   };
 }
 
+async function assertNoCertifiedPersistence(): Promise<void> {
+  assert.deepEqual(
+    {
+      teams: (await listBenchmarkTeamCompositions()).length,
+      certifications: (await listHarnessCertificationResults()).length,
+      cases: (await listBenchmarkCaseV2()).length,
+      runs: (await listBenchmarkRuns()).length,
+      attempts: (await listBenchmarkAttemptsV2()).length,
+    },
+    { teams: 0, certifications: 0, cases: 0, runs: 0, attempts: 0 }
+  );
+}
+
+{
+  configureStore();
+  const model = selectedModel("pre-aborted-toolrel");
+  const parent = new AbortController();
+  const cancellation = new Error("cancel before Tool Reliability setup");
+  parent.abort(cancellation);
+  let providerCalls = 0;
+  let message: string | null = null;
+  const originalStreamChat = openaiProvider.streamChat;
+  openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
+    providerCalls++;
+    yield { type: "token", content: "{}" };
+  };
+  try {
+    await runSelected({
+      selectedTrack: "toolreliability",
+      suiteId: toolReliabilityLeg.suiteId,
+      models: [model],
+      modelId: model.modelId,
+      teamModelIds: [],
+      teamIqStrategy: "panel",
+      fireworksPlayerCount: 2,
+      includeSoloBaselines: true,
+      workBenchModelIds: [],
+      workBenchRoleMode: "solo",
+      workBenchRunnerUrl: "",
+      workBenchRunnerToken: "",
+      effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
+      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      effortByModelId: {},
+      signal: parent.signal,
+      runAbortRef: { current: null },
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: () => {},
+      setMessage: (next) => {
+        message = next;
+      },
+      onComplete: async () => {},
+    });
+  } finally {
+    openaiProvider.streamChat = originalStreamChat;
+  }
+  assert.equal(providerCalls, 0);
+  assert.equal(message, cancellation.message);
+  await assertNoCertifiedPersistence();
+  console.log("PASS pre-aborted Tool Reliability persists and calls nothing");
+}
+
+{
+  configureStore();
+  const model = selectedModel("pre-aborted-gameiq");
+  const parent = new AbortController();
+  const cancellation = new Error("cancel before GameIQ setup");
+  parent.abort(cancellation);
+  let providerCalls = 0;
+  let message: string | null = null;
+  let visibleRuns: GameIqModelRunState[] = [];
+  const originalStreamChat = openaiProvider.streamChat;
+  openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
+    providerCalls++;
+    yield { type: "token", content: "{}" };
+  };
+  try {
+    await runGameIqMultiModel({
+      models: [model],
+      gameIqModelIds: [model.modelId],
+      suiteId: "gameiq-all-packs",
+      fireworksPlayerCount: 2,
+      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      effortByModelId: {},
+      signal: parent.signal,
+      runAbortRef: { current: null },
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: () => {},
+      setMessage: (next) => {
+        message = next;
+      },
+      setGameIqModelRuns: (updater) => {
+        visibleRuns =
+          typeof updater === "function" ? updater(visibleRuns) : updater;
+      },
+      onComplete: async () => {},
+    });
+  } finally {
+    openaiProvider.streamChat = originalStreamChat;
+  }
+  assert.equal(providerCalls, 0);
+  assert.equal(message, cancellation.message);
+  assert.equal(visibleRuns[0]?.status, "cancelled");
+  assert.equal(visibleRuns[0]?.error, cancellation.message);
+  await assertNoCertifiedPersistence();
+  console.log("PASS pre-aborted GameIQ persists and calls nothing");
+}
+
+for (const boundary of [
+  { write: 1, name: "team", expected: { certifications: 0, cases: 0, runs: 0 } },
+  { write: 2, name: "certification", expected: { cases: 0, runs: 0 } },
+  { write: 3, name: "case", expected: { runs: 0 } },
+  { write: 4, name: "run", expected: {} },
+] as const) {
+  configureStore();
+  const model = selectedModel(`deferred-${boundary.name}`);
+  const parent = new AbortController();
+  const cancellation = new Error(
+    `cancel during deferred ${boundary.name} persistence`
+  );
+  const persistence = deferredWriteAdapter(boundary.write);
+  __setAdapterForTests(persistence.adapter);
+  let providerCalls = 0;
+  let message: string | null = null;
+  const originalStreamChat = openaiProvider.streamChat;
+  openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
+    providerCalls++;
+    yield { type: "token", content: "{}" };
+  };
+  try {
+    const pending = runSelected({
+      selectedTrack: "toolreliability",
+      suiteId: toolReliabilityLeg.suiteId,
+      models: [model],
+      modelId: model.modelId,
+      teamModelIds: [],
+      teamIqStrategy: "panel",
+      fireworksPlayerCount: 2,
+      includeSoloBaselines: true,
+      workBenchModelIds: [],
+      workBenchRoleMode: "solo",
+      workBenchRunnerUrl: "",
+      workBenchRunnerToken: "",
+      effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
+      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      effortByModelId: {},
+      signal: parent.signal,
+      runAbortRef: { current: null },
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: () => {},
+      setMessage: (next) => {
+        message = next;
+      },
+      onComplete: async () => {},
+    });
+    await persistence.entered;
+    parent.abort(cancellation);
+    persistence.release();
+    await pending;
+  } finally {
+    persistence.release();
+    __setAdapterForTests(null);
+    openaiProvider.streamChat = originalStreamChat;
+  }
+  const actual = {
+    certifications: (await listHarnessCertificationResults()).length,
+    cases: (await listBenchmarkCaseV2()).length,
+    runs: (await listBenchmarkRuns()).length,
+  };
+  assert.equal(providerCalls, 0);
+  assert.equal(message, cancellation.message);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.keys(boundary.expected).map((key) => [
+        key,
+        actual[key as keyof typeof actual],
+      ])
+    ),
+    boundary.expected
+  );
+  assert.equal((await listBenchmarkAttemptsV2()).length, 0);
+  console.log(
+    `PASS cancellation at deferred ${boundary.name} persistence admits no later boundary`
+  );
+}
+
 // Removing parent-to-child signal linking makes this fail: only the child
 // currently stored in the shared ref aborts and the queued fifth model starts.
 {
@@ -98,11 +333,14 @@ async function persistedFor(modelName: string) {
   const cancellation = new Error("cancel every Tool Reliability descendant");
   const startedModels = new Set<string>();
   const abortedModels = new Set<string>();
+  const activeSignals: AbortSignal[] = [];
   const gates = new Map<string, ReturnType<typeof deferred<void>>>();
   const progress: PresetProgressEvent[] = [];
   const originalStreamChat = openaiProvider.streamChat;
   openaiProvider.streamChat = async function* (params): AsyncIterable<StreamChunk> {
     startedModels.add(params.model);
+    assert.ok(params.signal);
+    activeSignals.push(params.signal);
     const gate = deferred<void>();
     gates.set(params.model, gate);
     const abort = () => {
@@ -150,6 +388,12 @@ async function persistedFor(modelName: string) {
     "toolrel-3",
     "toolrel-4",
   ]);
+  assert.equal(activeSignals.length, 4);
+  assert.ok(
+    activeSignals.every(
+      (signal) => signal.aborted && signal.reason === cancellation
+    )
+  );
   assert.equal(startedModels.has("toolrel-5"), false);
   const fifth = await persistedFor("toolrel-5");
   assert.equal(fifth.teams.length, 0);
@@ -214,15 +458,14 @@ async function persistedFor(modelName: string) {
   }
   assert.equal(parent.signal.aborted, false);
   assert.deepEqual([...abortedModels], []);
-  assert.equal(
-    progress.some(
-      (event) =>
-        event.type === "model" &&
-        event.modelId.endsWith("isolated-1") &&
-        event.status === "failed"
-    ),
-    true
+  const failedModelProgress = progress.find(
+    (event) =>
+      event.type === "model" &&
+      event.modelId.endsWith("isolated-1") &&
+      event.status === "failed"
   );
+  assert.equal(failedModelProgress?.detail, "isolated provider failure");
+  assert.doesNotMatch(failedModelProgress?.detail ?? "", /completed|success/i);
   for (const model of models.slice(1)) {
     assert.equal(
       progress.some(
@@ -246,6 +489,7 @@ async function persistedFor(modelName: string) {
   const healthGate = deferred<void>();
   const progress: PresetProgressEvent[] = [];
   let healthRequests = 0;
+  let healthSocketClosed = false;
   let workBenchPostRequests = 0;
   let unexpectedRoute: string | null = null;
   const healthyRunnerV2Response = {
@@ -261,8 +505,14 @@ async function persistedFor(modelName: string) {
       return;
     }
     healthRequests++;
+    request.on("aborted", () => {
+      healthSocketClosed = true;
+    });
+    response.on("close", () => {
+      if (!response.writableEnded) healthSocketClosed = true;
+    });
     await healthGate.promise;
-    sendJson(response, 200, healthyRunnerV2Response);
+    if (!response.destroyed) sendJson(response, 200, healthyRunnerV2Response);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -294,6 +544,7 @@ async function persistedFor(modelName: string) {
     );
     await waitFor(() => healthRequests === 1);
     parent.abort(new Error("cancel during runner health"));
+    await waitFor(() => healthSocketClosed);
     healthGate.resolve();
     await pending;
   } finally {
@@ -305,6 +556,7 @@ async function persistedFor(modelName: string) {
   const teams = await listBenchmarkTeamCompositions();
   const runs = await listBenchmarkRuns();
   assert.equal(workBenchPostRequests, 0, unexpectedRoute ?? undefined);
+  assert.equal(healthSocketClosed, true);
   assert.equal(teams.length, 0);
   assert.equal(runs.length, 0);
   assert.equal(

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PresetCards } from "../components/benchmark/run/PresetCards";
 import { RunProgressList } from "../components/benchmark/run/RunProgressList";
+import {
+  GameIqModelRunProgress,
+  GameIqModelRunSummaryPanel,
+} from "../components/benchmark/certified/CertifiedRunPanel";
 import { createCertifiedTabRunCoordinator } from "../lib/benchmark/certified/run-session";
 
 function deferred<T>() {
@@ -164,6 +168,38 @@ async function main() {
   );
   assert.match(emptyRunningMarkup, /continues/i);
   assert.match(emptyRunningMarkup, />Cancel<\/button>/);
+
+  const retainedReason = "Cancelled from the remounted Advanced panel.";
+  const cancelledGameIqRun = {
+    modelId: "openai:cancelled-gameiq",
+    displayName: "Cancelled GameIQ",
+    providerId: "openai",
+    status: "cancelled" as const,
+    error: retainedReason,
+  };
+  const cancelledProgressMarkup = renderToStaticMarkup(
+    <GameIqModelRunProgress runs={[cancelledGameIqRun]} />
+  );
+  const cancelledSummaryMarkup = renderToStaticMarkup(
+    <GameIqModelRunSummaryPanel
+      runs={[cancelledGameIqRun]}
+      models={[
+        {
+          modelId: cancelledGameIqRun.modelId,
+          providerId: cancelledGameIqRun.providerId,
+          displayName: cancelledGameIqRun.displayName,
+        },
+      ]}
+    />
+  );
+  for (const gameIqMarkup of [
+    cancelledProgressMarkup,
+    cancelledSummaryMarkup,
+  ]) {
+    assert.match(gameIqMarkup, />Cancelled</);
+    assert.match(gameIqMarkup, new RegExp(retainedReason));
+    assert.doesNotMatch(gameIqMarkup, /text-destructive/);
+  }
 
   console.log("PASS");
 }

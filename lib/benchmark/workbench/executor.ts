@@ -27,6 +27,7 @@ export async function executeWorkBenchVerifierOnly(
   const harnessProfile = input.harnessProfile ?? "aiboard-build-multi-worker";
   let attemptId = input.attemptId;
   let prepared = false;
+  let prepareIssued = false;
   let cleanupEligible = false;
 
   if (!input.runBuild) {
@@ -43,6 +44,7 @@ export async function executeWorkBenchVerifierOnly(
 
   try {
     throwIfCertifiedRunAborted(input.signal);
+    prepareIssued = true;
     const preparedAttempt = await prepareBenchCase(input.runner, {
       attemptId: input.attemptId,
       caseId: input.case.id,
@@ -55,9 +57,16 @@ export async function executeWorkBenchVerifierOnly(
       verifierResultFile: input.case.verifier.resultFile,
       allowedCommands: input.case.allowedCommands,
       files: input.case.fixtureFiles,
-    });
+    }, input.signal);
     attemptId = preparedAttempt.attemptId || input.attemptId;
+    throwIfCertifiedRunAborted(input.signal);
   } catch (error) {
+    if (input.signal?.aborted) {
+      if (prepareIssued) {
+        await cleanupBenchRun(input.runner, { attemptId }).catch(() => undefined);
+      }
+      throwIfCertifiedRunAborted(input.signal);
+    }
     const failure = classifyPrepareFailure(error);
     return createFailedWorkBenchAttempt(input, {
       attemptId,
@@ -70,8 +79,14 @@ export async function executeWorkBenchVerifierOnly(
     });
   }
 
-  await input.onAttemptPrepared?.(attemptId);
   prepared = true;
+  try {
+    await input.onAttemptPrepared?.(attemptId);
+    throwIfCertifiedRunAborted(input.signal);
+  } catch (error) {
+    await cleanupBenchRun(input.runner, { attemptId }).catch(() => undefined);
+    throw error;
+  }
 
   try {
     let buildResult: WorkBenchBuildExecutionResult;
@@ -89,6 +104,7 @@ export async function executeWorkBenchVerifierOnly(
       });
       throwIfCertifiedRunAborted(input.signal);
     } catch (error) {
+      throwIfCertifiedRunAborted(input.signal);
       const failure = classifyBuildFailure(error);
       return createFailedWorkBenchAttempt(input, {
         attemptId,
@@ -143,13 +159,14 @@ export async function executeWorkBenchVerifierOnly(
       verifierRun = await runBenchVerifier(input.runner, {
         attemptId,
         timeoutSeconds: input.case.verifier.timeoutSeconds,
-      });
+      }, input.signal);
       parsedVerifierResult = parseVerifierResult(
         verifierRun.stdoutPreview,
         verifierRun.resultJson
       );
       throwIfCertifiedRunAborted(input.signal);
     } catch (error) {
+      throwIfCertifiedRunAborted(input.signal);
       return createFailedWorkBenchAttempt(input, {
         attemptId,
         startedAt,
@@ -192,7 +209,10 @@ export async function executeWorkBenchVerifierOnly(
       assertionResults: parsedVerifierResult.assertions,
       artifactIds: [`${attemptId}:verifier-result`],
     };
-    const diff = await getBenchDiff(input.runner, { attemptId }).catch(() => ({ diff: "" }));
+    const diff = await getBenchDiff(input.runner, { attemptId }, input.signal).catch(
+      () => ({ diff: "" })
+    );
+    throwIfCertifiedRunAborted(input.signal);
     const completedAt = new Date().toISOString();
     const durationMs = Math.max(0, Date.now() - startedMs);
     const artifacts = [
@@ -252,7 +272,10 @@ export async function executeWorkBenchVerifierOnly(
     cleanupEligible = attempt.status === "passed";
     return { attempt, verifierResult, parsedVerifierResult, score, artifacts };
   } finally {
-    if (prepared && cleanupEligible && input.cleanup !== false) {
+    if (
+      prepared &&
+      (input.signal?.aborted || (cleanupEligible && input.cleanup !== false))
+    ) {
       await cleanupBenchRun(input.runner, { attemptId }).catch(() => undefined);
     }
   }

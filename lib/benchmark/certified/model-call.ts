@@ -688,15 +688,25 @@ async function closeIteratorBeforeRetry(
     if (!iterator.return) {
       throw new Error("Certified provider iterator does not expose return().");
     }
-    const result = await Promise.race([
-      iterator.return(),
-      new Promise<never>((_, reject) => {
+    const teardown = iterator.return();
+    const timedOut = Symbol("certified-iterator-teardown-timeout");
+    const resultOrTimeout = await Promise.race([
+      teardown,
+      new Promise<typeof timedOut>((resolve) => {
         timeoutId = setTimeout(
-          () => reject(new Error("Certified provider iterator teardown timed out.")),
+          () => resolve(timedOut),
           CERTIFIED_ITERATOR_TEARDOWN_TIMEOUT_MS
         );
       }),
     ]);
+    if (resultOrTimeout === timedOut) {
+      // The five-second bound still suppresses retry, but it must not turn an
+      // unconfirmed physical call into logical idleness. Keep the full run
+      // tree pending until the provider's iterator teardown actually settles.
+      await teardown;
+      throw new Error("Certified provider iterator teardown exceeded its confirmation limit.");
+    }
+    const result = resultOrTimeout;
     if (result.done !== true) {
       throw new Error("Certified provider iterator return() did not report done.");
     }
@@ -844,12 +854,9 @@ export function throwIfCertifiedRunAborted(signal?: AbortSignal): void {
   throw abortedError(signal);
 }
 
-function abortedError(signal: AbortSignal): Error {
-  const reason = signal.reason;
-  if (reason instanceof Error) return reason;
-  const suffix =
-    typeof reason === "string" && reason.trim() ? ` ${reason.trim()}` : "";
-  return new Error(`Certified run aborted by user.${suffix}`);
+function abortedError(signal: AbortSignal): unknown {
+  if (signal.reason !== undefined) return signal.reason;
+  return new Error("Certified run aborted by user.");
 }
 
 function errorMessage(error: unknown): string {

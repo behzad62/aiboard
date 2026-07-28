@@ -46,11 +46,13 @@ export interface RunCertifiedBenchmarkInput {
 export async function runCertifiedBenchmark(
   input: RunCertifiedBenchmarkInput
 ): Promise<CertifiedRunSummary> {
+  throwIfCertifiedRunAborted(input.signal);
   assertCertifiedHarnessCanRun(input.certification);
   const profile = getHarnessProfileDefinition(input.harnessProfile);
   if (!profile) throw new Error(`Unknown harness profile: ${input.harnessProfile}`);
 
   const selection = await loadAndValidateCertifiedRunSelection(input);
+  throwIfCertifiedRunAborted(input.signal);
   const runId = input.runId ?? createRunId(input.track);
   const startedAt = new Date().toISOString();
   let run: ReturnType<typeof createBenchmarkRunRecord>;
@@ -64,15 +66,19 @@ export async function runCertifiedBenchmark(
     teamCompositionIds: input.teamCompositionIds,
     modelBudget: input.modelBudget,
     async onTeamCompositionIdsChanged(teamCompositionIds) {
+      throwIfCertifiedRunAborted(input.signal);
       run = updateRunningBenchmarkRunTeamCompositionIds(
         run,
         teamCompositionIds
       );
       await persistCertifiedRunRecord(run);
+      throwIfCertifiedRunAborted(input.signal);
     },
     async onAttemptOwnersChanged(attemptOwners) {
+      throwIfCertifiedRunAborted(input.signal);
       run = updateRunningBenchmarkRunAttemptOwners(run, attemptOwners);
       await persistCertifiedRunRecord(run);
+      throwIfCertifiedRunAborted(input.signal);
     },
   });
   run = createBenchmarkRunRecord({
@@ -80,7 +86,9 @@ export async function runCertifiedBenchmark(
     name: input.name,
     modelIds: modelIdsForTeams(selection.teamCompositions),
   });
+  throwIfCertifiedRunAborted(input.signal);
   await persistCertifiedRunRecord(run);
+  throwIfCertifiedRunAborted(input.signal);
 
   let status: CertifiedRunSummary["status"] = "completed";
   let errorMessage: string | undefined;
@@ -92,6 +100,7 @@ export async function runCertifiedBenchmark(
     );
     throwIfCertifiedRunAborted(input.signal);
   } catch (error) {
+    throwIfCertifiedRunAborted(input.signal);
     status = "failed";
     errorMessage = error instanceof Error ? error.message : String(error);
     const runFailure = createRunEngineFailure({
@@ -100,6 +109,7 @@ export async function runCertifiedBenchmark(
       message: errorMessage,
     });
     await context.recordFailure(runFailure);
+    throwIfCertifiedRunAborted(input.signal);
     await persistReturnedAttempts(
       context,
       createFailedAttemptsForRunError({
@@ -109,11 +119,14 @@ export async function runCertifiedBenchmark(
         failureId: runFailure.id,
       })
     );
+    throwIfCertifiedRunAborted(input.signal);
   }
 
+  throwIfCertifiedRunAborted(input.signal);
   const completedAt = new Date().toISOString();
   const snapshot = context.snapshot();
   const dashboard = await rebuildCertifiedDashboardData();
+  throwIfCertifiedRunAborted(input.signal);
   const summary = createCertifiedRunSummary({
     context,
     completedAt,
@@ -122,6 +135,7 @@ export async function runCertifiedBenchmark(
     dashboard,
     error: errorMessage,
   });
+  throwIfCertifiedRunAborted(input.signal);
   await persistCertifiedRunRecord(
     completeBenchmarkRunRecord({
       run,
@@ -131,6 +145,7 @@ export async function runCertifiedBenchmark(
       snapshot,
     })
   );
+  throwIfCertifiedRunAborted(input.signal);
 
   return summary;
 }

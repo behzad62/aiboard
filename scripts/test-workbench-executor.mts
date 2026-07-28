@@ -1,4 +1,5 @@
 /* WorkBench executor checks (run: npx tsx scripts/test-workbench-executor.mts) */
+import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -51,15 +52,20 @@ interface FakeRunnerOptions {
   verifierDelayMs?: number;
   verifierResultJson?: string;
   diff?: string;
+  prepareGate?: Promise<void>;
+  verifierGate?: Promise<void>;
+  cleanupGate?: Promise<void>;
 }
 
 async function startCanonicalAttemptRunner(preparedAttemptId: string, options: FakeRunnerOptions = {}): Promise<{
   url: string;
   token: string;
   requests: Array<{ path: string; body: Record<string, unknown> }>;
+  abortedPaths: string[];
   stop: () => Promise<void>;
 }> {
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const abortedPaths: string[] = [];
   const token = `fake-runner-${Date.now()}`;
   const verifierJson = JSON.stringify({
     passed: true,
@@ -71,12 +77,16 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
     const path = req.url ?? "/";
     const body = await readJsonRequest(req);
     requests.push({ path, body });
+    res.on("close", () => {
+      if (!res.writableEnded) abortedPaths.push(path);
+    });
     if (req.headers["x-runner-token"] !== token) {
       sendJsonResponse(res, 401, { error: "token required" });
       return;
     }
     switch (path) {
       case "/bench/prepare":
+        if (options.prepareGate) await options.prepareGate;
         if (options.prepareDelayMs) await delay(options.prepareDelayMs);
         if (options.prepareStatus && options.prepareStatus >= 400) {
           sendJsonResponse(res, options.prepareStatus, { error: options.prepareError ?? "prepare failed" });
@@ -89,6 +99,7 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
         });
         return;
       case "/bench/run-verifier":
+        if (options.verifierGate) await options.verifierGate;
         if (options.verifierDelayMs) await delay(options.verifierDelayMs);
         if (options.verifierStatus && options.verifierStatus >= 400) {
           sendJsonResponse(res, options.verifierStatus, { error: options.verifierError ?? "verifier failed" });
@@ -109,6 +120,7 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
         sendJsonResponse(res, 200, { diff: options.diff ?? "--- a/index.js\n+++ b/index.js\n+fixed\n" });
         return;
       case "/bench/cleanup":
+        if (options.cleanupGate) await options.cleanupGate;
         sendJsonResponse(res, 200, { removed: true });
         return;
       default:
@@ -122,8 +134,25 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
     url: `http://127.0.0.1:${address.port}`,
     token,
     requests,
+    abortedPaths,
     stop: () => stopServer(server),
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    if (predicate()) return;
+    await delay(5);
+  }
+  throw new Error("Timed out waiting for fake WorkBench runner state.");
 }
 
 function delay(ms: number): Promise<void> {
@@ -232,6 +261,115 @@ const caseRecord: WorkBenchCase = {
   },
   allowedCommands: [modelCommand, verifierCommand],
 };
+
+{
+  const prepareGate = deferred<void>();
+  const cleanupGate = deferred<void>();
+  const runner = await startCanonicalAttemptRunner("cancelled-prepare-attempt", {
+    prepareGate: prepareGate.promise,
+    cleanupGate: cleanupGate.promise,
+  });
+  const controller = new AbortController();
+  const cancellation = new Error("cancel during WorkBench prepare");
+  let settled = false;
+  try {
+    const pending = executeWorkBenchVerifierOnly({
+      case: caseRecord,
+      runner: { url: runner.url, token: runner.token },
+      attemptId: "cancelled-prepare-attempt",
+      runId: "run-cancelled-prepare",
+      teamCompositionId: "team-fixture",
+      signal: controller.signal,
+      cleanup: true,
+      runBuild: async () => {
+        throw new Error("cancelled prepare must not enter build");
+      },
+    });
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await waitFor(() =>
+      runner.requests.some((request) => request.path === "/bench/prepare")
+    );
+    controller.abort(cancellation);
+    await waitFor(() => runner.abortedPaths.includes("/bench/prepare"));
+    await waitFor(() =>
+      runner.requests.some((request) => request.path === "/bench/cleanup")
+    );
+    await delay(20);
+    assert.equal(settled, false, "cancelled prepare waits for cleanup");
+    cleanupGate.resolve();
+    await assert.rejects(pending, (error) => error === cancellation);
+    assert.equal(
+      runner.requests.some((request) => request.path === "/bench/run-verifier"),
+      false
+    );
+  } finally {
+    prepareGate.resolve();
+    cleanupGate.resolve();
+    await runner.stop();
+  }
+}
+
+{
+  const verifierGate = deferred<void>();
+  const cleanupGate = deferred<void>();
+  const runner = await startCanonicalAttemptRunner("cancelled-verifier-attempt", {
+    verifierGate: verifierGate.promise,
+    cleanupGate: cleanupGate.promise,
+  });
+  const controller = new AbortController();
+  const cancellation = new Error("cancel during WorkBench verifier");
+  let settled = false;
+  try {
+    const pending = executeWorkBenchVerifierOnly({
+      case: caseRecord,
+      runner: { url: runner.url, token: runner.token },
+      attemptId: "cancelled-verifier-attempt",
+      runId: "run-cancelled-verifier",
+      teamCompositionId: "team-fixture",
+      signal: controller.signal,
+      cleanup: true,
+      runBuild: async () => ({
+        traceIds: ["trace-cancelled-verifier"],
+        modelCalls: 1,
+      }),
+    });
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await waitFor(() =>
+      runner.requests.some((request) => request.path === "/bench/run-verifier")
+    );
+    controller.abort(cancellation);
+    await waitFor(() => runner.abortedPaths.includes("/bench/run-verifier"));
+    await waitFor(() =>
+      runner.requests.some((request) => request.path === "/bench/cleanup")
+    );
+    await delay(20);
+    assert.equal(settled, false, "cancelled verifier waits for cleanup");
+    cleanupGate.resolve();
+    await assert.rejects(pending, (error) => error === cancellation);
+    assert.equal(
+      runner.requests.some((request) => request.path === "/bench/diff"),
+      false
+    );
+  } finally {
+    verifierGate.resolve();
+    cleanupGate.resolve();
+    await runner.stop();
+  }
+}
 
 async function expectStructuredFailure(
   name: string,

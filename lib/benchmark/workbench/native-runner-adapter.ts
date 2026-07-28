@@ -182,11 +182,14 @@ export async function runNativeWorkBenchBuild(
   let audit: NativeBuildAuditExport | undefined;
   let connection: NativeRunnerConnection | undefined;
   let nativeRunId: string | undefined;
+  let managedStartIssued = false;
   try {
     throwIfAborted(input.signal);
+    managedStartIssued = true;
     managed = await dependencies.startManagedAttemptRunner(input.runner, {
       attemptId: input.attemptId,
-    });
+    }, input.signal);
+    throwIfAborted(input.signal);
     if (!managed.running || !managed.url || !managed.token) {
       throw new Error("Bench Runner did not return a live managed Runner V2 connection.");
     }
@@ -194,13 +197,19 @@ export async function runNativeWorkBenchBuild(
       url: managed.url,
       token: managed.token,
     };
-    const health = await dependencies.getNativeRunnerHealth(connection);
+    const health = await dependencies.getNativeRunnerHealth(
+      connection,
+      undefined,
+      input.signal
+    );
+    throwIfAborted(input.signal);
     if (health.projectPath !== managed.projectPath) {
       throw new Error("Managed Runner V2 project path does not match the prepared attempt.");
     }
     await dependencies.restoreManagedAttemptOracle(input.runner, {
       attemptId: input.attemptId,
-    });
+    }, input.signal);
+    throwIfAborted(input.signal);
     const roleMapping = nativeWorkBenchRoles(input.teamComposition, input.models);
     const configuredRuntimeIds = uniqueStrings(
       input.teamComposition
@@ -216,46 +225,60 @@ export async function runNativeWorkBenchBuild(
         input.teamComposition,
         input.models,
         dependencies.createProviderConfigs
-      )
+      ),
+      undefined,
+      input.signal
     );
+    throwIfAborted(input.signal);
     nativeRunId = safeNativeId(`workbench-${input.attemptId}`);
     const budgetLimits = nativeBudgetLimits(input);
-    await dependencies.createNativeBuild(connection, {
-      runId: nativeRunId,
-      projectPath: managed.projectPath,
-      permissionProfile: "full",
-      idempotencyKey: `create:${nativeRunId}`,
-      build: {
-        projectId: input.attemptId,
-        objective: workBenchObjective(input),
-        architectRuntimeId: roleMapping.architectRuntimeId,
-        workerRuntimeIds: roleMapping.workerRuntimeIds,
-        maxConcurrency: Math.max(1, Math.min(4, roleMapping.workerRuntimeIds.length)),
-        runPolicy: Object.keys(budgetLimits).length > 0 ? "budgeted" : "finish",
-        budgetLimits,
-        benchmark: {
-          attemptId: input.attemptId,
-          allowedCommands: uniqueStrings([...input.allowedCommands, "git diff --check"]),
-          hiddenPaths: [...WORKBENCH_HIDDEN_PATHS],
-          protectedPaths: [...WORKBENCH_PROTECTED_PATHS],
+    await dependencies.createNativeBuild(
+      connection,
+      {
+        runId: nativeRunId,
+        projectPath: managed.projectPath,
+        permissionProfile: "full",
+        idempotencyKey: `create:${nativeRunId}`,
+        build: {
+          projectId: input.attemptId,
+          objective: workBenchObjective(input),
+          architectRuntimeId: roleMapping.architectRuntimeId,
+          workerRuntimeIds: roleMapping.workerRuntimeIds,
+          maxConcurrency: Math.max(1, Math.min(4, roleMapping.workerRuntimeIds.length)),
+          runPolicy: Object.keys(budgetLimits).length > 0 ? "budgeted" : "finish",
+          budgetLimits,
+          benchmark: {
+            attemptId: input.attemptId,
+            allowedCommands: uniqueStrings([...input.allowedCommands, "git diff --check"]),
+            hiddenPaths: [...WORKBENCH_HIDDEN_PATHS],
+            protectedPaths: [...WORKBENCH_PROTECTED_PATHS],
+          },
         },
       },
-    });
+      undefined,
+      input.signal
+    );
+    throwIfAborted(input.signal);
     await dependencies.commandNativeRun(
       connection,
       nativeRunId,
       "start",
-      `start:${nativeRunId}`
+      `start:${nativeRunId}`,
+      undefined,
+      undefined,
+      input.signal
     );
+    throwIfAborted(input.signal);
 
     const eligibleRuntimes = new Set(configuredRuntimeIds);
     const continuationCounts = new Map<string, number>();
     for (;;) {
       throwIfAborted(input.signal);
       const [run, projection] = await Promise.all([
-        dependencies.getNativeRun(connection, nativeRunId),
-        dependencies.getNativeBuild(connection, nativeRunId),
+        dependencies.getNativeRun(connection, nativeRunId, undefined, input.signal),
+        dependencies.getNativeBuild(connection, nativeRunId, undefined, input.signal),
       ]);
+      throwIfAborted(input.signal);
       if (run.state === "failed" || run.state === "stopped") {
         throw new Error(`Managed Runner V2 Build terminated in state ${run.state}.`);
       }
@@ -266,8 +289,11 @@ export async function runNativeWorkBenchBuild(
             connection,
             nativeRunId,
             "apply_to_project",
-            `workbench-project-handoff:${nativeRunId}`
+            `workbench-project-handoff:${nativeRunId}`,
+            undefined,
+            input.signal
           );
+          throwIfAborted(input.signal);
           break;
         }
         const handoff = projection.runtime.architect.handoff;
@@ -282,8 +308,11 @@ export async function runNativeWorkBenchBuild(
             connection,
             nativeRunId,
             runtimeId,
-            `workbench-architect-handoff:${nativeRunId}:${runtimeId}`
+            `workbench-architect-handoff:${nativeRunId}:${runtimeId}`,
+            undefined,
+            input.signal
           );
+          throwIfAborted(input.signal);
           continue;
         }
         const disposition = nativePauseDisposition(
@@ -297,8 +326,12 @@ export async function runNativeWorkBenchBuild(
             connection,
             nativeRunId,
             "continue",
-            `workbench-auto-continue:${nativeRunId}:${disposition.key}:${continuationCount + 1}`
+            `workbench-auto-continue:${nativeRunId}:${disposition.key}:${continuationCount + 1}`,
+            undefined,
+            undefined,
+            input.signal
           );
+          throwIfAborted(input.signal);
           continue;
         }
         throw new NativeWorkBenchRunFailure(
@@ -310,14 +343,25 @@ export async function runNativeWorkBenchBuild(
       await dependencies.wait(500, input.signal);
     }
 
-    audit = await dependencies.getNativeBuildAudit(connection, nativeRunId);
+    audit = await dependencies.getNativeBuildAudit(
+      connection,
+      nativeRunId,
+      undefined,
+      input.signal
+    );
+    throwIfAborted(input.signal);
     return await recordNativeAudit(input, audit, managed, startedMs);
   } catch (error) {
     if (managed) {
       let buildResult: Partial<WorkBenchBuildExecutionResult> | undefined;
       if (connection && nativeRunId) {
         try {
-          audit ??= await dependencies.getNativeBuildAudit(connection, nativeRunId);
+          audit ??= await dependencies.getNativeBuildAudit(
+            connection,
+            nativeRunId,
+            undefined,
+            input.signal
+          );
           buildResult = nativeAuditResult(input, audit, managed, startedMs);
           try {
             await recordNativeAudit(input, audit, managed, startedMs);
@@ -328,6 +372,7 @@ export async function runNativeWorkBenchBuild(
           // Preserve the original failure when the Runner audit itself is unavailable.
         }
       }
+      throwIfAborted(input.signal);
       const metadata = nativeFailureMetadata(error);
       throw new NativeWorkBenchExecutionError(
         error instanceof Error ? error.message : String(error),
@@ -343,12 +388,17 @@ export async function runNativeWorkBenchBuild(
         }
       );
     }
+    throwIfAborted(input.signal);
     throw error;
   } finally {
-    if (managed) {
-      await dependencies.stopManagedAttemptRunner(input.runner, {
-        attemptId: input.attemptId,
-      });
+    if (managedStartIssued) {
+      try {
+        await dependencies.stopManagedAttemptRunner(input.runner, {
+          attemptId: input.attemptId,
+        });
+      } catch (stopError) {
+        if (!input.signal?.aborted) throw stopError;
+      }
     }
   }
 }
@@ -739,6 +789,7 @@ function safeNativeId(value: string): string {
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
+  if (signal.reason !== undefined) throw signal.reason;
   const error = new Error("Native WorkBench execution aborted.");
   error.name = "AbortError";
   throw error;
@@ -753,6 +804,10 @@ function waitFor(milliseconds: number, signal?: AbortSignal): Promise<void> {
     const abort = () => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
+      if (signal?.reason !== undefined) {
+        rejectWait(signal.reason);
+        return;
+      }
       const error = new Error("Native WorkBench execution aborted.");
       error.name = "AbortError";
       rejectWait(error);

@@ -89,6 +89,7 @@ const connection: NativeRunnerConnection = {
   token: "runner-control-token",
 };
 const calls: Array<{ url: string; init: RequestInit }> = [];
+const requestController = new AbortController();
 const fetchImpl: typeof fetch = async (input, init = {}) => {
   calls.push({ url: String(input), init });
   if (String(input).endsWith("/v2/health")) {
@@ -146,7 +147,11 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
   return Response.json({ runId: "run_1", state: "created" }, { status: 201 });
 };
 
-const health = await getNativeRunnerHealth(connection, fetchImpl);
+const health = await getNativeRunnerHealth(
+  connection,
+  fetchImpl,
+  requestController.signal
+);
 assert.equal(health.projectPath, "C:/project");
 await configureNativeProviders(connection, [{
   runtimeId: "chatgpt:gpt-5.5",
@@ -160,7 +165,7 @@ await configureNativeProviders(connection, [{
   inputCostMicrosPerMillion: 2_500_000,
   cachedInputCostMicrosPerMillion: 250_000,
   outputCostMicrosPerMillion: 15_000_000,
-}], fetchImpl);
+}], fetchImpl, requestController.signal);
 await createNativeBuild(connection, {
   runId: "run_1",
   projectPath: health.projectPath,
@@ -178,22 +183,38 @@ await createNativeBuild(connection, {
       maxActiveMs: 1_800_000,
     },
   },
-}, fetchImpl);
+}, fetchImpl, requestController.signal);
 await selectNativeProjectHandoff(
   connection,
   "run_1",
   "keep_integration_branch",
   "handoff:keep",
-  fetchImpl
+  fetchImpl,
+  requestController.signal
 );
-const usage = await getNativeBuildUsage(connection, "run_1", fetchImpl);
+const usage = await getNativeBuildUsage(
+  connection,
+  "run_1",
+  fetchImpl,
+  requestController.signal
+);
 assert.equal(usage.effective.modelCalls, 9);
 assert.equal(usage.effective.inputTokens, 12_000);
-const observed = await getNativeBuildObservability(connection, "run_1", fetchImpl);
+const observed = await getNativeBuildObservability(
+  connection,
+  "run_1",
+  fetchImpl,
+  requestController.signal
+);
 assert.equal(observed.agents.length, 1);
 assert.equal(observed.toolCallCount, 1);
 assert.equal(observed.tools[0].toolName, "fs.read");
-const audit = await getNativeBuildAudit(connection, "run_1", fetchImpl);
+const audit = await getNativeBuildAudit(
+  connection,
+  "run_1",
+  fetchImpl,
+  requestController.signal
+);
 assert.equal(audit.protocolVersion, 2);
 assert.equal(audit.runEvents.length, 1);
 
@@ -244,6 +265,11 @@ assert.deepEqual(attachmentCalls, [
 ]);
 
 assert.equal(calls.every((call) => new Headers(call.init.headers).get("authorization") === "Bearer runner-control-token"), true);
+assert.equal(
+  calls.every((call) => call.init.signal === requestController.signal),
+  true,
+  "every active Runner V2 control-plane wrapper forwards the exact parent signal"
+);
 assert.equal(calls[0].url, "http://127.0.0.1:8787/v2/health");
 assert.equal(JSON.parse(String(calls[1].init.body)).configs[0].secret, "provider-secret");
 assert.equal(JSON.parse(String(calls[2].init.body)).build.maxConcurrency, 2);

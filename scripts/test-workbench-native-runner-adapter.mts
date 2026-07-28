@@ -8,6 +8,17 @@ import {
   runNativeWorkBenchBuild,
 } from "../lib/benchmark/workbench/native-runner-adapter";
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+const delay = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
 assert.deepEqual(
   nativePauseDisposition("task_attempt_budget"),
   {
@@ -337,6 +348,171 @@ assert.equal(recordedTraces.length, 1);
 assert.equal((recordedTraces[0] as { reasoningEffort?: unknown }).reasoningEffort, "xhigh");
 assert.equal(recordedTools.length, 2);
 assert.equal(recordedArtifacts.length, 1);
+
+async function verifyNativeCancellation(phase: "start" | "poll"): Promise<void> {
+  const controller = new AbortController();
+  const cancellation = new Error(`cancel during native ${phase}`);
+  const stalledEntered = deferred<void>();
+  const fallbackGate = deferred<void>();
+  const stopEntered = deferred<void>();
+  const stopGate = deferred<void>();
+  const activeSignals: AbortSignal[] = [];
+  let settled = false;
+
+  const stall = (signal: AbortSignal | undefined): Promise<never> => {
+    if (signal) activeSignals.push(signal);
+    stalledEntered.resolve();
+    return new Promise<never>((_, reject) => {
+      const abort = () => reject(signal?.reason);
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+      void fallbackGate.promise.then(() =>
+        reject(new Error(`native ${phase} fallback release`))
+      );
+    });
+  };
+
+  const pending = runNativeWorkBenchBuild(
+    {
+      attemptId: `attempt_cancel_${phase}`,
+      runId: `run_cancel_${phase}`,
+      teamCompositionId: "team_1",
+      harnessProfile: "aiboard-build-multi-worker",
+      allowedCommands: ["git diff --check"],
+      runner: { url: "http://127.0.0.1:8797", token: "bench-token" },
+      case: {
+        id: `case_cancel_${phase}`,
+        title: "Cancel native fixture",
+        description: "Cancel the native control plane",
+        prompt: { userRequest: "Fix the fixture" },
+        budget: { maxModelCalls: 1 },
+      },
+      models: [
+        {
+          modelId: "chatgpt:gpt-5.4-mini",
+          providerId: "chatgpt",
+          displayName: "GPT",
+        },
+      ],
+      teamComposition: {
+        roles: [
+          {
+            role: "worker",
+            slot: "worker",
+            modelId: "chatgpt:gpt-5.4-mini",
+            providerId: "chatgpt",
+            displayName: "GPT",
+          },
+        ],
+      },
+      signal: controller.signal,
+      context: {
+        recordTrace: async () => undefined,
+        recordToolCall: async () => undefined,
+        recordArtifact: async () => undefined,
+      },
+    } as never,
+    {
+      startManagedAttemptRunner: async (...args: unknown[]) => {
+        if (args[2] instanceof AbortSignal) activeSignals.push(args[2]);
+        return {
+          attemptId: `attempt_cancel_${phase}`,
+          running: true,
+          url: "http://127.0.0.1:18890",
+          token: "native-token-native-token",
+          projectPath: "C:\\fixture-cancel",
+          statePath: "C:\\runner-state-cancel",
+        };
+      },
+      restoreManagedAttemptOracle: async (...args: unknown[]) => {
+        if (args[2] instanceof AbortSignal) activeSignals.push(args[2]);
+        return {
+          attemptId: `attempt_cancel_${phase}`,
+          restored: true,
+        };
+      },
+      stopManagedAttemptRunner: async () => {
+        stopEntered.resolve();
+        await stopGate.promise;
+        return {
+          attemptId: `attempt_cancel_${phase}`,
+          running: false,
+        } as never;
+      },
+      getNativeRunnerHealth: async (...args: unknown[]) => {
+        if (args[2] instanceof AbortSignal) activeSignals.push(args[2]);
+        return {
+          ok: true,
+          protocolVersion: 2,
+          projectPath: "C:\\fixture-cancel",
+          nodeVersion: "24.18.0",
+        };
+      },
+      createProviderConfigs: () =>
+        [{ runtimeId: "chatgpt:gpt-5.4-mini" }] as never,
+      configureNativeProviders: async (...args: unknown[]) => {
+        if (args[3] instanceof AbortSignal) activeSignals.push(args[3]);
+      },
+      createNativeBuild: async (...args: unknown[]) => {
+        if (args[3] instanceof AbortSignal) activeSignals.push(args[3]);
+      },
+      commandNativeRun: async (...args: unknown[]) => {
+        const signal = args[6] instanceof AbortSignal ? args[6] : undefined;
+        if (phase === "start" && args[2] === "start") {
+          await stall(signal);
+        }
+        if (signal) activeSignals.push(signal);
+      },
+      getNativeRun: async (...args: unknown[]) => {
+        const signal = args[3] instanceof AbortSignal ? args[3] : undefined;
+        if (phase === "poll") await stall(signal);
+        if (signal) activeSignals.push(signal);
+        return { state: "running" } as never;
+      },
+      getNativeBuild: async (...args: unknown[]) => {
+        const signal = args[3] instanceof AbortSignal ? args[3] : undefined;
+        if (signal) activeSignals.push(signal);
+        return { status: "running", runtime: { architect: {} } } as never;
+      },
+      selectNativeArchitectHandoff: async () => {
+        throw new Error("unexpected handoff");
+      },
+      selectNativeProjectHandoff: async () => {
+        throw new Error("unexpected handoff");
+      },
+      getNativeBuildAudit: async (...args: unknown[]) => {
+        if (args[3] instanceof AbortSignal) activeSignals.push(args[3]);
+        throw new Error("audit unavailable after cancellation");
+      },
+      wait: async () => undefined,
+    } as never
+  );
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  await stalledEntered.promise;
+  controller.abort(cancellation);
+  await delay(20);
+  fallbackGate.resolve();
+  await stopEntered.promise;
+  await delay(20);
+  assert.equal(settled, false, `${phase} cancellation awaits managed stop`);
+  stopGate.resolve();
+  await assert.rejects(pending, (error) => error === cancellation);
+  assert.ok(activeSignals.length > 0);
+  assert.ok(
+    activeSignals.every((signal) => signal === controller.signal),
+    `${phase} control-plane requests receive the exact parent signal`
+  );
+}
+
+await verifyNativeCancellation("start");
+await verifyNativeCancellation("poll");
 
 const failureCalls: string[] = [];
 const failureTraces: unknown[] = [];

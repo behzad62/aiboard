@@ -1017,7 +1017,7 @@ export function AdvancedModelEffortControl({
   );
 }
 
-function GameIqModelRunProgress({ runs }: { runs: GameIqModelRunState[] }) {
+export function GameIqModelRunProgress({ runs }: { runs: GameIqModelRunState[] }) {
   if (runs.length === 0) {
     return (
       <div className="rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
@@ -1037,8 +1037,14 @@ function GameIqModelRunProgress({ runs }: { runs: GameIqModelRunState[] }) {
             <div className="truncate text-xs text-muted-foreground">
               {run.providerId}
             </div>
-            {run.status === "failed" && run.error && (
-              <div className="mt-1 text-xs leading-snug text-destructive">
+            {(run.status === "failed" || run.status === "cancelled") && run.error && (
+              <div
+                className={`mt-1 text-xs leading-snug ${
+                  run.status === "failed"
+                    ? "text-destructive"
+                    : "text-muted-foreground"
+                }`}
+              >
                 {run.error}
               </div>
             )}
@@ -1060,7 +1066,9 @@ function GameIqModelStatusBadge({ run }: { run: GameIqModelRunState }) {
           ? "Passed"
           : run.status === "partial"
             ? "Partial"
-            : "Failed";
+            : run.status === "cancelled"
+              ? "Cancelled"
+              : "Failed";
   const tone =
     run.status === "passed"
       ? "border-primary/40 bg-primary/10 text-primary"
@@ -1080,7 +1088,7 @@ function GameIqModelStatusBadge({ run }: { run: GameIqModelRunState }) {
   );
 }
 
-function GameIqModelRunSummaryPanel({
+export function GameIqModelRunSummaryPanel({
   runs,
   models,
 }: {
@@ -1116,11 +1124,18 @@ function GameIqModelRunSummaryPanel({
                   {run.packsScored === 1 ? "" : "s"} passed
                 </div>
               )}
-              {run.status === "failed" && run.error && (
-                <div className="mt-1 text-xs leading-snug text-destructive">
+              {(run.status === "failed" || run.status === "cancelled") &&
+                run.error && (
+                <div
+                  className={`mt-1 text-xs leading-snug ${
+                    run.status === "failed"
+                      ? "text-destructive"
+                      : "text-muted-foreground"
+                  }`}
+                >
                   {run.error}
                 </div>
-              )}
+                )}
             </div>
           ))
         )}

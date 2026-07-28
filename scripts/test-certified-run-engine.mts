@@ -207,23 +207,32 @@ await expectReject(
 );
 
 const abortController = new AbortController();
+const abortReason = {
+  kind: "test cancellation",
+  boundary: "certified runner",
+};
 let runnerReceivedAbortSignal = false;
-const abortedSummary = await runCertifiedBenchmark({
-  runId: "run-certified-engine-aborted",
-  suiteId: "suite-engine",
-  track: "gameiq",
-  harnessProfile: "raw-single-model",
-  caseIds: [caseOne.id],
-  teamCompositionIds: [team.id],
-  certification: passingCertification,
-  signal: abortController.signal,
-  runner: async (_context, options) => {
-    runnerReceivedAbortSignal = options?.signal === abortController.signal;
-    abortController.abort("test cancellation");
-  },
-});
+let surfacedAbortReason: unknown;
+try {
+  await runCertifiedBenchmark({
+    runId: "run-certified-engine-aborted",
+    suiteId: "suite-engine",
+    track: "gameiq",
+    harnessProfile: "raw-single-model",
+    caseIds: [caseOne.id],
+    teamCompositionIds: [team.id],
+    certification: passingCertification,
+    signal: abortController.signal,
+    runner: async (_context, options) => {
+      runnerReceivedAbortSignal = options?.signal === abortController.signal;
+      abortController.abort(abortReason);
+    },
+  });
+} catch (error) {
+  surfacedAbortReason = error;
+}
 const abortedAttempt = (await listBenchmarkAttemptsV2()).find(
-  (attempt) => attempt.runId === abortedSummary.runId
+  (attempt) => attempt.runId === "run-certified-engine-aborted"
 );
 check(
   "certified run forwards AbortSignal to runner",
@@ -231,11 +240,9 @@ check(
   runnerReceivedAbortSignal
 );
 check(
-  "aborted certified run creates excluded aborted_user attempt",
-  abortedSummary.status === "failed" &&
-    abortedAttempt?.status === "aborted_user" &&
-    abortedAttempt.verifiedQuality === 0,
-  { summary: abortedSummary, attempt: abortedAttempt }
+  "aborted certified run preserves the exact reason and admits no failure persistence",
+  surfacedAbortReason === abortReason && abortedAttempt === undefined,
+  { surfacedAbortReason, attempt: abortedAttempt }
 );
 
 __resetBenchmarkStoreForTests();

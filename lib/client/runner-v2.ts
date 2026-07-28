@@ -481,30 +481,35 @@ export class NativeRunnerError extends Error {
 
 export async function getNativeRunnerHealth(
   connection: NativeRunnerConnection,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeRunnerHealth> {
-  return await request(connection, "/v2/health", {}, fetchImpl);
+  return await request(connection, "/v2/health", { signal }, fetchImpl);
 }
 
 export async function configureNativeProviders(
   connection: NativeRunnerConnection,
   configs: readonly NativeProviderConfig[],
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<void> {
   await request(connection, "/v2/provider-configs", {
     method: "PUT",
     body: JSON.stringify({ configs }),
+    signal,
   }, fetchImpl);
 }
 
 export async function createNativeBuild(
   connection: NativeRunnerConnection,
   input: CreateNativeBuildInput,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<void> {
   await request(connection, "/v2/runs", {
     method: "POST",
     body: JSON.stringify(input),
+    signal,
   }, fetchImpl);
 }
 
@@ -514,23 +519,26 @@ export async function commandNativeRun(
   command: "start" | "pause" | "resume" | "continue" | "stop",
   idempotencyKey: string,
   reason?: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<void> {
   await request(connection, `/v2/runs/${encodeURIComponent(runId)}/commands`, {
     method: "POST",
     body: JSON.stringify({ command, idempotencyKey, ...(reason ? { reason } : {}) }),
+    signal,
   }, fetchImpl);
 }
 
 export async function getNativeRun(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeRunProjection> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -538,12 +546,13 @@ export async function getNativeRun(
 export async function getNativeBuild(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildProjection> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -551,12 +560,13 @@ export async function getNativeBuild(
 export async function getNativeBuildReferences(
   connection: NativeRunnerConnection,
   projectId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildReference[]> {
   const result = await request<{ builds: NativeBuildReference[] }>(
     connection,
     `/v2/builds?projectId=${encodeURIComponent(projectId)}`,
-    {},
+    { signal },
     fetchImpl
   );
   return result.builds;
@@ -619,12 +629,13 @@ export async function getNativeBuildTranscript(
   connection: NativeRunnerConnection,
   runId: string,
   afterSequence = 0,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildTranscriptPage> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/transcript?after=${afterSequence}`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -632,12 +643,13 @@ export async function getNativeBuildTranscript(
 export async function getNativeBuildFiles(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildFileSnapshot> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/files`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -645,12 +657,13 @@ export async function getNativeBuildFiles(
 export async function getNativeBuildUsage(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildUsageProjection> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/usage`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -658,12 +671,13 @@ export async function getNativeBuildUsage(
 export async function getNativeBuildObservability(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildObservability> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/observability`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -671,12 +685,13 @@ export async function getNativeBuildObservability(
 export async function getNativeBuildAudit(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildAuditExport> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/audit`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -685,12 +700,13 @@ export async function getNativeBuildEvents(
   connection: NativeRunnerConnection,
   runId: string,
   afterSequence = 0,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildEvent[]> {
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/events?after=${afterSequence}`,
-    {},
+    { signal },
     fetchImpl
   );
 }
@@ -733,7 +749,8 @@ export async function selectNativeArchitectHandoff(
   runId: string,
   runtimeId: string,
   idempotencyKey: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildProjection> {
   return await request(
     connection,
@@ -741,6 +758,7 @@ export async function selectNativeArchitectHandoff(
     {
       method: "POST",
       body: JSON.stringify({ runtimeId, idempotencyKey }),
+      signal,
     },
     fetchImpl
   );
@@ -751,7 +769,8 @@ export async function selectNativeProjectHandoff(
   runId: string,
   choice: NativeProjectHandoffChoice,
   idempotencyKey: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativeBuildProjection> {
   return await request(
     connection,
@@ -759,6 +778,7 @@ export async function selectNativeProjectHandoff(
     {
       method: "POST",
       body: JSON.stringify({ choice, idempotencyKey }),
+      signal,
     },
     fetchImpl
   );
@@ -767,12 +787,13 @@ export async function selectNativeProjectHandoff(
 export async function getNativePermissions(
   connection: NativeRunnerConnection,
   runId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativePermissionRequest[]> {
   const result = await request<{ permissions: NativePermissionRequest[] }>(
     connection,
     `/v2/permissions?runId=${encodeURIComponent(runId)}`,
-    {},
+    { signal },
     fetchImpl
   );
   return result.permissions;
@@ -783,7 +804,8 @@ export async function decideNativePermission(
   requestId: string,
   decision: "approved" | "denied",
   idempotencyKey: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<NativePermissionRequest> {
   return await request(
     connection,
@@ -791,6 +813,7 @@ export async function decideNativePermission(
     {
       method: "POST",
       body: JSON.stringify({ decision, idempotencyKey }),
+      signal,
     },
     fetchImpl
   );

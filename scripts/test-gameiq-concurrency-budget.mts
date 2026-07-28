@@ -164,6 +164,7 @@ function configureTestOpenAiKey(): void {
   let visibleRuns: GameIqModelRunState[] = [];
   const visibleStatusHistory = new Map<string, GameIqModelRunState["status"][]>();
   const runAbortRef: { current: AbortController | null } = { current: null };
+  const cancellationReason = "Cancelled from the three-model regression.";
   try {
     const pending = runGameIqMultiModel({
       models,
@@ -191,7 +192,7 @@ function configureTestOpenAiKey(): void {
 
     await waitFor(() => providerModels.size === MAX_PARALLEL_GAMEIQ_MODELS);
     assert.ok(runAbortRef.current, "GameIQ batch exposes its active abort controller");
-    runAbortRef.current.abort("Cancelled from the three-model regression.");
+    runAbortRef.current.abort(cancellationReason);
     for (const gate of providerGates.values()) gate.release();
     await pending;
   } finally {
@@ -216,11 +217,10 @@ function configureTestOpenAiKey(): void {
   assert.deepEqual(
     {
       visibleStatuses: visibleStatusHistory.get(queuedModel.modelId),
-      visibleReasonIsUserCancellation: Boolean(
-        queuedVisible?.error &&
-          /abort|cancel/i.test(queuedVisible.error) &&
-          !/timed out|timeout/i.test(queuedVisible.error)
-      ),
+      visibleReason: queuedVisible?.error,
+      everyCancelledRowRetainsReason: visibleRuns
+        .filter((run) => run.status === "cancelled")
+        .every((run) => run.error === cancellationReason),
       enteredProviderWork: providerModels.has("gpt-cancel-c"),
       persistedTeamCount: queuedTeamIds.size,
       persistedRun: durableRuns.some((run) =>
@@ -232,7 +232,8 @@ function configureTestOpenAiKey(): void {
     },
     {
       visibleStatuses: ["queued", "cancelled"],
-      visibleReasonIsUserCancellation: true,
+      visibleReason: cancellationReason,
+      everyCancelledRowRetainsReason: true,
       enteredProviderWork: false,
       persistedTeamCount: 0,
       persistedRun: false,
