@@ -17,7 +17,7 @@
 - A timed-out certified physical attempt must abort the exact signal passed to its provider stream before a retry begins.
 - Existing user cancellation must still reject as user cancellation, not be relabeled as a provider timeout.
 - A downstream disconnect from `/providers/chatgpt/chat` must abort the corresponding upstream ChatGPT Codex fetch.
-- Update both `lib/account-provider-runner.mjs` and its generated `public/account-provider-runner.mjs` copy, and bump the standalone account-runner version from 17 to 18.
+- Update `lib/account-provider-runner.mjs`, regenerate its deliberately git-ignored `public/account-provider-runner.mjs` copy for byte-identity verification without force-adding it, and bump the standalone account-runner version from 17 to 18.
 - Follow strict TDD: add the behavioral test, run it and capture the expected failure, then implement the minimum production change and rerun to green.
 - Preserve all unrelated user changes and avoid unrelated refactors.
 
@@ -157,7 +157,7 @@ git commit -m "fix(benchmark): abort timed-out provider calls"
 **Files:**
 - Modify: `scripts/test-account-provider-runner-chat.mts`
 - Modify: `lib/account-provider-runner.mjs`
-- Regenerate: `public/account-provider-runner.mjs`
+- Regenerate and verify, but do not force-add: `public/account-provider-runner.mjs`
 
 **Interfaces:**
 - Consumes: the browser-side fetch cancellation produced by Task 2, observed by the Node runner as an aborted/closed downstream request.
@@ -204,7 +204,7 @@ Expected: all commands exit 0; `lib/account-provider-runner.mjs` and `public/acc
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add scripts/test-account-provider-runner-chat.mts lib/account-provider-runner.mjs public/account-provider-runner.mjs
+git add scripts/test-account-provider-runner-chat.mts lib/account-provider-runner.mjs
 git commit -m "fix(provider): cancel disconnected ChatGPT streams"
 ```
 
