@@ -92,11 +92,11 @@ export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 export const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 
-// Safety valve: GameIQ runs every selected model as its own certified run. Each
-// model already fans out to one provider call per scenario per pack, so an
-// unbounded Promise.allSettled over 10 models would open 10x that many calls at
-// once. We run models parallel up to this cap and queue the rest.
-export const MAX_PARALLEL_GAMEIQ_MODELS = 4;
+// GameIQ runs every selected model as its own certified run. Each admitted
+// model fans out to four scenario calls, so two concurrent model runs bound
+// aggregate provider pressure to eight calls while queued models wait.
+export const MAX_PARALLEL_GAMEIQ_MODELS = 2;
+export const MAX_PARALLEL_GAMEIQ_SCENARIOS_PER_MODEL = 4;
 
 export type RunnableTrack = CertifiedRunnableTrack;
 export type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
@@ -476,9 +476,9 @@ export async function runGameIqMultiModel(
               teamCompositions: [team],
               trials: 1,
               signal: options?.signal,
-              // Scenario calls are independent single calls; concurrency 4
-              // cuts wall-clock ~4x and shrinks the provider-failure window.
-              concurrency: 4,
+              // Scenario calls are independent single calls; this per-model
+              // cap combines with the two-model cap above for eight calls.
+              concurrency: MAX_PARALLEL_GAMEIQ_SCENARIOS_PER_MODEL,
             });
             const reidd = packAttempts.map((attempt) =>
               reidGameIqPackAttempt(attempt, packId)
@@ -960,8 +960,8 @@ export function workBenchRoleFor(
 // RunProgressList instead of the single-flow's runPhase/summary state.
 // ---------------------------------------------------------------------------
 
-/** Caps how many models run in parallel within one solo preset leg. */
-const MAX_PARALLEL_PRESET_LEG_MODELS = MAX_PARALLEL_GAMEIQ_MODELS;
+/** Tool Reliability keeps its deliberate, independent solo-preset cap. */
+const MAX_PARALLEL_PRESET_LEG_MODELS = 4;
 
 export type PresetLegStatus =
   | "queued"
