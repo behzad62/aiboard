@@ -39,6 +39,18 @@ async function readRequestBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 2_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return condition();
+}
+
 interface CapturedRequest {
   headers: http.IncomingHttpHeaders;
   body: Record<string, unknown>;
@@ -50,6 +62,8 @@ const runnerPort = await getFreePort();
 const fakeBackendPort = await getFreePort();
 const authFile = path.join(tmp, "auth.json");
 const capturedRequests: CapturedRequest[] = [];
+let disconnectBackendReceived = false;
+let disconnectBackendClosed = false;
 const longSessionId = `worker:${"native-run-".repeat(7)}task:1`;
 const expectedSessionId = `aiboard-${createHash("sha256")
   .update(longSessionId)
@@ -111,6 +125,23 @@ const fakeBackend = http.createServer(async (req, res) => {
   if (body.stream !== true) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ detail: "Stream must be set to true" }));
+    return;
+  }
+  if (body.model === "gpt-5.5-disconnect-test") {
+    disconnectBackendReceived = true;
+    const observeClose = () => {
+      disconnectBackendClosed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    res.write(
+      'event: response.created\ndata: {"type":"response.created","sequence_number":0}\n\n'
+    );
     return;
   }
   res.writeHead(200, { "content-type": "application/json" });
@@ -197,8 +228,8 @@ try {
   const healthResponse = await fetch(`${baseUrl}/health`);
   const health = await healthResponse.json();
   check(
-    "GPT-5.6-capable account-provider runner reports version 17",
-    healthResponse.ok && health.version === 17,
+    "GPT-5.6-capable account-provider runner reports version 18",
+    healthResponse.ok && health.version === 18,
     health
   );
 
@@ -311,6 +342,42 @@ try {
       effortCaptured?.body
     );
   }
+
+  const downstreamController = new AbortController();
+  const downstreamRequest = fetch(
+    `${baseUrl}/providers/chatgpt/chat`,
+    {
+      method: "POST",
+      headers,
+      signal: downstreamController.signal,
+      body: JSON.stringify({
+        model: "gpt-5.5-disconnect-test",
+        stream: true,
+        messages: [{ role: "user", content: "Keep this stream open." }],
+      }),
+    }
+  )
+    .then(async (streamingResponse) => {
+      await streamingResponse.text();
+    })
+    .catch(() => {});
+
+  const backendReceivedDisconnectRequest = await waitForCondition(
+    () => disconnectBackendReceived
+  );
+  check(
+    "fake ChatGPT backend receives the downstream cancellation test request",
+    backendReceivedDisconnectRequest
+  );
+  downstreamController.abort();
+  await downstreamRequest;
+  const backendObservedDisconnect = await waitForCondition(
+    () => disconnectBackendClosed
+  );
+  check(
+    "disconnecting the runner client closes the upstream ChatGPT connection",
+    backendObservedDisconnect
+  );
 } catch (err) {
   check("account-provider runner ChatGPT chat integration", false, err instanceof Error ? err.message : String(err));
 } finally {
