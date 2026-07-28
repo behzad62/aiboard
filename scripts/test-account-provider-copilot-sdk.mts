@@ -155,8 +155,26 @@ await assert.rejects(
 assert.deepEqual(preStartCounts, { start: 0, create: 0, send: 0 });
 check("Copilot SDK does not begin setup when already cancelled", true);
 
+const undefinedReasonSignal = {
+  aborted: true,
+  reason: undefined,
+  addEventListener() {},
+  removeEventListener() {},
+} as AbortSignal;
+await assert.rejects(
+  sdk.runCopilotSdkChat(cancellationBody(), "test-token", "C:\\aiboard-sdk-undefined-reason-test", undefined, {
+    signal: undefinedReasonSignal,
+    clientFactory() {
+      return { async start() {}, async createSession() {}, async stop() {} };
+    },
+  }),
+  (error) => error instanceof Error && error.message === "Copilot SDK request aborted."
+);
+check("Copilot SDK uses the literal fallback when an aborted signal has no reason", true);
+
 const startController = new AbortController();
 const startReason = new Error("start cancellation");
+const startSdkError = new Error("SDK startup failure");
 const startEntered = deferred<void>();
 const startGate = deferred<void>();
 const startCounts = { create: 0, send: 0 };
@@ -179,11 +197,34 @@ const duringStart = sdk.runCopilotSdkChat(cancellationBody(), "test-token", "C:\
 });
 await startEntered.promise;
 startController.abort(startReason);
-startGate.resolve();
+startGate.reject(startSdkError);
 await assert.rejects(duringStart, (error) => error === startReason);
 assert.deepEqual(startCounts, { create: 0, send: 0 });
 assert.deepEqual(startCleanup, ["stop"]);
 check("Copilot SDK stops after cancellation during client startup", true);
+
+const rejectedCreateController = new AbortController();
+const rejectedCreateReason = new Error("create cancellation");
+const rejectedCreateSdkError = new Error("SDK create-session failure");
+const rejectedCreateEntered = deferred<void>();
+const rejectedCreateGate = deferred<never>();
+const rejectedCreateCleanup: string[] = [];
+const rejectedDuringCreate = sdk.runCopilotSdkChat(cancellationBody(), "test-token", "C:\\aiboard-sdk-rejected-create-test", undefined, {
+  signal: rejectedCreateController.signal,
+  clientFactory() {
+    return {
+      async start() {},
+      async createSession() { rejectedCreateEntered.resolve(); return rejectedCreateGate.promise; },
+      async stop() { rejectedCreateCleanup.push("stop"); },
+    };
+  },
+});
+await rejectedCreateEntered.promise;
+rejectedCreateController.abort(rejectedCreateReason);
+rejectedCreateGate.reject(rejectedCreateSdkError);
+await assert.rejects(rejectedDuringCreate, (error) => error === rejectedCreateReason);
+assert.deepEqual(rejectedCreateCleanup, ["stop"]);
+check("Copilot SDK prioritizes cancellation over a delayed create-session error", true);
 
 const createController = new AbortController();
 const createReason = new Error("session creation cancellation");
@@ -227,6 +268,8 @@ let disconnectCalls = 0;
 let stopCalls = 0;
 let releasePendingSend: (() => void) | undefined;
 const sendEntered = deferred<void>();
+const inFlightReason = { kind: "in-flight cancellation" };
+const inFlightSdkError = new Error("SDK send failure");
 const pendingSend = new Promise<void>((resolve) => {
   releasePendingSend = resolve;
 });
@@ -237,7 +280,7 @@ const cancellingSession = {
   async sendAndWait() {
     sendEntered.resolve();
     await pendingSend;
-    throw inFlightReason;
+    throw inFlightSdkError;
   },
   async abort() {
     abortCalls += 1;
@@ -249,7 +292,6 @@ const cancellingSession = {
     cleanupOrder.push("disconnect");
   },
 };
-const inFlightReason = new Error("in-flight cancellation");
 const cancellingRun = sdk.runCopilotSdkChat(
   {
     model: "gpt-5.4",
@@ -276,18 +318,8 @@ const cancellingRun = sdk.runCopilotSdkChat(
 );
 await sendEntered.promise;
 cancellationController.abort(inFlightReason);
-const cancellationSettled =
-  (await Promise.race([
-    cancellingRun.then(
-      () => false,
-      (error) => error === inFlightReason
-    ),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
-  ])) === true;
-check(
-  "aborting the supplied signal settles the pending Copilot SDK send",
-  cancellationSettled
-);
+await assert.rejects(cancellingRun, (error) => error === inFlightReason);
+check("Copilot SDK prioritizes a non-Error cancellation reason over a send error", true);
 check("Copilot SDK cancellation calls session.abort once", abortCalls === 1, abortCalls);
 check(
   "Copilot SDK cancellation disconnects the session once",
@@ -300,5 +332,42 @@ check(
   JSON.stringify(cleanupOrder) === JSON.stringify(["abort", "disconnect", "stop"]),
   cleanupOrder
 );
+
+const resolvedSendController = new AbortController();
+const resolvedSendReason = { kind: "resolved-send cancellation" };
+const resolvedSendEntered = deferred<void>();
+const resolvedSendGate = deferred<void>();
+const resolvedSendCleanup: string[] = [];
+const resolvedAfterAbortSession = {
+  on() { return () => undefined; },
+  async sendAndWait() {
+    resolvedSendEntered.resolve();
+    await resolvedSendGate.promise;
+    return { data: { content: "must not be returned" } };
+  },
+  async abort() { resolvedSendCleanup.push("abort"); resolvedSendGate.resolve(); },
+  async disconnect() { resolvedSendCleanup.push("disconnect"); },
+};
+const resolvedAfterAbortRun = sdk.runCopilotSdkChat(
+  cancellationBody(),
+  "test-token",
+  "C:\\aiboard-sdk-resolved-send-test",
+  undefined,
+  {
+    signal: resolvedSendController.signal,
+    clientFactory() {
+      return {
+        async start() {},
+        async createSession() { return resolvedAfterAbortSession; },
+        async stop() { resolvedSendCleanup.push("stop"); },
+      };
+    },
+  }
+);
+await resolvedSendEntered.promise;
+resolvedSendController.abort(resolvedSendReason);
+await assert.rejects(resolvedAfterAbortRun, (error) => error === resolvedSendReason);
+assert.deepEqual(resolvedSendCleanup, ["abort", "disconnect", "stop"]);
+check("Copilot SDK does not return send content after cancellation", true);
 
 process.exit(failed === 0 ? 0 : 1);
