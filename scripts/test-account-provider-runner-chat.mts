@@ -64,6 +64,9 @@ const authFile = path.join(tmp, "auth.json");
 const capturedRequests: CapturedRequest[] = [];
 let disconnectBackendReceived = false;
 let disconnectBackendClosed = false;
+let nonStreamingDisconnectBackendReceived = false;
+let nonStreamingDisconnectBackendClosed = false;
+const refreshRequests: Array<{ closed: boolean }> = [];
 const longSessionId = `worker:${"native-run-".repeat(7)}task:1`;
 const expectedSessionId = `aiboard-${createHash("sha256")
   .update(longSessionId)
@@ -90,6 +93,16 @@ fs.writeFileSync(
 
 const fakeBackend = http.createServer(async (req, res) => {
   const raw = await readRequestBody(req);
+  if (req.url === "/oauth/token") {
+    const state = { closed: false };
+    refreshRequests.push(state);
+    const observeClose = () => {
+      state.closed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
+    return;
+  }
   const body = raw ? JSON.parse(raw) : {};
   capturedRequests.push({
     headers: req.headers,
@@ -142,6 +155,15 @@ const fakeBackend = http.createServer(async (req, res) => {
     res.write(
       'event: response.created\ndata: {"type":"response.created","sequence_number":0}\n\n'
     );
+    return;
+  }
+  if (body.model === "gpt-5.5-disconnect-nonstream-test") {
+    nonStreamingDisconnectBackendReceived = true;
+    const observeClose = () => {
+      nonStreamingDisconnectBackendClosed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
     return;
   }
   res.writeHead(200, { "content-type": "application/json" });
@@ -207,19 +229,150 @@ async function waitForRunner(): Promise<void> {
 }
 
 async function stopRunner(): Promise<void> {
-  if (runner.exitCode !== null) return;
-  if (process.platform === "win32" && runner.pid) {
-    spawnSync("taskkill", ["/pid", String(runner.pid), "/t", "/f"], {
+  await stopChild(runner);
+}
+
+async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) return;
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
     });
   } else {
-    runner.kill("SIGINT");
+    child.kill("SIGINT");
   }
   await Promise.race([
-    new Promise<void>((resolve) => runner.once("close", () => resolve())),
+    new Promise<void>((resolve) => child.once("close", () => resolve())),
     new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
   ]);
+}
+
+async function waitForRunnerAt(url: string, output: () => string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${url}/health`);
+      if (res.ok) return;
+    } catch {
+      // keep polling
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(`account-provider runner did not become ready: ${output()}`);
+}
+
+async function runRefreshDisconnectCase(
+  stream: boolean,
+  expires: number,
+  label: string
+): Promise<void> {
+  const refreshRunnerPort = await getFreePort();
+  const refreshAuthFile = path.join(tmp, `refresh-${label}.json`);
+  const preloadFile = path.join(tmp, `redirect-refresh-${label}.cjs`);
+  const initialAuth = `${JSON.stringify(
+    {
+      chatgpt: {
+        type: "oauth",
+        refresh: `fake-refresh-${label}`,
+        access: `stale-access-${label}`,
+        expires,
+        accountId: `account-${label}`,
+        updatedAt: "2026-07-28T00:00:00.000Z",
+      },
+    },
+    null,
+    2
+  )}\n`;
+  fs.writeFileSync(refreshAuthFile, initialAuth);
+  fs.writeFileSync(
+    preloadFile,
+    [
+      "const realFetch = global.fetch;",
+      "global.fetch = (input, init) => {",
+      "  const requestUrl = typeof input === 'string' ? input : input?.url ?? input?.href;",
+      "  if (requestUrl === 'https://auth.openai.com/oauth/token') {",
+      `    return realFetch('http://127.0.0.1:${fakeBackendPort}/oauth/token', init);`,
+      "  }",
+      "  return realFetch(input, init);",
+      "};",
+      "",
+    ].join("\n")
+  );
+  const refreshRunner = spawn(
+    process.execPath,
+    [
+      "lib/account-provider-runner.mjs",
+      "--port",
+      String(refreshRunnerPort),
+      "--token",
+      token,
+      "--auth-file",
+      refreshAuthFile,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadFile}`]
+          .filter(Boolean)
+          .join(" "),
+        AIBOARD_CHATGPT_CODEX_ENDPOINT: `http://127.0.0.1:${fakeBackendPort}/codex/responses`,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    }
+  );
+  let refreshRunnerOutput = "";
+  refreshRunner.stdout.setEncoding("utf8");
+  refreshRunner.stderr.setEncoding("utf8");
+  refreshRunner.stdout.on("data", (chunk) => {
+    refreshRunnerOutput += chunk;
+  });
+  refreshRunner.stderr.on("data", (chunk) => {
+    refreshRunnerOutput += chunk;
+  });
+  try {
+    const refreshBaseUrl = `http://127.0.0.1:${refreshRunnerPort}`;
+    await waitForRunnerAt(refreshBaseUrl, () => refreshRunnerOutput);
+    const previousRefreshCount = refreshRequests.length;
+    const controller = new AbortController();
+    const request = fetch(`${refreshBaseUrl}/providers/chatgpt/chat`, {
+      method: "POST",
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: `gpt-5.5-refresh-${label}`,
+        stream,
+        messages: [{ role: "user", content: "Keep refresh open." }],
+      }),
+    })
+      .then((response) => response.text())
+      .catch(() => undefined);
+    const refreshReceived = await waitForCondition(
+      () => refreshRequests.length > previousRefreshCount
+    );
+    check(
+      `fake OAuth server receives the ${label} ChatGPT refresh`,
+      refreshReceived
+    );
+    controller.abort();
+    await request;
+    const refreshState = refreshRequests[previousRefreshCount];
+    const refreshClosed = await waitForCondition(
+      () => refreshState?.closed === true
+    );
+    check(
+      `disconnecting the ${label} ChatGPT request closes its OAuth refresh socket`,
+      refreshClosed
+    );
+    check(
+      `disconnecting the ${label} ChatGPT request does not persist credentials`,
+      fs.readFileSync(refreshAuthFile, "utf8") === initialAuth
+    );
+  } finally {
+    await stopChild(refreshRunner);
+  }
 }
 
 try {
@@ -377,6 +530,44 @@ try {
   check(
     "disconnecting the runner client closes the upstream ChatGPT connection",
     backendObservedDisconnect
+  );
+
+  const nonStreamingController = new AbortController();
+  const nonStreamingRequest = fetch(
+    `${baseUrl}/providers/chatgpt/chat`,
+    {
+      method: "POST",
+      headers,
+      signal: nonStreamingController.signal,
+      body: JSON.stringify({
+        model: "gpt-5.5-disconnect-nonstream-test",
+        stream: false,
+        messages: [{ role: "user", content: "Keep this request open." }],
+      }),
+    }
+  ).catch(() => undefined);
+  const nonStreamingReceived = await waitForCondition(
+    () => nonStreamingDisconnectBackendReceived
+  );
+  check(
+    "fake ChatGPT backend receives the non-streaming cancellation test request",
+    nonStreamingReceived
+  );
+  nonStreamingController.abort();
+  await nonStreamingRequest;
+  const nonStreamingClosed = await waitForCondition(
+    () => nonStreamingDisconnectBackendClosed
+  );
+  check(
+    "disconnecting the non-streaming runner client closes the upstream ChatGPT connection",
+    nonStreamingClosed
+  );
+
+  await runRefreshDisconnectCase(true, Date.now() - 1_000, "expired-stream");
+  await runRefreshDisconnectCase(
+    false,
+    Date.now() + 30_000,
+    "near-expiry-nonstream"
   );
 } catch (err) {
   check("account-provider runner ChatGPT chat integration", false, err instanceof Error ? err.message : String(err));

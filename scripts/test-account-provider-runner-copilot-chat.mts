@@ -64,6 +64,8 @@ const authFile = path.join(tmp, "auth.json");
 const capturedRequests: CapturedRequest[] = [];
 let disconnectFallbackReceived = false;
 let disconnectFallbackClosed = false;
+let chatFallbackReceived = false;
+let chatFallbackClosed = false;
 
 fs.writeFileSync(
   authFile,
@@ -95,6 +97,20 @@ const fakeBackend = http.createServer(async (req, res) => {
     disconnectFallbackReceived = true;
     const observeClose = () => {
       disconnectFallbackClosed = true;
+    };
+    req.once("aborted", observeClose);
+    req.socket.once("close", observeClose);
+    return;
+  }
+  if (body.model === "claude-disconnect-test") {
+    if (req.url === "/chat/completions") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Use fallback" } }));
+      return;
+    }
+    chatFallbackReceived = true;
+    const observeClose = () => {
+      chatFallbackClosed = true;
     };
     req.once("aborted", observeClose);
     req.socket.once("close", observeClose);
@@ -151,19 +167,119 @@ async function waitForRunner(): Promise<void> {
 }
 
 async function stopRunner(): Promise<void> {
-  if (runner.exitCode !== null) return;
-  if (process.platform === "win32" && runner.pid) {
-    spawnSync("taskkill", ["/pid", String(runner.pid), "/t", "/f"], {
+  await stopChild(runner);
+}
+
+async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) return;
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
     });
   } else {
-    runner.kill("SIGINT");
+    child.kill("SIGINT");
   }
   await Promise.race([
-    new Promise<void>((resolve) => runner.once("close", () => resolve())),
+    new Promise<void>((resolve) => child.once("close", () => resolve())),
     new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
   ]);
+}
+
+async function waitForRunnerAt(url: string, output: () => string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${url}/health`);
+      if (res.ok) return;
+    } catch {
+      // keep polling
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(`account-provider runner did not become ready: ${output()}`);
+}
+
+async function checkRunnerSdkCancellation(): Promise<void> {
+  const sdkRunnerPort = await getFreePort();
+  const copiedRunner = path.join(tmp, "sdk-boundary-runner.mjs");
+  const fakeSdk = path.join(tmp, "account-provider-copilot-sdk.mjs");
+  const admittedMarker = path.join(tmp, "sdk-admitted");
+  const abortedMarker = path.join(tmp, "sdk-aborted");
+  fs.copyFileSync("lib/account-provider-runner.mjs", copiedRunner);
+  fs.writeFileSync(
+    fakeSdk,
+    [
+      'import fs from "node:fs";',
+      "export async function runCopilotSdkChat(body, token, baseDirectory, onToken, { signal } = {}) {",
+      `  fs.writeFileSync(${JSON.stringify(admittedMarker)}, "admitted");`,
+      "  return new Promise((resolve, reject) => {",
+      "    const abort = () => {",
+      `      fs.writeFileSync(${JSON.stringify(abortedMarker)}, "aborted");`,
+      '      reject(new Error("fake SDK aborted"));',
+      "    };",
+      "    if (signal?.aborted) abort();",
+      '    else signal?.addEventListener("abort", abort, { once: true });',
+      "  });",
+      "}",
+      "",
+    ].join("\n")
+  );
+  const sdkRunner = spawn(
+    process.execPath,
+    [
+      copiedRunner,
+      "--port",
+      String(sdkRunnerPort),
+      "--token",
+      token,
+      "--auth-file",
+      authFile,
+    ],
+    {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    }
+  );
+  let sdkRunnerOutput = "";
+  sdkRunner.stdout.setEncoding("utf8");
+  sdkRunner.stderr.setEncoding("utf8");
+  sdkRunner.stdout.on("data", (chunk) => {
+    sdkRunnerOutput += chunk;
+  });
+  sdkRunner.stderr.on("data", (chunk) => {
+    sdkRunnerOutput += chunk;
+  });
+  try {
+    const sdkBaseUrl = `http://127.0.0.1:${sdkRunnerPort}`;
+    await waitForRunnerAt(sdkBaseUrl, () => sdkRunnerOutput);
+    const controller = new AbortController();
+    const request = fetch(`${sdkBaseUrl}/providers/github-copilot/chat`, {
+      method: "POST",
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        runtimeMode: "discussion",
+        model: "gpt-5.4",
+        stream: true,
+        messages: [{ role: "user", content: "Keep the SDK open." }],
+      }),
+    })
+      .then((response) => response.text())
+      .catch(() => undefined);
+    const admitted = await waitForCondition(() => fs.existsSync(admittedMarker));
+    check("runner-boundary fake Copilot SDK receives the chat request", admitted);
+    controller.abort();
+    await request;
+    const aborted = await waitForCondition(() => fs.existsSync(abortedMarker));
+    check(
+      "runner request cancellation reaches and aborts the Copilot SDK adapter",
+      aborted
+    );
+  } finally {
+    await stopChild(sdkRunner);
+  }
 }
 
 try {
@@ -359,6 +475,35 @@ try {
     "disconnecting the runner client closes the Copilot responses fallback request",
     fallbackClosed
   );
+
+  const chatController = new AbortController();
+  const chatRequest = fetch(
+    `${baseUrl}/providers/github-copilot/chat`,
+    {
+      method: "POST",
+      headers,
+      signal: chatController.signal,
+      body: JSON.stringify({
+        runtimeMode: "build",
+        model: "claude-disconnect-test",
+        messages: [{ role: "user", content: "Keep fallback open." }],
+      }),
+    }
+  ).catch(() => undefined);
+  const chatReceived = await waitForCondition(() => chatFallbackReceived);
+  check(
+    "fake Copilot chat-completions fallback receives the disconnect test request",
+    chatReceived
+  );
+  chatController.abort();
+  await chatRequest;
+  const chatClosed = await waitForCondition(() => chatFallbackClosed);
+  check(
+    "disconnecting the runner client closes the Copilot chat-completions fallback request",
+    chatClosed
+  );
+
+  await checkRunnerSdkCancellation();
 } catch (err) {
   check("account-provider runner GitHub Copilot chat integration", false, err instanceof Error ? err.message : String(err));
 } finally {
