@@ -27,6 +27,8 @@ async function main() {
   let firstSubscriberCalls = 0;
   let remountedSubscriberCalls = 0;
 
+  const idleSnapshot = coordinator.getSnapshot();
+  assert.strictEqual(coordinator.getSnapshot(), idleSnapshot);
   const unsubscribeFirst = coordinator.subscribe(() => firstSubscriberCalls++);
   assert.equal(
     coordinator.tryStart("preset", { presetId: "model-iq" }, async (signal) => {
@@ -41,8 +43,12 @@ async function main() {
     presetId: "model-iq",
     startedAt: coordinator.getSnapshot().startedAt,
   });
+  const runningSnapshot = coordinator.getSnapshot();
+  assert.notStrictEqual(runningSnapshot, idleSnapshot);
+  assert.strictEqual(coordinator.getSnapshot(), runningSnapshot);
 
   await waitFor(() => activeSignal !== undefined);
+  const firstSubscriberCallsBeforeUnsubscribe = firstSubscriberCalls;
   unsubscribeFirst();
   const unsubscribeRemounted = coordinator.subscribe(
     () => remountedSubscriberCalls++
@@ -53,18 +59,62 @@ async function main() {
     false
   );
   assert.equal(coordinator.cancel(cancellation), true);
+  const cancellingSnapshot = coordinator.getSnapshot();
+  const remountedSubscriberCallsAfterCancel = remountedSubscriberCalls;
+  const cancellationSignal = activeSignal;
+  assert.notStrictEqual(cancellingSnapshot, runningSnapshot);
+  assert.strictEqual(coordinator.getSnapshot(), cancellingSnapshot);
   assert.equal(activeSignal?.aborted, true);
   assert.equal(activeSignal?.reason, cancellation);
+  assert.equal(coordinator.getSnapshot().phase, "cancelling");
+  assert.equal(coordinator.cancel(cancellation), true);
+  assert.strictEqual(activeSignal, cancellationSignal);
+  assert.equal(activeSignal?.reason, cancellation);
+  assert.strictEqual(coordinator.getSnapshot(), cancellingSnapshot);
+  assert.equal(remountedSubscriberCalls, remountedSubscriberCallsAfterCancel);
+  assert.equal(coordinator.getSnapshot().owner, "preset");
   assert.equal(coordinator.getSnapshot().phase, "cancelling");
   assert.equal(coordinator.tryStart("advanced", {}, async () => undefined), false);
 
   teardown.resolve();
   await waitFor(() => coordinator.getSnapshot().owner === null);
+  const settledSnapshot = coordinator.getSnapshot();
+  assert.notStrictEqual(settledSnapshot, cancellingSnapshot);
+  assert.strictEqual(coordinator.getSnapshot(), settledSnapshot);
   assert.equal(coordinator.getSnapshot().phase, "idle");
   assert.equal(coordinator.tryStart("advanced", {}, async () => undefined), true);
   unsubscribeRemounted();
-  assert.ok(firstSubscriberCalls >= 1);
+  assert.equal(firstSubscriberCalls, firstSubscriberCallsBeforeUnsubscribe);
   assert.ok(remountedSubscriberCalls >= 2);
+
+  const notificationCoordinator = createCertifiedTabRunCoordinator();
+  const notificationTeardown = deferred<void>();
+  let removingListenerCalls = 0;
+  let removedListenerCalls = 0;
+  let unsubscribeRemoved: () => void = () => undefined;
+  const unsubscribeRemoving = notificationCoordinator.subscribe(() => {
+    removingListenerCalls += 1;
+    unsubscribeRemoved();
+  });
+  unsubscribeRemoved = notificationCoordinator.subscribe(
+    () => removedListenerCalls++
+  );
+  assert.equal(
+    notificationCoordinator.tryStart("advanced", {}, async () => {
+      await notificationTeardown.promise;
+    }),
+    true
+  );
+  assert.equal(removingListenerCalls, 1);
+  assert.equal(removedListenerCalls, 1);
+  assert.equal(notificationCoordinator.cancel(new Error("self-removal")), true);
+  assert.equal(removingListenerCalls, 2);
+  assert.equal(removedListenerCalls, 1);
+  notificationTeardown.resolve();
+  await waitFor(() => notificationCoordinator.getSnapshot().owner === null);
+  assert.equal(removingListenerCalls, 3);
+  assert.equal(removedListenerCalls, 1);
+  unsubscribeRemoving();
 
   const rejectionCoordinator = createCertifiedTabRunCoordinator();
   const unhandledRejections: unknown[] = [];
