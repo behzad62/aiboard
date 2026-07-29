@@ -74,6 +74,10 @@ const latest = {
       effort: "high" as const,
     },
   ],
+  providerIds: [
+    "Authorization: Bearer provider-secret-token",
+    "C:\\Users\\someone\\private-provider",
+  ],
 };
 const older = Array.from({ length: 7 }, (_, index) =>
   row(
@@ -148,7 +152,7 @@ const latestMarkup = renderToStaticMarkup(
         older,
       },
     ]}
-    selectedResultSetId={null}
+    selectedResultSetId={latest.resultSetId}
     onSelect={() => undefined}
   />
 );
@@ -164,8 +168,10 @@ assert.ok(latestMarkup.includes("score-v5"));
 for (const secret of [
   "latest-secret-token",
   "roster-secret-token",
+  "provider-secret-token",
   "C:\\Users\\someone\\latest-model",
   "C:\\Users\\someone\\architect",
+  "C:\\Users\\someone\\private-provider",
 ]) {
   assert.ok(!latestMarkup.includes(secret), `latest output leaked ${secret}`);
 }

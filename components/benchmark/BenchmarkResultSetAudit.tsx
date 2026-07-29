@@ -300,18 +300,34 @@ function auditStatus(
   }
   const ownedProviderFailure =
     attempts.some((attempt) => attempt.status === "provider_unavailable") ||
-    traces.some((trace) =>
-      trace.retryHistory.some((attempt) => attempt.status === "provider_error")
-    ) ||
-    failures.some(
-      (failure) => classifyBenchmarkFailure(failure).group === "provider"
-    );
+    (traces.length > 0
+      ? latestTraceStatus(traces) === "provider_error"
+      : failures.some(
+          (failure) => classifyBenchmarkFailure(failure).group === "provider"
+        ));
   return kind === "provider" ||
     code === "provider_unavailable" ||
     code.startsWith("provider_") ||
     ownedProviderFailure
     ? "Provider failed"
     : "Unpublished";
+}
+
+function latestTraceStatus(
+  traces: readonly BenchmarkModelCallTrace[]
+): BenchmarkModelCallTrace["retryHistory"][number]["status"] | undefined {
+  const latest = [...traces].sort(
+    (left, right) =>
+      traceTerminalTime(right) - traceTerminalTime(left) ||
+      Date.parse(right.startedAt) - Date.parse(left.startedAt) ||
+      right.id.localeCompare(left.id)
+  )[0];
+  return latest?.retryHistory.at(-1)?.status;
+}
+
+function traceTerminalTime(trace: BenchmarkModelCallTrace): number {
+  const parsed = Date.parse(trace.completedAt ?? trace.startedAt);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
 function trackLabel(track: string): string {

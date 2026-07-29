@@ -369,7 +369,9 @@ export function withCertifiedDeleteMetadata(
       providerUnavailableAttemptIdsByTrack:
         providerUnavailableAttemptIdsByTrack(teamAttempts),
       providerIds: uniqueStrings(
-        (team?.roles ?? []).map((role) => role.providerId)
+        (team?.roles ?? []).map((role) =>
+          sanitizeBenchmarkDisplayText(role.providerId)
+        )
       ),
       reasoningEfforts: uniqueStrings(
         (team?.roles ?? []).map((role) =>

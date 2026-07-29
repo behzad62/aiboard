@@ -58,7 +58,7 @@ export function ModelEvidenceProfile({
             {row.preliminary && <Badge variant="outline">Preliminary</Badge>}
             {(row.providerIds ?? []).map((provider) => (
               <Badge key={provider} variant="outline">
-                {provider}
+                {sanitizeBenchmarkDisplayText(provider)}
               </Badge>
             ))}
             {row.isTeam && (row.reasoningEffortDetails?.length ?? 0) > 0 ? (

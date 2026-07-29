@@ -177,6 +177,32 @@ const traceOnlyTrace: BenchmarkModelCallTrace = {
     },
   ],
 };
+const recoveredTraceSet = resultSet("recovered-trace", "failed", {
+  kind: "infrastructure",
+  code: "persistence_failed",
+  message: "Could not persist the result set.",
+});
+const recoveredProviderTrace: BenchmarkModelCallTrace = {
+  ...traceOnlyTrace,
+  id: "recovered-provider-call",
+  resultSetId: recoveredTraceSet.id,
+  startedAt: "2026-07-29T08:15:00.000Z",
+  completedAt: "2026-07-29T08:16:00.000Z",
+};
+const recoveredParsedTrace: BenchmarkModelCallTrace = {
+  ...traceOnlyTrace,
+  id: "recovered-parsed-call",
+  resultSetId: recoveredTraceSet.id,
+  startedAt: "2026-07-29T08:20:00.000Z",
+  completedAt: "2026-07-29T08:21:00.000Z",
+  retryHistory: [
+    {
+      attempt: 1,
+      status: "parsed",
+      message: "Response parsed successfully.",
+    },
+  ],
+};
 const providerFailure: BenchmarkFailure = {
   id: "failure-provider",
   resultSetId: "provider",
@@ -190,12 +216,24 @@ const providerFailure: BenchmarkFailure = {
   message: "Provider unavailable.",
   createdAt: "2026-07-29T09:00:00.000Z",
 };
+const recoveredTransientFailure: BenchmarkFailure = {
+  ...providerFailure,
+  id: "failure-recovered-transient-provider",
+  resultSetId: recoveredTraceSet.id,
+  runId: recoveredTraceSet.anchorRunId,
+  attemptId: "attempt-recovered-transient-provider",
+  createdAt: "2026-07-29T08:16:00.000Z",
+};
 const rows = buildBenchmarkResultSetAuditRows(
-  [...sets, traceOnlySet],
+  [...sets, traceOnlySet, recoveredTraceSet],
   attempts,
   {
-    traces: [traceOnlyTrace],
-    failures: [providerFailure],
+    traces: [
+      recoveredParsedTrace,
+      traceOnlyTrace,
+      recoveredProviderTrace,
+    ],
+    failures: [providerFailure, recoveredTransientFailure],
     publishedResultSetIds: new Set(["completed"]),
   }
 );
@@ -211,6 +249,7 @@ assert.deepEqual(
     "Interrupted",
     "Deleting",
     "Provider failed",
+    "Unpublished",
     "Legacy evidence",
   ]
 );
@@ -222,6 +261,10 @@ assert.ok(!rows.find((row) => row.id === "provider")!.failureMessage.includes("s
 assert.ok(!rows.find((row) => row.id === "interrupted")!.failureMessage.includes("C:\\Users"));
 assert.equal(rows.find((row) => row.id === "trace-only")!.physicalCalls, 1);
 assert.equal(rows.find((row) => row.id === "trace-only")!.totalTokens, 400);
+assert.equal(
+  rows.find((row) => row.id === "recovered-trace")!.statusLabel,
+  "Unpublished"
+);
 assert.match(
   rows.find((row) => row.id === "infrastructure")!.configuration,
   /architect: account\/architect-model.*high reasoning.*12,288 tokens.*worker: local\/worker-model.*4,096 tokens/
