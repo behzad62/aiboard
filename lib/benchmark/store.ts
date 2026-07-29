@@ -32,6 +32,7 @@ import {
   getBenchmarkVerifierResults,
   initStore,
   isInitialized,
+  setBenchmarkResultSetDeletionResumer,
   replaceStore,
   upsertBenchmarkArtifact,
   upsertBenchmarkAttempt,
@@ -126,7 +127,7 @@ export async function listBenchmarkResultSets(): Promise<BenchmarkResultSet[]> {
     const { needsPassphrase } = await initStore();
     if (needsPassphrase) return [];
   }
-  return getBenchmarkResultSets().filter((set) => set.status !== "deleting");
+  return [...getBenchmarkResultSets()];
 }
 
 export async function listBenchmarkCases(): Promise<BenchmarkCase[]> {
@@ -447,6 +448,8 @@ export async function resumeDeletingBenchmarkResultSets(): Promise<number> {
   return ids.length;
 }
 
+setBenchmarkResultSetDeletionResumer(() => resumeDeletingBenchmarkResultSets());
+
 function removeOwnedResultSetRecords(
   resultSetId: string,
   attemptIds: Set<string>,
@@ -749,7 +752,7 @@ export function exportBenchmarkReportBundleV2(): BenchmarkReportBundleV2 {
     toolCallTraces: [...getBenchmarkToolCallTraces()],
     teamCompositions: [...getBenchmarkTeamCompositions()],
     harnessCertifications: [...getBenchmarkHarnessCertifications()],
-    resultSets: [...getBenchmarkResultSets()].filter((set) => set.status !== "deleting"),
+    resultSets: [...getBenchmarkResultSets()],
   };
   const redacted = redactBenchmarkBundle(bundle);
 

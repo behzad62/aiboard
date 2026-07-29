@@ -32,6 +32,7 @@ import {
   listBenchmarkToolCallTraces,
   listBenchmarkVerifierResults,
   listHarnessCertificationResults,
+  resumeDeletingBenchmarkResultSets,
 } from "@/lib/benchmark/store";
 import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persistence";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
@@ -202,6 +203,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     const ready = await ensureReady();
     if (!ready.needsPassphrase) {
       await rescanBenchmarkRunFiles();
+      await resumeDeletingBenchmarkResultSets();
     }
     await load();
   }, [load]);

@@ -110,11 +110,15 @@ export function useBenchmarkReportActions({
       const certified = bundle.attemptsV2.filter(
         (attempt) => attempt.mode === "certified"
       ).length;
+      const resultSetCount = bundle.resultSets?.length ?? 0;
+      const completedResultSetCount = bundle.resultSets?.filter(
+        (resultSet) => resultSet.status === "completed"
+      ).length ?? 0;
       const hashWarning = importResult.hashMismatch
         ? " Warning: bundleHash does not match contents; file may be edited or corrupted."
         : "";
       setMessage(
-        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ${certified} certified attempt(s); ${importResult.updatedCount} existing record(s) updated.${hashWarning}`
+        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ${certified} certified attempt(s), ${resultSetCount} result set(s) (${completedResultSetCount} completed); ${importResult.updatedCount} existing record(s) updated.${hashWarning}`
       );
     },
     [reload, setMessage]

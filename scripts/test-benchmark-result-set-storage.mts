@@ -68,7 +68,8 @@ async function main(): Promise<void> {
   assert.deepEqual((await listBenchmarkResultSets()).map((set) => set.id), ["set-2"]);
   assert.deepEqual((await listBenchmarkAttemptsV2()).map((entry) => entry.id), ["attempt-2"]);
   await saveBenchmarkResultSet({ ...sibling, status: "deleting", terminalAt: now });
-  assert.deepEqual(await listBenchmarkResultSets(), []);
+  assert.deepEqual((await listBenchmarkResultSets()).map((set) => set.status), ["deleting"]);
+  assert.equal(exportBenchmarkReportBundleV2().resultSets?.[0]?.status, "deleting");
   assert.equal(await resumeDeletingBenchmarkResultSets(), 1);
   assert.deepEqual(await listBenchmarkResultSets(), []);
 

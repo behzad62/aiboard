@@ -493,6 +493,7 @@ function commitLoadedStore(generation: number, loaded: ClientStore): void {
   const migration = migrateClientStoreModelSelections(loaded);
   memory = migration.store;
   notifyReady();
+  void benchmarkResultSetDeletionResumer?.();
   if (migration.changed) schedulePersist();
 }
 
@@ -846,6 +847,13 @@ function store(): ClientStore {
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let benchmarkResultSetDeletionResumer: (() => Promise<unknown>) | null = null;
+
+export function setBenchmarkResultSetDeletionResumer(
+  resumer: (() => Promise<unknown>) | null
+): void {
+  benchmarkResultSetDeletionResumer = resumer;
+}
 let persistDirty = false;
 
 // File System Access createWritable() is not safe for overlapping writes to the

@@ -560,6 +560,26 @@ check(
     reportActionSource.includes("existing record"),
   reportActionSource
 );
+const dashboardSource = readFileSync(
+  "components/benchmark/useBenchmarkDashboard.ts",
+  "utf8"
+);
+const clientStoreSource = readFileSync("lib/client/store.ts", "utf8");
+check(
+  "benchmark import success message surfaces result-set counts",
+  reportActionSource.includes("resultSetCount") && reportActionSource.includes("completedResultSetCount"),
+  reportActionSource
+);
+check(
+  "dashboard refresh resumes deleting result sets before reload",
+  dashboardSource.includes("await resumeDeletingBenchmarkResultSets()"),
+  dashboardSource
+);
+check(
+  "client-store initialization invokes registered result-set recovery",
+  clientStoreSource.includes("benchmarkResultSetDeletionResumer?.()"),
+  clientStoreSource
+);
 check(
   "benchmark export message surfaces redaction warnings",
   reportActionSource.includes("warning(s)") &&
