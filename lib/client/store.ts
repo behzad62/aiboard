@@ -37,6 +37,7 @@ import type {
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
   BenchmarkReportBundleV2,
+  BenchmarkResultSet,
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
 import type { AttachmentRecord } from "@/lib/attachments/types";
@@ -86,6 +87,7 @@ export interface ClientStore {
   gameStatsLegacyImportAttempted: boolean;
   benchmarkSuites: BenchmarkSuite[];
   benchmarkRuns: BenchmarkRun[];
+  benchmarkResultSets: BenchmarkResultSet[];
   benchmarkCases: BenchmarkCase[];
   benchmarkCaseV2: BenchmarkCaseV2[];
   benchmarkAttempts: BenchmarkAttempt[];
@@ -168,6 +170,7 @@ const DEFAULT_STORE: ClientStore = {
   gameStatsLegacyImportAttempted: false,
   benchmarkSuites: [],
   benchmarkRuns: [],
+  benchmarkResultSets: [],
   benchmarkCases: [],
   benchmarkCaseV2: [],
   benchmarkAttempts: [],
@@ -187,6 +190,7 @@ const DEFAULT_STORE: ClientStore = {
 const BENCHMARK_STORE_KEYS = [
   "benchmarkSuites",
   "benchmarkRuns",
+  "benchmarkResultSets",
   "benchmarkCases",
   "benchmarkCaseV2",
   "benchmarkAttempts",
@@ -213,6 +217,7 @@ function emptyBenchmarkStoreFields(): BenchmarkStoreFields {
   return {
     benchmarkSuites: [],
     benchmarkRuns: [],
+    benchmarkResultSets: [],
     benchmarkCases: [],
     benchmarkCaseV2: [],
     benchmarkAttempts: [],
@@ -760,6 +765,10 @@ function mergeBenchmarkBundleIntoFields(
 ): void {
   fields.benchmarkSuites = mergeById(fields.benchmarkSuites, bundle.suites ?? []);
   fields.benchmarkRuns = mergeById(fields.benchmarkRuns, bundle.runs ?? []);
+  fields.benchmarkResultSets = mergeById(
+    fields.benchmarkResultSets,
+    bundle.resultSets ?? []
+  );
   fields.benchmarkCases = mergeById(fields.benchmarkCases, bundle.cases ?? []);
   fields.benchmarkAttempts = mergeById(
     fields.benchmarkAttempts,
@@ -1095,6 +1104,11 @@ export function getBenchmarkRuns(): BenchmarkRun[] {
   s.benchmarkRuns ??= [];
   return s.benchmarkRuns;
 }
+export function getBenchmarkResultSets(): BenchmarkResultSet[] {
+  const s = store();
+  s.benchmarkResultSets ??= [];
+  return s.benchmarkResultSets;
+}
 export function getBenchmarkCases(): BenchmarkCase[] {
   const s = store();
   s.benchmarkCases ??= [];
@@ -1380,6 +1394,13 @@ export function upsertBenchmarkSuite(record: BenchmarkSuite): void {
 export function upsertBenchmarkRun(record: BenchmarkRun): void {
   upsertById(getBenchmarkRuns(), record);
   schedulePersist();
+}
+export function upsertBenchmarkResultSet(record: BenchmarkResultSet): void {
+  upsertById(getBenchmarkResultSets(), record);
+  schedulePersist();
+}
+export function deleteBenchmarkResultSetById(resultSetId: string): number {
+  return removeWhere(getBenchmarkResultSets(), (record) => record.id === resultSetId);
 }
 export function upsertBenchmarkCase(record: BenchmarkCase): void {
   upsertById(getBenchmarkCases(), record);

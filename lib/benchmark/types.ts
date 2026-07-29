@@ -95,6 +95,7 @@ export interface BenchmarkRun {
   metricValueIds: string[];
   artifactIds: string[];
   failureIds: string[];
+  resultSetIds?: string[];
 }
 
 export interface BenchmarkCase {
@@ -344,6 +345,7 @@ export interface BenchmarkVerifierResult {
   resultJson: string;
   assertionResults: BenchmarkVerifierAssertionResult[];
   artifactIds: string[];
+  resultSetId?: string;
 }
 
 export interface BenchmarkAttemptV2 {
@@ -392,6 +394,7 @@ export interface BenchmarkAttemptV2 {
   harnessVersion: string;
   promptSetVersion: string;
   scoringVersion: string;
+  resultSetId?: string;
 }
 
 export type BenchmarkRunEventType =
@@ -417,6 +420,7 @@ export interface BenchmarkRunEvent {
   modelId?: string;
   providerId?: string;
   detailsJson?: string;
+  resultSetId?: string;
 }
 
 export interface BenchmarkToolCallTrace {
@@ -433,6 +437,7 @@ export interface BenchmarkToolCallTrace {
   inputJson?: string;
   outputPreview?: string;
   error?: string;
+  resultSetId?: string;
 }
 
 export interface HarnessCertificationCheck {
@@ -473,6 +478,7 @@ export interface BenchmarkAttempt {
   traceIds: string[];
   artifactIds: string[];
   failureIds: string[];
+  resultSetId?: string;
 }
 
 export interface BenchmarkMetricValue {
@@ -501,6 +507,7 @@ export interface BenchmarkArtifact {
   mimeType: string;
   content: string;
   createdAt: string;
+  resultSetId?: string;
 }
 
 export interface BenchmarkFailure {
@@ -516,6 +523,7 @@ export interface BenchmarkFailure {
   message: string;
   details?: string;
   createdAt: string;
+  resultSetId?: string;
 }
 
 export interface BenchmarkModelCallTraceAttempt {
@@ -563,6 +571,7 @@ export interface BenchmarkModelCallTrace {
   retryHistory: BenchmarkModelCallTraceAttempt[];
   fallbackReason?: string;
   error?: string;
+  resultSetId?: string;
 }
 
 export interface BenchmarkReportBundleBase {
@@ -592,6 +601,8 @@ export interface BenchmarkReportBundleV2
   toolCallTraces: BenchmarkToolCallTrace[];
   teamCompositions: BenchmarkTeamComposition[];
   harnessCertifications: HarnessCertificationResult[];
+  /** Optional so v2 exports made before atomic result snapshots still import. */
+  resultSets?: BenchmarkResultSet[];
   bundleHash?: string;
   redactionSummary?: {
     scannedArtifacts: number;

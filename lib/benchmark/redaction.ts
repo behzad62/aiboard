@@ -5,6 +5,7 @@ import type {
   BenchmarkRunEvent,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
+  BenchmarkResultSet,
 } from "./types";
 
 export type BenchmarkSecretFindingKind =
@@ -46,6 +47,7 @@ interface BenchmarkBundleWithChannels {
   runEvents?: BenchmarkRunEvent[];
   verifierResults?: BenchmarkVerifierResult[];
   failures?: BenchmarkFailure[];
+  resultSets?: BenchmarkResultSet[];
   redactionSummary?: BenchmarkRedactionSummary;
 }
 
@@ -267,6 +269,14 @@ export function redactBenchmarkBundle<T extends BenchmarkBundleWithChannels>(
     details: redactField(failure.details, state, failureLabel(failure.id)),
   }));
 
+  const resultSets = bundle.resultSets?.map((resultSet) => ({
+    ...resultSet,
+    failure: resultSet.failure
+      ? { ...resultSet.failure, message: redactField(resultSet.failure.message, state, () => `Result set ${resultSet.id} contains blocked content.`) }
+      : undefined,
+    configuration: redactConfigurationStrings(resultSet.configuration, state, resultSet.id),
+  }));
+
   const scannedRecords =
     bundle.artifacts.length +
     (bundle.traces?.length ?? 0) +
@@ -283,6 +293,7 @@ export function redactBenchmarkBundle<T extends BenchmarkBundleWithChannels>(
     ...(runEvents ? { runEvents } : {}),
     ...(verifierResults ? { verifierResults } : {}),
     ...(failures ? { failures } : {}),
+    ...(resultSets ? { resultSets } : {}),
     redactionSummary: {
       scannedArtifacts: bundle.artifacts.length,
       scannedRecords,
@@ -290,6 +301,15 @@ export function redactBenchmarkBundle<T extends BenchmarkBundleWithChannels>(
       warnings: state.warnings,
     },
   };
+}
+
+function redactConfigurationStrings<T>(value: T, state: RedactionState, resultSetId: string): T {
+  if (typeof value === "string") {
+    return redactField(value, state, () => `Result set ${resultSetId} contains blocked content.`) as T;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactConfigurationStrings(item, state, resultSetId)) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactConfigurationStrings(item, state, resultSetId)])) as T;
 }
 
 function traceLabel(id: string) {
