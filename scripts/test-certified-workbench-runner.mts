@@ -4,6 +4,7 @@ import {
   __resetBenchmarkStoreForTests,
   exportBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
+  listBenchmarkResultSets,
   listBenchmarkRuns,
   listBenchmarkToolCallTraces,
   listBenchmarkTraces,
@@ -13,6 +14,10 @@ import {
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import {
+  createPendingBenchmarkResultSet,
+  publishBenchmarkResultSetIfComplete,
+} from "../lib/benchmark/certified/result-set-publication";
 import { runCertifiedWorkBench } from "../lib/benchmark/workbench/certified-runner";
 import { toBenchmarkCaseV2 } from "../lib/benchmark/workbench/case-loader";
 import type { BenchmarkTeamComposition } from "../lib/benchmark/types";
@@ -208,9 +213,53 @@ __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(toBenchmarkCaseV2(workBenchCase, "2026-06-28T10:00:00.000Z"));
 await saveBenchmarkTeamComposition(team);
 await saveBenchmarkTeamComposition(roleTeam);
+const workBenchCaseV2 = toBenchmarkCaseV2(
+  workBenchCase,
+  "2026-06-28T10:00:00.000Z"
+);
+await createPendingBenchmarkResultSet({
+  id: "result-certified-workbench",
+  schemaVersion: 1,
+  executionId: "execution-certified-workbench",
+  anchorRunId: "run-certified-workbench",
+  runIds: ["run-certified-workbench"],
+  configurationKey: "workbench-certified-team",
+  configuration: {
+    subjectKind: "team",
+    displayName: team.name,
+    roles: team.roles.map((role) => ({
+      role: role.role,
+      slot: role.slot,
+      providerId: role.providerId,
+      modelId: role.modelId,
+      reasoningEffort: role.reasoningEffort ?? "default",
+      maxTokens: role.maxTokens ?? null,
+    })),
+    tracks: [{
+      track: "workbench",
+      suiteId: "suite-certified-workbench",
+      caseManifest: [{
+        caseId: workBenchCaseV2.id,
+        caseVersion: workBenchCaseV2.caseVersion,
+        scoringVersion: workBenchCaseV2.scoring.scoringVersion,
+      }],
+      maxTokens: null,
+    }],
+  },
+  expectedAttempts: [{
+    runId: "run-certified-workbench",
+    track: "workbench",
+    suiteId: "suite-certified-workbench",
+    caseId: workBenchCaseV2.id,
+    caseVersion: workBenchCaseV2.caseVersion,
+    scoringVersion: workBenchCaseV2.scoring.scoringVersion,
+    teamCompositionId: team.id,
+  }],
+});
 
 const runner = await startPassingBenchRunner("prepared-workbench-attempt");
 try {
+  let pendingObservedBeforeWorkBenchAdmission = false;
   const traceStore: Array<{
     id: string;
     runId?: string;
@@ -229,6 +278,18 @@ try {
     caseIds: [workBenchCase.id],
     teamCompositionIds: [team.id],
     certification: runHarnessCertification("aiboard-build-multi-worker"),
+    resultSetOwnership: {
+      byTeamCompositionId: {
+        [team.id]: "result-certified-workbench",
+      },
+    },
+    onSubjectCompleted: async (teamCompositionId) => {
+      if (teamCompositionId === team.id) {
+        await publishBenchmarkResultSetIfComplete(
+          "result-certified-workbench"
+        );
+      }
+    },
     runner: (context) =>
       runCertifiedWorkBench({
         context,
@@ -243,6 +304,12 @@ try {
           },
         ],
         runBuildDiscussion: async (_discussion, _models, _emit, hooks) => {
+          pendingObservedBeforeWorkBenchAdmission ||=
+            (await listBenchmarkResultSets()).some(
+              (resultSet) =>
+                resultSet.id === "result-certified-workbench" &&
+                resultSet.status === "pending"
+            );
           const benchmark = hooks?.benchmark;
           if (!benchmark) throw new Error("missing benchmark hook");
           traceStore.push({
@@ -264,8 +331,18 @@ try {
   const verifiers = await listBenchmarkVerifierResults();
   const bundle = exportBenchmarkReportBundleV2();
   const attempt = attempts[0];
+  const resultSet = (await listBenchmarkResultSets()).find(
+    (item) => item.id === "result-certified-workbench"
+  );
 
   check("certified WorkBench run completes", summary.status === "completed" && summary.attemptCount === 1 && summary.verifierCount === 1, summary);
+  check(
+    "WorkBench result manifest exists before build admission and publishes atomically",
+    pendingObservedBeforeWorkBenchAdmission &&
+      resultSet?.status === "completed" &&
+      attempt?.resultSetId === resultSet.id,
+    { pendingObservedBeforeWorkBenchAdmission, resultSet, attempt }
+  );
   check("certified WorkBench attempt persists verifier score", attempt?.id === "prepared-workbench-attempt" && attempt.status === "passed" && attempt.verifiedQuality === 1, attempt);
   check("certified WorkBench verifier persists", verifiers[0]?.attemptId === attempt?.id && verifiers[0]?.passed, verifiers[0]);
   check("certified WorkBench artifacts persist", bundle.artifacts.some((artifact) => artifact.attemptId === attempt?.id && artifact.kind === "patch"), bundle.artifacts);

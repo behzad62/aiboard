@@ -95,6 +95,7 @@ import {
   cancelBenchmarkResultSet,
   createPendingBenchmarkResultSet,
   failBenchmarkResultSet,
+  publishBenchmarkResultSetAfterRuns,
   publishBenchmarkResultSetIfComplete,
   type ResultSetOwnershipMap,
 } from "./result-set-publication";
@@ -279,6 +280,14 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   setRunPhase("certifying");
   setSummary(null);
   setMessage(null);
+  const runExecutionId =
+    executionId ??
+    `execution-${selectedTrack}-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2, 10)}`;
+  const plannedScopeIds = plannedOwnership
+    ? uniqueResultSetIds(plannedOwnership)
+    : [];
   try {
     throwIfCertifiedRunAborted(abortController.signal);
     const initialTeams =
@@ -349,11 +358,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             resultSetIds: uniqueResultSetIds(plannedOwnership),
           }
         : await planResultSetsForRun({
-            executionId:
-              executionId ??
-              `execution-${selectedTrack}-${Date.now()}-${Math.random()
-                .toString(16)
-                .slice(2, 10)}`,
+            executionId: runExecutionId,
             runId,
             suiteId:
               selectedTrack === "workbench"
@@ -445,6 +450,11 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("done");
   } catch (error) {
+    await terminalizePendingResultSets({
+      resultSetIds: plannedScopeIds,
+      executionId: plannedOwnership ? undefined : runExecutionId,
+      signal: abortController.signal,
+    });
     setRunPhase("idle");
     setMessage(error instanceof Error ? error.message : String(error));
   } finally {
@@ -467,7 +477,6 @@ export interface RunGameIqMultiModelContext extends CertifiedRunActions {
   executionId?: string;
   runIdsByModelId?: Record<string, string>;
   resultSetIdsByModelId?: Record<string, string>;
-  allowIncompletePublication?: boolean;
 }
 
 export async function runGameIqMultiModel(
@@ -491,7 +500,6 @@ export async function runGameIqMultiModel(
     executionId,
     runIdsByModelId,
     resultSetIdsByModelId,
-    allowIncompletePublication,
   } = ctx;
   const selectedModels = gameIqModelIds
     .map((id) => models.find((candidate) => candidate.modelId === id))
@@ -564,6 +572,10 @@ export async function runGameIqMultiModel(
     string,
     { ownership: ResultSetOwnershipMap; resultSetIds: string[] }
   >();
+  const plannedPublicationIds = (): string[] =>
+    Array.from(publicationByModelId.values()).flatMap(
+      (publication) => publication.resultSetIds
+    );
 
   try {
     throwIfCertifiedRunAborted(abortController.signal);
@@ -600,8 +612,7 @@ export async function runGameIqMultiModel(
     setRunPhase("running");
 
     const runOneModel = async (
-      model: SelectedModel,
-      index: number
+      model: SelectedModel
     ): Promise<GameIqModelRunState> => {
       throwIfCertifiedRunAborted(abortController.signal);
       updateGameIqModelRun(model.modelId, { status: "running" });
@@ -681,7 +692,7 @@ export async function runGameIqMultiModel(
         publication.resultSetIds,
         result,
         abortController.signal,
-        allowIncompletePublication
+        [runId]
       );
       throwIfCertifiedRunAborted(abortController.signal);
       // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
@@ -741,7 +752,7 @@ export async function runGameIqMultiModel(
     const settled = await mapWithConcurrency(
       selectedModels,
       MAX_PARALLEL_GAMEIQ_MODELS,
-      async (model, index) => {
+      async (model) => {
         // A worker that just finished an active model can claim the next queued
         // index after the shared batch was cancelled. Resolve that row before
         // runOneModel marks it running or persists its team/run/attempt.
@@ -758,7 +769,7 @@ export async function runGameIqMultiModel(
           return state;
         }
         try {
-          const state = await runOneModel(model, index);
+          const state = await runOneModel(model);
           if (!abortController.signal.aborted) return state;
           const cancelledState: GameIqModelRunState = {
             modelId: model.modelId,
@@ -827,6 +838,11 @@ export async function runGameIqMultiModel(
     throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("done");
   } catch (error) {
+    await terminalizePendingResultSets({
+      resultSetIds: plannedPublicationIds(),
+      executionId: resultSetIdsByModelId ? undefined : execution,
+      signal: abortController.signal,
+    });
     setRunPhase("idle");
     if (abortController.signal.aborted) {
       const cancellationError = abortReasonMessage(abortController.signal);
@@ -1137,8 +1153,9 @@ async function terminalizeRunPublication(
   resultSetIds: string[],
   result: CertifiedRunSummary,
   signal: AbortSignal,
-  allowIncomplete = false
+  settledRunIds?: string[]
 ): Promise<void> {
+  let publicationError: Error | null = null;
   for (const resultSetId of resultSetIds) {
     if (signal.aborted) {
       await cancelBenchmarkResultSet(resultSetId, abortReasonMessage(signal));
@@ -1153,13 +1170,52 @@ async function terminalizeRunPublication(
       continue;
     }
     try {
-      await publishBenchmarkResultSetIfComplete(resultSetId);
+      if (settledRunIds) {
+        await publishBenchmarkResultSetAfterRuns(resultSetId, settledRunIds);
+      } else {
+        await publishBenchmarkResultSetIfComplete(resultSetId);
+      }
     } catch (error) {
-      if (allowIncomplete) continue;
+      const message = error instanceof Error ? error.message : String(error);
       await failBenchmarkResultSet(resultSetId, {
         kind: "infrastructure",
         code: "incomplete_benchmark_output",
-        message: error instanceof Error ? error.message : String(error),
+        message,
+      });
+      publicationError ??= new Error(
+        `Unpublished infrastructure failure: ${message}`
+      );
+    }
+  }
+  if (publicationError) throw publicationError;
+}
+
+async function terminalizePendingResultSets(input: {
+  resultSetIds?: string[];
+  executionId?: string;
+  signal: AbortSignal;
+}): Promise<void> {
+  const records = await listBenchmarkResultSets();
+  const ids = new Set(input.resultSetIds ?? []);
+  if (input.executionId) {
+    for (const record of records) {
+      if (record.executionId === input.executionId) ids.add(record.id);
+    }
+  }
+  for (const resultSetId of ids) {
+    const record = records.find((item) => item.id === resultSetId);
+    if (!record || record.status !== "pending") continue;
+    if (input.signal.aborted) {
+      await cancelBenchmarkResultSet(
+        resultSetId,
+        "Certified benchmark execution was cancelled before publication."
+      );
+    } else {
+      await failBenchmarkResultSet(resultSetId, {
+        kind: "infrastructure",
+        code: "unpublished_infrastructure_failure",
+        message:
+          "Certified benchmark execution stopped before this subject could be published.",
       });
     }
   }
@@ -1437,7 +1493,8 @@ interface ModelIqPublicationPlan {
 
 async function planModelIqPresetPublication(
   preset: BenchmarkPreset,
-  ctx: RunPresetContext
+  ctx: RunPresetContext,
+  executionId: string
 ): Promise<ModelIqPublicationPlan | undefined> {
   const gameLeg = preset.legs.find(
     (leg) => leg.mode === "solo" && leg.track === "gameiq"
@@ -1451,9 +1508,6 @@ async function planModelIqPresetPublication(
     .filter((model): model is SelectedModel => Boolean(model));
   if (models.length === 0) return undefined;
 
-  const executionId = `execution-modeliq-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2, 10)}`;
   const gameCases = gameIqBundlePackIds(gameLeg.suiteId).map((packId) =>
     caseForSelection("gameiq", packId, ctx.fireworksPlayerCount)
   );
@@ -1568,7 +1622,23 @@ export async function runPreset(
   ctx: RunPresetContext,
   onProgress: (event: PresetProgressEvent) => void
 ): Promise<void> {
-  const modelIqPublication = await planModelIqPresetPublication(preset, ctx);
+  const presetExecutionId = `execution-modeliq-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2, 10)}`;
+  let modelIqPublication: ModelIqPublicationPlan | undefined;
+  try {
+    modelIqPublication = await planModelIqPresetPublication(
+      preset,
+      ctx,
+      presetExecutionId
+    );
+  } catch (error) {
+    await terminalizePendingResultSets({
+      executionId: presetExecutionId,
+      signal: ctx.signal,
+    });
+    throw error;
+  }
   for (let legIndex = 0; legIndex < preset.legs.length; legIndex++) {
     const leg = preset.legs[legIndex]!;
     if (ctx.signal.aborted) {
@@ -1734,7 +1804,6 @@ async function runSoloLeg(
       executionId: publication?.executionId,
       runIdsByModelId: publication?.gameRunIdsByModelId,
       resultSetIdsByModelId: publication?.resultSetIdsByModelId,
-      allowIncompletePublication: Boolean(publication),
     });
     return { status: legStatusFromModelRuns(latestRuns) };
   }

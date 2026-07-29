@@ -5,11 +5,16 @@ import {
   importBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
   listBenchmarkFailures,
+  listBenchmarkResultSets,
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import {
+  createPendingBenchmarkResultSet,
+  publishBenchmarkResultSetIfComplete,
+} from "../lib/benchmark/certified/result-set-publication";
 import {
   FIREWORKS_MEMORY_SCENARIOS,
   FIREWORKS_TACTICS_SCENARIOS,
@@ -61,6 +66,46 @@ const team = deriveTeamComposition({
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
 await saveBenchmarkTeamComposition(team);
+await createPendingBenchmarkResultSet({
+  id: "result-certified-fireworks-e2e",
+  schemaVersion: 1,
+  executionId: "execution-certified-fireworks-e2e",
+  anchorRunId: "run-certified-fireworks-e2e",
+  runIds: ["run-certified-fireworks-e2e"],
+  configurationKey: "fireworks-e2e-team",
+  configuration: {
+    subjectKind: "team",
+    displayName: team.name,
+    roles: team.roles.map((role) => ({
+      role: role.role,
+      slot: role.slot,
+      providerId: role.providerId,
+      modelId: role.modelId,
+      reasoningEffort: role.reasoningEffort ?? "default",
+      maxTokens: role.maxTokens ?? null,
+    })),
+    tracks: [{
+      track: "teamiq",
+      suiteId: "suite-certified-fireworks",
+      caseManifest: [{
+        caseId: caseV2.id,
+        caseVersion: caseV2.caseVersion,
+        scoringVersion: caseV2.scoring.scoringVersion,
+      }],
+      maxTokens: null,
+    }],
+  },
+  expectedAttempts: [{
+    runId: "run-certified-fireworks-e2e",
+    track: "teamiq",
+    suiteId: "suite-certified-fireworks",
+    caseId: caseV2.id,
+    caseVersion: caseV2.caseVersion,
+    scoringVersion: caseV2.scoring.scoringVersion,
+    teamCompositionId: team.id,
+  }],
+});
+let pendingObservedBeforeFireworksProvider = false;
 
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-fireworks-e2e",
@@ -70,6 +115,18 @@ const summary = await runCertifiedBenchmark({
   caseIds: [caseV2.id],
   teamCompositionIds: [team.id],
   certification: runHarnessCertification("raw-single-model"),
+  resultSetOwnership: {
+    byTeamCompositionId: {
+      [team.id]: "result-certified-fireworks-e2e",
+    },
+  },
+  onSubjectCompleted: async (teamCompositionId) => {
+    if (teamCompositionId === team.id) {
+      await publishBenchmarkResultSetIfComplete(
+        "result-certified-fireworks-e2e"
+      );
+    }
+  },
   runner: (context) =>
     runCertifiedTeamIq({
       context,
@@ -81,6 +138,12 @@ const summary = await runCertifiedBenchmark({
       },
       includeSoloBaselines: true,
       streamChat: async function* (): AsyncIterable<StreamChunk> {
+        pendingObservedBeforeFireworksProvider ||=
+          (await listBenchmarkResultSets()).some(
+            (resultSet) =>
+              resultSet.id === "result-certified-fireworks-e2e" &&
+              resultSet.status === "pending"
+          );
         yield {
           type: "token",
           content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
@@ -102,6 +165,9 @@ const importedAttempt = (await listBenchmarkAttemptsV2()).find(
   (attempt) => attempt.id === teamAttempt?.id
 );
 const importedFailures = await listBenchmarkFailures();
+const importedResultSet = (await listBenchmarkResultSets()).find(
+  (resultSet) => resultSet.id === "result-certified-fireworks-e2e"
+);
 
 check(
   "Fireworks TeamIQ route creates solo baselines, mixed attempt, and team lift",
@@ -109,6 +175,13 @@ check(
     attempts.length === roles.length + 1 &&
     teamAttempt?.teamLift === 0,
   { summary, attempts, teamAttempt }
+);
+check(
+  "Fireworks result manifest exists before provider admission and publishes atomically",
+  pendingObservedBeforeFireworksProvider &&
+    importedResultSet?.status === "completed" &&
+    teamAttempt?.resultSetId === importedResultSet.id,
+  { pendingObservedBeforeFireworksProvider, importedResultSet, teamAttempt }
 );
 check(
   "v2 bundle export includes Fireworks attempts, verifiers, traces, artifacts, and failures",

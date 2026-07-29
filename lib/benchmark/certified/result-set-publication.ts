@@ -2,6 +2,7 @@ import {
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
   listBenchmarkResultSets,
+  listBenchmarkRuns,
   listBenchmarkVerifierResults,
   saveBenchmarkResultSet,
 } from "@/lib/benchmark/store";
@@ -46,6 +47,23 @@ export async function createPendingBenchmarkResultSet(
 export async function publishBenchmarkResultSetIfComplete(
   resultSetId: string
 ): Promise<BenchmarkResultSet> {
+  return validateAndPublishBenchmarkResultSet(resultSetId);
+}
+
+export async function publishBenchmarkResultSetAfterRuns(
+  resultSetId: string,
+  settledRunIds: string[]
+): Promise<BenchmarkResultSet> {
+  return validateAndPublishBenchmarkResultSet(
+    resultSetId,
+    new Set(settledRunIds)
+  );
+}
+
+async function validateAndPublishBenchmarkResultSet(
+  resultSetId: string,
+  settledRunIds?: ReadonlySet<string>
+): Promise<BenchmarkResultSet> {
   const resultSet = await requireResultSet(resultSetId);
   if (resultSet.status === "completed") return resultSet;
   if (resultSet.status !== "pending") {
@@ -59,34 +77,34 @@ export async function publishBenchmarkResultSetIfComplete(
     );
   }
 
-  const [allAttempts, cases, verifierResults] = await Promise.all([
+  const [allAttempts, cases, verifierResults, runs] = await Promise.all([
     listBenchmarkAttemptsV2(),
     listBenchmarkCaseV2(),
     listBenchmarkVerifierResults(),
+    listBenchmarkRuns(),
   ]);
   const ownedAttempts = allAttempts.filter(
     (attempt) => attempt.resultSetId === resultSetId
   );
   const casesById = new Map(cases.map((item) => [item.id, item]));
+  const runsById = new Map(runs.map((item) => [item.id, item]));
   const verifiersById = new Map(
     verifierResults.map((item) => [item.id, item])
   );
   const attemptsByKey = new Map<string, BenchmarkAttemptV2[]>();
+  const expectedByAttemptKey = new Map(
+    resultSet.expectedAttempts.map((expected) => [
+      evidenceAttemptKey(expected),
+      expected,
+    ])
+  );
   for (const attempt of ownedAttempts) {
-    const key = attemptKey({
-      runId: attempt.runId,
-      track: attempt.track,
-      suiteId:
-        resultSet.expectedAttempts.find(
-          (expected) =>
-            expected.runId === attempt.runId &&
-            expected.track === attempt.track &&
-            expected.caseId === attempt.caseId &&
-            expected.teamCompositionId === attempt.teamCompositionId
-        )?.suiteId ?? "",
-      caseId: attempt.caseId,
-      teamCompositionId: attempt.teamCompositionId,
-    });
+    const key = evidenceAttemptKey(attempt);
+    if (!expectedByAttemptKey.has(key)) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} contains an unexpected owned attempt ${attempt.id}.`
+      );
+    }
     const list = attemptsByKey.get(key) ?? [];
     list.push(attempt);
     attemptsByKey.set(key, list);
@@ -94,7 +112,42 @@ export async function publishBenchmarkResultSetIfComplete(
 
   const scoreableAttempts: BenchmarkAttemptV2[] = [];
   for (const expected of resultSet.expectedAttempts) {
-    const matches = attemptsByKey.get(attemptKey(expected)) ?? [];
+    if (!resultSet.runIds.includes(expected.runId)) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} expected run ${expected.runId} is not owned by the result set.`
+      );
+    }
+    const matches = attemptsByKey.get(evidenceAttemptKey(expected)) ?? [];
+    if (settledRunIds && !settledRunIds.has(expected.runId)) {
+      if (matches.length > 0) {
+        throw new Error(
+          `Benchmark result set ${resultSetId} has evidence for unsettled run ${expected.runId}.`
+        );
+      }
+      continue;
+    }
+    const run = runsById.get(expected.runId);
+    if (!run) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} is missing run ${expected.runId}.`
+      );
+    }
+    if (run.suiteId !== expected.suiteId) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} run ${expected.runId} uses suite ${run.suiteId ?? "(none)"}, expected ${expected.suiteId}.`
+      );
+    }
+    if (!run.caseIds.includes(expected.caseId)) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} run ${expected.runId} does not own case ${expected.caseId}.`
+      );
+    }
+    const runTrack = parseRunTrack(run.summaryJson);
+    if (runTrack !== expected.track) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} run ${expected.runId} uses track ${runTrack ?? "(none)"}, expected ${expected.track}.`
+      );
+    }
     if (matches.length === 0) {
       throw new Error(
         `Benchmark result set ${resultSetId} is missing expected attempt ${describeExpected(expected)}.`
@@ -109,6 +162,7 @@ export async function publishBenchmarkResultSetIfComplete(
     const benchmarkCase = casesById.get(expected.caseId);
     if (
       !benchmarkCase ||
+      benchmarkCase.track !== expected.track ||
       benchmarkCase.caseVersion !== expected.caseVersion ||
       benchmarkCase.scoring.scoringVersion !== expected.scoringVersion ||
       attempt.scoringVersion !== expected.scoringVersion
@@ -133,6 +187,16 @@ export async function publishBenchmarkResultSetIfComplete(
         `Benchmark result set ${resultSetId} is missing its owned verifier ${attempt.verifierResultId}.`
       );
     }
+    if (verifier.attemptId !== attempt.id) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} verifier ${verifier.id} references attempt ${verifier.attemptId}, expected ${attempt.id}.`
+      );
+    }
+    if (verifier.caseId !== expected.caseId) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} verifier ${verifier.id} references case ${verifier.caseId}, expected ${expected.caseId}.`
+      );
+    }
     scoreableAttempts.push(attempt);
   }
 
@@ -140,6 +204,9 @@ export async function publishBenchmarkResultSetIfComplete(
     throw new Error(
       `Benchmark result set ${resultSetId} contains unexpected or duplicate owned attempts.`
     );
+  }
+  if (scoreableAttempts.length !== resultSet.expectedAttempts.length) {
+    return resultSet;
   }
   const rows = aggregateCertifiedRunScores(scoreableAttempts);
   if (rows.length !== 1) {
@@ -225,19 +292,29 @@ export async function reconcileStaleBenchmarkResultSets(input: {
   return reconciled;
 }
 
-function attemptKey(
+function evidenceAttemptKey(
   attempt: Pick<
     BenchmarkExpectedResultAttempt,
-    "runId" | "track" | "suiteId" | "caseId" | "teamCompositionId"
+    "runId" | "track" | "caseId" | "teamCompositionId"
   >
 ): string {
   return [
     attempt.runId,
     attempt.track,
-    attempt.suiteId,
     attempt.caseId,
     attempt.teamCompositionId,
   ].join("\u0000");
+}
+
+function parseRunTrack(summaryJson: string): BenchmarkAttemptV2["track"] | null {
+  try {
+    const parsed = JSON.parse(summaryJson) as { track?: unknown };
+    return typeof parsed.track === "string"
+      ? (parsed.track as BenchmarkAttemptV2["track"])
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function describeExpected(expected: BenchmarkExpectedResultAttempt): string {

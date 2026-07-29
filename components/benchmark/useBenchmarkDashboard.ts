@@ -35,6 +35,8 @@ import {
   resumeDeletingBenchmarkResultSets,
 } from "@/lib/benchmark/store";
 import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persistence";
+import { reconcileStaleBenchmarkResultSets } from "@/lib/benchmark/certified/result-set-publication";
+import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 import type { CertifiedFailureDetail } from "@/lib/benchmark/certified/dashboard-selectors";
 
@@ -96,6 +98,10 @@ export async function refreshBenchmarkDashboardStorage(): Promise<boolean> {
   if (ready.needsPassphrase) return false;
   await rescanBenchmarkRunFiles();
   await resumeDeletingBenchmarkResultSets();
+  await reconcileStaleCertifiedRuns();
+  await reconcileStaleBenchmarkResultSets({
+    hasLiveTabRun: certifiedTabRunCoordinator.getSnapshot().owner !== null,
+  });
   return true;
 }
 
@@ -129,7 +135,13 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     }
 
     setLocked(false);
-    await reconcileStaleCertifiedRuns();
+    await Promise.all([
+      reconcileStaleCertifiedRuns(),
+      reconcileStaleBenchmarkResultSets({
+        hasLiveTabRun:
+          certifiedTabRunCoordinator.getSnapshot().owner !== null,
+      }),
+    ]);
     const benchmarkRuns = [...getBenchmarkRuns()];
     const benchmarkCases = [...getBenchmarkCases()];
     const benchmarkMetricValues = [...getBenchmarkMetricValues()];

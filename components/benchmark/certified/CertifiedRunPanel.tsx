@@ -91,7 +91,6 @@ import {
   normalizeBenchmarkEffortForModel,
   type BenchmarkModelEffortMap,
 } from "@/lib/benchmark/model-effort";
-import { reconcileStaleBenchmarkResultSets } from "@/lib/benchmark/certified/result-set-publication";
 
 export function CertifiedRunPanel({
   track,
@@ -196,14 +195,6 @@ export function CertifiedRunPanel({
   useEffect(() => {
     if (tabRun.error) setMessage(tabRun.error);
   }, [setMessage, tabRun.error]);
-
-  useEffect(() => {
-    void reconcileStaleBenchmarkResultSets({
-      hasLiveTabRun: certifiedTabRunCoordinator.getSnapshot().owner !== null,
-    }).catch((error) => {
-      setMessage(error instanceof Error ? error.message : String(error));
-    });
-  }, [setMessage, tabRun.owner]);
 
   useEffect(() => {
     const enabled = getEnabledModels().map((model) => ({

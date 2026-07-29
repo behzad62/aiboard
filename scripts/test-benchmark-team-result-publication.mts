@@ -5,18 +5,21 @@ import {
   listBenchmarkAttemptsV2,
   listBenchmarkResultSets,
   saveBenchmarkCaseV2,
-  saveBenchmarkResultSet,
   saveBenchmarkRun,
   saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import { runCertifiedTeamIq } from "../lib/benchmark/teamiq";
+import {
+  STATEFUL_REFERENCE_TRANSCRIPTS,
+  TOOL_RELIABILITY_CASES,
+} from "../lib/benchmark/toolreliability";
 import {
   createPendingBenchmarkResultSet,
   failBenchmarkResultSet,
   publishBenchmarkResultSetIfComplete,
 } from "../lib/benchmark/certified/result-set-publication";
 import type {
-  BenchmarkAttemptV2,
   BenchmarkCaseV2,
   BenchmarkResultSet,
   BenchmarkRun,
@@ -40,7 +43,10 @@ const caseRecord: BenchmarkCaseV2 = {
   environment: { type: "browser", timeoutSeconds: 30, network: "none" },
   verifier: { scorer: "rule-checker" },
   budget: {},
-  scoring: { scoringVersion: "score-v1", primary: "verified_quality" },
+  scoring: {
+    scoringVersion: "teamiq-toolreliability-v2",
+    primary: "team_lift",
+  },
   contamination: {
     originalTask: true,
     canary: "team-case-canary",
@@ -135,37 +141,6 @@ function pending(id: string): Omit<BenchmarkResultSet, "status" | "createdAt" | 
   };
 }
 
-function scoreableAttempt(id: string): BenchmarkAttemptV2 {
-  return {
-    id: `attempt-${id}`,
-    runId: "shared-team-run",
-    caseId: caseRecord.id,
-    teamCompositionId: id,
-    mode: "certified",
-    track: "teamiq",
-    harnessProfile: "aiboard-panel",
-    status: "failed_model",
-    startedAt: now,
-    completedAt: now,
-    verifiedQuality: 0,
-    jobSuccessScore: 0,
-    efficiencyScore: 0,
-    costUsd: null,
-    inputTokens: 0,
-    outputTokens: 0,
-    modelCalls: 1,
-    toolCalls: 0,
-    durationMs: 1,
-    verifierResultId: `verifier-attempt-${id}`,
-    artifactIds: [],
-    traceIds: [],
-    failureIds: [],
-    harnessVersion: "v1",
-    promptSetVersion: "v1",
-    scoringVersion: "score-v1",
-  };
-}
-
 __clearClientStoreForTests();
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseRecord);
@@ -174,6 +149,9 @@ for (const team of teams) await saveBenchmarkTeamComposition(team);
 for (const team of teams) await createPendingBenchmarkResultSet(pending(team.id));
 
 const callbacks: string[] = [];
+const toolCase = TOOL_RELIABILITY_CASES.find(
+  (candidate) => candidate.kind === "write-scope"
+)!;
 const summary = await runCertifiedBenchmark({
   runId: "shared-team-run",
   suiteId: "suite-teamiq",
@@ -189,73 +167,29 @@ const summary = await runCertifiedBenchmark({
     callbacks.push(teamCompositionId);
     await publishBenchmarkResultSetIfComplete(teamCompositionId);
   },
-  runner: async (context) => {
-    const attempt = scoreableAttempt("solo-a");
-    await context.registerAttemptOwner({
-      attemptId: attempt.id,
-      caseId: attempt.caseId,
-      teamCompositionId: attempt.teamCompositionId,
-    });
-    await context.recordAttempt(attempt);
-    await context.recordVerifier({
-      id: attempt.verifierResultId!,
-      attemptId: attempt.id,
-      caseId: attempt.caseId,
-      passed: false,
-      score: 0,
-      durationMs: 1,
-      resultJson: "{}",
-      assertionResults: [],
-      artifactIds: [],
-    });
-    await context.recordArtifact({
-      id: "artifact-a",
-      attemptId: attempt.id,
-      kind: "text",
-      label: "A",
-      mimeType: "text/plain",
-      content: "A",
-      createdAt: now,
-    });
-    await context.recordFailure({
-      id: "failure-a",
-      attemptId: attempt.id,
-      domain: "model-call",
-      source: "benchmark",
-      code: "model_failed",
-      severity: "error",
-      message: "scoreable failure",
-      createdAt: now,
-    });
-    await context.recordTrace({
-      id: "trace-a",
-      attemptId: attempt.id,
-      caseId: attempt.caseId,
-      modelId: "a",
-      providerId: "test",
-      startedAt: now,
-      retryHistory: [],
-    });
-    await context.recordEvent({
-      id: "event-a",
-      attemptId: attempt.id,
-      caseId: attempt.caseId,
-      type: "model_call_completed",
-      phase: "model",
-      at: now,
-      message: "done",
-    });
-    await context.recordToolCall({
-      id: "tool-a",
-      attemptId: attempt.id,
-      caseId: attempt.caseId,
-      toolName: "test",
-      status: "ok",
-      startedAt: now,
-    });
-    await inputSubjectCompleted(context, "solo-a");
-    throw new Error("composition B infrastructure failed");
-  },
+  runner: (context) =>
+    runCertifiedTeamIq({
+      context,
+      teamCompositions: teams,
+      task: { kind: "toolreliability", casePack: [toolCase] },
+      includeSoloBaselines: false,
+      streamChat: async function* ({ params }) {
+        if (params.model === "b") {
+          throw new Error("composition B infrastructure failed");
+        }
+        const prompt = params.messages
+          .map((message) => message.content)
+          .join("\n");
+        const turn =
+          (prompt.match(/Turn \d+ - you replied:/g) ?? []).length;
+        yield {
+          type: "token",
+          content:
+            STATEFUL_REFERENCE_TRANSCRIPTS[toolCase.id]?.[turn] ?? "done",
+        };
+        yield { type: "done" };
+      },
+    }),
 });
 assert.equal(summary.status, "failed");
 await failBenchmarkResultSet("team-b", {
@@ -270,12 +204,5 @@ assert.deepEqual(
 );
 const ownedA = (await listBenchmarkAttemptsV2()).find((item) => item.teamCompositionId === "solo-a");
 assert.equal(ownedA?.resultSetId, "solo-a");
-
-async function inputSubjectCompleted(
-  context: { subjectCompleted?(teamCompositionId: string): Promise<void> },
-  teamCompositionId: string
-): Promise<void> {
-  await context.subjectCompleted?.(teamCompositionId);
-}
 
 console.log("PASS benchmark team result publication");

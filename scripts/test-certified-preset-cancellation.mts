@@ -19,6 +19,7 @@ import {
   listBenchmarkFailures,
   listBenchmarkRunEvents,
   listBenchmarkRuns,
+  listBenchmarkResultSets,
   listBenchmarkTeamCompositions,
   listBenchmarkToolCallTraces,
   listBenchmarkTraces,
@@ -337,7 +338,7 @@ for (const boundary of [
     write: 3,
     // Pending result-set creation is now the paid-work admission boundary;
     // cancellation terminalizes that durable manifest before returning.
-    finalWrites: 4,
+    finalWrites: 6,
     name: "team",
     expected: { teams: 0, certifications: 1, cases: 1, runs: 0 },
   },
@@ -357,7 +358,7 @@ for (const boundary of [
     write: 4,
     // The fourth write is the pending result-set's main-store flush. The
     // certified run is not admitted after cancellation wins this boundary.
-    finalWrites: 4,
+    finalWrites: 6,
     name: "run",
     expected: { teams: 0, certifications: 1, cases: 1, runs: 0 },
   },
@@ -472,6 +473,12 @@ for (const boundary of [
     assert.equal(visibleRuns[0]?.status, "cancelled");
     assert.equal(visibleRuns[0]?.error, cancellation.message);
     assert.equal(visibleRuns[0]?.packsScored, undefined);
+    assert.equal(
+      (await listBenchmarkResultSets()).some(
+        (resultSet) => resultSet.status === "pending"
+      ),
+      false
+    );
     assert.doesNotMatch(message ?? "", /completed|success/i);
     console.log(
       `PASS GameIQ cancellation at deferred ${boundary.name} persistence admits no later boundary`
@@ -572,6 +579,12 @@ assert.deepEqual(gameIqBoundaryFailures, []);
     ),
     true
   );
+  assert.equal(
+    (await listBenchmarkResultSets()).some(
+      (resultSet) => resultSet.status === "pending"
+    ),
+    false
+  );
   console.log("PASS preset cancellation aborts four active children and never admits the fifth");
 }
 
@@ -641,6 +654,12 @@ assert.deepEqual(gameIqBoundaryFailures, []);
       true
     );
   }
+  assert.equal(
+    (await listBenchmarkResultSets()).some(
+      (resultSet) => resultSet.status === "pending"
+    ),
+    false
+  );
   console.log("PASS one Tool Reliability provider failure does not abort siblings");
 }
 
