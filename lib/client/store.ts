@@ -337,6 +337,10 @@ function mergeBenchmarkStoreFields(
     ...target,
     benchmarkSuites: mergeById(target.benchmarkSuites, source.benchmarkSuites ?? []),
     benchmarkRuns: mergeById(target.benchmarkRuns, source.benchmarkRuns ?? []),
+    benchmarkResultSets: mergeById(
+      target.benchmarkResultSets,
+      source.benchmarkResultSets ?? []
+    ),
     benchmarkCases: mergeById(target.benchmarkCases, source.benchmarkCases ?? []),
     benchmarkCaseV2: mergeById(target.benchmarkCaseV2, source.benchmarkCaseV2 ?? []),
     benchmarkAttempts: mergeById(
@@ -449,7 +453,10 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   if (raw === null) {
     const benchmarkData = await loadBenchmarkStoreFields();
     const loaded = await loadDiscussionStoreFields(hydrateStore());
-    commitLoadedStore(generation, mergeBenchmarkStoreFields(loaded, benchmarkData));
+    await commitLoadedStore(
+      generation,
+      mergeBenchmarkStoreFields(loaded, benchmarkData)
+    );
     return { needsPassphrase: false };
   }
 
@@ -462,7 +469,7 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
     const loaded = await loadDiscussionStoreFields(
       hydrateStore(stripBenchmarkStoreFields(persisted))
     );
-    commitLoadedStore(
+    await commitLoadedStore(
       generation,
       mergeBenchmarkStoreFields(loaded, benchmarkData)
     );
@@ -480,7 +487,7 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   const loaded = await loadDiscussionStoreFields(
     hydrateStore(stripBenchmarkStoreFields(persisted))
   );
-  commitLoadedStore(
+  await commitLoadedStore(
     generation,
     mergeBenchmarkStoreFields(loaded, benchmarkData)
   );
@@ -488,12 +495,15 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   return { needsPassphrase: false };
 }
 
-function commitLoadedStore(generation: number, loaded: ClientStore): void {
+async function commitLoadedStore(
+  generation: number,
+  loaded: ClientStore
+): Promise<void> {
   if (generation !== initGeneration || memory) return;
   const migration = migrateClientStoreModelSelections(loaded);
   memory = migration.store;
+  await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
-  void benchmarkResultSetDeletionResumer?.();
   if (migration.changed) schedulePersist();
 }
 
@@ -848,11 +858,25 @@ function store(): ClientStore {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let benchmarkResultSetDeletionResumer: (() => Promise<unknown>) | null = null;
+let benchmarkResultSetRecoveryQueue: Promise<unknown> = Promise.resolve();
 
-export function setBenchmarkResultSetDeletionResumer(
+export async function setBenchmarkResultSetDeletionResumer(
   resumer: (() => Promise<unknown>) | null
-): void {
+): Promise<void> {
   benchmarkResultSetDeletionResumer = resumer;
+  if (memory && resumer) await runBenchmarkResultSetDeletionRecovery();
+}
+
+function runBenchmarkResultSetDeletionRecovery(): Promise<void> {
+  if (!benchmarkResultSetDeletionResumer) return Promise.resolve();
+  const recovery = benchmarkResultSetRecoveryQueue.then(() =>
+    benchmarkResultSetDeletionResumer?.()
+  );
+  benchmarkResultSetRecoveryQueue = recovery.then(
+    () => undefined,
+    () => undefined
+  );
+  return recovery.then(() => undefined);
 }
 let persistDirty = false;
 
@@ -1802,11 +1826,15 @@ export async function __loadClientStoreFromAdapterForTests(
       ? JSON.parse(await unwrap(parseEnvelope(raw)!))
       : JSON.parse(raw)
     : {};
+  const benchmarkData = await loadBenchmarkStoreFields();
   const loaded = await loadDiscussionStoreFields(
     hydrateStore(stripBenchmarkStoreFields(persisted))
   );
-  const migration = migrateClientStoreModelSelections(loaded);
+  const migration = migrateClientStoreModelSelections(
+    mergeBenchmarkStoreFields(loaded, benchmarkData)
+  );
   memory = migration.store;
+  await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
   if (migration.changed) schedulePersist();
   return { needsPassphrase: false };
@@ -1934,6 +1962,7 @@ async function switchClientStoreAdapter(
     mergeBenchmarkStoreFields(loaded, benchmarkData)
   );
   memory = migration.store;
+  await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
   if (
     migration.changed ||

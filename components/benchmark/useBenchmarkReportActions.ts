@@ -10,6 +10,7 @@ import {
 import {
   exportBenchmarkReportBundleV2,
   importBenchmarkReportBundleV2,
+  type BenchmarkImportResult,
 } from "@/lib/benchmark/store";
 import type { BenchmarkReportBundleV2 } from "@/lib/benchmark/types";
 
@@ -36,6 +37,24 @@ function readBundle(value: unknown): BenchmarkReportBundleV2 {
     return bundle as BenchmarkReportBundleV2;
   }
   throw new Error("Only current AI Board Benchmark Bundle imports are supported.");
+}
+
+export function formatBenchmarkImportMessage(
+  bundle: BenchmarkReportBundleV2,
+  importResult: BenchmarkImportResult
+): string {
+  const certified = bundle.attemptsV2.filter(
+    (attempt) => attempt.mode === "certified"
+  ).length;
+  const hashWarning = importResult.hashMismatch
+    ? " Warning: bundleHash does not match contents; file may be edited or corrupted."
+    : "";
+  return (
+    `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ` +
+    `${certified} certified attempt(s), ${importResult.resultSetCount} result set(s) ` +
+    `(${importResult.completedResultSetCount} completed); ` +
+    `${importResult.updatedCount} existing record(s) updated.${hashWarning}`
+  );
 }
 
 function isBaseBundleShape(bundle: ImportCandidate): boolean {
@@ -107,19 +126,7 @@ export function useBenchmarkReportActions({
       const bundle = readBundle(JSON.parse(text));
       const importResult = await importBenchmarkReportBundleV2(bundle);
       await reload();
-      const certified = bundle.attemptsV2.filter(
-        (attempt) => attempt.mode === "certified"
-      ).length;
-      const resultSetCount = bundle.resultSets?.length ?? 0;
-      const completedResultSetCount = bundle.resultSets?.filter(
-        (resultSet) => resultSet.status === "completed"
-      ).length ?? 0;
-      const hashWarning = importResult.hashMismatch
-        ? " Warning: bundleHash does not match contents; file may be edited or corrupted."
-        : "";
-      setMessage(
-        `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ${certified} certified attempt(s), ${resultSetCount} result set(s) (${completedResultSetCount} completed); ${importResult.updatedCount} existing record(s) updated.${hashWarning}`
-      );
+      setMessage(formatBenchmarkImportMessage(bundle, importResult));
     },
     [reload, setMessage]
   );

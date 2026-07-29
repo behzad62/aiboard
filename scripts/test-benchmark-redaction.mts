@@ -162,6 +162,43 @@ check(
   redactedLeaky.redactionSummary
 );
 
+const resultSetSecret = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890";
+const redactedResultSetBundle = redactBenchmarkBundle({
+  ...bundle,
+  resultSets: [{
+    id: "secret-set",
+    schemaVersion: 1,
+    executionId: "execution-secret",
+    anchorRunId: "run-secret",
+    runIds: ["run-secret"],
+    configurationKey: "result-config-v1:secret",
+    configuration: {
+      subjectKind: "model",
+      displayName: `Model ${resultSetSecret}`,
+      providerId: "provider",
+      modelId: "model",
+      roles: [],
+      tracks: [],
+    },
+    expectedAttempts: [],
+    status: "failed",
+    createdAt: "2026-07-29T10:00:00.000Z",
+    terminalAt: "2026-07-29T10:00:00.000Z",
+    failure: {
+      kind: "provider",
+      code: "auth",
+      message: `Authentication failed for ${resultSetSecret}`,
+    },
+  }],
+});
+const redactedResultSetBlob = JSON.stringify(redactedResultSetBundle.resultSets);
+check(
+  "result-set failure and configuration strings redact secrets",
+  !redactedResultSetBlob.includes(resultSetSecret) &&
+    redactedResultSetBlob.includes("[REDACTED_SECRET]"),
+  redactedResultSetBlob
+);
+
 if (failures === 0) {
   console.log("PASS");
 } else {

@@ -82,7 +82,9 @@ export {
   __enableBenchmarkRunBlobStorageForTests,
   __exportClientStoreForPersistenceForTests,
   __getBenchmarkRunBlobsForTests,
+  __loadClientStoreFromAdapterForTests,
   __setAdapterForTests,
+  setBenchmarkResultSetDeletionResumer,
 } from "../client/store";
 export {
   clearAllBenchmarkData,
@@ -426,8 +428,16 @@ export async function deleteBenchmarkResultSetCascade(
   for (const runId of affectedRunIds) {
     const run = getBenchmarkRuns().find((item) => item.id === runId);
     if (!run) continue;
-    const resultSetIds = (run.resultSetIds ?? []).filter((id) => id !== resultSetId);
-    if (resultSetIds.length === 0 && !getBenchmarkAttemptsV2().some((item) => item.runId === runId)) {
+    const resultSetIds = getBenchmarkResultSets()
+      .filter(
+        (candidate) =>
+          candidate.id !== resultSetId && candidate.runIds.includes(runId)
+      )
+      .map((candidate) => candidate.id);
+    const hasUnmanifestedAttempts =
+      getBenchmarkAttemptsV2().some((item) => item.runId === runId) ||
+      getBenchmarkAttempts().some((item) => item.runId === runId);
+    if (resultSetIds.length === 0 && !hasUnmanifestedAttempts) {
       summary.runs += deleteBenchmarkRunById(runId);
       await deleteBenchmarkRunBlob(runId);
     } else {
@@ -448,7 +458,11 @@ export async function resumeDeletingBenchmarkResultSets(): Promise<number> {
   return ids.length;
 }
 
-setBenchmarkResultSetDeletionResumer(() => resumeDeletingBenchmarkResultSets());
+void setBenchmarkResultSetDeletionResumer(
+  () => resumeDeletingBenchmarkResultSets()
+).catch((error) => {
+  console.error("Benchmark result-set deletion recovery failed.", error);
+});
 
 function removeOwnedResultSetRecords(
   resultSetId: string,
@@ -733,6 +747,14 @@ function isString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isValidTimestamp(value: unknown): value is string {
+  return isNonEmptyString(value) && Number.isFinite(Date.parse(value));
+}
+
+function isOptionalTimestamp(value: unknown): value is string | undefined {
+  return value === undefined || isValidTimestamp(value);
+}
+
 export function exportBenchmarkReportBundleV2(): BenchmarkReportBundleV2 {
   const bundle: Omit<BenchmarkReportBundleV2, "bundleHash" | "redactionSummary"> = {
     version: 2,
@@ -764,6 +786,8 @@ export interface BenchmarkImportResult {
   updatedCount: number;
   addedByCategory: Record<string, number>;
   updatedByCategory: Record<string, number>;
+  resultSetCount: number;
+  completedResultSetCount: number;
   hashMismatch: boolean;
 }
 
@@ -781,7 +805,16 @@ async function mergeBenchmarkReportBundle(
 ): Promise<BenchmarkImportResult> {
   await ensureWritableStore();
   const current = exportStore();
-  const importResult = summarizeBenchmarkImport(current, bundle);
+  const acceptedResultSets = importableResultSets(
+    current.benchmarkResultSets ?? [],
+    bundle.resultSets ?? []
+  );
+  validateImportedResultSetCrossReferences(current, bundle, acceptedResultSets);
+  const importResult = summarizeBenchmarkImport(
+    current,
+    bundle,
+    acceptedResultSets
+  );
   const next: Partial<ClientStore> = {
     benchmarkSuites: mergeByIdKeepExisting(current.benchmarkSuites ?? [], bundle.suites),
     benchmarkRuns: mergeByIdPreferNewer(
@@ -853,17 +886,39 @@ async function mergeBenchmarkReportBundle(
     bundle.harnessCertifications,
     (record) => record.createdAt
   );
-  next.benchmarkResultSets = mergeResultSetsKeepCompleted(
+  next.benchmarkResultSets = mergeResultSetsFailClosed(
     current.benchmarkResultSets ?? [],
-    bundle.resultSets ?? []
+    acceptedResultSets
+  );
+  next.benchmarkRuns = repairBenchmarkRunResultSetLinks(
+    next.benchmarkRuns ?? [],
+    next.benchmarkResultSets
   );
 
   replaceStore({ ...current, ...next });
-  await persistBenchmarkRunIds(bundle.runs.map((run) => run.id));
-  await persistBenchmarkRunIds(
-    bundle.attempts.map((attempt) => attempt.runId).filter(isString)
+  const completedAnchorIds = new Set(
+    acceptedResultSets
+      .filter((resultSet) => resultSet.status === "completed")
+      .map((resultSet) => resultSet.anchorRunId)
   );
-  await persistBenchmarkRunIds(bundle.attemptsV2.map((attempt) => attempt.runId));
+  const completedEvidenceIds = acceptedResultSets
+    .filter((resultSet) => resultSet.status === "completed")
+    .flatMap((resultSet) =>
+      resultSet.runIds.filter((runId) => runId !== resultSet.anchorRunId)
+    );
+  const affectedRunIds = new Set([
+    ...bundle.runs.map((run) => run.id),
+    ...bundle.attempts.map((attempt) => attempt.runId).filter(isString),
+    ...bundle.attemptsV2.map((attempt) => attempt.runId),
+    ...acceptedResultSets.flatMap((resultSet) => resultSet.runIds),
+  ]);
+  await persistBenchmarkRunIds(
+    completedEvidenceIds.filter((runId) => !completedAnchorIds.has(runId))
+  );
+  await persistBenchmarkRunIds(
+    [...affectedRunIds].filter((runId) => !completedAnchorIds.has(runId))
+  );
+  await persistBenchmarkRunIds(completedAnchorIds);
   await flush();
   return importResult;
 }
@@ -1288,14 +1343,186 @@ function validateBenchmarkAttemptV2(record: BenchmarkAttemptV2): void {
 }
 
 function validateBenchmarkResultSet(record: BenchmarkResultSet): void {
-  if (!record || typeof record !== "object" || typeof record.id !== "string" ||
-      record.id.length === 0 || record.schemaVersion !== 1 ||
-      typeof record.anchorRunId !== "string" || !Array.isArray(record.runIds) ||
-      !record.runIds.every(isString) || !Array.isArray(record.expectedAttempts) ||
-      !["pending", "completed", "failed", "cancelled", "deleting"].includes(record.status) ||
-      !record.configuration || typeof record.configuration !== "object") {
+  if (
+    !isPlainObject(record) ||
+    !isNonEmptyString(record.id) ||
+    record.schemaVersion !== 1 ||
+    !isNonEmptyString(record.executionId) ||
+    !isNonEmptyString(record.anchorRunId) ||
+    !isStringArray(record.runIds) ||
+    record.runIds.length === 0 ||
+    new Set(record.runIds).size !== record.runIds.length ||
+    !record.runIds.includes(record.anchorRunId) ||
+    !isNonEmptyString(record.configurationKey) ||
+    !isBenchmarkResultConfiguration(record.configuration) ||
+    !Array.isArray(record.expectedAttempts) ||
+    !record.expectedAttempts.every(isBenchmarkExpectedResultAttempt) ||
+    !isUniqueExpectedAttemptList(record.expectedAttempts) ||
+    !["pending", "completed", "failed", "cancelled", "deleting"].includes(record.status) ||
+    !isValidTimestamp(record.createdAt) ||
+    !isOptionalTimestamp(record.completedAt) ||
+    !isOptionalTimestamp(record.terminalAt) ||
+    !isOptionalResultSetFailure(record.failure) ||
+    !isOptionalSnapshotMetrics(record.metrics) ||
+    !hasValidResultSetTerminalShape(record)
+  ) {
     throw new Error("Invalid resultSets record in benchmark report bundle.");
   }
+}
+
+function isBenchmarkResultConfiguration(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return (
+    (value.subjectKind === "model" || value.subjectKind === "team") &&
+    isNonEmptyString(value.displayName) &&
+    isOptionalString(value.providerId) &&
+    isOptionalString(value.modelId) &&
+    isOptionalString(value.reasoningEffort) &&
+    isOptionalString(value.strategy) &&
+    Array.isArray(value.roles) &&
+    value.roles.every((role) =>
+      isPlainObject(role) &&
+      TEAM_ROLES.has(role.role as BenchmarkTeamComposition["roles"][number]["role"]) &&
+      isNonEmptyString(role.slot) &&
+      isNonEmptyString(role.providerId) &&
+      isNonEmptyString(role.modelId) &&
+      isNonEmptyString(role.reasoningEffort) &&
+      (role.maxTokens === null || isFiniteNumber(role.maxTokens))
+    ) &&
+    Array.isArray(value.tracks) &&
+    value.tracks.every((track) =>
+      isPlainObject(track) &&
+      BENCHMARK_TRACKS.has(track.track as BenchmarkAttemptV2["track"]) &&
+      isNonEmptyString(track.suiteId) &&
+      (track.maxTokens === null || isFiniteNumber(track.maxTokens)) &&
+      Array.isArray(track.caseManifest) &&
+      track.caseManifest.every((item) =>
+        isPlainObject(item) &&
+        isNonEmptyString(item.caseId) &&
+        isNonEmptyString(item.caseVersion) &&
+        isNonEmptyString(item.scoringVersion)
+      )
+    )
+  );
+}
+
+function isBenchmarkExpectedResultAttempt(value: unknown): boolean {
+  return (
+    isPlainObject(value) &&
+    isNonEmptyString(value.runId) &&
+    BENCHMARK_TRACKS.has(value.track as BenchmarkAttemptV2["track"]) &&
+    isNonEmptyString(value.suiteId) &&
+    isNonEmptyString(value.caseId) &&
+    isNonEmptyString(value.caseVersion) &&
+    isNonEmptyString(value.scoringVersion) &&
+    isNonEmptyString(value.teamCompositionId)
+  );
+}
+
+function isUniqueExpectedAttemptList(
+  attempts: BenchmarkResultSet["expectedAttempts"]
+): boolean {
+  const keys = attempts.map((attempt) =>
+    [
+      attempt.runId,
+      attempt.track,
+      attempt.suiteId,
+      attempt.caseId,
+      attempt.caseVersion,
+      attempt.scoringVersion,
+      attempt.teamCompositionId,
+    ].join("\u0000")
+  );
+  return new Set(keys).size === keys.length;
+}
+
+function isOptionalResultSetFailure(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isPlainObject(value) &&
+      isNonEmptyString(value.kind) &&
+      isNonEmptyString(value.code) &&
+      typeof value.message === "string")
+  );
+}
+
+function isOptionalSnapshotMetrics(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isPlainObject(value)) return false;
+  const finiteKeys = [
+    "attempts",
+    "passed",
+    "failed",
+    "verifiedQuality",
+    "jobSuccessScore",
+    "efficiencyScore",
+    "toolReliabilitySamples",
+  ];
+  const nullableFiniteKeys = [
+    "verifiedPassRate",
+    "overallScore",
+    "toolReliabilityScore",
+    "costUsd",
+    "averageCostUsd",
+    "durationMs",
+    "costPerPass",
+    "speedPerPassMs",
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "tokensPerPass",
+  ];
+  return (
+    finiteKeys.every((key) => isFiniteNumber(value[key])) &&
+    nullableFiniteKeys.every(
+      (key) => value[key] === null || isFiniteNumber(value[key])
+    ) &&
+    (value.costBasis === null || value.costBasis === "usd" || value.costBasis === "tokens") &&
+    Array.isArray(value.trackBreakdown) &&
+    value.trackBreakdown.every((track) =>
+      isPlainObject(track) &&
+      BENCHMARK_TRACKS.has(track.track as BenchmarkAttemptV2["track"]) &&
+      isFiniteNumber(track.attempts) &&
+      isFiniteNumber(track.passed) &&
+      (track.verifiedPassRate === null || isFiniteNumber(track.verifiedPassRate)) &&
+      isFiniteNumber(track.averageVerifiedQuality)
+    )
+  );
+}
+
+function hasValidResultSetTerminalShape(record: BenchmarkResultSet): boolean {
+  if (record.status === "pending") {
+    return (
+      record.completedAt === undefined &&
+      record.terminalAt === undefined &&
+      record.failure === undefined &&
+      record.metrics === undefined
+    );
+  }
+  if (record.status === "completed") {
+    return (
+      record.completedAt !== undefined &&
+      record.terminalAt !== undefined &&
+      record.failure === undefined &&
+      record.metrics !== undefined
+    );
+  }
+  if (record.status === "failed") {
+    return (
+      record.completedAt === undefined &&
+      record.terminalAt !== undefined &&
+      record.failure !== undefined &&
+      record.metrics === undefined
+    );
+  }
+  if (record.status === "cancelled") {
+    return (
+      record.completedAt === undefined &&
+      record.terminalAt !== undefined &&
+      record.metrics === undefined
+    );
+  }
+  return record.terminalAt !== undefined;
 }
 
 function validateResultSetMutation(
@@ -1303,15 +1530,12 @@ function validateResultSetMutation(
   incoming: BenchmarkResultSet
 ): void {
   if (!existing) return;
-  const immutable = existing.status === "completed";
-  if (immutable && incoming.status !== "completed" && incoming.status !== "deleting") {
-    throw new Error("Completed benchmark result sets are immutable.");
-  }
-  if ((existing.status === "failed" || existing.status === "cancelled") && incoming.status === "completed") {
-    throw new Error("Terminal benchmark result sets cannot become completed.");
-  }
-  if (immutable && incoming.status === "completed" && stableStringify(existing) !== stableStringify(incoming)) {
-    throw new Error("Completed benchmark result sets accept only byte-equivalent terminal saves.");
+  if (incoming.status === "deleting" && existing.status !== "deleting") return;
+  if (
+    existing.status !== "pending" &&
+    stableStringify(existing) !== stableStringify(incoming)
+  ) {
+    throw new Error("Terminal benchmark result sets are immutable.");
   }
 }
 
@@ -1859,16 +2083,127 @@ function mergeByIdKeepExisting<T extends { id: string }>(
   return Array.from(map.values());
 }
 
-function mergeResultSetsKeepCompleted(
+function importableResultSets(
+  current: BenchmarkResultSet[],
+  incoming: BenchmarkResultSet[]
+): BenchmarkResultSet[] {
+  const currentById = new Map(current.map((record) => [record.id, record]));
+  return incoming.filter((record) => {
+    const existing = currentById.get(record.id);
+    return !existing || existing.status === "pending";
+  });
+}
+
+function mergeResultSetsFailClosed(
   current: BenchmarkResultSet[],
   incoming: BenchmarkResultSet[]
 ): BenchmarkResultSet[] {
   const byId = new Map(current.map((record) => [record.id, record]));
-  for (const record of incoming) {
-    const existing = byId.get(record.id);
-    if (!existing || existing.status !== "completed") byId.set(record.id, record);
-  }
+  for (const record of incoming) byId.set(record.id, record);
   return [...byId.values()];
+}
+
+function repairBenchmarkRunResultSetLinks(
+  runs: BenchmarkRun[],
+  resultSets: BenchmarkResultSet[]
+): BenchmarkRun[] {
+  const idsByRun = new Map<string, string[]>();
+  for (const resultSet of resultSets) {
+    for (const runId of resultSet.runIds) {
+      const ids = idsByRun.get(runId) ?? [];
+      if (!ids.includes(resultSet.id)) ids.push(resultSet.id);
+      idsByRun.set(runId, ids);
+    }
+  }
+  return runs.map((run) => ({
+    ...run,
+    resultSetIds: idsByRun.get(run.id) ?? [],
+  }));
+}
+
+function validateImportedResultSetCrossReferences(
+  current: ClientStore,
+  bundle: BenchmarkReportBundleV2,
+  resultSets: BenchmarkResultSet[]
+): void {
+  const runs = new Map(
+    mergeByIdPreferNewer(
+      current.benchmarkRuns ?? [],
+      bundle.runs,
+      completedOrStartedAt
+    ).map((run) => [run.id, run])
+  );
+  const attempts = new Map(
+    mergeByIdPreferNewer(
+      current.benchmarkAttemptsV2 ?? [],
+      bundle.attemptsV2,
+      completedOrStartedAt
+    ).map((attempt) => [attempt.id, attempt])
+  );
+
+  for (const resultSet of resultSets) {
+    if (resultSet.runIds.some((runId) => !runs.has(runId))) {
+      throw new Error("Invalid resultSets run reference in benchmark report bundle.");
+    }
+
+    for (const expected of resultSet.expectedAttempts) {
+      if (!resultSet.runIds.includes(expected.runId)) {
+        throw new Error("Invalid resultSets expected-attempt run reference.");
+      }
+      const track = resultSet.configuration.tracks.find(
+        (candidate) =>
+          candidate.track === expected.track &&
+          candidate.suiteId === expected.suiteId
+      );
+      if (
+        !track ||
+        !track.caseManifest.some(
+          (entry) =>
+            entry.caseId === expected.caseId &&
+            entry.caseVersion === expected.caseVersion &&
+            entry.scoringVersion === expected.scoringVersion
+        )
+      ) {
+        throw new Error("Invalid resultSets expected-attempt configuration reference.");
+      }
+    }
+
+    if (resultSet.status !== "completed") continue;
+    if (resultSet.expectedAttempts.length === 0) {
+      throw new Error("Completed resultSets require expected-attempt ownership.");
+    }
+    const ownedAttempts = [...attempts.values()].filter(
+      (attempt) => attempt.resultSetId === resultSet.id
+    );
+    const everyExpectedAttemptExists = resultSet.expectedAttempts.every(
+      (expected) =>
+        ownedAttempts.some(
+          (attempt) =>
+            attempt.runId === expected.runId &&
+            attempt.track === expected.track &&
+            attempt.caseId === expected.caseId &&
+            attempt.teamCompositionId === expected.teamCompositionId &&
+            attempt.scoringVersion === expected.scoringVersion
+        )
+    );
+    const everyOwnedAttemptWasExpected = ownedAttempts.every((attempt) =>
+      resultSet.expectedAttempts.some(
+        (expected) =>
+          attempt.runId === expected.runId &&
+          attempt.track === expected.track &&
+          attempt.caseId === expected.caseId &&
+          attempt.teamCompositionId === expected.teamCompositionId &&
+          attempt.scoringVersion === expected.scoringVersion
+      )
+    );
+    if (
+      ownedAttempts.length !== resultSet.expectedAttempts.length ||
+      !everyExpectedAttemptExists ||
+      !everyOwnedAttemptWasExpected
+    ) {
+      throw new Error("Invalid completed resultSets attempt ownership.");
+    }
+  }
 }
 
 function mergeByIdPreferNewer<T extends { id: string }>(
@@ -1909,13 +2244,18 @@ function isSameOrNewerTimestamp(
 
 function summarizeBenchmarkImport(
   current: ClientStore,
-  bundle: BenchmarkReportBundleV2
+  bundle: BenchmarkReportBundleV2,
+  acceptedResultSets: BenchmarkResultSet[]
 ): BenchmarkImportResult {
   const result: BenchmarkImportResult = {
     addedCount: 0,
     updatedCount: 0,
     addedByCategory: {},
     updatedByCategory: {},
+    resultSetCount: acceptedResultSets.length,
+    completedResultSetCount: acceptedResultSets.filter(
+      (record) => record.status === "completed"
+    ).length,
     hashMismatch: false,
   };
 
@@ -1978,7 +2318,7 @@ function summarizeBenchmarkImport(
     result,
     "resultSets",
     current.benchmarkResultSets ?? [],
-    bundle.resultSets ?? []
+    acceptedResultSets
   );
 
   return result;

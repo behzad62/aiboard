@@ -91,6 +91,14 @@ const EMPTY_REPORT_COUNTS: BenchmarkReportCounts = {
   harnessCertifications: 0,
 };
 
+export async function refreshBenchmarkDashboardStorage(): Promise<boolean> {
+  const ready = await ensureReady();
+  if (ready.needsPassphrase) return false;
+  await rescanBenchmarkRunFiles();
+  await resumeDeletingBenchmarkResultSets();
+  return true;
+}
+
 export function useBenchmarkDashboard(): BenchmarkDashboardState {
   const [dashboard, setDashboard] = useState<BenchmarkDashboardData | null>(null);
   const [certifiedDashboard, setCertifiedDashboard] = useState<unknown | null>(null);
@@ -200,11 +208,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
   // tab, a cloud-synced folder, an external writer) are merged before the
   // in-memory re-read. The adapter list call is cheap, so refresh stays fast.
   const refresh = useCallback(async () => {
-    const ready = await ensureReady();
-    if (!ready.needsPassphrase) {
-      await rescanBenchmarkRunFiles();
-      await resumeDeletingBenchmarkResultSets();
-    }
+    await refreshBenchmarkDashboardStorage();
     await load();
   }, [load]);
 

@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
+import { formatBenchmarkImportMessage } from "../components/benchmark/useBenchmarkReportActions";
 import {
   __resetBenchmarkStoreForTests,
   __exportBenchmarkStoreForTests,
@@ -560,25 +561,31 @@ check(
     reportActionSource.includes("existing record"),
   reportActionSource
 );
-const dashboardSource = readFileSync(
-  "components/benchmark/useBenchmarkDashboard.ts",
-  "utf8"
-);
-const clientStoreSource = readFileSync("lib/client/store.ts", "utf8");
 check(
   "benchmark import success message surfaces result-set counts",
   reportActionSource.includes("resultSetCount") && reportActionSource.includes("completedResultSetCount"),
   reportActionSource
 );
-check(
-  "dashboard refresh resumes deleting result sets before reload",
-  dashboardSource.includes("await resumeDeletingBenchmarkResultSets()"),
-  dashboardSource
+const appliedImportMessage = formatBenchmarkImportMessage(
+  {
+    ...bundle,
+    resultSets: [{ status: "completed" }, { status: "completed" }],
+  } as BenchmarkReportBundleV2,
+  {
+    addedCount: 1,
+    updatedCount: 0,
+    addedByCategory: { resultSets: 1 },
+    updatedByCategory: {},
+    resultSetCount: 1,
+    completedResultSetCount: 0,
+    hashMismatch: false,
+  }
 );
 check(
-  "client-store initialization invokes registered result-set recovery",
-  clientStoreSource.includes("benchmarkResultSetDeletionResumer?.()"),
-  clientStoreSource
+  "benchmark import message reports applied rather than source result sets",
+  appliedImportMessage.includes("1 result set(s) (0 completed)") &&
+    !appliedImportMessage.includes("2 result set(s)"),
+  appliedImportMessage
 );
 check(
   "benchmark export message surfaces redaction warnings",
