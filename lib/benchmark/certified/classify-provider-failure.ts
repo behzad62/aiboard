@@ -35,8 +35,10 @@ export function classifyProviderFailure(
       metadata.code
     )
   ) return "fatal";
-  if ([429, 500, 502, 503, 504].includes(metadata?.statusCode ?? 0)) {
-    return "transient";
+  if (metadata?.statusCode != null) {
+    return [429, 500, 502, 503, 504].includes(metadata.statusCode)
+      ? "transient"
+      : "other";
   }
   if (TRANSIENT_PATTERN.test(message)) return "transient";
   return "other";

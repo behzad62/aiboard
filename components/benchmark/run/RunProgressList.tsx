@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {
   TRACK_OPTIONS,
   type GameIqModelRunStatus,
+  type PresetProgressEvent,
   type PresetLegStatus,
 } from "@/lib/benchmark/certified/run-execution";
 import type { BenchmarkPresetLeg } from "@/lib/benchmark/certified/run-presets";
@@ -22,6 +23,61 @@ export interface RunProgressLegRow {
   status: PresetLegStatus | "queued";
   detail?: string;
   models: RunProgressModelRow[];
+}
+
+export function applyPresetProgressEvent(
+  current: RunProgressLegRow[],
+  event: PresetProgressEvent,
+): RunProgressLegRow[] {
+  const next = [...current];
+  if (event.type === "leg") {
+    const existing = next[event.legIndex];
+    next[event.legIndex] = {
+      legIndex: event.legIndex,
+      leg: event.leg,
+      status: event.status,
+      detail: event.detail,
+      models: existing?.models ?? [],
+    };
+    return next;
+  }
+  const existing = next[event.legIndex] ?? {
+    legIndex: event.legIndex,
+    leg: event.leg,
+    status: "running" as const,
+    models: [],
+  };
+  if (event.type === "model") {
+    const models = existing.models.filter(
+      (model) => model.modelId !== event.modelId,
+    );
+    models.push({
+      modelId: event.modelId,
+      displayName: event.displayName,
+      status: event.status,
+      detail: event.detail,
+    });
+    next[event.legIndex] = { ...existing, models };
+    return next;
+  }
+  const prior = existing.models.find(
+    (model) => model.modelId === event.modelId,
+  );
+  next[event.legIndex] = {
+    ...existing,
+    status: "running",
+    detail: event.detail,
+    models: [
+      ...existing.models.filter((model) => model.modelId !== event.modelId),
+      {
+        modelId: event.modelId,
+        displayName: prior?.displayName ?? event.displayName,
+        status: "running",
+        detail: event.detail,
+      },
+    ],
+  };
+  return next;
 }
 
 // Generalized from CertifiedRunPanel's old GameIqModelRunProgress
@@ -78,10 +134,19 @@ export function RunProgressList({
               {row.models.map((model) => (
                 <div
                   key={model.modelId}
-                  className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-xs"
+                  className="rounded border px-2 py-1 text-xs"
                 >
-                  <span className="min-w-0 truncate">{model.displayName}</span>
-                  <StatusBadge status={model.status} />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      {model.displayName}
+                    </span>
+                    <StatusBadge status={model.status} />
+                  </div>
+                  {model.detail && (
+                    <p className="mt-1 leading-snug text-muted-foreground">
+                      {model.detail}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

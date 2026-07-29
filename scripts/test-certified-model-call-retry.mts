@@ -6,6 +6,7 @@ import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persis
 import {
   callCertifiedModel,
   CertifiedProviderError,
+  expandCertifiedPhysicalUsages,
 } from "../lib/benchmark/certified/model-call";
 import { CertifiedBudgetExceededError } from "../lib/benchmark/certified/budget";
 import { classifyProviderFailure } from "../lib/benchmark/certified/classify-provider-failure";
@@ -235,6 +236,146 @@ for (const statusCode of [400, 401, 403, 501]) {
   check(
     `typed HTTP ${statusCode} does not enter transient recovery`,
     classifyProviderFailure("safe provider failure", { statusCode }) === expected
+  );
+}
+for (const statusCode of [400, 418, 501]) {
+  check(
+    `typed HTTP ${statusCode} overrides transient-looking message text`,
+    classifyProviderFailure("timeout while unavailable; retry after 503", {
+      statusCode,
+    }) === "other",
+  );
+}
+
+{
+  const context = makeTestContext();
+  let calls = 0;
+  let sleeps = 0;
+  await expectReject(
+    "typed non-retryable status makes exactly one physical call",
+    () =>
+      callCertifiedModel({
+        model,
+        system: "s",
+        user: "u",
+        maxTokens: 128,
+        temperature: 0,
+        context,
+        caseId: context.caseIds[0],
+        attemptId: "attempt-explicit-400",
+        participantId: "p",
+        streamChat: async function* () {
+          calls++;
+          yield {
+            type: "error",
+            error: "timeout while unavailable; retry after 503",
+            errorMetadata: { statusCode: 400 },
+          };
+        },
+        retryRuntime: {
+          now: () => Date.parse(context.startedAt),
+          random: () => 0.5,
+          sleep: async () => {
+            sleeps++;
+          },
+        },
+      }),
+    (error) =>
+      error instanceof CertifiedProviderError &&
+      error.classification === "other",
+  );
+  check(
+    "typed non-retryable status never sleeps",
+    calls === 1 && sleeps === 0,
+    {
+      calls,
+      sleeps,
+    },
+  );
+}
+
+{
+  const context = makeTestContext();
+  let calls = 0;
+  const result = await callCertifiedModel({
+    model,
+    system: "s",
+    user: "u",
+    maxTokens: 128,
+    temperature: 0,
+    context,
+    caseId: context.caseIds[0],
+    attemptId: "attempt-tool-call-output",
+    participantId: "p",
+    streamChat: async function* () {
+      calls++;
+      yield {
+        type: "tool_call",
+        toolCall: {
+          id: "call-1",
+          name: "submit_answer",
+          arguments: { answer: 42 },
+        },
+      };
+      yield { type: "done" };
+    },
+  });
+  check(
+    "tool-call-only completion is usable output and is not retried",
+    calls === 1 &&
+      result.rawResponse.includes("submit_answer") &&
+      result.rawResponse.includes("42"),
+    { calls, rawResponse: result.rawResponse },
+  );
+}
+
+{
+  const context = makeTestContext();
+  let calls = 0;
+  const error = await expectReject(
+    "terminal transient exhaustion returns every physical usage",
+    () =>
+      callCertifiedModel({
+        model,
+        system: "s",
+        user: "u",
+        maxTokens: 128,
+        temperature: 0,
+        context,
+        caseId: context.caseIds[0],
+        attemptId: "attempt-terminal-exhaustion-usage",
+        participantId: "p",
+        retryDelaysMs: [0, 0],
+        retryRuntime: {
+          now: () => Date.parse(context.startedAt),
+          random: () => 0.5,
+          sleep: async () => {},
+        },
+        streamChat: async function* () {
+          calls++;
+          yield {
+            type: "usage",
+            usage: { inputTokens: 10 * calls, outputTokens: calls },
+          };
+          yield {
+            type: "error",
+            error: "temporary",
+            errorMetadata: { statusCode: 503 },
+          };
+        },
+      }),
+    (candidate) =>
+      candidate instanceof CertifiedProviderError &&
+      expandCertifiedPhysicalUsages(candidate).length === 3,
+  );
+  check(
+    "terminal exhaustion usage remains ordered and complete",
+    error instanceof CertifiedProviderError &&
+      calls === 3 &&
+      expandCertifiedPhysicalUsages(error)
+        .map((usage) => usage.inputTokens)
+        .join(",") === "10,20,30",
+    error,
   );
 }
 

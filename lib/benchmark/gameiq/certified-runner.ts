@@ -5,6 +5,7 @@ import {
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
+import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamComposition,
@@ -108,6 +109,8 @@ export interface RunCertifiedGameIqInput {
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   signal?: AbortSignal;
+  retryDelaysMs?: number[];
+  retryRuntime?: CertifiedRetryRuntime;
   // Max scenarios evaluated in parallel per pack; threaded through to
   // runGameIqScenarios. Default 1 (sequential) when omitted.
   concurrency?: number;
@@ -196,35 +199,42 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         totalScenarios,
         system
       );
-      const call = await callCertifiedModel({
-        model: input.model,
-        system,
-        user: gameIqScenarioPrompt(scenario, scenarioIndex, totalScenarios),
-        ...(memoryMessages ? { messages: memoryMessages } : {}),
-        structuredOutput: gameIqStructuredOutputForScenario(scenario),
-        maxTokens: input.maxTokens ?? DEFAULT_GAMEIQ_MAX_TOKENS,
-        temperature: 0,
-        allowInvalidStructuredOutput: true,
-        context: input.context,
-        caseId: input.context.caseIds[0],
-        attemptId: plannedAttemptId,
-        scenarioId: scenario.id,
-        participantId: input.teamCompositionId,
-        reasoningEffort: soloReasoningEffort(
-          input.teamCompositions,
-          input.teamCompositionId,
-          input.model.modelId
-        ),
-        pricing: input.pricing,
-        streamChat: input.streamChat,
-        signal,
-      });
-      calls.push(...expandCertifiedPhysicalUsages(call));
-      return {
-        action: actionFromParsedJson(call.parsedJson),
-        rawResponse: call.rawResponse,
-        latencyMs: call.latencyMs,
-      };
+      try {
+        const call = await callCertifiedModel({
+          model: input.model,
+          system,
+          user: gameIqScenarioPrompt(scenario, scenarioIndex, totalScenarios),
+          ...(memoryMessages ? { messages: memoryMessages } : {}),
+          structuredOutput: gameIqStructuredOutputForScenario(scenario),
+          maxTokens: input.maxTokens ?? DEFAULT_GAMEIQ_MAX_TOKENS,
+          temperature: 0,
+          allowInvalidStructuredOutput: true,
+          context: input.context,
+          caseId: input.context.caseIds[0],
+          attemptId: plannedAttemptId,
+          scenarioId: scenario.id,
+          participantId: input.teamCompositionId,
+          reasoningEffort: soloReasoningEffort(
+            input.teamCompositions,
+            input.teamCompositionId,
+            input.model.modelId,
+          ),
+          pricing: input.pricing,
+          streamChat: input.streamChat,
+          signal,
+          retryDelaysMs: input.retryDelaysMs,
+          retryRuntime: input.retryRuntime,
+        });
+        calls.push(...expandCertifiedPhysicalUsages(call));
+        return {
+          action: actionFromParsedJson(call.parsedJson),
+          rawResponse: call.rawResponse,
+          latencyMs: call.latencyMs,
+        };
+      } catch (error) {
+        calls.push(...expandCertifiedPhysicalUsages(error));
+        throw error;
+      }
     },
   });
 

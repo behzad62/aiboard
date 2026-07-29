@@ -10,6 +10,7 @@ import type {
   CertifiedRunContext,
   PersistentCertifiedRunContext,
 } from "@/lib/benchmark/certified/run-context";
+import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
 import { createJsonArtifact } from "@/lib/benchmark/artifacts";
 import { saveBenchmarkTeamComposition } from "@/lib/benchmark/store";
 import type {
@@ -78,6 +79,8 @@ export interface RunCertifiedFireworksTeamIqInput {
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   signal?: AbortSignal;
+  retryDelaysMs?: number[];
+  retryRuntime?: CertifiedRetryRuntime;
 }
 
 interface FireworksCallRecord {
@@ -558,6 +561,8 @@ async function callFireworksAction(params: {
       pricing: params.input.pricing,
       streamChat: params.input.streamChat,
       signal: params.input.signal,
+      retryDelaysMs: params.input.retryDelaysMs,
+      retryRuntime: params.input.retryRuntime,
     });
     for (const usage of expandCertifiedPhysicalUsages(call).slice(0, -1)) {
       params.calls.push({
@@ -628,6 +633,21 @@ async function callFireworksAction(params: {
       call: record,
     };
   } catch (error) {
+    const exhaustedUsages = expandCertifiedPhysicalUsages(error);
+    for (const [index, usage] of exhaustedUsages.entries()) {
+      const terminalAttempt = index === exhaustedUsages.length - 1;
+      params.calls.push({
+        ...usage,
+        legal: !terminalAttempt,
+        fallbackUsed: terminalAttempt,
+        ...(terminalAttempt
+          ? {
+              failureCode: "fireworks_provider_failure",
+              error: error instanceof Error ? error.message : String(error),
+            }
+          : {}),
+      });
+    }
     const message = error instanceof Error ? error.message : String(error);
     const fallback = chooseDeterministicFireworksFallback(
       params.state,
@@ -648,7 +668,9 @@ async function callFireworksAction(params: {
       failureCode,
       error: message,
     };
-    params.calls.push(record);
+    if (exhaustedUsages.length === 0) {
+      params.calls.push(record);
+    }
     params.failures.push(
       createFireworksFailure({
         context: params.input.context,

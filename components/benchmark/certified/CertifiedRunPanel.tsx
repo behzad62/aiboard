@@ -30,6 +30,7 @@ import {
 import { ModelEffortSelect } from "@/components/benchmark/run/ModelEffortSelect";
 import { PresetCards, type PresetCardGate } from "@/components/benchmark/run/PresetCards";
 import {
+  applyPresetProgressEvent,
   RunProgressList,
   type RunProgressLegRow,
 } from "@/components/benchmark/run/RunProgressList";
@@ -706,49 +707,7 @@ export function CertifiedRunPanel({
   }
 
   function handlePresetProgress(event: PresetProgressEvent) {
-    setPresetLegRows((current) => {
-      const next = [...current];
-      if (event.type === "leg") {
-        const existing = next[event.legIndex];
-        next[event.legIndex] = {
-          legIndex: event.legIndex,
-          leg: event.leg,
-          status: event.status,
-          detail: event.detail,
-          models: existing?.models ?? [],
-        };
-      } else if (event.type === "model") {
-        const existing = next[event.legIndex] ?? {
-          legIndex: event.legIndex,
-          leg: event.leg,
-          status: "running" as const,
-          models: [],
-        };
-        const models = existing.models.filter(
-          (model) => model.modelId !== event.modelId
-        );
-        models.push({
-          modelId: event.modelId,
-          displayName: event.displayName,
-          status: event.status,
-          detail: event.detail,
-        });
-        next[event.legIndex] = { ...existing, models };
-      } else {
-        const existing = next[event.legIndex];
-        if (existing) {
-          next[event.legIndex] = {
-            ...existing,
-            models: existing.models.map((model) =>
-              model.modelId === event.modelId
-                ? { ...model, detail: event.detail }
-                : model
-            ),
-          };
-        }
-      }
-      return next;
-    });
+    setPresetLegRows((current) => applyPresetProgressEvent(current, event));
   }
 
   function cancelPresetRun() {

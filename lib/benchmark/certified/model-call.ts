@@ -73,6 +73,12 @@ export class CertifiedProviderError extends Error {
    * cost by exactly the attempts that were retried away.
    */
   readonly attemptUsage?: CertifiedModelCallAttemptUsage;
+  /**
+   * Every physical attempt billed for this logical call when recovery is
+   * exhausted. Populated by the retry coordinator before the terminal error
+   * crosses into a track runner.
+   */
+  retryAttempts?: CertifiedModelCallAttemptUsage[];
   readonly statusCode?: number;
   readonly code?: string;
   readonly retryAfterMs?: number;
@@ -333,6 +339,12 @@ async function callCertifiedModelOnce(
         }
       } else if (chunk.type === "usage" && chunk.usage) {
         reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
+      } else if (chunk.type === "tool_call" && chunk.toolCall) {
+        // A provider-native tool call is a substantive completion even when
+        // the provider emits no token chunks. Preserve it as deterministic
+        // JSON so benchmark parsers/auditors can consume the physical result
+        // without misclassifying it as an empty transient response.
+        rawResponse += JSON.stringify(chunk.toolCall);
       } else if (chunk.type === "error") {
         throw new CertifiedStreamError(
           chunk.error ?? "Certified provider returned an error.",
@@ -637,11 +649,12 @@ export async function callCertifiedModel(
     } catch (error) {
       lastError = error;
       if (error instanceof CertifiedBudgetExceededError) throw error;
-      const transient =
-        error instanceof CertifiedProviderError && error.classification === "transient";
-      if (!transient) throw error;
-      // transient: record what this attempt already cost, then loop.
+      if (!(error instanceof CertifiedProviderError)) throw error;
+      // Preserve the complete physical bill even when a later retry changes
+      // classification (for example, transient 503 followed by typed 400).
       if (error.attemptUsage) retryAttempts.push(error.attemptUsage);
+      error.retryAttempts = [...retryAttempts];
+      if (error.classification !== "transient") throw error;
     }
   }
   throw lastError;
@@ -649,16 +662,30 @@ export async function callCertifiedModel(
 
 /** Physical usage expansion keeps failed retries ordered before the success. */
 export function expandCertifiedPhysicalUsages(
-  call: CertifiedModelCallResult
+  call: CertifiedModelCallResult | unknown
 ): CertifiedModelCallAttemptUsage[] {
+  if (typeof call === "object" && call !== null && "classification" in call) {
+    const failed = call as {
+      retryAttempts?: CertifiedModelCallAttemptUsage[];
+      attemptUsage?: CertifiedModelCallAttemptUsage;
+    };
+    return [
+      ...(failed.retryAttempts ??
+        (failed.attemptUsage ? [failed.attemptUsage] : [])),
+    ];
+  }
+  if (typeof call !== "object" || call === null || !("rawResponse" in call)) {
+    return [];
+  }
+  const result = call as CertifiedModelCallResult;
   return [
-    ...(call.retryAttempts ?? []),
+    ...(result.retryAttempts ?? []),
     {
-      traceId: call.traceId,
-      latencyMs: call.latencyMs,
-      inputTokens: call.inputTokens,
-      outputTokens: call.outputTokens,
-      estimatedUsd: call.estimatedUsd,
+      traceId: result.traceId,
+      latencyMs: result.latencyMs,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      estimatedUsd: result.estimatedUsd,
     },
   ];
 }

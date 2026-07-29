@@ -3,9 +3,11 @@ import {
   expandCertifiedPhysicalUsages,
   throwIfCertifiedRunAborted,
   type CertifiedModelCallAttemptUsage,
+  type CertifiedModelCallResult,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
+import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamComposition,
@@ -45,6 +47,7 @@ export interface RunCertifiedToolReliabilityInput {
    * without waiting out the production backoff.
    */
   retryDelaysMs?: number[];
+  retryRuntime?: CertifiedRetryRuntime;
 }
 
 /**
@@ -123,28 +126,35 @@ async function runCertifiedToolReliabilityAttempt(
     let transcript = "";
     for (let turn = 0; turn < benchmarkCase.maxTurns; turn++) {
       throwIfCertifiedRunAborted(input.signal);
-      const call = await callCertifiedModel({
-        model: input.model,
-        system:
-          "You are a certified ToolReliability benchmark participant operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
-        user: buildStatefulTurnPrompt(benchmarkCase, transcript),
-        maxTokens: input.maxTokens ?? TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
-        temperature: 0,
-        allowInvalidStructuredOutput: true,
-        context: input.context,
-        caseId: benchmarkCase.id,
-        attemptId,
-        participantId: input.teamCompositionId,
-        reasoningEffort: soloReasoningEffort(
-          input.teamCompositions,
-          input.teamCompositionId,
-          input.model.modelId
-        ),
-        pricing: input.pricing,
-        streamChat: input.streamChat,
-        signal: input.signal,
-        retryDelaysMs: input.retryDelaysMs,
-      });
+      let call: CertifiedModelCallResult;
+      try {
+        call = await callCertifiedModel({
+          model: input.model,
+          system:
+            "You are a certified ToolReliability benchmark participant operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
+          user: buildStatefulTurnPrompt(benchmarkCase, transcript),
+          maxTokens: input.maxTokens ?? TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
+          temperature: 0,
+          allowInvalidStructuredOutput: true,
+          context: input.context,
+          caseId: benchmarkCase.id,
+          attemptId,
+          participantId: input.teamCompositionId,
+          reasoningEffort: soloReasoningEffort(
+            input.teamCompositions,
+            input.teamCompositionId,
+            input.model.modelId,
+          ),
+          pricing: input.pricing,
+          streamChat: input.streamChat,
+          signal: input.signal,
+          retryDelaysMs: input.retryDelaysMs,
+          retryRuntime: input.retryRuntime,
+        });
+      } catch (error) {
+        calls.push(...expandCertifiedPhysicalUsages(error));
+        throw error;
+      }
       calls.push(...expandCertifiedPhysicalUsages(call));
       // One turn consumes one OUTPUT, however many physical calls it took:
       // a transient attempt is retried away inside `callCertifiedModel` and

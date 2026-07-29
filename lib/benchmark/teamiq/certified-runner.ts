@@ -2,10 +2,12 @@ import {
   callCertifiedModel,
   expandCertifiedPhysicalUsages,
   throwIfCertifiedRunAborted,
+  type CertifiedModelCallResult,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
+import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
 import { saveBenchmarkTeamComposition } from "@/lib/benchmark/store";
 import type {
   BenchmarkAttemptV2,
@@ -66,6 +68,8 @@ export interface RunCertifiedTeamIqInput {
   streamChat?: CertifiedModelStream;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   signal?: AbortSignal;
+  retryDelaysMs?: number[];
+  retryRuntime?: CertifiedRetryRuntime;
 }
 
 type TeamIqParticipantCall = {
@@ -95,6 +99,8 @@ export async function runCertifiedTeamIq(
       streamChat: input.streamChat,
       pricing: input.pricing,
       signal: input.signal,
+      retryDelaysMs: input.retryDelaysMs,
+      retryRuntime: input.retryRuntime,
     });
   }
 
@@ -296,56 +302,80 @@ async function runTeamRound(params: {
   const { input, team, benchmarkCase, attemptId, turn, transcript, calls } = params;
   const roleOutputs: string[] = [];
   for (const role of team.roles) {
-    const call = await callCertifiedModel({
-      model: selectedModelForRole(role),
-      system:
-        "You are participating in a certified TeamIQ benchmark operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
-      user: teamIqStatefulTurnPrompt({
-        team,
-        role,
-        benchmarkCase,
-        transcript,
-        previousOutputs: roleOutputs,
-      }),
-      maxTokens: input.maxTokens ?? role.maxTokens ?? TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
-      temperature: 0,
-      reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
-      allowInvalidStructuredOutput: true,
-      context: input.context,
-      caseId: benchmarkCase.id,
-      attemptId,
-      participantId: `${team.id}:${role.slot}:turn${turn}`,
-      pricing: input.pricing,
-      streamChat: input.streamChat,
-      signal: input.signal,
-    });
+    let call: CertifiedModelCallResult;
+    try {
+      call = await callCertifiedModel({
+        model: selectedModelForRole(role),
+        system:
+          "You are participating in a certified TeamIQ benchmark operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
+        user: teamIqStatefulTurnPrompt({
+          team,
+          role,
+          benchmarkCase,
+          transcript,
+          previousOutputs: roleOutputs,
+        }),
+        maxTokens:
+          input.maxTokens ??
+          role.maxTokens ??
+          TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
+        temperature: 0,
+        reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
+        allowInvalidStructuredOutput: true,
+        context: input.context,
+        caseId: benchmarkCase.id,
+        attemptId,
+        participantId: `${team.id}:${role.slot}:turn${turn}`,
+        pricing: input.pricing,
+        streamChat: input.streamChat,
+        signal: input.signal,
+        retryDelaysMs: input.retryDelaysMs,
+        retryRuntime: input.retryRuntime,
+      });
+    } catch (error) {
+      calls.push(...expandCertifiedPhysicalUsages(error));
+      throw error;
+    }
     calls.push(...expandCertifiedPhysicalUsages(call));
     roleOutputs.push(call.rawResponse);
   }
   if (team.roles.length > 1) {
     const synthesisRole = preferredRoleForTeam(team, roleOutputs);
-    const synthesisCall = await callCertifiedModel({
-      model: selectedModelForRole(synthesisRole),
-      system:
-        "You are the final synthesizer for a certified TeamIQ benchmark operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
-      user: teamIqStatefulSynthesisPrompt({
-        team,
-        benchmarkCase,
-        transcript,
-        roleOutputs,
-      }),
-      maxTokens: input.maxTokens ?? synthesisRole.maxTokens ?? TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
-      temperature: 0,
-      reasoningEffort: certifiedReasoningEffort(synthesisRole.reasoningEffort),
-      allowInvalidStructuredOutput: true,
-      context: input.context,
-      caseId: benchmarkCase.id,
-      attemptId,
-      participantId: `${team.id}:${synthesisRole.slot}:synthesis:turn${turn}`,
-      pricing: input.pricing,
-      streamChat: input.streamChat,
-      signal: input.signal,
-    });
+    let synthesisCall: CertifiedModelCallResult;
+    try {
+      synthesisCall = await callCertifiedModel({
+        model: selectedModelForRole(synthesisRole),
+        system:
+          "You are the final synthesizer for a certified TeamIQ benchmark operating a scripted multi-turn environment. Return only the requested JSON tool action, or a short final plain-text answer once the task is complete.",
+        user: teamIqStatefulSynthesisPrompt({
+          team,
+          benchmarkCase,
+          transcript,
+          roleOutputs,
+        }),
+        maxTokens:
+          input.maxTokens ??
+          synthesisRole.maxTokens ??
+          TOOL_RELIABILITY_STATEFUL_MAX_TOKENS,
+        temperature: 0,
+        reasoningEffort: certifiedReasoningEffort(
+          synthesisRole.reasoningEffort,
+        ),
+        allowInvalidStructuredOutput: true,
+        context: input.context,
+        caseId: benchmarkCase.id,
+        attemptId,
+        participantId: `${team.id}:${synthesisRole.slot}:synthesis:turn${turn}`,
+        pricing: input.pricing,
+        streamChat: input.streamChat,
+        signal: input.signal,
+        retryDelaysMs: input.retryDelaysMs,
+        retryRuntime: input.retryRuntime,
+      });
+    } catch (error) {
+      calls.push(...expandCertifiedPhysicalUsages(error));
+      throw error;
+    }
     calls.push(...expandCertifiedPhysicalUsages(synthesisCall));
     return synthesisCall.rawResponse;
   }

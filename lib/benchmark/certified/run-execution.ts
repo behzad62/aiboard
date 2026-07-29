@@ -657,9 +657,11 @@ export async function runGameIqMultiModel(
         signal: abortController.signal,
         resultSetOwnership: publication.ownership,
         reportRetry: (event) => {
+          const retryMessage = `${model.displayName}: temporary provider failure; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`;
           updateGameIqModelRun(model.modelId, {
-            error: `${model.displayName}: temporary provider failure; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`,
+            error: retryMessage,
           });
+          setMessage(retryMessage);
           onRetry?.(event);
         },
         runner: async (context, options) => {
@@ -1487,6 +1489,7 @@ export interface PresetRetryProgress {
   legIndex: number;
   leg: BenchmarkPresetLeg;
   modelId: string;
+  displayName: string;
   resultSetId?: string;
   retry: number;
   maxRetries: 5;
@@ -1841,6 +1844,9 @@ async function runSoloLeg(
           legIndex,
           leg,
           modelId: event.modelId,
+          displayName:
+            ctx.models.find((candidate) => candidate.modelId === event.modelId)
+              ?.displayName ?? event.modelId,
           resultSetId: event.resultSetId,
           retry: event.retry,
           maxRetries: event.maxRetries,
@@ -1940,6 +1946,7 @@ async function runSoloLeg(
               legIndex,
               leg,
               modelId: event.modelId,
+              displayName: model.displayName,
               resultSetId: event.resultSetId,
               retry: event.retry,
               maxRetries: event.maxRetries,
@@ -2072,6 +2079,9 @@ async function runTeamLeg(
           legIndex: _legIndex,
           leg,
           modelId: event.modelId,
+          displayName:
+            ctx.models.find((candidate) => candidate.modelId === event.modelId)
+              ?.displayName ?? event.modelId,
           resultSetId: event.resultSetId,
           retry: event.retry,
           maxRetries: event.maxRetries,
