@@ -12,9 +12,12 @@ import type {
   BenchmarkResultSet,
   BenchmarkRun,
   BenchmarkRunEvent,
+  BenchmarkTeamComposition,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
+import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
+import { normalizeTeamRoles } from "@/lib/benchmark/teamiq/compositions";
 
 const SCOREABLE_STATUSES = new Set<BenchmarkAttemptV2["status"]>([
   "passed",
@@ -33,6 +36,7 @@ export interface BenchmarkResultSetEvidence {
   traces: readonly BenchmarkModelCallTrace[];
   runEvents: readonly BenchmarkRunEvent[];
   toolCallTraces: readonly BenchmarkToolCallTrace[];
+  teamCompositions: readonly BenchmarkTeamComposition[];
 }
 
 interface CompletedResultSet {
@@ -123,6 +127,21 @@ export function isPublishableBenchmarkResultSet(
     resultSet.expectedAttempts.map((expected) => expected.caseId)
   );
   const ownedRunIds = new Set(resultSet.runIds);
+  const expectedCompositionIds = new Set(
+    resultSet.expectedAttempts.map((expected) => expected.teamCompositionId)
+  );
+  if (
+    expectedCompositionIds.size !== 1 ||
+    !compositionMatchesConfiguration(
+      evidence.teamCompositions.find(
+        (composition) =>
+          composition.id === [...expectedCompositionIds][0]
+      ),
+      resultSet
+    )
+  ) {
+    return false;
+  }
 
   const expectedEvidenceIsComplete = resultSet.expectedAttempts.every((expected) => {
     const matches = attemptsByKey.get(attemptEvidenceKey(expected)) ?? [];
@@ -189,7 +208,13 @@ export function isPublishableBenchmarkResultSet(
       .every(
         (record) =>
           ownedAttemptIds.has(record.attemptId) &&
-          ownedCaseIds.has(record.caseId)
+          ownedCaseIds.has(record.caseId) &&
+          allOwnedReferencesExist(
+            record.artifactIds,
+            artifactsById,
+            resultSet.id,
+            record.attemptId
+          )
       ) &&
     resultSet.runIds.every((runId) => {
       const run = runsById.get(runId);
@@ -240,6 +265,67 @@ export function isPublishableBenchmarkResultSet(
       ownedCaseIds,
       ownedAttemptIds
     )
+  );
+}
+
+function compositionMatchesConfiguration(
+  composition: BenchmarkTeamComposition | undefined,
+  resultSet: BenchmarkResultSet
+): boolean {
+  if (!composition) return false;
+  const configuration = resultSet.configuration;
+  const roles = normalizeTeamRoles(composition.roles).map((role) => ({
+    role: role.role,
+    slot: role.slot,
+    providerId: role.providerId,
+    modelId: role.modelId,
+    reasoningEffort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+    maxTokens: role.maxTokens ?? null,
+  }));
+  const configuredRoles = [...configuration.roles]
+    .map((role) => ({
+      ...role,
+      reasoningEffort: normalizeBenchmarkReasoningEffort(
+        role.reasoningEffort
+      ),
+    }))
+    .sort((left, right) =>
+      `${left.slot}\u0000${left.role}\u0000${left.providerId}\u0000${left.modelId}`.localeCompare(
+        `${right.slot}\u0000${right.role}\u0000${right.providerId}\u0000${right.modelId}`
+      )
+    );
+  if (
+    roles.length !== configuredRoles.length ||
+    roles.some((role, index) => {
+      const configured = configuredRoles[index];
+      return (
+        !configured ||
+        configured.role !== role.role ||
+        configured.slot !== role.slot ||
+        configured.providerId !== role.providerId ||
+        configured.modelId !== role.modelId ||
+        configured.reasoningEffort !== role.reasoningEffort ||
+        configured.maxTokens !== role.maxTokens
+      );
+    })
+  ) {
+    return false;
+  }
+  const solo = roles.length === 1 && roles[0]?.role === "single";
+  if ((configuration.subjectKind === "model") !== solo) return false;
+  if (!solo) {
+    return (
+      (configuration.strategy ?? null) === (composition.strategy ?? null) &&
+      configuration.providerId === undefined &&
+      configuration.modelId === undefined
+    );
+  }
+  const role = roles[0]!;
+  return (
+    configuration.providerId === role.providerId &&
+    configuration.modelId === role.modelId &&
+    normalizeBenchmarkReasoningEffort(configuration.reasoningEffort) ===
+      role.reasoningEffort
   );
 }
 

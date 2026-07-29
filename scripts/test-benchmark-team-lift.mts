@@ -21,7 +21,9 @@ import {
   deriveTeamComposition,
   type TeamIqComboMatrixRow,
 } from "../lib/benchmark/teamiq";
-import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
+import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
+import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamCompositionRole,
@@ -310,7 +312,7 @@ function teamIqAttempt(
   };
 }
 
-const leaderboard = aggregateCertifiedRunScores({
+const leaderboard = aggregateCompletedResultSetFixtures({
   attempts: [
     teamIqAttempt("solo-gpt", soloGpt.id, 74, 0.8, 60_000),
     teamIqAttempt("solo-gemini", soloGemini.id, 60, 0.4, 40_000),
@@ -325,7 +327,7 @@ check(
   leaderboardTeamRow
 );
 
-const disjointLeaderboard = aggregateCertifiedRunScores({
+const disjointLeaderboard = aggregateCompletedResultSetFixtures({
   attempts: [
     {
       ...teamIqAttempt("disjoint-a-gameiq", soloGpt.id, 70, 0.8, 60_000),
@@ -541,6 +543,122 @@ check(
   mismatchedPackRows.find((row) => row.teamCompositionId === workBenchTeam.id)
     ?.teamLift === null,
   mismatchedPackRows
+);
+
+const retainedSiblingFixture = withCompletedResultSetFixtures({
+  caseV2: [],
+  attemptsV2: [
+    workBenchAttempt("retained-gpt-e1", soloGptWb.id, 70, 1, 100_000),
+    {
+      ...workBenchAttempt("retained-gpt-e2", soloGptWb.id, 95, 1, 100_000),
+      startedAt: "2026-07-26T01:00:00.000Z",
+      completedAt: "2026-07-26T01:00:00.000Z",
+    },
+    workBenchAttempt(
+      "retained-claude-e1",
+      soloClaudeWb.id,
+      55,
+      0.9,
+      90_000
+    ),
+    workBenchAttempt("retained-team-e1", workBenchTeam.id, 90, 1.5, 120_000),
+  ],
+  verifierResults: [],
+  teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
+  harnessCertifications: [],
+});
+const retainedAttemptById = new Map(
+  retainedSiblingFixture.attemptsV2.map((attempt) => [attempt.id, attempt])
+);
+const retainedResultSets = retainedSiblingFixture.resultSets.map((resultSet) => {
+  const owned = retainedSiblingFixture.attemptsV2.find(
+    (attempt) => attempt.resultSetId === resultSet.id
+  )!;
+  return {
+    ...resultSet,
+    executionId: owned.id === "retained-gpt-e2" ? "execution-e2" : "execution-e1",
+  };
+});
+const retainedSiblingDashboard = buildCertifiedBenchmarkDashboardData({
+  ...retainedSiblingFixture,
+  resultSets: retainedResultSets,
+});
+check(
+  "latest team lift retains an older publishable solo sibling from its execution",
+  retainedSiblingDashboard.leaderboard.find(
+    (row) => row.teamCompositionId === workBenchTeam.id
+  )?.teamLift === 20,
+  {
+    leaderboard: retainedSiblingDashboard.leaderboard,
+    attempts: [...retainedAttemptById.keys()],
+  }
+);
+
+const soloGpt200 = deriveSoloTeamComposition({
+  id: "solo-gpt-200",
+  modelId: "openai:gpt-wb",
+  providerId: "openai",
+  displayName: "GPT WB 200",
+  maxTokens: 200,
+});
+const soloClaude100 = deriveSoloTeamComposition({
+  id: "solo-claude-100",
+  modelId: "anthropic:claude-wb",
+  providerId: "anthropic",
+  displayName: "Claude WB 100",
+  maxTokens: 100,
+});
+const tokenBoundTeam = deriveTeamComposition({
+  id: "team-token-bound",
+  name: "Token-bound team",
+  roles: [
+    {
+      ...soloGpt200.roles[0],
+      role: "architect",
+      slot: "architect",
+      maxTokens: 100,
+    },
+    {
+      ...soloClaude100.roles[0],
+      role: "worker",
+      slot: "worker",
+    },
+  ],
+});
+const tokenBoundRows = buildTeamIqComboMatrixRows({
+  attempts: [
+    {
+      ...workBenchAttempt("solo-gpt-200-attempt", soloGpt200.id, 70, 1, 1),
+      resultSetId: "solo-gpt-200-set",
+    },
+    {
+      ...workBenchAttempt(
+        "solo-claude-100-attempt",
+        soloClaude100.id,
+        55,
+        1,
+        1
+      ),
+      resultSetId: "solo-claude-100-set",
+    },
+    {
+      ...workBenchAttempt("token-bound-team-attempt", tokenBoundTeam.id, 90, 1, 1),
+      resultSetId: "token-bound-team-set",
+    },
+  ],
+  teamCompositions: [soloGpt200, soloClaude100, tokenBoundTeam],
+  track: "workbench",
+  executionIdByResultSetId: new Map([
+    ["solo-gpt-200-set", "execution-token"],
+    ["solo-claude-100-set", "execution-token"],
+    ["token-bound-team-set", "execution-token"],
+  ]),
+});
+check(
+  "team lift never matches a member to a solo with different max tokens",
+  tokenBoundRows.find((row) => row.teamCompositionId === tokenBoundTeam.id)
+    ?.teamLift === null,
+  tokenBoundRows
 );
 
 // --- (c) missing baseline -> null + dash rendering contract ---------------

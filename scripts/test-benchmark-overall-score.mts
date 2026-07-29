@@ -9,11 +9,13 @@
    the rankByOverall ordering, and that the dashboard payload carries the new
    overallLeaderboard while modelIntelligence stays intact. */
 import {
-  aggregateCertifiedRunScores,
   rankByOverall,
 } from "../lib/benchmark/scoring/aggregate";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
-import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
+import {
+  aggregateCompletedResultSetFixtures,
+  withCompletedResultSetFixtures,
+} from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -158,7 +160,7 @@ const lopsidedAttempts: BenchmarkAttemptV2[] = [
   ),
   attempt("gi-0", lopsidedTeam.id, "gameiq", 1.0),
 ];
-const lopsidedRows = aggregateCertifiedRunScores({
+const lopsidedRows = aggregateCompletedResultSetFixtures({
   attempts: lopsidedAttempts,
   cases: [],
   teamCompositions: [lopsidedTeam],
@@ -195,7 +197,7 @@ check(
 // Single-track passthrough: overallScore equals that track's average quality.
 // ---------------------------------------------------------------------------
 const singleTeam = soloTeam("solo-single", "prov:single");
-const singleRows = aggregateCertifiedRunScores({
+const singleRows = aggregateCompletedResultSetFixtures({
   attempts: [
     attempt("s1", singleTeam.id, "gameiq", 0.8),
     attempt("s2", singleTeam.id, "gameiq", 0.6, { status: "failed" }),
@@ -221,7 +223,7 @@ check(
 
 const repeatedSolo = soloTeam("solo-repeat-baseline", "prov:repeat");
 const repeatedTeam = repeatedModelTeam("team-repeat", "prov:repeat");
-const repeatedRows = aggregateCertifiedRunScores({
+const repeatedRows = aggregateCompletedResultSetFixtures({
   attempts: [
     attempt("repeat-solo", repeatedSolo.id, "workbench", 0.5),
     attempt("repeat-team", repeatedTeam.id, "workbench", 0.8),
@@ -246,7 +248,7 @@ check(
 // to average). Assert the aggregate simply produces no row for it, and that an
 // empty attempt set yields an empty leaderboard (no overallScore to compute).
 // ---------------------------------------------------------------------------
-const emptyRows = aggregateCertifiedRunScores({
+const emptyRows = aggregateCompletedResultSetFixtures({
   attempts: [],
   cases: [],
   teamCompositions: [soloTeam("solo-empty", "prov:empty")],

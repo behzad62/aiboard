@@ -5,9 +5,9 @@ import { callCertifiedModel } from "../lib/benchmark/certified/model-call";
 import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persistence";
 import { __resetBenchmarkStoreForTests } from "../lib/benchmark/store";
 import {
-  aggregateCertifiedRunScores,
   rankByCostPerPass,
 } from "../lib/benchmark/scoring/aggregate";
+import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { buildModelIntelligenceRows } from "../lib/benchmark/metrics";
 import type {
   SelectedModel,
@@ -326,7 +326,7 @@ function attempt(
 {
   const teamA = soloTeam("solo-a", "prov:a"); // priced
   const teamB = soloTeam("solo-b", "prov:b"); // token-only, no pricing
-  const rows = aggregateCertifiedRunScores({
+  const rows = aggregateCompletedResultSetFixtures({
     attempts: [
       attempt("a1", teamA.id, {
         status: "passed",
@@ -381,7 +381,7 @@ function attempt(
     "row with no tokens reports null token fields",
     (() => {
       const noneTeam = soloTeam("solo-c", "prov:c");
-      const r = aggregateCertifiedRunScores({
+      const r = aggregateCompletedResultSetFixtures({
         attempts: [attempt("c1", noneTeam.id, { costUsd: null })],
         cases: [],
         teamCompositions: [noneTeam],
@@ -526,11 +526,13 @@ function attempt(
       attempt("tq1", teamA.id, {
         track: "teamiq",
         caseId: "tq-case",
+        resultSetId: "snapshot-cross-track",
         verifiedQuality: 0.6,
       }),
       attempt("gi1", teamA.id, {
         track: "gameiq",
         caseId: "gi-case",
+        resultSetId: "snapshot-cross-track",
         verifiedQuality: 0.9,
       }),
     ],

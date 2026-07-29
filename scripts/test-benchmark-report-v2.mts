@@ -4,6 +4,7 @@ import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
 import { formatBenchmarkImportMessage } from "../components/benchmark/useBenchmarkReportActions";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
+import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
 import {
   __resetBenchmarkStoreForTests,
   __exportBenchmarkStoreForTests,
@@ -405,7 +406,31 @@ const completedBundle: BenchmarkReportBundleV2 = {
   traces: certifiedFixture.traces,
   runEvents: certifiedFixture.runEvents,
   toolCallTraces: certifiedFixture.toolCallTraces,
-  resultSets: certifiedFixture.resultSets,
+  harnessCertifications: [{
+    id: "unscoped-certification",
+    createdAt: "2026-06-27T10:00:00.000Z",
+    aiboardVersion: "test",
+    benchmarkEngineVersion: "test",
+    harnessProfile: "raw-single-model",
+    harnessVersion: "test",
+    promptSetVersion: "test",
+    passed: true,
+    checks: [],
+  }],
+  resultSets: certifiedFixture.resultSets.map((resultSet) => ({
+    ...resultSet,
+    metrics: {
+      ...resultSet.metrics!,
+      verifiedQuality: 0.9,
+      overallScore: 0.9,
+      jobSuccessScore: 90,
+      efficiencyScore: 90,
+      trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
+        ...track,
+        averageVerifiedQuality: 0.9,
+      })),
+    },
+  })),
 };
 const markdown = formatBenchmarkMarkdownReport(completedBundle, {
   summary: {
@@ -523,6 +548,104 @@ check(
     !variantMarkdown.includes("- Variant Model:"),
   variantMarkdown
 );
+
+const exactReportFixture = withCompletedResultSetFixtures({
+  caseV2: bundle.caseV2,
+  attemptsV2: [
+    {
+      ...attempt,
+      id: "attempt-max-100",
+      runId: "run-max-100",
+      teamCompositionId: lowVariantTeam.id,
+    },
+    {
+      ...attempt,
+      id: "attempt-max-200",
+      runId: "run-max-200",
+      teamCompositionId: lowVariantTeam.id,
+    },
+  ],
+  verifierResults: [],
+  teamCompositions: [lowVariantTeam],
+  harnessCertifications: [],
+});
+const exactReportResultSets = exactReportFixture.resultSets.map(
+  (resultSet, index) => {
+    const configuration = {
+      ...resultSet.configuration,
+      tracks: resultSet.configuration.tracks.map((track) => ({
+        ...track,
+        maxTokens: index === 0 ? 100 : 200,
+      })),
+    };
+    const quality = index === 0 ? 0.3 : 0.8;
+    return {
+      ...resultSet,
+      configuration,
+      configurationKey: benchmarkResultConfigurationKey(configuration),
+      metrics: {
+        ...resultSet.metrics!,
+        verifiedQuality: quality,
+        overallScore: quality,
+        trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
+          ...track,
+          averageVerifiedQuality: quality,
+        })),
+      },
+    };
+  }
+);
+const exactReportMarkdown = formatBenchmarkMarkdownReport(
+  {
+    ...bundle,
+    runs: exactReportFixture.runs,
+    caseV2: exactReportFixture.caseV2,
+    attemptsV2: exactReportFixture.attemptsV2,
+    verifierResults: exactReportFixture.verifierResults,
+    artifacts: exactReportFixture.artifacts,
+    failures: exactReportFixture.failures,
+    traces: exactReportFixture.traces,
+    runEvents: exactReportFixture.runEvents,
+    toolCallTraces: exactReportFixture.toolCallTraces,
+    teamCompositions: exactReportFixture.teamCompositions,
+    resultSets: exactReportResultSets,
+  },
+  {
+    summary: {
+      totalRuns: 0,
+      totalCases: 0,
+      capturedCases: 0,
+      totalModels: 0,
+      completionRate: null,
+      schemaValidRate: null,
+      legalActionRate: null,
+      fallbackRate: null,
+      averageCostUsd: null,
+      averageLatencyMs: null,
+    },
+    models: [],
+    radarRows: [],
+    rateBars: [],
+    costQualityPoints: [],
+    latencyQualityPoints: [],
+    trendRows: [],
+    failureRows: [],
+    headToHeadRows: [],
+    evidenceByModel: {},
+  }
+);
+check(
+  "markdown preserves exact max-token snapshot configurations",
+  exactReportMarkdown
+    .slice(
+      exactReportMarkdown.indexOf("## Top Certified Models"),
+      exactReportMarkdown.indexOf("## Cost Speed")
+    )
+    .match(/quality/g)?.length === 2 &&
+    exactReportMarkdown.includes("quality 30/100") &&
+    exactReportMarkdown.includes("quality 80/100"),
+  exactReportMarkdown
+);
 check(
   "markdown renders legacy missing effort as Default",
   markdown.includes("- GPT Test · Default:"),
@@ -538,7 +661,7 @@ check(
 );
 check("markdown report includes team lift matrix", markdown.includes("Team Lift Matrix"), markdown);
 check("markdown report includes failure taxonomy", markdown.includes("Failure Taxonomy"), markdown);
-check("markdown report reports certified evidence counts", markdown.includes("Certified attempts: 3"), markdown);
+check("markdown report reports latest snapshot evidence counts", markdown.includes("Certified attempts: 1"), markdown);
 check(
   "markdown report keeps unpublished evidence out of certified counts",
   markdown.includes("Scored attempts: 1") &&
@@ -551,19 +674,22 @@ check("markdown report filters non-certified verifier assertions", !markdown.inc
 check("markdown report scores one latest completed snapshot", markdown.includes("Completed attempts: 1"), markdown);
 check(
   "markdown report excludes history and provider-unavailable attempts from latest scoring rows",
-  markdown.includes("Average verified quality: 50/100") &&
+  markdown.includes("Average verified quality: 90/100") &&
     markdown.includes("Average cost: $0.020") &&
     markdown.includes("Average duration: 1.0s") &&
-    markdown.includes("GPT solo: quality 50/100, pass rate 0%, 1 attempt(s), avg cost $0.020") &&
+    markdown.includes("GPT solo: quality 90/100, pass rate 0%, 1 attempt(s), avg cost $0.020") &&
     markdown.includes("Certified Snapshot History"),
   markdown
 );
-check("markdown report includes v2 raw counts", markdown.includes("Verifier results: 2"), markdown);
-check("markdown report includes run evidence counts", markdown.includes("Run events: 0") && markdown.includes("Tool-call traces: 0"), markdown);
 check(
-  "markdown report surfaces redaction warnings",
-  markdown.includes("Redaction warnings") &&
-    markdown.includes("Tool-call trace tool-1 contains blocked ssh_private_key content."),
+  "certified markdown keeps raw audit counts, warnings, and unscoped certifications out",
+  !markdown.includes("Raw V2 Counts") &&
+    !markdown.includes("Raw Bundle Counts") &&
+    !markdown.includes("## Summary") &&
+    !markdown.includes("## Model Scorecards") &&
+    !markdown.includes("## Head To Head") &&
+    !markdown.includes("Redaction warnings") &&
+    !markdown.includes("Certification raw-single-model"),
   markdown
 );
 
@@ -615,7 +741,7 @@ const appliedImportMessage = formatBenchmarkImportMessage(
 );
 check(
   "benchmark import message reports applied rather than source result sets",
-  appliedImportMessage.includes("1 result set(s) (0 completed)") &&
+  appliedImportMessage.includes("1 result set(s) (0 publishable completed)") &&
     !appliedImportMessage.includes("2 result set(s)"),
   appliedImportMessage
 );
@@ -624,6 +750,31 @@ check(
   reportActionSource.includes("warning(s)") &&
     reportActionSource.includes("summary?.warnings"),
   reportActionSource
+);
+
+__replaceBenchmarkStoreForTests({});
+const malformedCompletedImport = await importBenchmarkReportBundleV2({
+  ...completedBundle,
+  verifierResults: [
+    ...completedBundle.verifierResults,
+    {
+      ...completedBundle.verifierResults[0]!,
+      id: "import-extra-owned-verifier",
+      resultSetId: completedBundle.resultSets![0]!.id,
+      attemptId: completedBundle.attemptsV2.find(
+        (record) => record.resultSetId === completedBundle.resultSets![0]!.id
+      )!.id,
+      artifactIds: ["missing-import-artifact"],
+    },
+  ],
+});
+check(
+  "import completed count includes only read-time publishable snapshots",
+  malformedCompletedImport.resultSetCount > 0 &&
+    malformedCompletedImport.completedResultSetCount <
+      completedBundle.resultSets!.filter((record) => record.status === "completed")
+        .length,
+  malformedCompletedImport
 );
 
 if (failures === 0) {

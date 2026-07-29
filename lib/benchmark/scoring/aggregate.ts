@@ -10,7 +10,10 @@ import {
 } from "@/lib/benchmark/model-effort";
 import type { CertifiedAggregateInput, CertifiedRunScore } from "./types";
 import { finiteOrNull, round } from "./types";
-import { canonicalTeamCompositionKey } from "@/lib/benchmark/teamiq/compositions";
+import {
+  canonicalTeamCompositionKey,
+  getTeamCompositionMemberComparisonKeys,
+} from "@/lib/benchmark/teamiq/compositions";
 
 const MIN_CONFIDENT_ATTEMPTS = 3;
 
@@ -97,6 +100,10 @@ export function dedupeCrossTrackAttempts(
   >();
 
   for (const attempt of attempts as AttemptLike[]) {
+    if (!attempt.resultSetId) {
+      passthrough.push(attempt);
+      continue;
+    }
     const decisionId = underlyingDecisionId(attempt, caseById);
     if (!decisionId) {
       passthrough.push(attempt);
@@ -104,7 +111,7 @@ export function dedupeCrossTrackAttempts(
     }
     const persistedTeamId = attempt.teamCompositionId ?? "unknown";
     const teamId = teamIdentityById.get(persistedTeamId) ?? persistedTeamId;
-    const resultSetId = attempt.resultSetId ?? "";
+    const resultSetId = attempt.resultSetId;
     const key = `${resultSetId}::${teamId}::${decisionId}`;
     const group = groups.get(key);
     if (!group) {
@@ -175,6 +182,7 @@ interface MutableCertifiedRunScore {
   displayName: string;
   modelIds: string[];
   modelVariantKeys: string[];
+  memberComparisonKeys: string[];
   resultSetId?: string;
   executionId?: string;
   isTeam: boolean;
@@ -215,19 +223,45 @@ interface MutableCertifiedRunScore {
 }
 
 export function aggregateCertifiedRunScores(
-  input: CertifiedAggregateInput | BenchmarkAttemptV2[]
+  input: CertifiedAggregateInput
 ): CertifiedRunScore[] {
-  const rawAttempts = (Array.isArray(input) ? input : input.attempts).filter(
+  if (Array.isArray(input)) {
+    throw new Error(
+      "Certified aggregation requires explicit result-set snapshot scope."
+    );
+  }
+  if (input.resultSetIds.size === 0) {
+    throw new Error(
+      "Certified aggregation requires at least one scoped resultSetId."
+    );
+  }
+  const rawAttempts = input.attempts.filter(
     (attempt) => (attempt as AttemptLike).mode === undefined || (attempt as AttemptLike).mode === "certified"
   );
-  const teams = Array.isArray(input) ? [] : input.teamCompositions ?? [];
-  const cases = Array.isArray(input) ? [] : input.cases ?? [];
-  const executionIdByResultSetId = Array.isArray(input)
-    ? undefined
-    : input.executionIdByResultSetId;
-  const trackComparisonKeysByResultSetId = Array.isArray(input)
-    ? undefined
-    : input.trackComparisonKeysByResultSetId;
+  if (
+    rawAttempts.some(
+      (attempt) =>
+        !attempt.resultSetId || !input.resultSetIds.has(attempt.resultSetId)
+    )
+  ) {
+    throw new Error(
+      "Every certified aggregate attempt must carry an owned scoped resultSetId."
+    );
+  }
+  const observedResultSetIds = new Set(
+    rawAttempts.map((attempt) => attempt.resultSetId!)
+  );
+  if (
+    observedResultSetIds.size !== input.resultSetIds.size ||
+    [...input.resultSetIds].some((id) => !observedResultSetIds.has(id))
+  ) {
+    throw new Error("Certified aggregate scope does not match its attempts.");
+  }
+  const teams = input.teamCompositions ?? [];
+  const cases = input.cases ?? [];
+  const executionIdByResultSetId = input.executionIdByResultSetId;
+  const trackComparisonKeysByResultSetId =
+    input.trackComparisonKeysByResultSetId;
   const teamIdentityById = new Map(
     teams.map((team) => [team.id, canonicalTeamCompositionKey(team)])
   );
@@ -506,6 +540,7 @@ function groupFor(
     displayName,
     modelIds,
     modelVariantKeys,
+    memberComparisonKeys: getTeamCompositionMemberComparisonKeys(team),
     resultSetId,
     executionId,
     isTeam,
@@ -591,6 +626,7 @@ function finalizeGroup(
     displayName: group.displayName,
     modelIds: group.modelIds,
     modelVariantKeys: group.modelVariantKeys,
+    memberComparisonKeys: group.memberComparisonKeys,
     isTeam: group.isTeam,
     tracks: Array.from(group.tracks).sort(),
     caseTitles: resolveCaseTitles(group.caseIdOrder, caseById),
@@ -636,9 +672,9 @@ function finalizeGroup(
 function applyTeamLift(rows: CertifiedRunScore[]): void {
   const soloScoreByVariant = new Map<string, CertifiedRunScore>();
   for (const row of rows) {
-    if (row.isTeam || row.modelVariantKeys.length !== 1) continue;
-    const variantKey = row.modelVariantKeys[0];
-    const comparisonKey = `${row.executionId ?? ""}\u0000${variantKey}`;
+    if (row.isTeam || row.memberComparisonKeys.length !== 1) continue;
+    const memberKey = row.memberComparisonKeys[0];
+    const comparisonKey = `${row.executionId ?? ""}\u0000${memberKey}`;
     const existing = soloScoreByVariant.get(comparisonKey);
     if (!existing || row.jobSuccessScore > existing.jobSuccessScore) {
       soloScoreByVariant.set(comparisonKey, row);
@@ -648,11 +684,11 @@ function applyTeamLift(rows: CertifiedRunScore[]): void {
   for (const row of rows) {
     if (!row.isTeam) continue;
     const scopedSolos = new Map(
-      row.modelVariantKeys.flatMap((variantKey) => {
+      row.memberComparisonKeys.flatMap((memberKey) => {
         const solo = soloScoreByVariant.get(
-          `${row.executionId ?? ""}\u0000${variantKey}`
+          `${row.executionId ?? ""}\u0000${memberKey}`
         );
-        return solo ? [[variantKey, solo] as const] : [];
+        return solo ? [[memberKey, solo] as const] : [];
       })
     );
     const lift = computeComparableTrackTeamLift(row, scopedSolos);

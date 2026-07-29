@@ -10,9 +10,9 @@
  * the aggregate layer (the UI shortens prefixes for display only).
  */
 import {
-  aggregateCertifiedRunScores,
   dedupeCrossTrackAttempts,
 } from "../lib/benchmark/scoring/aggregate";
+import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -132,7 +132,7 @@ const battleship = certifiedCase(
 );
 const teamA = soloTeam("solo-a", "model:a");
 
-const rowsBasic = aggregateCertifiedRunScores({
+const rowsBasic = aggregateCompletedResultSetFixtures({
   // Battleship appears first, then Chess, then Chess again (repeat).
   attempts: [
     attempt("a1", teamA.id, "gameiq", battleship.id),
@@ -168,7 +168,7 @@ check(
 // (2) Missing case record -> fall back to the raw case id.
 // ---------------------------------------------------------------------------
 const teamB = soloTeam("solo-b", "model:b");
-const rowsMissing = aggregateCertifiedRunScores({
+const rowsMissing = aggregateCompletedResultSetFixtures({
   attempts: [
     attempt("b1", teamB.id, "gameiq", chess.id),
     attempt("b2", teamB.id, "gameiq", "gameiq-orphan-case-99"),
@@ -218,17 +218,17 @@ const mergedAttempts = [
   attempt("c-tool", teamC.id, "toolreliability", toolCase.id),
 ];
 
-// Sanity: dedup really does drop the teamiq re-wrap sample for this team.
+// Unscoped evidence is audit-only and must not be cross-track deduplicated.
 const deduped = dedupeCrossTrackAttempts(mergedAttempts, mergedCases);
 check(
-  "cross-track dedup drops the teamiq re-wrap before aggregation",
+  "cross-track dedup preserves evidence without snapshot identity",
   deduped.some((a) => a.id === "c-gameiq") &&
-    !deduped.some((a) => a.id === "c-teamiq") &&
+    deduped.some((a) => a.id === "c-teamiq") &&
     deduped.some((a) => a.id === "c-tool"),
   deduped.map((a) => a.id)
 );
 
-const rowsMerged = aggregateCertifiedRunScores({
+const rowsMerged = aggregateCompletedResultSetFixtures({
   attempts: mergedAttempts,
   cases: mergedCases,
   teamCompositions: [teamC],
@@ -257,7 +257,7 @@ check(
 const dupTitleA = certifiedCase("dup-a", "gameiq", "Shared Pack Name");
 const dupTitleB = certifiedCase("dup-b", "gameiq", "Shared Pack Name");
 const teamD = soloTeam("solo-d", "model:d");
-const rowsDupTitle = aggregateCertifiedRunScores({
+const rowsDupTitle = aggregateCompletedResultSetFixtures({
   attempts: [
     attempt("d1", teamD.id, "gameiq", dupTitleA.id),
     attempt("d2", teamD.id, "gameiq", dupTitleB.id),
@@ -286,7 +286,7 @@ const teamE = soloTeam("solo-e", "model:e");
 const manyCases = Array.from({ length: 7 }, (_, i) =>
   certifiedCase(`bundle-case-${i}`, "gameiq", `Bundle Case ${i}`)
 );
-const rowsMany = aggregateCertifiedRunScores({
+const rowsMany = aggregateCompletedResultSetFixtures({
   attempts: manyCases.map((c, i) =>
     attempt(`e${i}`, teamE.id, "gameiq", c.id)
   ),

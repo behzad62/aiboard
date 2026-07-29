@@ -5,7 +5,7 @@ import {
   isScoredCertifiedAttempt,
 } from "../lib/benchmark/metrics";
 import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
-import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
+import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { scoreTeamLift } from "../lib/benchmark/scoring/teamiq";
 import { scoreToolReliability } from "../lib/benchmark/scoring/toolreliability";
@@ -351,7 +351,7 @@ const teamAB: BenchmarkTeamComposition = {
     },
   ],
 };
-const aggregateRows = aggregateCertifiedRunScores({
+const aggregateRows = aggregateCompletedResultSetFixtures({
   attempts: [
     certifiedAttempt("attempt-solo-a", soloTeamA.id, 60),
     certifiedAttempt("attempt-team-ab", teamAB.id, 90),
@@ -384,7 +384,7 @@ const soloTeamB: BenchmarkTeamComposition = {
     },
   ],
 };
-const zeroPassCostRows = aggregateCertifiedRunScores({
+const zeroPassCostRows = aggregateCompletedResultSetFixtures({
   attempts: [
     certifiedAttempt("cost-solo-a", soloTeamA.id, 70, {
       costUsd: 0.1,
@@ -415,7 +415,7 @@ check(
   zeroPassCostlyTeam
 );
 
-const preliminaryRows = aggregateCertifiedRunScores({
+const preliminaryRows = aggregateCompletedResultSetFixtures({
   attempts: [
     certifiedAttempt("preliminary-perfect", soloTeamA.id, 100),
     certifiedAttempt("mature-good-1", soloTeamB.id, 70),

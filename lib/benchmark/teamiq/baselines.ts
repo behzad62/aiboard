@@ -5,7 +5,7 @@ import type {
 import { scoreTeamLift } from "@/lib/benchmark/scoring/teamiq";
 import type { TeamLiftScore } from "@/lib/benchmark/scoring/types";
 import {
-  getTeamCompositionModelVariantKeys,
+  getTeamCompositionMemberComparisonKeys,
   isSoloTeamComposition,
 } from "./compositions";
 
@@ -45,7 +45,7 @@ export function linkTeamLiftBaselines(
     .map((attempt): SoloCandidate | null => {
       const team = teamsById.get(attempt.teamCompositionId);
       if (!isSoloTeamComposition(team)) return null;
-      const variantKey = getTeamCompositionModelVariantKeys(team)[0];
+      const variantKey = getTeamCompositionMemberComparisonKeys(team)[0];
       return variantKey ? { attempt, variantKey } : null;
     })
     .filter((candidate): candidate is SoloCandidate => candidate !== null);
@@ -54,7 +54,7 @@ export function linkTeamLiftBaselines(
   for (const teamAttempt of input.teamAttempts) {
     if (!matchesTrack(teamAttempt, input.track)) continue;
     const teamComposition = teamsById.get(teamAttempt.teamCompositionId);
-    const variantKeys = getTeamCompositionModelVariantKeys(teamComposition);
+    const variantKeys = getTeamCompositionMemberComparisonKeys(teamComposition);
     if (!teamComposition || isSoloTeamComposition(teamComposition) || variantKeys.length === 0) {
       continue;
     }

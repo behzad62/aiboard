@@ -15,7 +15,10 @@ export type {
 export { linkTeamLiftBaselines } from "./baselines";
 export type { TeamIqBaselineInput, TeamIqBaselineLink } from "./baselines";
 
-export { buildTeamIqComboMatrixRows } from "./combo-matrix";
+export {
+  buildSnapshotComboMatrixRows,
+  buildTeamIqComboMatrixRows,
+} from "./combo-matrix";
 export type {
   TeamIqComboMatrixInput,
   TeamIqComboMatrixRow,

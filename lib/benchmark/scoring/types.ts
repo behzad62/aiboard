@@ -98,6 +98,7 @@ export interface ParetoDimension<T> {
 }
 
 export interface CertifiedAggregateInput {
+  resultSetIds: ReadonlySet<string>;
   attempts: BenchmarkAttemptV2[];
   cases?: BenchmarkCaseV2[];
   teamCompositions?: BenchmarkTeamComposition[];
@@ -119,6 +120,7 @@ export interface CertifiedRunScore {
   displayName: string;
   modelIds: string[];
   modelVariantKeys: string[];
+  memberComparisonKeys: string[];
   /** True for multi-role compositions, even when every role uses one model. */
   isTeam: boolean;
   tracks: string[];
@@ -234,6 +236,9 @@ export interface WorkBenchRoleLeaderboardRow {
   efficiencyScore: number;
   averageCostUsd: number | null;
   averageDurationMs: number | null;
+  resultSetId?: string;
+  executionId?: string;
+  configurationKey?: string;
 }
 
 export interface CertifiedBenchmarkDashboardInput {

@@ -119,6 +119,29 @@ export function getTeamCompositionModelVariantKeys(
   ).sort();
 }
 
+export function benchmarkMemberComparisonKey(role: {
+  providerId: string;
+  modelId: string;
+  reasoningEffort?: unknown;
+  maxTokens?: number | null;
+}): string {
+  return JSON.stringify({
+    providerId: role.providerId,
+    modelId: role.modelId,
+    reasoningEffort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+    maxTokens: role.maxTokens ?? null,
+  });
+}
+
+export function getTeamCompositionMemberComparisonKeys(
+  team: BenchmarkTeamComposition | undefined
+): string[] {
+  if (!team) return [];
+  return normalizeTeamRoles(team.roles)
+    .map(benchmarkMemberComparisonKey)
+    .sort();
+}
+
 /**
  * Read-time identity for semantically compatible persisted compositions.
  * Historical records can omit reasoningEffort while newer records persist the

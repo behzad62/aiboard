@@ -3,7 +3,10 @@ import type {
   BenchmarkTeamComposition,
 } from "@/lib/benchmark/types";
 import { computeParetoFrontier } from "@/lib/benchmark/scoring/pareto";
-import type { TeamLiftLabel } from "@/lib/benchmark/scoring/types";
+import type {
+  CertifiedRunScore,
+  TeamLiftLabel,
+} from "@/lib/benchmark/scoring/types";
 import {
   getTeamCompositionModelIds,
   getTeamCompositionModelVariantKeys,
@@ -58,6 +61,9 @@ export interface TeamIqComboMatrixRow {
   teamLiftLabel: TeamLiftLabel | null;
   isParetoRecommended: boolean;
   recommendationLabel: TeamIqRecommendationLabel;
+  resultSetId?: string;
+  executionId?: string;
+  configurationKey?: string;
 }
 
 interface MutableComboRow {
@@ -156,6 +162,56 @@ export function buildTeamIqComboMatrixRows(
   }
 
   const rows = Array.from(groups.values()).map(finalizeGroup);
+  applyParetoRecommendations(rows);
+  return rows.sort(compareRows);
+}
+
+export function buildSnapshotComboMatrixRows(input: {
+  rows: CertifiedRunScore[];
+  teamCompositions: BenchmarkTeamComposition[];
+}): TeamIqComboMatrixRow[] {
+  const teamsById = new Map(
+    input.teamCompositions.map((team) => [team.id, team])
+  );
+  const rows = input.rows.flatMap((row) => {
+    if (!row.resultSetId || !row.isTeam) return [];
+    const team = teamsById.get(row.teamCompositionId);
+    return row.trackBreakdown
+      .filter(
+        (track) => track.track === "teamiq" || track.track === "workbench"
+      )
+      .map((track): TeamIqComboMatrixRow => ({
+        id: `${row.resultSetId}:${track.track}`,
+        resultSetId: row.resultSetId,
+        executionId: row.executionId,
+        configurationKey: row.configurationKey,
+        teamCompositionId: row.teamCompositionId,
+        teamName: row.teamName,
+        comboHash: row.comboHash,
+        track: track.track as BenchmarkAttemptV2["track"],
+        modelIds: row.modelIds,
+        modelVariantKeys: row.modelVariantKeys,
+        reasoningEffortDetails: benchmarkVariantRosterDetails(team?.roles ?? []),
+        isSolo: !row.isTeam,
+        attempts: track.attempts,
+        verifiedQuality: track.averageVerifiedQuality,
+        jobSuccessScore: row.jobSuccessScore,
+        costUsd: row.costUsd,
+        averageCostUsd: row.averageCostUsd,
+        durationMs: row.durationMs,
+        averageDurationMs:
+          row.attempts > 0 && row.durationMs != null
+            ? round(row.durationMs / row.attempts)
+            : null,
+        bestSoloScore: row.bestSoloScore,
+        teamLift: row.teamLift,
+        teamLiftLabel: row.teamLiftLabel,
+        isParetoRecommended: false,
+        recommendationLabel: row.isTeam
+          ? "insufficient_data"
+          : "solo_baseline",
+      }));
+  });
   applyParetoRecommendations(rows);
   return rows.sort(compareRows);
 }

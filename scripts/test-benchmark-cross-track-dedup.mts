@@ -65,6 +65,7 @@ function attempt(
     harnessVersion: "test",
     promptSetVersion: "test",
     scoringVersion: "certified-v0.1",
+    resultSetId: `test-snapshot-${teamCompositionId}`,
     ...overrides,
   };
 }
@@ -161,9 +162,30 @@ check(
   dedup.filter((a) => a.teamCompositionId === teamY.id).length === 1,
   dedup.filter((a) => a.teamCompositionId === teamY.id)
 );
+const unscopedDuplicates = attempts.map((record) => ({
+  ...record,
+  resultSetId: undefined,
+}));
+check(
+  "de-dup preserves evidence that has no snapshot identity",
+  dedupeCrossTrackAttempts(unscopedDuplicates, cases).length ===
+    unscopedDuplicates.length,
+  dedupeCrossTrackAttempts(unscopedDuplicates, cases)
+);
+let bareAggregateRejected = false;
+try {
+  aggregateCertifiedRunScores(unscopedDuplicates as never);
+} catch (error) {
+  bareAggregateRejected = /snapshot scope|resultSetId/i.test(String(error));
+}
+check(
+  "public aggregate rejects bare attempt arrays",
+  bareAggregateRejected
+);
 
 // Merged leaderboard row for team X counts the shared decision once.
 const leaderboard = aggregateCertifiedRunScores({
+  resultSetIds: new Set(attempts.map((record) => record.resultSetId!)),
   attempts,
   cases,
   teamCompositions: [teamX, teamY],
@@ -178,7 +200,8 @@ check(
   rowY
 );
 
-// Full dashboard: per-track trackRows keep BOTH samples; summary de-dups.
+// Full dashboard: every intrinsic surface consumes the immutable snapshot
+// metrics, whose cross-track freezer keeps the primary sample only.
 const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: cases,
   attemptsV2: attempts,
@@ -194,8 +217,8 @@ check(
   gameiqTrackRow
 );
 check(
-  "per-track teamiq view still counts the teamiq attempt",
-  teamiqTrackRow?.attempts === 1,
+  "per-track teamiq view does not resurrect the dropped duplicate",
+  teamiqTrackRow === undefined,
   teamiqTrackRow
 );
 // Summary verifiedPassRate is over deduped decisions: X counts once (both
@@ -339,9 +362,9 @@ check(
   mixedDashboard.summary.averageVerifiedQuality
 );
 check(
-  "certifiedAttempts count stays a raw attempt count (not deduped)",
-  mixedDashboard.summary.certifiedAttempts === 2 &&
-    mixedDashboard.summary.scoredAttempts === 2,
+  "summary attempt counts use the immutable deduped snapshot denominator",
+  mixedDashboard.summary.certifiedAttempts === 1 &&
+    mixedDashboard.summary.scoredAttempts === 1,
   {
     certifiedAttempts: mixedDashboard.summary.certifiedAttempts,
     scoredAttempts: mixedDashboard.summary.scoredAttempts,

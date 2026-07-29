@@ -10,9 +10,13 @@ import type {
   BenchmarkTrack,
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
-import { isSoloTeamComposition } from "@/lib/benchmark/teamiq/compositions";
 import {
-  aggregateCertifiedRunScores,
+  benchmarkMemberComparisonKey,
+  getTeamCompositionModelIds,
+  getTeamCompositionModelVariantKeys,
+  isSoloTeamComposition,
+} from "@/lib/benchmark/teamiq/compositions";
+import {
   dedupeCrossTrackAttempts,
   rankByCostPerPass,
   rankByEfficiency,
@@ -26,6 +30,7 @@ import { computeParetoFrontier } from "@/lib/benchmark/scoring/pareto";
 import type {
   CertifiedBenchmarkDashboardData,
   CertifiedBenchmarkDashboardInput,
+  CertifiedRunScore,
   WorkBenchRoleLeaderboardRow,
 } from "@/lib/benchmark/scoring/types";
 import {
@@ -33,11 +38,14 @@ import {
   selectBenchmarkResultSeries,
 } from "@/lib/benchmark/certified/result-set-selectors";
 import {
-  buildTeamIqComboMatrixRows,
+  buildSnapshotComboMatrixRows,
   buildTeamIqRecommendationCards,
 } from "@/lib/benchmark/teamiq";
 import { MIN_CONFIDENT_ATTEMPTS } from "@/lib/benchmark/teamiq/recommendations";
-import { sortRowsByTeamLift } from "@/lib/benchmark/certified/team-lift";
+import {
+  computeComparableTrackTeamLift,
+  sortRowsByTeamLift,
+} from "@/lib/benchmark/certified/team-lift";
 import { isInvalidCertifiedRun } from "@/lib/benchmark/failures";
 import { partitionBenchmarkCases } from "@/lib/benchmark/build-cases";
 import {
@@ -371,6 +379,7 @@ export function buildCertifiedBenchmarkDashboardData(
     traces: rawInput.traces,
     runEvents: rawInput.runEvents,
     toolCallTraces: rawInput.toolCallTraces,
+    teamCompositions: rawInput.teamCompositions,
   };
   const publishableResultSets = suppliedResultSets.filter((resultSet) =>
     isPublishableBenchmarkResultSet(resultSet, evidence)
@@ -381,15 +390,6 @@ export function buildCertifiedBenchmarkDashboardData(
   );
   const latestResultSetIds = new Set(
     resultSeries.map((series) => series.latest.id)
-  );
-  const publishableResultSetIds = new Set(
-    publishableResultSets.map((resultSet) => resultSet.id)
-  );
-  const executionIdByResultSetId = new Map(
-    publishableResultSets.map((resultSet) => [
-      resultSet.id,
-      resultSet.executionId,
-    ])
   );
   const trackComparisonKeysByResultSetId = new Map(
     publishableResultSets.map((resultSet) => [
@@ -403,56 +403,39 @@ export function buildCertifiedBenchmarkDashboardData(
       latestResultSetIds.has(attempt.resultSetId)
   );
   const latestAttemptIds = new Set(latestAttempts.map((attempt) => attempt.id));
-  const latestCaseIds = new Set(latestAttempts.map((attempt) => attempt.caseId));
-  const input = {
-    ...rawInput,
-    resultSets: suppliedResultSets,
-    attemptsV2: latestAttempts,
-    caseV2: rawInput.caseV2.filter((item) => latestCaseIds.has(item.id)),
-    verifierResults: rawInput.verifierResults.filter((result) =>
-      latestAttemptIds.has(result.attemptId)
-    ),
-    harnessCertifications: rawInput.harnessCertifications.slice(0, 0),
-  } satisfies CertifiedBenchmarkDashboardInput;
-  const certifiedAttempts = input.attemptsV2.filter(isCertifiedAttempt);
-  const scoredAttempts = certifiedAttempts.filter(isScoredCertifiedAttempt);
-  const excludedAttempts = certifiedAttempts.filter(
-    (attempt) => !isScoredCertifiedAttempt(attempt)
+  const verifierResults = rawInput.verifierResults.filter((result) =>
+    latestAttemptIds.has(result.attemptId)
   );
-  const certifiedAttemptIds = new Set(scoredAttempts.map((attempt) => attempt.id));
-  const verifierResults = input.verifierResults.filter((result) =>
-    certifiedAttemptIds.has(result.attemptId)
-  );
-  const verifierByAttemptId = new Map(
-    verifierResults.map((result) => [result.attemptId, result])
-  );
-  const baseLeaderboard = aggregateCertifiedRunScores({
-    attempts: scoredAttempts,
-    cases: input.caseV2,
-    teamCompositions: input.teamCompositions,
-    verifierResults,
-    executionIdByResultSetId,
-    trackComparisonKeysByResultSetId,
-  });
   const seriesByLatestId = new Map(
     resultSeries.map((series) => [series.latest.id, series])
   );
   const resultSetById = new Map(
     publishableResultSets.map((resultSet) => [resultSet.id, resultSet])
   );
+  const allSnapshotRows = publishableResultSets.map((resultSet) =>
+    materializeSnapshotRow(
+      resultSet,
+      rawInput.teamCompositions,
+      rawInput.caseV2,
+      trackComparisonKeysByResultSetId.get(resultSet.id)
+    )
+  );
+  applySnapshotRelationships(allSnapshotRows);
   const leaderboard = rankByVerifiedQuality(
-    baseLeaderboard.map((row) => {
-      if (!row.resultSetId) return row;
-      const resultSet = resultSetById.get(row.resultSetId);
-      const series = seriesByLatestId.get(row.resultSetId);
+    allSnapshotRows
+      .filter((row) => latestResultSetIds.has(row.resultSetId!))
+      .map((row) => {
+      const resultSet = resultSetById.get(row.resultSetId!);
+      const series = seriesByLatestId.get(row.resultSetId!);
       return resultSet
-        ? withSnapshotMetrics(row, resultSet, {
+        ? {
+            ...row,
             overallDelta: series?.overallDelta ?? null,
             passRateDelta: series?.passRateDelta ?? null,
             historyCount: series?.older.length ?? 0,
-          })
+          }
         : row;
-    })
+      })
   );
   const confidentLeaderboard = leaderboard.filter(
     (row) => row.attempts >= MIN_CONFIDENT_ATTEMPTS
@@ -489,83 +472,64 @@ export function buildCertifiedBenchmarkDashboardData(
   // ComboMatrix renders that as a dash. Merged and re-sorted by lift so a
   // mixed TeamIQ/WorkBench list ranks consistently regardless of which track
   // produced more rows.
-  const teamIqComboMatrixRows = sortRowsByTeamLift([
-    ...buildTeamIqComboMatrixRows({
-      attempts: scoredAttempts,
-      teamCompositions: input.teamCompositions,
-      track: "teamiq",
-      executionIdByResultSetId,
-      comparisonKeysByResultSetId: trackComparisonKeysByResultSetId,
-    }),
-    ...buildTeamIqComboMatrixRows({
-      attempts: scoredAttempts,
-      teamCompositions: input.teamCompositions,
-      track: "workbench",
-      executionIdByResultSetId,
-      comparisonKeysByResultSetId: trackComparisonKeysByResultSetId,
-    }),
-  ]);
-  // Summary quality/pass/cost/duration averages MERGE every track into one set
-  // of headline numbers, so the same underlying decision reached via two tracks
-  // must count once here too (leaderboard rows already dedupe internally).
-  // Track-scoped views below (trackRows, combo matrix, role leaderboards) keep
-  // the full scoredAttempts so per-track counts stay intact.
-  const mergedSummaryAttempts = dedupeCrossTrackAttempts(
-    scoredAttempts,
-    input.caseV2,
-    input.teamCompositions
+  const teamIqComboMatrixRows = sortRowsByTeamLift(
+    buildSnapshotComboMatrixRows({
+      rows: leaderboard,
+      teamCompositions: rawInput.teamCompositions,
+    })
+  );
+  const intrinsicAttempts = leaderboard.reduce(
+    (sum, row) => sum + row.attempts,
+    0
+  );
+  const intrinsicPassed = leaderboard.reduce(
+    (sum, row) => sum + row.passed,
+    0
+  );
+  const latestResultSets = publishableResultSets.filter((resultSet) =>
+    latestResultSetIds.has(resultSet.id)
   );
 
   return {
     summary: {
-      certifiedRuns: countCertifiedRuns(certifiedAttempts),
-      certifiedAttempts: certifiedAttempts.length,
-      scoredAttempts: scoredAttempts.length,
-      excludedAttempts: excludedAttempts.length,
-      excludedProviderAttempts: excludedAttempts.filter(
-        (attempt) => attempt.status === "provider_unavailable"
-      ).length,
-      excludedHarnessAttempts: excludedAttempts.filter(
-        (attempt) => attempt.status === "invalid_harness"
-      ).length,
-      excludedEnvironmentAttempts: excludedAttempts.filter(
-        (attempt) => attempt.status === "invalid_environment"
-      ).length,
-      excludedUserAttempts: excludedAttempts.filter(
-        (attempt) => attempt.status === "aborted_user"
-      ).length,
-      excludedCaseAttempts: excludedAttempts.filter(
-        (attempt) => attempt.status === "invalid_case"
-      ).length,
-      certifiedCases: input.caseV2.length,
+      certifiedRuns: new Set(
+        latestResultSets.flatMap((resultSet) => resultSet.runIds)
+      ).size,
+      certifiedAttempts: intrinsicAttempts,
+      scoredAttempts: intrinsicAttempts,
+      excludedAttempts: 0,
+      excludedProviderAttempts: 0,
+      excludedHarnessAttempts: 0,
+      excludedEnvironmentAttempts: 0,
+      excludedUserAttempts: 0,
+      excludedCaseAttempts: 0,
+      certifiedCases: new Set(
+        latestResultSets.flatMap((resultSet) =>
+          resultSet.expectedAttempts.map((attempt) => attempt.caseId)
+        )
+      ).size,
       certifiedTeams: leaderboard.length,
-      verifiedPassRate: rate(
-        mergedSummaryAttempts.filter((attempt) =>
-          isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))
-        ).length,
-        mergedSummaryAttempts.length
+      verifiedPassRate: rate(intrinsicPassed, intrinsicAttempts),
+      averageVerifiedQuality: weightedRowAverage(
+        leaderboard,
+        (row) => row.verifiedQuality
       ),
-      averageVerifiedQuality: averageNumbers(
-        mergedSummaryAttempts.map((attempt) =>
-          finiteMetric(attempt.verifiedQuality)
-        )
+      averageEfficiencyScore: weightedRowAverage(
+        leaderboard,
+        (row) => row.efficiencyScore
       ),
-      averageEfficiencyScore: averageNumbers(
-        mergedSummaryAttempts.map((attempt) =>
-          finiteMetric(attempt.efficiencyScore)
-        )
+      averageCostUsd: weightedRowAverage(
+        leaderboard,
+        (row) => row.averageCostUsd
       ),
-      averageCostUsd: averageNumbers(
-        mergedSummaryAttempts.map((attempt) => finiteMetric(attempt.costUsd))
+      averageDurationMs: weightedRowAverage(
+        leaderboard,
+        (row) =>
+          row.durationMs != null && row.attempts > 0
+            ? row.durationMs / row.attempts
+            : null
       ),
-      averageDurationMs: averageNumbers(
-        mergedSummaryAttempts.map((attempt) => finiteMetric(attempt.durationMs))
-      ),
-      harnessCertificationPassRate: rate(
-        input.harnessCertifications.filter((certification) => certification.passed)
-          .length,
-        input.harnessCertifications.length
-      ),
+      harnessCertificationPassRate: null,
     },
     leaderboard,
     overallLeaderboard: rankByOverall(leaderboard),
@@ -574,43 +538,26 @@ export function buildCertifiedBenchmarkDashboardData(
     speedPerPassLeaderboard: rankBySpeedPerPass(leaderboard),
     teamLiftLeaderboard: rankByTeamLift(leaderboard),
     toolReliabilityLeaderboard: rankByToolReliability(leaderboard),
-    workBenchRoleLeaderboards: buildWorkBenchRoleLeaderboards(
-      scoredAttempts,
-      input.teamCompositions,
-      verifierByAttemptId
+    workBenchRoleLeaderboards: buildSnapshotWorkBenchRoleLeaderboards(
+      leaderboard,
+      latestResultSets,
+      rawInput.teamCompositions,
     ),
     paretoFrontier,
     teamIqComboMatrixRows,
     teamIqRecommendationCards:
       buildTeamIqRecommendationCards(teamIqComboMatrixRows),
-    trackRows: buildCertifiedTrackRows(
-      input.caseV2,
-      scoredAttempts,
-      verifierByAttemptId
-    ),
+    trackRows: buildSnapshotTrackRows(leaderboard, latestResultSets),
     verifierAssertionRows: buildVerifierAssertionRows(verifierResults),
-    // Goal 1 ("most intelligent model"): a per-model, cross-track SOLO
-    // leaderboard. Built from the full certified attempts (not just scored) —
-    // buildModelIntelligenceRows filters to solo + scored itself.
-    modelIntelligence: buildModelIntelligenceRows({
-      attempts: certifiedAttempts,
-      cases: input.caseV2,
-      teamCompositions: input.teamCompositions,
-      verifierResults,
-    }),
+    // Goal 1 ("most intelligent model"): exact latest SOLO snapshot rows,
+    // with every intrinsic metric read from the frozen result-set metrics.
+    modelIntelligence: buildSnapshotModelIntelligence(
+      leaderboard,
+      latestResultSets
+    ),
     resultHistory: buildResultHistory({
       resultSeries,
-      resultSets: publishableResultSets,
-      attempts: rawInput.attemptsV2.filter(
-        (attempt) =>
-          attempt.resultSetId !== undefined &&
-          publishableResultSetIds.has(attempt.resultSetId)
-      ),
-      cases: rawInput.caseV2,
-      teams: rawInput.teamCompositions,
-      verifierResults: rawInput.verifierResults,
-      executionIdByResultSetId,
-      trackComparisonKeysByResultSetId,
+      snapshotRows: allSnapshotRows,
     }),
     audit: {
       completedSnapshots: publishableResultSets.length,
@@ -624,32 +571,63 @@ export function buildCertifiedBenchmarkDashboardData(
   };
 }
 
-function withSnapshotMetrics(
-  row: ReturnType<typeof aggregateCertifiedRunScores>[number],
+function materializeSnapshotRow(
   resultSet: BenchmarkResultSet,
-  comparisons: {
-    overallDelta: number | null;
-    passRateDelta: number | null;
-    historyCount: number;
-  }
-) {
+  teams: BenchmarkTeamComposition[],
+  cases: BenchmarkCaseV2[],
+  comparisonKeys: ReadonlyMap<string, string> | undefined
+): CertifiedRunScore {
   const metrics = resultSet.metrics!;
+  const compositionId = resultSet.expectedAttempts[0]!.teamCompositionId;
+  const team = teams.find((item) => item.id === compositionId)!;
+  const caseById = new Map(cases.map((item) => [item.id, item]));
+  const modelIds = getTeamCompositionModelIds(team);
+  const modelVariantKeys = getTeamCompositionModelVariantKeys(team);
+  const memberComparisonKeys = resultSet.configuration.roles
+    .map(benchmarkMemberComparisonKey)
+    .sort();
+  const isTeam = resultSet.configuration.subjectKind === "team";
+  const soloRole = !isTeam ? team.roles[0] : undefined;
+  const displayName = soloRole
+    ? benchmarkVariantLabel(
+        soloRole.displayName || soloRole.modelId,
+        soloRole.reasoningEffort
+      )
+    : resultSet.configuration.displayName;
   return {
-    ...row,
+    id: resultSet.id,
+    teamCompositionId: compositionId,
+    teamCompositionIds: [compositionId],
+    teamName: resultSet.configuration.displayName,
+    comboHash: team.comboHash,
+    displayName,
+    modelIds,
+    modelVariantKeys,
+    memberComparisonKeys,
+    isTeam,
+    tracks: metrics.trackBreakdown.map((track) => track.track),
+    caseTitles: resultSet.expectedAttempts.map(
+      (expected) => caseById.get(expected.caseId)?.title ?? expected.caseId
+    ),
     resultSetId: resultSet.id,
     executionId: resultSet.executionId,
     configurationKey: resultSet.configurationKey,
     completedAt: resultSet.completedAt!,
-    overallDelta: comparisons.overallDelta,
-    passRateDelta: comparisons.passRateDelta,
-    historyCount: comparisons.historyCount,
+    overallDelta: null,
+    passRateDelta: null,
+    historyCount: 0,
     attempts: metrics.attempts,
+    preliminary: metrics.attempts < MIN_CONFIDENT_ATTEMPTS,
+    cases: new Set(resultSet.expectedAttempts.map((item) => item.caseId)).size,
     passed: metrics.passed,
     failed: metrics.failed,
     verifiedPassRate: metrics.verifiedPassRate,
     verifiedQuality: metrics.verifiedQuality,
     overallScore: metrics.overallScore,
-    trackBreakdown: metrics.trackBreakdown,
+    trackBreakdown: metrics.trackBreakdown.map((track) => ({
+      ...track,
+      comparisonKey: comparisonKeys?.get(track.track),
+    })),
     jobSuccessScore: metrics.jobSuccessScore,
     efficiencyScore: metrics.efficiencyScore,
     toolReliabilityScore: metrics.toolReliabilityScore,
@@ -664,37 +642,63 @@ function withSnapshotMetrics(
     totalTokens: metrics.totalTokens,
     tokensPerPass: metrics.tokensPerPass,
     costBasis: metrics.costBasis,
+    bestSoloScore: null,
+    teamLift: null,
+    teamLiftLabel: null,
+    teamLiftTracks: [],
   };
+}
+
+function applySnapshotRelationships(rows: CertifiedRunScore[]): void {
+  const rowsByExecution = new Map<string, CertifiedRunScore[]>();
+  for (const row of rows) {
+    const records = rowsByExecution.get(row.executionId!) ?? [];
+    records.push(row);
+    rowsByExecution.set(row.executionId!, records);
+  }
+  for (const executionRows of rowsByExecution.values()) {
+    const soloCandidatesByMember = new Map<string, CertifiedRunScore[]>();
+    for (const row of executionRows) {
+      if (row.isTeam || row.memberComparisonKeys.length !== 1) continue;
+      const key = row.memberComparisonKeys[0]!;
+      const candidates = soloCandidatesByMember.get(key) ?? [];
+      candidates.push(row);
+      soloCandidatesByMember.set(key, candidates);
+    }
+    for (const row of executionRows) {
+      if (!row.isTeam) continue;
+      const solosByMember = new Map<string, CertifiedRunScore>();
+      for (const memberKey of row.memberComparisonKeys) {
+        const candidate = (soloCandidatesByMember.get(memberKey) ?? []).find(
+          (solo) =>
+            row.trackBreakdown.every((teamTrack) =>
+              solo.trackBreakdown.some(
+                (soloTrack) =>
+                  soloTrack.track === teamTrack.track &&
+                  soloTrack.comparisonKey === teamTrack.comparisonKey
+              )
+            )
+        );
+        if (candidate) solosByMember.set(memberKey, candidate);
+      }
+      const lift = computeComparableTrackTeamLift(row, solosByMember);
+      if (!lift) continue;
+      row.bestSoloScore = lift.bestSoloScore;
+      row.teamLift = lift.teamLift;
+      row.teamLiftLabel = lift.label;
+      row.teamLiftTracks = lift.tracks;
+    }
+  }
 }
 
 function buildResultHistory(input: {
   resultSeries: ReturnType<typeof selectBenchmarkResultSeries>;
-  resultSets: BenchmarkResultSet[];
-  attempts: BenchmarkAttemptV2[];
-  cases: BenchmarkCaseV2[];
-  teams: BenchmarkTeamComposition[];
-  verifierResults: BenchmarkVerifierResult[];
-  executionIdByResultSetId: ReadonlyMap<string, string>;
-  trackComparisonKeysByResultSetId: ReadonlyMap<
-    string,
-    ReadonlyMap<string, string>
-  >;
+  snapshotRows: CertifiedRunScore[];
 }): CertifiedBenchmarkDashboardData["resultHistory"] {
-  const rows = aggregateCertifiedRunScores({
-    attempts: input.attempts.filter(isScoredCertifiedAttempt),
-    cases: input.cases,
-    teamCompositions: input.teams,
-    verifierResults: input.verifierResults,
-    executionIdByResultSetId: input.executionIdByResultSetId,
-    trackComparisonKeysByResultSetId: input.trackComparisonKeysByResultSetId,
-  });
   const rowByResultSetId = new Map(
-    rows.flatMap((row) =>
+    input.snapshotRows.flatMap((row) =>
       row.resultSetId ? [[row.resultSetId, row] as const] : []
     )
-  );
-  const resultSetById = new Map(
-    input.resultSets.map((resultSet) => [resultSet.id, resultSet])
   );
   return input.resultSeries.map((series) => ({
     configurationKey: series.configurationKey,
@@ -703,14 +707,17 @@ function buildResultHistory(input: {
     passRateDelta: series.passRateDelta,
     older: series.older.flatMap((resultSet) => {
       const row = rowByResultSetId.get(resultSet.id);
-      const stored = resultSetById.get(resultSet.id);
-      return row && stored
+      return row
         ? [
-            withSnapshotMetrics(row, stored, {
+            {
+              ...row,
+              resultSetId: resultSet.id,
+              executionId: resultSet.executionId,
+              configurationKey: resultSet.configurationKey,
+              completedAt: resultSet.completedAt!,
               overallDelta: null,
               passRateDelta: null,
-              historyCount: 0,
-            }),
+            },
           ]
         : [];
     }),
@@ -739,6 +746,7 @@ function resultSetTrackComparisonKeys(
       return [
         track.track,
         JSON.stringify({
+          executionId: resultSet.executionId,
           suiteId: track.suiteId,
           maxTokens: track.maxTokens,
           caseManifest: [...track.caseManifest].sort((left, right) =>
@@ -753,142 +761,69 @@ function resultSetTrackComparisonKeys(
   );
 }
 
-function buildWorkBenchRoleLeaderboards(
-  attempts: BenchmarkAttemptV2[],
-  teams: CertifiedBenchmarkDashboardInput["teamCompositions"],
-  verifierByAttemptId: Map<string, BenchmarkVerifierResult>
+function buildSnapshotWorkBenchRoleLeaderboards(
+  rows: CertifiedRunScore[],
+  resultSets: BenchmarkResultSet[],
+  teams: BenchmarkTeamComposition[]
 ): CertifiedBenchmarkDashboardData["workBenchRoleLeaderboards"] {
   type Role = WorkBenchRoleLeaderboardRow["role"];
+  const rowByResultSetId = new Map(rows.map((row) => [row.resultSetId, row]));
   const teamById = new Map(teams.map((team) => [team.id, team]));
-  const rows = new Map<
-    string,
-    {
-      role: Role;
-      modelId: string;
-      reasoningEffort: string;
-      variantKey: string;
-      displayName: string;
-      attempts: number;
-      passed: number;
-      verifiedQualitySum: number;
-      efficiencySum: number;
-      costSum: number;
-      costSamples: number;
-      durationSum: number;
-      durationSamples: number;
-    }
-  >();
-
-  const addRoleAttempt = (
-    role: Role,
-    modelId: string,
-    displayName: string,
-    reasoningEffortValue: unknown,
-    attempt: BenchmarkAttemptV2
-  ) => {
-    const reasoningEffort =
-      normalizeBenchmarkReasoningEffort(reasoningEffortValue);
-    const variantKey = benchmarkVariantKey(modelId, reasoningEffort);
-    const key = `${role}:${variantKey}`;
-    const row =
-      rows.get(key) ??
-      {
-        role,
-        modelId,
-        reasoningEffort,
-        variantKey,
-        displayName: benchmarkVariantLabel(
-          displayName || displayModelName(modelId),
-          reasoningEffort
-        ),
-        attempts: 0,
-        passed: 0,
-        verifiedQualitySum: 0,
-        efficiencySum: 0,
-        costSum: 0,
-        costSamples: 0,
-        durationSum: 0,
-        durationSamples: 0,
-      };
-    row.attempts += 1;
-    if (isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))) {
-      row.passed += 1;
-    }
-    row.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
-    row.efficiencySum += finiteMetric(attempt.efficiencyScore) ?? 0;
-    const cost = finiteMetric(attempt.costUsd);
-    if (cost != null) {
-      row.costSum += cost;
-      row.costSamples += 1;
-    }
-    const durationMs = finiteMetric(attempt.durationMs);
-    if (durationMs != null) {
-      row.durationSum += durationMs;
-      row.durationSamples += 1;
-    }
-    rows.set(key, row);
-  };
-
-  for (const attempt of attempts) {
-    if (attempt.track !== "workbench") continue;
-    const team = teamById.get(attempt.teamCompositionId);
-    if (!team) continue;
-    for (const role of team.roles) {
-      if (
-        role.role === "architect" ||
-        role.role === "worker" ||
-        role.role === "reviewer"
-      ) {
-        addRoleAttempt(
-          role.role,
-          role.modelId,
-          role.displayName,
-          role.reasoningEffort,
-          attempt
-        );
-      } else if (role.role === "single") {
-        addRoleAttempt(
-          "worker",
-          role.modelId,
-          role.displayName,
-          role.reasoningEffort,
-          attempt
-        );
-      }
-    }
-  }
-
-  const byRole: CertifiedBenchmarkDashboardData["workBenchRoleLeaderboards"] = {
+  const output: CertifiedBenchmarkDashboardData["workBenchRoleLeaderboards"] = {
     architect: [],
     worker: [],
     reviewer: [],
   };
-  for (const row of rows.values()) {
-    byRole[row.role].push({
-      id: `${row.role}:${row.variantKey}`,
-      role: row.role,
-      modelId: row.modelId,
-      reasoningEffort: row.reasoningEffort,
-      variantKey: row.variantKey,
-      displayName: row.displayName,
-      attempts: row.attempts,
-      passed: row.passed,
-      verifiedPassRate: rate(row.passed, row.attempts),
-      verifiedQuality:
-        row.attempts > 0 ? round(row.verifiedQualitySum / row.attempts, 4) : 0,
-      efficiencyScore:
-        row.attempts > 0 ? round(row.efficiencySum / row.attempts, 4) : 0,
-      averageCostUsd:
-        row.costSamples > 0 ? round(row.costSum / row.costSamples, 6) : null,
-      averageDurationMs:
-        row.durationSamples > 0
-          ? round(row.durationSum / row.durationSamples, 2)
-          : null,
-    });
+  for (const resultSet of resultSets) {
+    const row = rowByResultSetId.get(resultSet.id);
+    const track = row?.trackBreakdown.find(
+      (item) => item.track === "workbench"
+    );
+    const team = row ? teamById.get(row.teamCompositionId) : undefined;
+    if (!row || !track || !team) continue;
+    for (const role of team.roles) {
+      const mappedRole: Role | null =
+        role.role === "single"
+          ? "worker"
+          : role.role === "architect" ||
+              role.role === "worker" ||
+              role.role === "reviewer"
+            ? role.role
+            : null;
+      if (mappedRole) {
+        const reasoningEffort = normalizeBenchmarkReasoningEffort(
+          role.reasoningEffort
+        );
+        const variantKey = benchmarkVariantKey(role.modelId, reasoningEffort);
+        output[mappedRole].push({
+          id: `${resultSet.id}:${mappedRole}:${variantKey}`,
+          role: mappedRole,
+          modelId: role.modelId,
+          reasoningEffort,
+          variantKey,
+          displayName: benchmarkVariantLabel(
+            role.displayName || displayModelName(role.modelId),
+            reasoningEffort
+          ),
+          attempts: track.attempts,
+          passed: track.passed,
+          verifiedPassRate: track.verifiedPassRate,
+          verifiedQuality: track.averageVerifiedQuality,
+          efficiencyScore: row.efficiencyScore,
+          averageCostUsd: row.averageCostUsd,
+          averageDurationMs:
+            row.durationMs != null && row.attempts > 0
+              ? row.durationMs / row.attempts
+              : null,
+          resultSetId: resultSet.id,
+          executionId: resultSet.executionId,
+          configurationKey: resultSet.configurationKey,
+        });
+      }
+    }
   }
-
   for (const key of ["architect", "worker", "reviewer"] as const) {
-    byRole[key].sort(
+    output[key].sort(
       (a, b) =>
         b.verifiedQuality - a.verifiedQuality ||
         (b.verifiedPassRate ?? -1) - (a.verifiedPassRate ?? -1) ||
@@ -896,7 +831,7 @@ function buildWorkBenchRoleLeaderboards(
         a.displayName.localeCompare(b.displayName)
     );
   }
-  return byRole;
+  return output;
 }
 
 function isCertifiedAttempt(attempt: BenchmarkAttemptV2): boolean {
@@ -922,85 +857,114 @@ function isVerifiedPassed(
   return attempt.status === "passed";
 }
 
-function countCertifiedRuns(attempts: BenchmarkAttemptV2[]): number {
-  const runIds = new Set(
-    attempts
-      .map((attempt) => attempt.runId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0)
-  );
-  return runIds.size > 0 ? runIds.size : attempts.length;
+function weightedRowAverage(
+  rows: CertifiedRunScore[],
+  valueFor: (row: CertifiedRunScore) => number | null
+): number | null {
+  let sum = 0;
+  let samples = 0;
+  for (const row of rows) {
+    const value = valueFor(row);
+    if (value == null || !Number.isFinite(value) || row.attempts <= 0) continue;
+    sum += value * row.attempts;
+    samples += row.attempts;
+  }
+  return samples > 0 ? round(sum / samples, 6) : null;
 }
 
-function buildCertifiedTrackRows(
-  cases: BenchmarkCaseV2[],
-  attempts: BenchmarkAttemptV2[],
-  verifierByAttemptId: Map<string, BenchmarkVerifierResult>
+function buildSnapshotTrackRows(
+  rows: CertifiedRunScore[],
+  resultSets: BenchmarkResultSet[]
 ): CertifiedBenchmarkDashboardData["trackRows"] {
-  const caseById = new Map(cases.map((item) => [item.id, item]));
-  const rows = new Map<
+  const caseIdsByTrack = new Map<string, Set<string>>();
+  for (const resultSet of resultSets) {
+    for (const track of resultSet.configuration.tracks) {
+      const caseIds = caseIdsByTrack.get(track.track) ?? new Set<string>();
+      for (const item of track.caseManifest) caseIds.add(item.caseId);
+      caseIdsByTrack.set(track.track, caseIds);
+    }
+  }
+  const accumulators = new Map<
     string,
-    {
-      track: string;
-      caseIds: Set<string>;
-      attempts: number;
-      passed: number;
-      verifiedQualitySum: number;
-    }
+    { attempts: number; passed: number; qualitySum: number }
   >();
-
-  for (const item of cases) {
-    const row = trackRowFor(rows, item.track);
-    row.caseIds.add(item.id);
-  }
-
-  for (const attempt of attempts) {
-    const track = attempt.track ?? caseById.get(attempt.caseId)?.track ?? "unknown";
-    const row = trackRowFor(rows, track);
-    if (attempt.caseId) row.caseIds.add(attempt.caseId);
-    row.attempts += 1;
-    if (isVerifiedPassed(attempt, verifierByAttemptId.get(attempt.id))) {
-      row.passed += 1;
+  for (const row of rows) {
+    for (const track of row.trackBreakdown) {
+      const accumulator = accumulators.get(track.track) ?? {
+        attempts: 0,
+        passed: 0,
+        qualitySum: 0,
+      };
+      accumulator.attempts += track.attempts;
+      accumulator.passed += track.passed;
+      accumulator.qualitySum +=
+        track.averageVerifiedQuality * track.attempts;
+      accumulators.set(track.track, accumulator);
     }
-    row.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
   }
-
-  return Array.from(rows.values())
-    .map((row) => ({
-      track: row.track,
-      cases: row.caseIds.size,
-      attempts: row.attempts,
-      passed: row.passed,
-      verifiedPassRate: rate(row.passed, row.attempts),
+  return [...accumulators.entries()]
+    .map(([track, accumulator]) => ({
+      track,
+      cases: caseIdsByTrack.get(track)?.size ?? 0,
+      attempts: accumulator.attempts,
+      passed: accumulator.passed,
+      verifiedPassRate: rate(accumulator.passed, accumulator.attempts),
       averageVerifiedQuality:
-        row.attempts > 0 ? round(row.verifiedQualitySum / row.attempts, 4) : null,
+        accumulator.attempts > 0
+          ? round(accumulator.qualitySum / accumulator.attempts, 4)
+          : null,
     }))
-    .sort((a, b) => a.track.localeCompare(b.track));
+    .sort((left, right) => left.track.localeCompare(right.track));
 }
 
-function trackRowFor(
-  rows: Map<
-    string,
-    {
-      track: string;
-      caseIds: Set<string>;
-      attempts: number;
-      passed: number;
-      verifiedQualitySum: number;
-    }
-  >,
-  track: string
-) {
-  const existing = rows.get(track);
-  if (existing) return existing;
-  const created = {
-    track,
-    caseIds: new Set<string>(),
-    attempts: 0,
-    passed: 0,
-    verifiedQualitySum: 0,
-  };
-  rows.set(track, created);
-  return created;
+function buildSnapshotModelIntelligence(
+  rows: CertifiedRunScore[],
+  resultSets: BenchmarkResultSet[]
+): ModelIntelligenceRow[] {
+  const resultSetById = new Map(
+    resultSets.map((resultSet) => [resultSet.id, resultSet])
+  );
+  return rows
+    .filter((row) => !row.isTeam && row.resultSetId)
+    .map((row) => {
+      const resultSet = resultSetById.get(row.resultSetId!);
+      const role = resultSet?.configuration.roles[0];
+      const modelId = role?.modelId ?? row.modelIds[0] ?? "unknown";
+      const reasoningEffort = normalizeBenchmarkReasoningEffort(
+        role?.reasoningEffort
+      );
+      const tracks = row.trackBreakdown
+        .map((track) => ({
+          track: track.track as BenchmarkTrack,
+          attempts: track.attempts,
+          passed: track.passed,
+          verifiedPassRate: track.verifiedPassRate,
+          averageVerifiedQuality: track.averageVerifiedQuality,
+        }))
+        .sort((left, right) => left.track.localeCompare(right.track));
+      return {
+        modelId,
+        reasoningEffort,
+        variantKey: benchmarkVariantKey(modelId, reasoningEffort),
+        displayName: row.displayName,
+        attempts: row.attempts,
+        passed: row.passed,
+        verifiedPassRate: row.verifiedPassRate,
+        combinedScore: row.overallScore ?? row.verifiedQuality,
+        trackCount: tracks.length,
+        preliminary: row.preliminary,
+        tracks,
+        resultSetId: row.resultSetId,
+        executionId: row.executionId,
+        configurationKey: row.configurationKey,
+      };
+    })
+    .sort(
+      (left, right) =>
+        Number(left.preliminary) - Number(right.preliminary) ||
+        right.combinedScore - left.combinedScore ||
+        left.displayName.localeCompare(right.displayName)
+    );
 }
 
 function buildVerifierAssertionRows(
@@ -1310,6 +1274,9 @@ export interface ModelIntelligenceRow {
   preliminary: boolean;
   /** Per-track breakdown, sorted by track id. */
   tracks: ModelIntelligenceTrackBreakdown[];
+  resultSetId?: string;
+  executionId?: string;
+  configurationKey?: string;
 }
 
 export interface ModelIntelligenceInput {

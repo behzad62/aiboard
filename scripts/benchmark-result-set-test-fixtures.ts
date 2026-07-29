@@ -1,6 +1,7 @@
 import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
 import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
 import type {
+  CertifiedAggregateInput,
   CertifiedBenchmarkDashboardInput,
 } from "../lib/benchmark/scoring/types";
 import type {
@@ -21,6 +22,31 @@ const SCOREABLE = new Set<BenchmarkAttemptV2["status"]>([
   "failed_verifier",
   "failed_tool_use",
 ]);
+
+export function aggregateCompletedResultSetFixtures(
+  input: Omit<CertifiedAggregateInput, "resultSetIds">
+) {
+  if (input.attempts.length === 0) return [];
+  const teamById = new Map(
+    (input.teamCompositions ?? []).map((team) => [team.id, team])
+  );
+  const attempts = input.attempts.map((attempt) => {
+    if (attempt.resultSetId) return attempt;
+    const team = teamById.get(attempt.teamCompositionId);
+    const identity = team
+      ? canonicalTeamCompositionKey(team)
+      : attempt.teamCompositionId;
+    return {
+      ...attempt,
+      resultSetId: `test-aggregate:${identity}`,
+    };
+  });
+  return aggregateCertifiedRunScores({
+    ...input,
+    attempts,
+    resultSetIds: new Set(attempts.map((attempt) => attempt.resultSetId!)),
+  });
+}
 
 /**
  * Test-only adapter for pre-result-set dashboard fixtures. It assigns the
@@ -111,6 +137,7 @@ export function withCompletedResultSetFixtures(
       const team = teamById.get(batch[0]!.teamCompositionId);
       const configuration = configurationFor(team, clonedBatch, casesById);
       const row = aggregateCertifiedRunScores({
+        resultSetIds: new Set([resultSetId]),
         attempts: clonedBatch,
         cases,
         teamCompositions: input.teamCompositions,
@@ -265,9 +292,7 @@ function configurationFor(
       ? normalizeBenchmarkReasoningEffort(roles[0]?.reasoningEffort)
       : undefined,
     strategy: team?.strategy,
-    roles: solo
-      ? []
-      : roles.map((role) => ({
+    roles: roles.map((role) => ({
           role: role.role,
           slot: role.slot,
           providerId: role.providerId,

@@ -1,6 +1,5 @@
 import {
   buildCertifiedBenchmarkDashboardData,
-  isScoredCertifiedAttempt,
   type BenchmarkDashboardData,
 } from "@/lib/benchmark/metrics";
 import {
@@ -8,8 +7,7 @@ import {
   explainCertifiedFailureStatus,
   groupFailureClassifications,
 } from "@/lib/benchmark/failures";
-import { aggregateCertifiedRunScores } from "@/lib/benchmark/scoring/aggregate";
-import { isCapturedBuildCase } from "@/lib/benchmark/build-cases";
+import type { CertifiedRunScore } from "@/lib/benchmark/scoring/types";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -17,98 +15,22 @@ import type {
   BenchmarkReportBundleV2,
   BenchmarkTeamComposition,
   BenchmarkVerifierResult,
-  HarnessCertificationResult,
 } from "@/lib/benchmark/types";
 import {
-  benchmarkVariantKey,
   benchmarkVariantLabel,
   normalizeBenchmarkReasoningEffort,
 } from "@/lib/benchmark/model-effort";
-import { canonicalTeamCompositionKey } from "@/lib/benchmark/teamiq/compositions";
 
 export function formatBenchmarkMarkdownReport(
   bundle: BenchmarkReportBundleV2,
-  dashboard: BenchmarkDashboardData
+  _dashboard: BenchmarkDashboardData
 ): string {
   const lines: string[] = [];
   lines.push("# LLM Benchmark Lab Report");
   lines.push("");
   lines.push(`Generated: ${bundle.exportedAt}`);
   lines.push("");
-  lines.push("## Summary");
-  lines.push(`- Total runs: ${dashboard.summary.totalRuns}`);
-  lines.push(`- Runnable cases: ${dashboard.summary.totalCases}`);
-  if (dashboard.summary.capturedCases > 0) {
-    lines.push(
-      `- Captured stop-report cases (diagnostics, not runnable): ${dashboard.summary.capturedCases}`
-    );
-  }
-  lines.push(`- Models: ${dashboard.summary.totalModels}`);
-  lines.push(
-    `- Completion rate: ${formatPct(dashboard.summary.completionRate)}`
-  );
-  lines.push(
-    `- Schema-valid rate: ${formatPct(dashboard.summary.schemaValidRate)}`
-  );
-  lines.push(
-    `- Legal-action rate: ${formatPct(dashboard.summary.legalActionRate)}`
-  );
-  lines.push(`- Fallback rate: ${formatPct(dashboard.summary.fallbackRate)}`);
-  lines.push(`- Average cost: ${formatUsd(dashboard.summary.averageCostUsd)}`);
-  lines.push(
-    `- Average latency: ${formatDuration(dashboard.summary.averageLatencyMs)}`
-  );
-  lines.push("");
-
-  lines.push("## Model Scorecards");
-  for (const model of dashboard.models.slice(0, 12)) {
-    lines.push(
-      `- ${model.displayName}: quality ${model.qualityScore}/100, strategy ${model.strategyScore}/100, rules ${model.ruleComplianceScore}/100, structured output ${model.structuredOutputScore}/100, tool use ${model.toolUseScore}/100, reliability ${model.reliabilityScore}/100`
-    );
-  }
-  lines.push("");
-
-  lines.push("## Failure Categories");
-  for (const row of dashboard.failureRows.slice(0, 12)) {
-    lines.push(
-      `- ${row.displayName}: provider ${row.provider}, parser ${row.parser}, rules ${row.rules}, tool ${row.tool}, verifier ${row.verifier}, other ${row.other}`
-    );
-  }
-  if (dashboard.failureRows.length === 0) lines.push("- No failures recorded.");
-  lines.push("");
-
-  lines.push("## Head To Head");
-  for (const row of dashboard.headToHeadRows.slice(0, 12)) {
-    lines.push(
-      `- ${row.modelADisplay} vs ${row.modelBDisplay}: ${row.modelAWins}-${row.modelBWins}-${row.draws} over ${row.games} game(s)`
-    );
-  }
-  if (dashboard.headToHeadRows.length === 0) {
-    lines.push("- No two-model game matches recorded.");
-  }
-  lines.push("");
-
   appendCertifiedReportSections(lines, bundle);
-
-  const capturedBundleCases = bundle.cases.filter(isCapturedBuildCase);
-  lines.push("## Raw Bundle Counts");
-  lines.push(`- Suites: ${bundle.suites.length}`);
-  lines.push(`- Runs: ${bundle.runs.length}`);
-  lines.push(
-    `- Cases: ${bundle.cases.length - capturedBundleCases.length} runnable` +
-      (capturedBundleCases.length > 0
-        ? ` (+${capturedBundleCases.length} captured stop-report case(s), diagnostics only)`
-        : "")
-  );
-  lines.push(`- Attempts: ${bundle.attempts.length}`);
-  lines.push(`- Metric values: ${bundle.metricValues.length}`);
-  lines.push(`- Artifacts: ${bundle.artifacts.length}`);
-  lines.push(`- Failures: ${bundle.failures.length}`);
-  lines.push(`- Model-call traces: ${bundle.traces.length}`);
-  lines.push("");
-  lines.push(
-    "Paste this report with the exported JSON bundle when you want Codex to debug a benchmark result."
-  );
   return lines.join("\n");
 }
 
@@ -154,78 +76,49 @@ function appendCertifiedReportSections(
       attempt.resultSetId !== undefined &&
       latestResultSetIds.has(attempt.resultSetId)
   );
-  const scoredAttempts = certifiedAttempts.filter(isScoredCertifiedAttempt);
-  const excludedAttempts = certifiedAttempts.filter(
-    (attempt) => !isScoredCertifiedAttempt(attempt)
-  );
-  const scoredAttemptIds = new Set(scoredAttempts.map((attempt) => attempt.id));
+  const scoredAttempts = certifiedAttempts;
+  const scoredAttemptIds = new Set(certifiedAttempts.map((attempt) => attempt.id));
   const certifiedVerifierResults = bundle.verifierResults.filter((result) =>
     scoredAttemptIds.has(result.attemptId)
   );
-  const completedAttempts = scoredAttempts.filter((attempt) =>
-    isCertifiedAttemptComplete(attempt.status)
-  );
-  const passedAttempts = scoredAttempts.filter(
-    (attempt) => attempt.status === "passed"
-  );
-  const verifiedAttempts = certifiedVerifierResults.filter(
-    (result) => result.passed
-  );
-  const uniqueRunIds = uniqueValues(
-    certifiedAttempts.map((attempt) => attempt.runId).filter(isNonEmptyString)
-  );
-  const uniqueCaseIds = uniqueValues(bundle.caseV2.map((item) => item.id));
-  const averageQuality = average(
-    completedAttempts
-      .map((attempt) => attempt.verifiedQuality)
-      .filter(isFiniteNumber)
-  );
-  const averageCost = average(
-    completedAttempts.map((attempt) => attempt.costUsd).filter(isFiniteNumber)
-  );
-  const averageDuration = average(
-    completedAttempts
-      .map((attempt) => attempt.durationMs)
-      .filter(isFiniteNumber)
-  );
+  const latestCaseIds = new Set(certifiedAttempts.map((attempt) => attempt.caseId));
+  const latestCases = bundle.caseV2.filter((item) => latestCaseIds.has(item.id));
 
   lines.push("## Certified Run Summary");
-  lines.push(`- Certified runs: ${uniqueRunIds.length}`);
-  lines.push(`- Certified cases: ${uniqueCaseIds.length}`);
-  lines.push(`- Certified attempts: ${certifiedAttempts.length}`);
-  lines.push(`- Scored attempts: ${scoredAttempts.length}`);
+  lines.push(`- Certified runs: ${certifiedDashboard.summary.certifiedRuns}`);
+  lines.push(`- Certified cases: ${certifiedDashboard.summary.certifiedCases}`);
+  lines.push(`- Certified attempts: ${certifiedDashboard.summary.certifiedAttempts}`);
+  lines.push(`- Scored attempts: ${certifiedDashboard.summary.scoredAttempts}`);
   lines.push(
-    `- Excluded attempts: ${excludedAttempts.length} (provider ${
-      excludedAttempts.filter((attempt) => attempt.status === "provider_unavailable")
-        .length
-    }, harness ${
-      excludedAttempts.filter((attempt) => attempt.status === "invalid_harness")
-        .length
-    }, environment ${
-      excludedAttempts.filter((attempt) => attempt.status === "invalid_environment")
-        .length
-    }, user ${
-      excludedAttempts.filter((attempt) => attempt.status === "aborted_user").length
-    })`
+    `- Excluded attempts: ${certifiedDashboard.summary.excludedAttempts} (provider ${certifiedDashboard.summary.excludedProviderAttempts}, harness ${certifiedDashboard.summary.excludedHarnessAttempts}, environment ${certifiedDashboard.summary.excludedEnvironmentAttempts}, user ${certifiedDashboard.summary.excludedUserAttempts})`
   );
   lines.push(
-    `- Completed attempts: ${completedAttempts.length} (${formatPct(
-      rate(completedAttempts.length, scoredAttempts.length)
+    `- Completed attempts: ${certifiedDashboard.summary.scoredAttempts} (${formatPct(
+      rate(
+        certifiedDashboard.summary.scoredAttempts,
+        certifiedDashboard.summary.certifiedAttempts
+      )
     )})`
   );
   lines.push(
-    `- Verified pass rate: ${formatPct(
-      rate(verifiedAttempts.length, scoredAttempts.length)
+    `- Verified pass rate: ${formatPct(certifiedDashboard.summary.verifiedPassRate)}`
+  );
+  lines.push(
+    `- Attempt pass rate: ${formatPct(certifiedDashboard.summary.verifiedPassRate)}`
+  );
+  lines.push(
+    `- Average verified quality: ${formatNormalizedScore(
+      certifiedDashboard.summary.averageVerifiedQuality
     )}`
   );
   lines.push(
-    `- Attempt pass rate: ${formatPct(
-      rate(passedAttempts.length, scoredAttempts.length)
+    `- Average cost: ${formatUsd(certifiedDashboard.summary.averageCostUsd)}`
+  );
+  lines.push(
+    `- Average duration: ${formatDuration(
+      certifiedDashboard.summary.averageDurationMs
     )}`
   );
-  lines.push(`- Average verified quality: ${formatNormalizedScore(averageQuality)}`);
-  lines.push(`- Average cost: ${formatUsd(averageCost)}`);
-  lines.push(`- Average duration: ${formatDuration(averageDuration)}`);
   lines.push("");
 
   lines.push("## Latest Certified Snapshots");
@@ -259,45 +152,35 @@ function appendCertifiedReportSections(
   }
   lines.push("");
 
-  appendTopCertifiedTeams(lines, bundle, scoredAttempts);
-  appendTopCertifiedModels(lines, bundle, scoredAttempts);
-  appendCertifiedTradeoffs(lines, bundle, scoredAttempts);
-  appendTeamLiftMatrix(lines, bundle, scoredAttempts);
+  appendTopCertifiedTeams(lines, bundle, certifiedDashboard.leaderboard);
+  appendTopCertifiedModels(lines, certifiedDashboard.leaderboard);
+  appendCertifiedTradeoffs(lines, certifiedDashboard.leaderboard);
+  appendTeamLiftMatrix(lines, bundle, certifiedDashboard.leaderboard);
   appendCertifiedFailureTaxonomy(lines, bundle, certifiedAttempts);
   appendVerifierAssertionSummary(lines, certifiedVerifierResults);
-  appendHarnessVersions(lines, bundle, scoredAttempts);
-  appendCaseVersions(lines, bundle.caseV2);
-  appendReproducibilityHashes(lines, bundle);
-  appendRawV2Counts(lines, bundle);
+  appendHarnessVersions(lines, scoredAttempts);
+  appendCaseVersions(lines, latestCases);
+  appendReproducibilityHashes(
+    lines,
+    bundle,
+    latestCases,
+    new Set(certifiedDashboard.leaderboard.map((row) => row.teamCompositionId))
+  );
 }
 
 function appendTopCertifiedTeams(
   lines: string[],
   bundle: BenchmarkReportBundleV2,
-  certifiedAttempts: BenchmarkAttemptV2[]
+  snapshotRows: CertifiedRunScore[]
 ): void {
   const teamsById = new Map(bundle.teamCompositions.map((team) => [team.id, team]));
-  const rows = Array.from(
-    groupAttemptsByTeam(certifiedAttempts, bundle.teamCompositions).entries()
-  )
-    .map(([teamId, attempts]) => {
-      const team = teamsById.get(teamId);
-      const quality = average(
-        attempts.map((attempt) => attempt.verifiedQuality).filter(isFiniteNumber)
-      );
-      return {
-        teamId,
-        label: team?.name ?? teamId,
-        roster: formatTeamRoster(team),
-        attempts: attempts.length,
-        passed: attempts.filter((attempt) => attempt.status === "passed").length,
-        quality,
-        cost: average(
-          attempts.map((attempt) => attempt.costUsd).filter(isFiniteNumber)
-        ),
-      };
-    })
-    .sort((a, b) => (b.quality ?? -1) - (a.quality ?? -1))
+  const rows = snapshotRows
+    .map((row) => ({
+      ...row,
+      label: row.teamName,
+      roster: formatTeamRoster(teamsById.get(row.teamCompositionId)),
+    }))
+    .sort((a, b) => b.verifiedQuality - a.verifiedQuality)
     .slice(0, 8);
 
   lines.push("## Top Certified Teams");
@@ -306,10 +189,12 @@ function appendTopCertifiedTeams(
   } else {
     for (const row of rows) {
       lines.push(
-        `- ${row.label}: quality ${formatNormalizedScore(row.quality)}, pass rate ${formatPct(
-          rate(row.passed, row.attempts)
-        )}, ${row.attempts} attempt(s), avg cost ${formatUsd(row.cost)}${
+        `- ${row.label}: quality ${formatNormalizedScore(row.verifiedQuality)}, pass rate ${formatPct(
+          row.verifiedPassRate
+        )}, ${row.attempts} attempt(s), avg cost ${formatUsd(row.averageCostUsd)}${
           row.roster ? `; roster ${row.roster}` : ""
+        }; snapshot ${row.resultSetId ?? "n/a"}; configuration ${
+          row.configurationKey ?? "n/a"
         }`
       );
     }
@@ -319,24 +204,11 @@ function appendTopCertifiedTeams(
 
 function appendTopCertifiedModels(
   lines: string[],
-  bundle: BenchmarkReportBundleV2,
-  certifiedAttempts: BenchmarkAttemptV2[]
+  snapshotRows: CertifiedRunScore[]
 ): void {
-  const teamsById = new Map(bundle.teamCompositions.map((team) => [team.id, team]));
-  const rows = Array.from(groupAttemptsByModel(certifiedAttempts, teamsById).entries())
-    .map(([variantKey, item]) => ({
-      variantKey,
-      displayName: item.displayName,
-      attempts: item.attempts.length,
-      quality: average(
-        item.attempts
-          .map((attempt) => attempt.verifiedQuality)
-          .filter(isFiniteNumber)
-      ),
-      passed: item.attempts.filter((attempt) => attempt.status === "passed")
-        .length,
-    }))
-    .sort((a, b) => (b.quality ?? -1) - (a.quality ?? -1))
+  const rows = snapshotRows
+    .filter((row) => !row.isTeam)
+    .sort((a, b) => b.verifiedQuality - a.verifiedQuality)
     .slice(0, 8);
 
   lines.push("## Top Certified Models");
@@ -346,10 +218,12 @@ function appendTopCertifiedModels(
     for (const row of rows) {
       lines.push(
         `- ${row.displayName}: quality ${formatNormalizedScore(
-          row.quality
-        )}, pass rate ${formatPct(rate(row.passed, row.attempts))}, ${
+          row.verifiedQuality
+        )}, pass rate ${formatPct(row.verifiedPassRate)}, ${
           row.attempts
-        } attempt(s)`
+        } attempt(s); snapshot ${row.resultSetId ?? "n/a"}; configuration ${
+          row.configurationKey ?? "n/a"
+        }`
       );
     }
   }
@@ -358,15 +232,9 @@ function appendTopCertifiedModels(
 
 function appendCertifiedTradeoffs(
   lines: string[],
-  bundle: BenchmarkReportBundleV2,
-  certifiedAttempts: BenchmarkAttemptV2[]
+  snapshotRows: CertifiedRunScore[]
 ): void {
-  const rows = aggregateCertifiedRunScores({
-    attempts: certifiedAttempts,
-    cases: bundle.caseV2,
-    teamCompositions: bundle.teamCompositions,
-    verifierResults: bundle.verifierResults,
-  })
+  const rows = [...snapshotRows]
     .sort(
       (a, b) =>
         b.efficiencyScore - a.efficiencyScore ||
@@ -385,7 +253,11 @@ function appendCertifiedTradeoffs(
           row.verifiedQuality
         )}, efficiency ${formatScore(row.efficiencyScore)}, cost/pass ${formatUsd(
           row.costPerPass
-        )}, speed/pass ${formatDuration(row.speedPerPassMs)}`
+        )}, speed/pass ${formatDuration(
+          row.speedPerPassMs
+        )}; snapshot ${row.resultSetId ?? "n/a"}; configuration ${
+          row.configurationKey ?? "n/a"
+        }`
       );
     }
   }
@@ -395,14 +267,9 @@ function appendCertifiedTradeoffs(
 function appendTeamLiftMatrix(
   lines: string[],
   bundle: BenchmarkReportBundleV2,
-  certifiedAttempts: BenchmarkAttemptV2[]
+  snapshotRows: CertifiedRunScore[]
 ): void {
-  const rows = aggregateCertifiedRunScores({
-    attempts: certifiedAttempts,
-    cases: bundle.caseV2,
-    teamCompositions: bundle.teamCompositions,
-    verifierResults: bundle.verifierResults,
-  }).filter((row) => row.modelIds.length > 1);
+  const rows = snapshotRows.filter((row) => row.isTeam);
 
   lines.push("## Team Lift Matrix");
   if (rows.length === 0) {
@@ -413,12 +280,25 @@ function appendTeamLiftMatrix(
         (item) => item.id === row.teamCompositionId
       );
       const roster = formatTeamRoster(team);
+      const comparisonKeys = row.trackBreakdown
+        .filter((track) => row.teamLiftTracks.includes(track.track))
+        .map(
+          (track) =>
+            `${track.track}=${track.comparisonKey ?? "unavailable"}`
+        )
+        .join("; ");
       lines.push(
         `- ${row.displayName}: team lift ${formatNumber(
           row.teamLift
         )}, best solo ${formatNumber(row.bestSoloScore)}, label ${
           row.teamLiftLabel ?? "n/a"
-        }${roster ? `; roster ${roster}` : ""}`
+        }; execution ${row.executionId ?? "n/a"}; comparison tracks ${
+          row.teamLiftTracks.join(", ") || "n/a"
+        }; comparison keys ${comparisonKeys || "n/a"}${
+          roster ? `; roster ${roster}` : ""
+        }; snapshot ${row.resultSetId ?? "n/a"}; configuration ${
+          row.configurationKey ?? "n/a"
+        }`
       );
     }
   }
@@ -506,7 +386,6 @@ function appendVerifierAssertionSummary(
 
 function appendHarnessVersions(
   lines: string[],
-  bundle: BenchmarkReportBundleV2,
   certifiedAttempts: BenchmarkAttemptV2[]
 ): void {
   const versionRows = countBy(
@@ -531,17 +410,6 @@ function appendHarnessVersions(
     }
   }
 
-  if (bundle.harnessCertifications.length > 0) {
-    for (const certification of bundle.harnessCertifications.slice(0, 8)) {
-      lines.push(
-        `- Certification ${certification.harnessProfile}: ${
-          certification.passed ? "passed" : "failed"
-        }, ${certification.checks.length} check(s), ${formatCertificationVersion(
-          certification
-        )}`
-      );
-    }
-  }
   lines.push("");
 }
 
@@ -568,18 +436,21 @@ function appendCaseVersions(
 
 function appendReproducibilityHashes(
   lines: string[],
-  bundle: BenchmarkReportBundleV2
+  bundle: BenchmarkReportBundleV2,
+  cases: BenchmarkCaseV2[],
+  teamCompositionIds: ReadonlySet<string>
 ): void {
-  const promptHashes = bundle.caseV2
+  const promptHashes = cases
     .map((item) => item.prompt?.hiddenNotesHash ?? readStringField(item, "promptHash"))
     .filter(isNonEmptyString);
-  const fixtureHashes = bundle.caseV2
+  const fixtureHashes = cases
     .map((item) => item.repo?.fixtureHash)
     .filter(isNonEmptyString);
-  const baseCommits = bundle.caseV2
+  const baseCommits = cases
     .map((item) => item.repo?.baseCommit)
     .filter(isNonEmptyString);
   const comboHashes = bundle.teamCompositions
+    .filter((team) => teamCompositionIds.has(team.id))
     .map((team) => team.comboHash)
     .filter(isNonEmptyString);
 
@@ -592,133 +463,8 @@ function appendReproducibilityHashes(
   lines.push("");
 }
 
-function appendRawV2Counts(
-  lines: string[],
-  bundle: BenchmarkReportBundleV2
-): void {
-  const certifiedAttempts = bundle.attemptsV2.filter(isCertifiedModeAttempt);
-  lines.push("## Raw V2 Counts");
-  lines.push(`- Certified cases: ${bundle.caseV2.length}`);
-  lines.push(`- Certified attempts: ${certifiedAttempts.length}`);
-  lines.push(`- V2 attempts: ${bundle.attemptsV2.length}`);
-  lines.push(`- Verifier results: ${bundle.verifierResults.length}`);
-  lines.push(`- Run events: ${bundle.runEvents?.length ?? 0}`);
-  lines.push(`- Tool-call traces: ${bundle.toolCallTraces?.length ?? 0}`);
-  lines.push(`- Team compositions: ${bundle.teamCompositions.length}`);
-  lines.push(`- Harness certifications: ${bundle.harnessCertifications.length}`);
-  lines.push(
-    `- Redaction scanned records (all channels): ${
-      bundle.redactionSummary?.scannedRecords ??
-      bundle.redactionSummary?.scannedArtifacts ??
-      0
-    }`
-  );
-  lines.push(
-    `- Redacted secrets: ${bundle.redactionSummary?.redactedSecrets ?? 0}`
-  );
-  const warnings = bundle.redactionSummary?.warnings ?? [];
-  if (warnings.length > 0) {
-    lines.push("- Redaction warnings:");
-    for (const warning of warnings.slice(0, 5)) {
-      lines.push(`  - ${warning}`);
-    }
-    if (warnings.length > 5) {
-      lines.push(`  - ${warnings.length - 5} more warning(s) omitted.`);
-    }
-  }
-  lines.push("");
-}
-
-
 function isCertifiedModeAttempt(attempt: BenchmarkAttemptV2): boolean {
   return attempt.mode === "certified";
-}
-
-function isCertifiedAttemptComplete(status: string): boolean {
-  return (
-    status === "passed" ||
-    status === "failed_model" ||
-    status === "failed_verifier" ||
-    status === "failed_tool_use" ||
-    status === "failed_budget" ||
-    status === "provider_unavailable" ||
-    status === "invalid_harness" ||
-    status === "invalid_environment" ||
-    status === "invalid_case" ||
-    status === "aborted_user"
-  );
-}
-
-function groupAttemptsByTeam(
-  attempts: BenchmarkAttemptV2[],
-  teams: BenchmarkTeamComposition[]
-): Map<string, BenchmarkAttemptV2[]> {
-  const teamById = new Map(teams.map((team) => [team.id, team]));
-  const groups = new Map<
-    string,
-    { primaryTeamId: string; attempts: BenchmarkAttemptV2[] }
-  >();
-  for (const attempt of attempts) {
-    const persistedId = attempt.teamCompositionId || "unknown";
-    const team = teamById.get(persistedId);
-    const key = team ? canonicalTeamCompositionKey(team) : persistedId;
-    const group = groups.get(key) ?? {
-      primaryTeamId: persistedId,
-      attempts: [],
-    };
-    group.attempts.push(attempt);
-    groups.set(key, group);
-  }
-  return new Map(
-    Array.from(groups.values()).map((group) => [
-      group.primaryTeamId,
-      group.attempts,
-    ])
-  );
-}
-
-function groupAttemptsByModel(
-  attempts: BenchmarkAttemptV2[],
-  teamsById: Map<string, BenchmarkTeamComposition>
-): Map<
-  string,
-  {
-    displayName: string;
-    attempts: BenchmarkAttemptV2[];
-  }
-> {
-  const rows = new Map<
-    string,
-    {
-      displayName: string;
-      attempts: BenchmarkAttemptV2[];
-    }
-  >();
-
-  for (const attempt of attempts) {
-    const team = teamsById.get(attempt.teamCompositionId);
-    const seenVariants = new Set<string>();
-    for (const role of team?.roles ?? []) {
-      const variantKey = benchmarkVariantKey(
-        role.modelId,
-        role.reasoningEffort
-      );
-      if (seenVariants.has(variantKey)) continue;
-      seenVariants.add(variantKey);
-      const existing =
-        rows.get(variantKey) ?? {
-          displayName: benchmarkVariantLabel(
-            role.displayName || role.modelId,
-            role.reasoningEffort
-          ),
-          attempts: [],
-        };
-      existing.attempts.push(attempt);
-      rows.set(variantKey, existing);
-    }
-  }
-
-  return rows;
 }
 
 function formatTeamRoster(
@@ -750,15 +496,13 @@ function isCertifiedFailureRecord(
   failure: BenchmarkFailure,
   certifiedAttemptIds: Set<string>
 ): boolean {
-  return !failure.attemptId || certifiedAttemptIds.has(failure.attemptId);
+  return Boolean(
+    failure.attemptId && certifiedAttemptIds.has(failure.attemptId)
+  );
 }
 
 function uniqueValues(values: string[]): string[] {
   return Array.from(new Set(values));
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -773,11 +517,6 @@ function readStringField(value: unknown, key: string): string | undefined {
 
 function rate(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
-}
-
-function average(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function formatScore(value: number | null): string {
@@ -797,18 +536,6 @@ function formatNumber(value: number | null): string {
 function round(value: number, digits = 1): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
-}
-
-function formatCertificationVersion(
-  certification: HarnessCertificationResult
-): string {
-  return [
-    certification.harnessVersion,
-    certification.promptSetVersion,
-    certification.benchmarkEngineVersion,
-  ]
-    .filter(isNonEmptyString)
-    .join(" | ");
 }
 
 function formatHashList(values: string[]): string {

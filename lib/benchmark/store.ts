@@ -57,6 +57,7 @@ import {
 } from "../client/store";
 import type { ClientStore } from "../client/store";
 import { redactBenchmarkBundle } from "./redaction";
+import { isPublishableBenchmarkResultSet } from "./certified/result-set-selectors";
 import type {
   BenchmarkArtifact,
   BenchmarkAttempt,
@@ -810,11 +811,6 @@ async function mergeBenchmarkReportBundle(
     bundle.resultSets ?? []
   );
   validateImportedResultSetCrossReferences(current, bundle, acceptedResultSets);
-  const importResult = summarizeBenchmarkImport(
-    current,
-    bundle,
-    acceptedResultSets
-  );
   const next: Partial<ClientStore> = {
     benchmarkSuites: mergeByIdKeepExisting(current.benchmarkSuites ?? [], bundle.suites),
     benchmarkRuns: mergeByIdPreferNewer(
@@ -893,6 +889,12 @@ async function mergeBenchmarkReportBundle(
   next.benchmarkRuns = repairBenchmarkRunResultSetLinks(
     next.benchmarkRuns ?? [],
     next.benchmarkResultSets
+  );
+  const importResult = summarizeBenchmarkImport(
+    current,
+    bundle,
+    acceptedResultSets,
+    next
   );
 
   replaceStore({ ...current, ...next });
@@ -2245,16 +2247,29 @@ function isSameOrNewerTimestamp(
 function summarizeBenchmarkImport(
   current: ClientStore,
   bundle: BenchmarkReportBundleV2,
-  acceptedResultSets: BenchmarkResultSet[]
+  acceptedResultSets: BenchmarkResultSet[],
+  merged: Partial<ClientStore>
 ): BenchmarkImportResult {
+  const evidence = {
+    runs: merged.benchmarkRuns ?? [],
+    attempts: merged.benchmarkAttemptsV2 ?? [],
+    cases: merged.benchmarkCaseV2 ?? [],
+    verifierResults: merged.benchmarkVerifierResults ?? [],
+    artifacts: merged.benchmarkArtifacts ?? [],
+    failures: merged.benchmarkFailures ?? [],
+    traces: merged.benchmarkTraces ?? [],
+    runEvents: merged.benchmarkRunEvents ?? [],
+    toolCallTraces: merged.benchmarkToolCallTraces ?? [],
+    teamCompositions: merged.benchmarkTeamCompositions ?? [],
+  };
   const result: BenchmarkImportResult = {
     addedCount: 0,
     updatedCount: 0,
     addedByCategory: {},
     updatedByCategory: {},
     resultSetCount: acceptedResultSets.length,
-    completedResultSetCount: acceptedResultSets.filter(
-      (record) => record.status === "completed"
+    completedResultSetCount: acceptedResultSets.filter((record) =>
+      isPublishableBenchmarkResultSet(record, evidence)
     ).length,
     hashMismatch: false,
   };

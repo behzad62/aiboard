@@ -67,7 +67,15 @@ function configuration(team: BenchmarkTeamComposition): BenchmarkResultConfigura
     providerId: role.providerId,
     modelId: role.modelId,
     reasoningEffort: "medium",
-    roles: [],
+    strategy: team.strategy,
+    roles: [{
+      role: role.role,
+      slot: role.slot,
+      providerId: role.providerId,
+      modelId: role.modelId,
+      reasoningEffort: role.reasoningEffort ?? "default",
+      maxTokens: role.maxTokens ?? null,
+    }],
     tracks: [{
       track: "gameiq",
       suiteId: "history-suite",
@@ -334,7 +342,7 @@ const dashboard = buildCertifiedBenchmarkDashboardData({
 const rowsForLuna = dashboard.leaderboard.filter((row) =>
   row.modelIds.includes("gpt-5.6-luna")
 );
-assert.equal(rowsForLuna.length, 1);
+assert.equal(rowsForLuna.length, 1, JSON.stringify(dashboard.audit));
 assert.equal(rowsForLuna[0]?.resultSetId, "luna-new-complete");
 assert.equal(rowsForLuna[0]?.overallDelta, 0.07);
 assert.equal(rowsForLuna[0]?.historyCount, 1);
@@ -349,6 +357,45 @@ assert.deepEqual(
 assert.equal(dashboard.audit.completedSnapshots, 3);
 assert.equal(dashboard.audit.unpublishedSnapshots, 2);
 assert.equal(dashboard.audit.legacyAttempts, 1);
+
+const missingCompositionDashboard = buildCertifiedBenchmarkDashboardData({
+  resultSets,
+  ...evidence,
+  caseV2: [benchmarkCase],
+  attemptsV2: attempts,
+  verifierResults,
+  teamCompositions: [sol],
+  harnessCertifications: [],
+});
+assert.ok(
+  !missingCompositionDashboard.leaderboard.some((row) =>
+    row.modelIds.includes("gpt-5.6-luna")
+  ),
+  "a completed marker without its exact composition must remain audit-only"
+);
+
+const extraVerifierDashboard = buildCertifiedBenchmarkDashboardData({
+  resultSets,
+  ...evidence,
+  caseV2: [benchmarkCase],
+  attemptsV2: attempts,
+  verifierResults: [
+    ...verifierResults,
+    {
+      ...verifier(latestAttempt),
+      id: "extra-owned-verifier",
+      artifactIds: ["missing-extra-verifier-artifact"],
+    },
+  ],
+  teamCompositions: [luna, sol],
+  harnessCertifications: [],
+});
+assert.ok(
+  !extraVerifierDashboard.leaderboard.some(
+    (row) => row.resultSetId === latestSet.id
+  ),
+  "every owned verifier reference must exist before publication"
+);
 const dashboardWithEvidence = withCertifiedDeleteMetadata(
   dashboard,
   attempts,

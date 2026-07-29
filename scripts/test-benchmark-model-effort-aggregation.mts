@@ -3,7 +3,8 @@ import {
   buildCertifiedBenchmarkDashboardData,
   buildModelIntelligenceRows,
 } from "../lib/benchmark/metrics";
-import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
+import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
+import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import {
   readModelIntelligence,
@@ -85,7 +86,7 @@ const attempts = [
   attempt("explicit-default", explicitDefault.id, 0.8),
 ];
 
-const aggregateRows = aggregateCertifiedRunScores({
+const aggregateRows = aggregateCompletedResultSetFixtures({
   attempts,
   teamCompositions: [low, high, legacy, explicitDefault],
 });
@@ -127,7 +128,7 @@ const sameDecisionHighAttempt = {
   ...attempt("same-decision-high", high.id, 0.9, "gameiq"),
   caseId: "same-default-decision",
 };
-const sameDecisionRows = aggregateCertifiedRunScores({
+const sameDecisionRows = aggregateCompletedResultSetFixtures({
   attempts: [
     sameDecisionLegacyAttempt,
     sameDecisionExplicitAttempt,
@@ -159,7 +160,7 @@ const defaultTeam: BenchmarkTeamComposition = {
     { ...explicitDefault.roles[0], role: "worker", slot: "worker" },
   ],
 };
-const defaultLiftRows = aggregateCertifiedRunScores({
+const defaultLiftRows = aggregateCompletedResultSetFixtures({
   attempts: [...attempts, attempt("team-default", defaultTeam.id, 0.9)],
   teamCompositions: [low, high, legacy, explicitDefault, defaultTeam],
 });
@@ -190,7 +191,7 @@ const highTeam: BenchmarkTeamComposition = {
 const teamAttempt = attempt("team-high", highTeam.id, 0.8);
 const lowBaselineAttempt = attempt("lift-low", low.id, 0.9);
 const highBaselineAttempt = attempt("lift-high", high.id, 0.6);
-const effortLiftRows = aggregateCertifiedRunScores({
+const effortLiftRows = aggregateCompletedResultSetFixtures({
   attempts: [lowBaselineAttempt, highBaselineAttempt, teamAttempt],
   teamCompositions: [low, high, highTeam],
 });
@@ -198,7 +199,7 @@ assert.equal(
   effortLiftRows.find((row) => row.teamCompositionId === highTeam.id)?.teamLift,
   20
 );
-const missingEffortLiftRows = aggregateCertifiedRunScores({
+const missingEffortLiftRows = aggregateCompletedResultSetFixtures({
   attempts: [lowBaselineAttempt, teamAttempt],
   teamCompositions: [low, highTeam],
 });
@@ -245,6 +246,138 @@ assert.deepEqual(
     { variantKey: "openai:model\u0000high", reasoningEffort: "high", displayName: "Model · High" },
     { variantKey: "openai:model\u0000low", reasoningEffort: "low", displayName: "Model · Low" },
   ]
+);
+
+const exactConfigBase = withCompletedResultSetFixtures({
+  caseV2: [],
+  attemptsV2: [
+    {
+      ...attempt("exact-config-100", low.id, 0.1, "workbench"),
+      caseId: "exact-config-case",
+    },
+    {
+      ...attempt("exact-config-200", low.id, 0.2, "workbench"),
+      caseId: "exact-config-case",
+    },
+  ],
+  verifierResults: [],
+  teamCompositions: [low],
+  harnessCertifications: [],
+});
+const exactConfigResultSets = exactConfigBase.resultSets.map(
+  (resultSet, index) => {
+    const configuration = {
+      ...resultSet.configuration,
+      tracks: resultSet.configuration.tracks.map((track) => ({
+        ...track,
+        maxTokens: index === 0 ? 100 : 200,
+      })),
+    };
+    const quality = index === 0 ? 0.9 : 0.7;
+    return {
+      ...resultSet,
+      configuration,
+      configurationKey: benchmarkResultConfigurationKey(configuration),
+      metrics: {
+        ...resultSet.metrics!,
+        verifiedQuality: quality,
+        overallScore: quality,
+        jobSuccessScore: quality * 100,
+        efficiencyScore: quality * 100,
+        trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
+          ...track,
+          averageVerifiedQuality: quality,
+        })),
+      },
+    };
+  }
+);
+const exactConfigDashboard = buildCertifiedBenchmarkDashboardData({
+  ...exactConfigBase,
+  resultSets: exactConfigResultSets,
+});
+assert.equal(exactConfigDashboard.leaderboard.length, 2);
+assert.deepEqual(
+  exactConfigDashboard.modelIntelligence
+    .map((row) => row.combinedScore)
+    .sort(),
+  [0.7, 0.9],
+  "model intelligence must preserve exact snapshot configurations"
+);
+assert.deepEqual(
+  exactConfigDashboard.workBenchRoleLeaderboards.worker
+    .map((row) => row.verifiedQuality)
+    .sort(),
+  [0.7, 0.9],
+  "role rows must use each exact snapshot's immutable metrics"
+);
+assert.equal(
+  exactConfigDashboard.summary.averageVerifiedQuality,
+  0.8,
+  "summary quality must be calculated from immutable snapshot metrics"
+);
+
+const exactTeam: BenchmarkTeamComposition = {
+  id: "exact-team",
+  name: "Exact team",
+  comboHash: "exact-team",
+  strategy: "architect_worker",
+  roles: [
+    { ...low.roles[0], role: "architect", slot: "architect" },
+    { ...high.roles[0], role: "worker", slot: "worker" },
+  ],
+};
+const exactComboBase = withCompletedResultSetFixtures({
+  caseV2: [],
+  attemptsV2: [
+    {
+      ...attempt("exact-combo-100", exactTeam.id, 0.1, "workbench"),
+      caseId: "exact-combo-case",
+    },
+    {
+      ...attempt("exact-combo-200", exactTeam.id, 0.2, "workbench"),
+      caseId: "exact-combo-case",
+    },
+  ],
+  verifierResults: [],
+  teamCompositions: [low, high, exactTeam],
+  harnessCertifications: [],
+});
+const exactComboResultSets = exactComboBase.resultSets.map((resultSet, index) => {
+  const configuration = {
+    ...resultSet.configuration,
+    tracks: resultSet.configuration.tracks.map((track) => ({
+      ...track,
+      maxTokens: index === 0 ? 100 : 200,
+    })),
+  };
+  const quality = index === 0 ? 0.4 : 0.85;
+  return {
+    ...resultSet,
+    configuration,
+    configurationKey: benchmarkResultConfigurationKey(configuration),
+    metrics: {
+      ...resultSet.metrics!,
+      verifiedQuality: quality,
+      overallScore: quality,
+      jobSuccessScore: quality * 100,
+      trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
+        ...track,
+        averageVerifiedQuality: quality,
+      })),
+    },
+  };
+});
+const exactComboDashboard = buildCertifiedBenchmarkDashboardData({
+  ...exactComboBase,
+  resultSets: exactComboResultSets,
+});
+assert.deepEqual(
+  exactComboDashboard.teamIqComboMatrixRows
+    .map((row) => row.verifiedQuality)
+    .sort(),
+  [0.4, 0.85],
+  "combo rows must preserve exact snapshots and immutable quality"
 );
 
 assert.deepEqual(

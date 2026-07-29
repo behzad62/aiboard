@@ -208,7 +208,11 @@ async function validateAndPublishBenchmarkResultSet(
   if (scoreableAttempts.length !== resultSet.expectedAttempts.length) {
     return resultSet;
   }
-  const rows = aggregateCertifiedRunScores(scoreableAttempts);
+  const rows = aggregateCertifiedRunScores({
+    resultSetIds: new Set([resultSetId]),
+    attempts: scoreableAttempts,
+    cases,
+  });
   if (rows.length !== 1) {
     throw new Error(
       `Benchmark result set ${resultSetId} must resolve to exactly one scoreable subject.`

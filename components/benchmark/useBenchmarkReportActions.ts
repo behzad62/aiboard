@@ -52,7 +52,7 @@ export function formatBenchmarkImportMessage(
   return (
     `Imported ${bundle.runs.length} run(s), ${bundle.cases.length} case(s), ` +
     `${certified} certified attempt(s), ${importResult.resultSetCount} result set(s) ` +
-    `(${importResult.completedResultSetCount} completed); ` +
+    `(${importResult.completedResultSetCount} publishable completed); ` +
     `${importResult.updatedCount} existing record(s) updated.${hashWarning}`
   );
 }

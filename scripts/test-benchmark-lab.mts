@@ -271,7 +271,12 @@ check(
   terminalFailureTrace.retryHistory
 );
 check("bundle excludes unrelated source evidence", bundle.sourceEvidence === undefined, bundle);
-check("markdown report includes scorecards", markdown.includes("Model Scorecards"), markdown);
+check(
+  "markdown report exposes the certified snapshot boundary",
+  markdown.includes("Latest Certified Snapshots") &&
+    !markdown.includes("Model Scorecards"),
+  markdown
+);
 check(
   "markdown excludes unrelated source evidence counts",
   !markdown.includes("Game match records:") &&

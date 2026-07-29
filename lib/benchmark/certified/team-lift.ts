@@ -32,6 +32,7 @@ export interface TeamLiftRowLike {
 
 export interface ComparableTrackRowLike extends TeamLiftRowLike {
   modelVariantKeys: string[];
+  memberComparisonKeys?: string[];
   trackBreakdown: Array<{
     track: string;
     comparisonKey?: string;
@@ -50,11 +51,19 @@ export function computeComparableTrackTeamLift(
   teamRow: ComparableTrackRowLike,
   soloRowsByVariant: Map<string, ComparableTrackRowLike>
 ): ComparableTrackTeamLift | null {
-  if (teamRow.modelVariantKeys.length === 0) return null;
-  const soloRows = teamRow.modelVariantKeys.map((variantKey) => {
-    const row = soloRowsByVariant.get(variantKey);
-    return row?.modelVariantKeys.length === 1 &&
-      row.modelVariantKeys[0] === variantKey
+  const memberKeys =
+    teamRow.memberComparisonKeys?.length
+      ? teamRow.memberComparisonKeys
+      : teamRow.modelVariantKeys;
+  if (memberKeys.length === 0) return null;
+  const soloRows = memberKeys.map((memberKey) => {
+    const row = soloRowsByVariant.get(memberKey);
+    const rowKeys =
+      row?.memberComparisonKeys?.length
+        ? row.memberComparisonKeys
+        : row?.modelVariantKeys;
+    return rowKeys?.length === 1 &&
+      rowKeys[0] === memberKey
       ? row
       : undefined;
   });
