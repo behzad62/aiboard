@@ -15,6 +15,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test:provider-abort-signals": "tsx scripts/test-provider-abort-signals.mts",
+    "test:certified-provider-retry-accounting": "tsx scripts/test-certified-provider-retry-accounting.mts",
     "test:certified-run-lock": "tsx scripts/test-certified-run-lock.tsx",
     "test:certified-preset-cancellation": "tsx scripts/test-certified-preset-cancellation.mts",
     "test:benchmark:publication": "tsx scripts/test-benchmark-result-set-publication.mts && tsx scripts/test-benchmark-team-result-publication.mts",

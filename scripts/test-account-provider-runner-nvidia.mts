@@ -116,6 +116,14 @@ const fakeBackend = http.createServer(async (req, res) => {
     headers: capturedHeaders,
     body: capturedBody,
   });
+  if (capturedBody.model === "nvidia/retry-after-test") {
+    res.writeHead(503, {
+      "content-type": "application/json",
+      "retry-after": "9",
+    });
+    res.end(JSON.stringify({ error: { message: "safe NVIDIA overload" } }));
+    return;
+  }
   if (capturedBody.model === "nvidia/disconnect-stream") {
     streamingDisconnectReceived = true;
     const observeClose = () => {
@@ -403,6 +411,33 @@ try {
       chatTemplateKwargs?.enable_thinking === true &&
       chatTemplateKwargs.force_nonempty_content === true,
     nemotronBody
+  );
+
+  const retryResponse = await fetch(`${baseUrl}/providers/nvidia/chat`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-runner-token": token,
+    },
+    body: JSON.stringify({
+      apiKey: "fake-nvidia-api-key",
+      model: "nvidia/retry-after-test",
+      messages: [{ role: "user", content: "retry metadata" }],
+      stream: false,
+    }),
+  });
+  const retryData = await retryResponse.json() as {
+    error?: string;
+    errorMetadata?: { statusCode?: number; retryAfterMs?: number };
+  };
+  check(
+    "NVIDIA upstream status and Retry-After are sanitized and forwarded",
+    retryResponse.status === 503 &&
+      retryResponse.headers.get("retry-after") === "9" &&
+      retryData.error === "safe NVIDIA overload" &&
+      retryData.errorMetadata?.statusCode === 503 &&
+      retryData.errorMetadata.retryAfterMs === 9_000,
+    retryData
   );
 
   const disconnectHeaders = {

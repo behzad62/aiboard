@@ -15,12 +15,13 @@ import { openAIResponsesTextFormatField } from "./structured-output";
 
 const XAI_BASE_URL = "https://api.x.ai/v1";
 
-function createXAIClient(apiKey: string) {
+function createXAIClient(apiKey: string, disableAutomaticRetries = false) {
   return new OpenAI({
     apiKey,
     baseURL: XAI_BASE_URL,
     dangerouslyAllowBrowser: true,
     timeout: 360_000,
+    ...(disableAutomaticRetries ? { maxRetries: 0 } : {}),
   });
 }
 
@@ -281,7 +282,7 @@ export const xaiProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = createXAIClient(params.apiKey);
+    const client = createXAIClient(params.apiKey, params.disableAutomaticRetries);
     yield* streamXAIResponses(client, params);
   },
 };

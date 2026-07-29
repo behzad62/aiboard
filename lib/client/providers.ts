@@ -275,6 +275,7 @@ export async function* streamCustomChat(
     apiKey: model.apiKey || "not-needed",
     baseURL: model.baseURL,
     dangerouslyAllowBrowser: true,
+    ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
   });
   yield* streamOpenAICompatibleChat(
     client,

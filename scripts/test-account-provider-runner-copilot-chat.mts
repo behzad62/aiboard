@@ -87,6 +87,14 @@ fs.writeFileSync(
 const fakeBackend = http.createServer(async (req, res) => {
   const raw = await readRequestBody(req);
   const body = raw ? JSON.parse(raw) : {};
+  if (body.model === "gpt-5.4-retry-after-test") {
+    res.writeHead(429, {
+      "content-type": "application/json",
+      "retry-after": "7",
+    });
+    res.end(JSON.stringify({ error: { message: "safe rate limit" } }));
+    return;
+  }
   capturedRequests.push({ url: req.url, headers: req.headers, body });
   if (body.model === "gpt-5.4-disconnect-test") {
     if (req.url === "/responses") {
@@ -434,6 +442,32 @@ try {
       effortCaptured?.body
     );
   }
+
+  const retryResponse = await fetch(
+    `${baseUrl}/providers/github-copilot/chat`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        runtimeMode: "build",
+        model: "gpt-5.4-retry-after-test",
+        messages: [{ role: "user", content: "retry metadata" }],
+      }),
+    }
+  );
+  const retryData = await retryResponse.json() as {
+    error?: string;
+    errorMetadata?: { statusCode?: number; retryAfterMs?: number };
+  };
+  check(
+    "Copilot upstream status and Retry-After are sanitized and forwarded",
+    retryResponse.status === 429 &&
+      retryResponse.headers.get("retry-after") === "7" &&
+      retryData.error === "safe rate limit" &&
+      retryData.errorMetadata?.statusCode === 429 &&
+      retryData.errorMetadata.retryAfterMs === 7_000,
+    retryData
+  );
 
   const downstreamController = new AbortController();
   const downstreamRequest = fetch(

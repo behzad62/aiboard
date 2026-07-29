@@ -36,6 +36,7 @@ import type {
 import type { CertifiedBenchmarkDashboardData } from "@/lib/benchmark/scoring/types";
 import { createCertifiedBudgetController } from "./budget";
 import type { ResultSetOwnershipMap } from "./result-set-publication";
+import type { CertifiedRetryProgress } from "./retry-policy";
 
 const DEFAULT_STALE_CERTIFIED_RUN_MS = 24 * 60 * 60 * 1000;
 const STALE_CERTIFIED_RUN_GRACE_MS = 5 * 60 * 1000;
@@ -56,6 +57,7 @@ export interface CreateCertifiedRunContextInput {
   ) => Promise<void>;
   resultSetOwnership?: ResultSetOwnershipMap;
   onSubjectCompleted?: (teamCompositionId: string) => Promise<void>;
+  reportRetry?: (event: CertifiedRetryProgress) => void;
 }
 
 export function createCertifiedRunContext(
@@ -112,6 +114,7 @@ export function createCertifiedRunContext(
     teamCompositionIds,
     attemptOwners: registeredAttemptOwners,
     modelBudget: input.modelBudget ?? {},
+    reportRetry: input.reportRetry,
     resultSetIdForAttempt,
     subjectCompleted: input.onSubjectCompleted,
     async registerTeamCompositionId(teamCompositionId) {

@@ -376,6 +376,7 @@ export const openaiProvider: AIProvider = {
     const client = new OpenAI({
       apiKey: params.apiKey,
       dangerouslyAllowBrowser: true,
+      ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
     });
     if (usesResponsesApi(params.model)) {
       yield* streamOpenAIResponses(client, params);

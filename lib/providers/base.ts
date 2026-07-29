@@ -82,6 +82,14 @@ export interface ChatParams {
   signal?: AbortSignal;
   /** Build-mode context metadata resolved from the static registry + overrides. */
   contextProfile?: ModelContextProfile;
+  /** Internal: certified callers own retries centrally and disable SDK retries. */
+  disableAutomaticRetries?: boolean;
+}
+
+export interface CertifiedProviderErrorMetadata {
+  statusCode?: number;
+  code?: string;
+  retryAfterMs?: number;
 }
 
 /**
@@ -114,6 +122,7 @@ export interface StreamChunk {
   type: "token" | "done" | "error" | "tool_call" | "usage";
   content?: string;
   error?: string;
+  errorMetadata?: CertifiedProviderErrorMetadata;
   toolCall?: NativeToolCall;
   /** Present on `type: "usage"` chunks (and optionally alongside `done`). */
   usage?: StreamUsage;

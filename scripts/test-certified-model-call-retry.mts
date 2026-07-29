@@ -1,5 +1,6 @@
 /* Retry behavior for certified model calls (run: npx tsx scripts/test-certified-model-call-retry.mts) */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { __resetBenchmarkStoreForTests } from "../lib/benchmark/store";
 import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persistence";
 import {
@@ -11,6 +12,12 @@ import { classifyProviderFailure } from "../lib/benchmark/certified/classify-pro
 import { createCertifiedTabRunCoordinator } from "../lib/benchmark/certified/run-session";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
 import type { PersistentCertifiedRunContext } from "../lib/benchmark/certified/run-context";
+import { parseRetryAfter } from "../lib/providers/account-runner";
+import {
+  CERTIFIED_RETRY_DELAYS_MS,
+  certifiedRetryDelayMs,
+  type CertifiedRetryRuntime,
+} from "../lib/benchmark/certified/retry-policy";
 
 let failures = 0;
 
@@ -129,6 +136,247 @@ check(
 // ---------------------------------------------------------------------------
 
 {
+  const sleeps: number[] = [];
+  const context = makeTestContext();
+  let now = Date.parse(context.startedAt);
+  const runtime: CertifiedRetryRuntime = {
+    now: () => now,
+    random: () => 0.5,
+    sleep: async (ms, signal) => {
+      if (signal?.aborted) throw signal.reason;
+      sleeps.push(ms);
+      now += ms;
+    },
+  };
+  let calls = 0;
+  let active = 0;
+  let overlapped = false;
+  async function* fiveFailuresThenSuccess(): AsyncIterable<StreamChunk> {
+    calls += 1;
+    active += 1;
+    if (active > 1) overlapped = true;
+    try {
+      if (calls <= 5) {
+        yield {
+          type: "error",
+          error: "temporarily unavailable",
+          errorMetadata: { statusCode: 503 },
+        };
+        return;
+      }
+      yield { type: "token", content: '{"action":{"column":6}}' };
+      yield { type: "done" };
+    } finally {
+      active -= 1;
+    }
+  }
+  const result = await callCertifiedModel({
+    model,
+    system: "s",
+    user: "u",
+    maxTokens: 128,
+    temperature: 0,
+    context,
+    caseId: context.caseIds[0],
+    attemptId: "attempt-five-retries",
+    participantId: "p",
+    streamChat: () => fiveFailuresThenSuccess(),
+    retryRuntime: runtime,
+  });
+  check(
+    "central policy makes five delayed retries and six non-overlapping physical calls",
+    calls === 6 &&
+      !overlapped &&
+      JSON.stringify(sleeps) === JSON.stringify([2_000, 5_000, 15_000, 30_000, 60_000]) &&
+      result.retryAttempts?.length === 5 &&
+      context.snapshot().traces.filter((trace) => trace.attemptId === "attempt-five-retries").length === 6,
+    { calls, sleeps, overlapped, retryAttempts: result.retryAttempts?.length }
+  );
+}
+
+check(
+  "jitter lower bound is minus twenty percent",
+  certifiedRetryDelayMs(5_000, undefined, 0) === 4_000
+);
+check(
+  "jitter upper bound is plus twenty percent",
+  certifiedRetryDelayMs(5_000, undefined, 1) === 6_000
+);
+check(
+  "Retry-After overrides a shorter jittered base",
+  certifiedRetryDelayMs(5_000, 12_000, 0.5) === 12_000
+);
+check(
+  "canonical policy has the approved five delays",
+  JSON.stringify(CERTIFIED_RETRY_DELAYS_MS) ===
+    JSON.stringify([2_000, 5_000, 15_000, 30_000, 60_000])
+);
+const retryAfterNow = Date.parse("2026-07-29T00:00:00.000Z");
+check("delta-seconds Retry-After parses", parseRetryAfter("12", retryAfterNow) === 12_000);
+check(
+  "HTTP-date Retry-After parses",
+  parseRetryAfter("Wed, 29 Jul 2026 00:00:12 GMT", retryAfterNow) === 12_000
+);
+for (const malformed of ["-1", "NaN", "not-a-date", ""]) {
+  check(
+    `malformed Retry-After ${JSON.stringify(malformed)} is rejected`,
+    parseRetryAfter(malformed, retryAfterNow) === undefined
+  );
+}
+
+for (const statusCode of [429, 500, 502, 503, 504]) {
+  check(
+    `typed HTTP ${statusCode} classifies transient`,
+    classifyProviderFailure("safe provider failure", { statusCode }) === "transient"
+  );
+}
+for (const statusCode of [400, 401, 403, 501]) {
+  const expected = statusCode === 401 || statusCode === 403 ? "fatal" : "other";
+  check(
+    `typed HTTP ${statusCode} does not enter transient recovery`,
+    classifyProviderFailure("safe provider failure", { statusCode }) === expected
+  );
+}
+
+{
+  const context = makeTestContext();
+  context.modelBudget.maxWallClockMs = 10_000;
+  let sleeps = 0;
+  const runtime: CertifiedRetryRuntime = {
+    now: () => Date.parse(context.startedAt),
+    random: () => 0.5,
+    sleep: async () => {
+      sleeps += 1;
+    },
+  };
+  await expectReject(
+    "Retry-After beyond remaining wall clock fails budget without sleeping",
+    () => callCertifiedModel({
+      model,
+      system: "s",
+      user: "u",
+      maxTokens: 128,
+      temperature: 0,
+      context,
+      caseId: context.caseIds[0],
+      attemptId: "attempt-retry-after-budget",
+      participantId: "p",
+      streamChat: async function* () {
+        yield {
+          type: "error",
+          error: "temporary",
+          errorMetadata: { statusCode: 503, retryAfterMs: 12_000 },
+        };
+      },
+      retryRuntime: runtime,
+    }),
+    (error) => error instanceof CertifiedBudgetExceededError
+  );
+  check("budget rejection performs no retry sleep", sleeps === 0, sleeps);
+}
+
+{
+  const context = makeTestContext();
+  const progress: unknown[] = [];
+  context.reportRetry = (event) => progress.push(event);
+  let calls = 0;
+  await callCertifiedModel({
+    model,
+    system: "s",
+    user: "u",
+    maxTokens: 128,
+    temperature: 0,
+    context,
+    caseId: context.caseIds[0],
+    attemptId: "attempt-sanitized-progress",
+    participantId: "participant-safe",
+    streamChat: async function* () {
+      calls += 1;
+      if (calls === 1) {
+        yield {
+          type: "error",
+          error: "secret-token-value must never reach progress",
+          errorMetadata: { statusCode: 503 },
+        };
+        return;
+      }
+      yield { type: "token", content: "{}" };
+      yield { type: "done" };
+    },
+    retryRuntime: {
+      now: () => Date.parse(context.startedAt),
+      random: () => 0.5,
+      sleep: async () => {},
+    },
+  });
+  check(
+    "retry progress is typed and sanitized",
+    progress.length === 1 &&
+      JSON.stringify(progress).includes("HTTP 503") &&
+      !JSON.stringify(progress).includes("secret-token-value"),
+    progress
+  );
+}
+
+for (let waitIndex = 0; waitIndex < CERTIFIED_RETRY_DELAYS_MS.length; waitIndex++) {
+  const context = makeTestContext();
+  const controller = new AbortController();
+  const reason = new Error(`cancel-wait-${waitIndex}`);
+  let calls = 0;
+  const error = await expectReject(
+    `cancellation during wait ${waitIndex + 1} preserves reason identity`,
+    () => callCertifiedModel({
+      model,
+      system: "s",
+      user: "u",
+      maxTokens: 128,
+      temperature: 0,
+      context,
+      caseId: context.caseIds[0],
+      attemptId: `attempt-cancel-wait-${waitIndex}`,
+      participantId: "p",
+      signal: controller.signal,
+      streamChat: async function* () {
+        calls += 1;
+        yield {
+          type: "error",
+          error: "temporary",
+          errorMetadata: { statusCode: 503 },
+        };
+      },
+      retryDelaysMs: [...CERTIFIED_RETRY_DELAYS_MS.slice(waitIndex)],
+      retryRuntime: {
+        now: () => Date.parse(context.startedAt),
+        random: () => 0.5,
+        sleep: async () => {
+          controller.abort(reason);
+          throw reason;
+        },
+      },
+    }),
+    (candidate) => candidate === reason
+  );
+  check(`wait ${waitIndex + 1} starts no next physical call`, error === reason && calls === 1);
+}
+
+{
+  const providerSources = [
+    "lib/providers/openai.ts",
+    "lib/providers/anthropic.ts",
+    "lib/providers/custom.ts",
+    "lib/providers/openrouter.ts",
+    "lib/providers/xai.ts",
+    "lib/client/providers.ts",
+  ].map((file) => fs.readFileSync(file, "utf8"));
+  check(
+    "certified calls disable automatic SDK retries at every supported constructor",
+    providerSources.every((source) =>
+      source.includes("disableAutomaticRetries") && source.includes("maxRetries: 0")
+    )
+  );
+}
+
+{
   let calls = 0;
   async function* flaky(): AsyncIterable<StreamChunk> {
     calls++;
@@ -151,7 +399,7 @@ check(
     attemptId: "attempt-retry-success",
     participantId: "p",
     streamChat: () => flaky(),
-    retryDelaysMs: [0, 0], // near-instant retries (jitter only)
+    retryDelaysMs: [0, 0],
   });
   check(
     "transient error retried to success",

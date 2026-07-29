@@ -104,6 +104,14 @@ const fakeBackend = http.createServer(async (req, res) => {
     return;
   }
   const body = raw ? JSON.parse(raw) : {};
+  if (body.model === "gpt-retry-after-test") {
+    res.writeHead(503, {
+      "content-type": "application/json",
+      "retry-after": "12",
+    });
+    res.end(JSON.stringify({ error: { message: "safe temporary failure" } }));
+    return;
+  }
   capturedRequests.push({
     headers: req.headers,
     body,
@@ -495,6 +503,29 @@ try {
       effortCaptured?.body
     );
   }
+
+  const retryResponse = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: "gpt-retry-after-test",
+      stream: false,
+      messages: [{ role: "user", content: "retry metadata" }],
+    }),
+  });
+  const retryData = await retryResponse.json() as {
+    error?: string;
+    errorMetadata?: { statusCode?: number; retryAfterMs?: number };
+  };
+  check(
+    "ChatGPT upstream status and Retry-After are sanitized and forwarded",
+    retryResponse.status === 503 &&
+      retryResponse.headers.get("retry-after") === "12" &&
+      retryData.error === "safe temporary failure" &&
+      retryData.errorMetadata?.statusCode === 503 &&
+      retryData.errorMetadata.retryAfterMs === 12_000,
+    retryData
+  );
 
   const downstreamController = new AbortController();
   const downstreamRequest = fetch(

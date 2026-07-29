@@ -99,6 +99,7 @@ import {
   publishBenchmarkResultSetIfComplete,
   type ResultSetOwnershipMap,
 } from "./result-set-publication";
+import type { CertifiedRetryProgress } from "./retry-policy";
 
 export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 export const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
@@ -159,6 +160,7 @@ export interface CertifiedRunActions {
   setMessage: (message: string | null) => void;
   runAbortRef: MutableRefObject<AbortController | null>;
   onComplete: () => Promise<void>;
+  onRetry?: (event: CertifiedRetryProgress) => void;
 }
 
 function linkRunController(parent?: AbortSignal): {
@@ -236,6 +238,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     setSummary,
     setMessage,
     onComplete,
+    onRetry,
   } = ctx;
   if (!suiteId) return;
   if (selectedTrack === "gameiq") {
@@ -389,6 +392,15 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
       certification,
       signal: abortController.signal,
       resultSetOwnership: publication.ownership,
+      reportRetry: (event) => {
+        const displayName =
+          models.find((candidate) => candidate.modelId === event.modelId)
+            ?.displayName ?? event.modelId;
+        setMessage(
+          `${displayName}: temporary provider failure; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`
+        );
+        onRetry?.(event);
+      },
       onSubjectCompleted: async (teamCompositionId) => {
         const resultSetId =
           publication.ownership.byTeamCompositionId[teamCompositionId];
@@ -503,6 +515,7 @@ export async function runGameIqMultiModel(
     executionId,
     runIdsByModelId,
     resultSetIdsByModelId,
+    onRetry,
   } = ctx;
   const selectedModels = gameIqModelIds
     .map((id) => models.find((candidate) => candidate.modelId === id))
@@ -643,6 +656,12 @@ export async function runGameIqMultiModel(
         certification,
         signal: abortController.signal,
         resultSetOwnership: publication.ownership,
+        reportRetry: (event) => {
+          updateGameIqModelRun(model.modelId, {
+            error: `${model.displayName}: temporary provider failure; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`,
+          });
+          onRetry?.(event);
+        },
         runner: async (context, options) => {
           // Run each selected pack as its own attempt so the bundle produces
           // one scored attempt per pack (distinct caseId + attempt id). The
@@ -1463,7 +1482,22 @@ export interface PresetModelProgress {
   detail?: string;
 }
 
-export type PresetProgressEvent = PresetLegProgress | PresetModelProgress;
+export interface PresetRetryProgress {
+  type: "retry";
+  legIndex: number;
+  leg: BenchmarkPresetLeg;
+  modelId: string;
+  resultSetId?: string;
+  retry: number;
+  maxRetries: 5;
+  delayMs: number;
+  detail: string;
+}
+
+export type PresetProgressEvent =
+  | PresetLegProgress
+  | PresetModelProgress
+  | PresetRetryProgress;
 
 // Everything runPreset needs across every leg kind: the shared model
 // checklist (solo legs), the shared team builder's role selections (team
@@ -1801,6 +1835,19 @@ async function runSoloLeg(
       setRunning: () => {},
       setRunPhase: () => {},
       setSummary: () => {},
+      onRetry: (event) => {
+        onProgress({
+          type: "retry",
+          legIndex,
+          leg,
+          modelId: event.modelId,
+          resultSetId: event.resultSetId,
+          retry: event.retry,
+          maxRetries: event.maxRetries,
+          delayMs: event.delayMs,
+          detail: `${event.reason}; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`,
+        });
+      },
       setMessage: () => {},
       setGameIqModelRuns,
       onComplete: async () => {},
@@ -1886,6 +1933,19 @@ async function runSoloLeg(
           },
           setMessage: (message) => {
             if (message) outcome.error = message;
+          },
+          onRetry: (event) => {
+            onProgress({
+              type: "retry",
+              legIndex,
+              leg,
+              modelId: event.modelId,
+              resultSetId: event.resultSetId,
+              retry: event.retry,
+              maxRetries: event.maxRetries,
+              delayMs: event.delayMs,
+              detail: `${event.reason}; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`,
+            });
           },
           onComplete: async () => {},
           executionId: publication?.executionId,
@@ -2005,6 +2065,19 @@ async function runTeamLeg(
       },
       setMessage: (message) => {
         if (message) outcome.error = message;
+      },
+      onRetry: (event) => {
+        _onProgress({
+          type: "retry",
+          legIndex: _legIndex,
+          leg,
+          modelId: event.modelId,
+          resultSetId: event.resultSetId,
+          retry: event.retry,
+          maxRetries: event.maxRetries,
+          delayMs: event.delayMs,
+          detail: `${event.reason}; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`,
+        });
       },
       onComplete: async () => {},
     });

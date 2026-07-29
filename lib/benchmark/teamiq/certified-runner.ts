@@ -1,5 +1,6 @@
 import {
   callCertifiedModel,
+  expandCertifiedPhysicalUsages,
   throwIfCertifiedRunAborted,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
@@ -318,7 +319,7 @@ async function runTeamRound(params: {
       streamChat: input.streamChat,
       signal: input.signal,
     });
-    calls.push(call);
+    calls.push(...expandCertifiedPhysicalUsages(call));
     roleOutputs.push(call.rawResponse);
   }
   if (team.roles.length > 1) {
@@ -345,7 +346,7 @@ async function runTeamRound(params: {
       streamChat: input.streamChat,
       signal: input.signal,
     });
-    calls.push(synthesisCall);
+    calls.push(...expandCertifiedPhysicalUsages(synthesisCall));
     return synthesisCall.rawResponse;
   }
   return finalOutputForTeam(team, roleOutputs);

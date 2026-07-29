@@ -1,8 +1,8 @@
 import {
   callCertifiedModel,
+  expandCertifiedPhysicalUsages,
   throwIfCertifiedRunAborted,
   type CertifiedModelCallAttemptUsage,
-  type CertifiedModelCallResult,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
@@ -41,8 +41,8 @@ export interface RunCertifiedToolReliabilityInput {
   signal?: AbortSignal;
   /**
    * Backoff between transient-failure retries, passed straight through to
-   * `callCertifiedModel` (default `DEFAULT_RETRY_DELAYS_MS`, 2s/8s). Tests
-   * pass `[0, 0]` to exercise the retry path without waiting out the backoff.
+   * `callCertifiedModel`. Tests pass `[0, 0]` to exercise the retry path
+   * without waiting out the production backoff.
    */
   retryDelaysMs?: number[];
 }
@@ -106,16 +106,6 @@ async function runCertifiedToolReliabilityAttempt(
    * dead stream still costs its input tokens). Counting only the answer
    * under-reports `modelCalls`, tokens and cost whenever a retry fires.
    */
-  const recordCall = (call: CertifiedModelCallResult): void => {
-    for (const retried of call.retryAttempts ?? []) calls.push(retried);
-    calls.push({
-      traceId: call.traceId,
-      latencyMs: call.latencyMs,
-      inputTokens: call.inputTokens,
-      outputTokens: call.outputTokens,
-      estimatedUsd: call.estimatedUsd,
-    });
-  };
 
   for (const benchmarkCase of input.casePack) {
     throwIfCertifiedRunAborted(input.signal);
@@ -155,7 +145,7 @@ async function runCertifiedToolReliabilityAttempt(
         signal: input.signal,
         retryDelaysMs: input.retryDelaysMs,
       });
-      recordCall(call);
+      calls.push(...expandCertifiedPhysicalUsages(call));
       // One turn consumes one OUTPUT, however many physical calls it took:
       // a transient attempt is retried away inside `callCertifiedModel` and
       // never reaches the env, so `caseOutputs` stays a clean turn-by-turn

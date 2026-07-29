@@ -1,4 +1,10 @@
-import type { AIProvider, ChatParams, ModelInfo, StreamChunk } from "./base";
+import type {
+  AIProvider,
+  CertifiedProviderErrorMetadata,
+  ChatParams,
+  ModelInfo,
+  StreamChunk,
+} from "./base";
 import { providerSupportsMaxTokensFeature } from "./provider-registry";
 
 export const ACCOUNT_RUNNER_TEXT_ONLY = {
@@ -35,13 +41,14 @@ interface AccountRunnerResponse {
   ok?: boolean;
   content?: string;
   error?: string;
+  errorMetadata?: CertifiedProviderErrorMetadata;
 }
 
 type AccountRunnerEvent =
   | { type: "token"; content?: string }
   | { type: "tool_call"; toolCall?: StreamChunk["toolCall"] }
   | { type: "usage"; usage?: StreamChunk["usage"] }
-  | { type: "error"; error?: string }
+  | { type: "error"; error?: string; errorMetadata?: CertifiedProviderErrorMetadata }
   | { type: "done" };
 
 function joinRunnerUrl(baseURL: string, path: string): string {
@@ -168,7 +175,11 @@ async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChun
         } else if (event.type === "usage" && event.usage) {
           yield { type: "usage", usage: event.usage };
         } else if (event.type === "error") {
-          yield { type: "error", error: event.error ?? "Account runner stream failed" };
+          yield {
+            type: "error",
+            error: event.error ?? "Account runner stream failed",
+            errorMetadata: event.errorMetadata,
+          };
           return;
         } else if (event.type === "done") {
           yield { type: "done" };
@@ -184,7 +195,11 @@ async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChun
     } else if (tail?.type === "usage" && tail.usage) {
       yield { type: "usage", usage: tail.usage };
     } else if (tail?.type === "error") {
-      yield { type: "error", error: tail.error ?? "Account runner stream failed" };
+      yield {
+        type: "error",
+        error: tail.error ?? "Account runner stream failed",
+        errorMetadata: tail.errorMetadata,
+      };
       return;
     }
     yield { type: "done" };
@@ -290,6 +305,13 @@ export function createAccountRunnerProvider(
           yield {
             type: "error",
             error: data.error ?? `${options.name} runner request failed (${response.status})`,
+            errorMetadata: data.errorMetadata ?? {
+              statusCode: response.status,
+              retryAfterMs: parseRetryAfter(
+                response.headers.get("retry-after"),
+                Date.now()
+              ),
+            },
           };
           return;
         }
@@ -306,4 +328,21 @@ export function createAccountRunnerProvider(
       }
     },
   };
+}
+
+export function parseRetryAfter(
+  value: string | null,
+  nowMs: number
+): number | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const seconds = Number(text);
+    if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+    return Math.round(seconds * 1_000);
+  }
+  const dateMs = Date.parse(text);
+  if (!Number.isFinite(dateMs)) return undefined;
+  const delayMs = dateMs - nowMs;
+  return delayMs >= 0 ? delayMs : undefined;
 }

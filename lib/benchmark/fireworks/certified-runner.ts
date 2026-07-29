@@ -1,5 +1,6 @@
 import {
   callCertifiedModel,
+  expandCertifiedPhysicalUsages,
   throwIfCertifiedRunAborted,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
@@ -558,6 +559,13 @@ async function callFireworksAction(params: {
       streamChat: params.input.streamChat,
       signal: params.input.signal,
     });
+    for (const usage of expandCertifiedPhysicalUsages(call).slice(0, -1)) {
+      params.calls.push({
+        ...usage,
+        legal: true,
+        fallbackUsed: false,
+      });
+    }
     const parsed = parseFireworksActionResponseResult(
       params.state,
       params.playerId,

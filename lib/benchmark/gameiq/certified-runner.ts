@@ -1,5 +1,6 @@
 import {
   callCertifiedModel,
+  expandCertifiedPhysicalUsages,
   throwIfCertifiedRunAborted,
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
@@ -218,13 +219,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
         streamChat: input.streamChat,
         signal,
       });
-      calls.push({
-        traceId: call.traceId,
-        latencyMs: call.latencyMs,
-        inputTokens: call.inputTokens,
-        outputTokens: call.outputTokens,
-        estimatedUsd: call.estimatedUsd,
-      });
+      calls.push(...expandCertifiedPhysicalUsages(call));
       return {
         action: actionFromParsedJson(call.parsedJson),
         rawResponse: call.rawResponse,

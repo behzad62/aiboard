@@ -206,10 +206,12 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
       check(`${path} starts the account runner`, packageJson.scripts?.start === "node account-provider-runner.mjs", packageJson);
     }
     if (runnerFile && existsSync(sourceAccountRunner)) {
+      const archivedRunner = await runnerFile.async("string");
       check(
-        `${path} account runner bytes match source`,
-        await runnerFile.async("nodebuffer").then((content) => content.equals(readFileSync(sourceAccountRunner)))
+        `${path} account runner matches source after normalized line endings`,
+        normalizeLf(archivedRunner) === normalizeLf(read(sourceAccountRunner))
       );
+      check(`${path} account runner keeps protocol version 19`, /const VERSION = 19;/.test(archivedRunner));
     }
     if (sdkFile && existsSync(sourceAccountSdk)) {
       check(

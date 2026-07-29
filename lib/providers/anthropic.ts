@@ -184,6 +184,7 @@ export async function* streamAnthropicChat(
       apiKey: params.apiKey,
       ...(params.baseURL ? { baseURL: params.baseURL } : {}),
       dangerouslyAllowBrowser: true,
+      ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
     });
     // Gateway providers (Foundry) pass capabilities explicitly — their model
     // ids aren't in the static catalog registry.

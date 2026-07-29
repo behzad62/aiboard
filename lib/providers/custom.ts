@@ -65,7 +65,11 @@ export async function* streamCustomChat(
   params: ChatParams
 ): AsyncIterable<StreamChunk> {
   const apiKey = decryptCustomKey(model) ?? "not-needed";
-  const client = new OpenAI({ apiKey, baseURL: model.baseURL });
+  const client = new OpenAI({
+    apiKey,
+    baseURL: model.baseURL,
+    ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
+  });
   yield* streamOpenAICompatibleChat(
     client,
     {

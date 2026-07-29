@@ -29,6 +29,7 @@ import { persistReturnedAttempts, type CertifiedTrackRunner } from "./model-runn
 import type { CertifiedRunBudget } from "./run-context";
 import { throwIfCertifiedRunAborted } from "./model-call";
 import type { ResultSetOwnershipMap } from "./result-set-publication";
+import type { CertifiedRetryProgress } from "./retry-policy";
 
 export interface RunCertifiedBenchmarkInput {
   runId?: string;
@@ -44,6 +45,7 @@ export interface RunCertifiedBenchmarkInput {
   signal?: AbortSignal;
   resultSetOwnership?: ResultSetOwnershipMap;
   onSubjectCompleted?: (teamCompositionId: string) => Promise<void>;
+  reportRetry?: (event: CertifiedRetryProgress) => void;
 }
 
 export async function runCertifiedBenchmark(
@@ -70,6 +72,7 @@ export async function runCertifiedBenchmark(
     modelBudget: input.modelBudget,
     resultSetOwnership: input.resultSetOwnership,
     onSubjectCompleted: input.onSubjectCompleted,
+    reportRetry: input.reportRetry,
     async onTeamCompositionIdsChanged(teamCompositionIds) {
       throwIfCertifiedRunAborted(input.signal);
       run = updateRunningBenchmarkRunTeamCompositionIds(

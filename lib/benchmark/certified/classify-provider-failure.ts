@@ -23,8 +23,21 @@ const FATAL_PATTERN =
 const TRANSIENT_PATTERN =
   /timed?\s?out|timeout|too many requests|rate.?limit|429|500|502|503|504|overloaded|server error|unavailable|network|fetch failed|econn|socket|empty response|processing your request|retry your request|help\.openai\.com|request id/i;
 
-export function classifyProviderFailure(message: string): ProviderFailureClass {
+export function classifyProviderFailure(
+  message: string,
+  metadata?: CertifiedProviderErrorMetadata
+): ProviderFailureClass {
   if (FATAL_PATTERN.test(message)) return "fatal";
+  if (metadata?.statusCode === 401 || metadata?.statusCode === 403) return "fatal";
+  if (
+    metadata?.code &&
+    /invalid.*key|unauthorized|forbidden|billing|quota|insufficient/i.test(
+      metadata.code
+    )
+  ) return "fatal";
+  if ([429, 500, 502, 503, 504].includes(metadata?.statusCode ?? 0)) {
+    return "transient";
+  }
   if (TRANSIENT_PATTERN.test(message)) return "transient";
   return "other";
 }
@@ -52,3 +65,4 @@ export function isCertifiedProviderError(
 export function isTransientProviderError(error: unknown): boolean {
   return isCertifiedProviderError(error) && error.classification === "transient";
 }
+import type { CertifiedProviderErrorMetadata } from "@/lib/providers/base";

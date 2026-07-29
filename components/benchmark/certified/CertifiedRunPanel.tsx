@@ -717,7 +717,7 @@ export function CertifiedRunPanel({
           detail: event.detail,
           models: existing?.models ?? [],
         };
-      } else {
+      } else if (event.type === "model") {
         const existing = next[event.legIndex] ?? {
           legIndex: event.legIndex,
           leg: event.leg,
@@ -734,6 +734,18 @@ export function CertifiedRunPanel({
           detail: event.detail,
         });
         next[event.legIndex] = { ...existing, models };
+      } else {
+        const existing = next[event.legIndex];
+        if (existing) {
+          next[event.legIndex] = {
+            ...existing,
+            models: existing.models.map((model) =>
+              model.modelId === event.modelId
+                ? { ...model, detail: event.detail }
+                : model
+            ),
+          };
+        }
       }
       return next;
     });

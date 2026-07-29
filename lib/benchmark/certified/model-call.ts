@@ -19,6 +19,7 @@ import {
   parseModelId,
   type ChatMessage,
   type ChatParams,
+  type CertifiedProviderErrorMetadata,
   type SelectedModel,
   type StreamUsage,
   type StreamChunk,
@@ -36,17 +37,22 @@ import {
   classifyProviderFailure,
   type ProviderFailureClass,
 } from "./classify-provider-failure";
+import {
+  CERTIFIED_RETRY_DELAYS_MS,
+  DEFAULT_CERTIFIED_RETRY_RUNTIME,
+  certifiedRetryDelayMs,
+  type CertifiedRetryRuntime,
+} from "./retry-policy";
 
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 const CERTIFIED_ITERATOR_TEARDOWN_TIMEOUT_MS = 5_000;
 
 /**
- * Default backoff policy for transient provider failures: one retry per entry,
- * so `[2_000, 8_000]` means up to 2 retries (3 attempts total). Exported so
- * downstream callers reference the canonical policy instead of hardcoding the
- * delays in a second place.
+ * Default backoff policy for transient provider failures. Exported under the
+ * legacy name for callers that disable or shorten delays in deterministic
+ * tests; production uses the canonical five-delay policy.
  */
-export const DEFAULT_RETRY_DELAYS_MS: number[] = [2_000, 8_000];
+export const DEFAULT_RETRY_DELAYS_MS: number[] = [...CERTIFIED_RETRY_DELAYS_MS];
 
 /**
  * Thrown by `callCertifiedModelOnce` for every non-budget failure, tagged
@@ -67,15 +73,22 @@ export class CertifiedProviderError extends Error {
    * cost by exactly the attempts that were retried away.
    */
   readonly attemptUsage?: CertifiedModelCallAttemptUsage;
+  readonly statusCode?: number;
+  readonly code?: string;
+  readonly retryAfterMs?: number;
   constructor(
     message: string,
     classification: ProviderFailureClass,
-    attemptUsage?: CertifiedModelCallAttemptUsage
+    attemptUsage?: CertifiedModelCallAttemptUsage,
+    metadata?: CertifiedProviderErrorMetadata
   ) {
     super(message);
     this.name = "CertifiedProviderError";
     this.classification = classification;
     this.attemptUsage = attemptUsage;
+    this.statusCode = metadata?.statusCode;
+    this.code = metadata?.code;
+    this.retryAfterMs = metadata?.retryAfterMs;
   }
 }
 
@@ -131,13 +144,12 @@ export interface CallCertifiedModelInput {
   signal?: AbortSignal;
   /**
    * Base delays (ms, before jitter) between retry attempts for transient
-   * provider failures. One retry is made per array entry, so `[2_000, 8_000]`
-   * (the default) means up to 2 retries / 3 attempts total. Pass `[]` to
-   * disable retries entirely. `[0, 0]` still retries but is near-instant: only
-   * the 0-499ms jitter is slept, never the base delay — tests use it to
-   * exercise the retry path without waiting out the real backoff.
+   * provider failures. One retry is made per array entry. Pass `[]` to
+   * disable retries entirely. Tests may pass zeroes with an injected runtime
+   * to exercise retry control flow without real waiting.
    */
   retryDelaysMs?: number[];
+  retryRuntime?: CertifiedRetryRuntime;
   /**
    * 1-based attempt number for this physical call, set by the retry loop in
    * `callCertifiedModel` so each attempt's run-events carry an `attempt`
@@ -275,6 +287,7 @@ async function callCertifiedModelOnce(
     capabilities: customModel?.capabilities,
     signal: attemptController.signal,
     contextProfile: input.model.contextProfile,
+    disableAutomaticRetries: true,
   };
   let iterator: AsyncIterator<StreamChunk> | undefined;
   let attemptSucceeded = false;
@@ -321,7 +334,10 @@ async function callCertifiedModelOnce(
       } else if (chunk.type === "usage" && chunk.usage) {
         reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
       } else if (chunk.type === "error") {
-        throw new Error(chunk.error ?? "Certified provider returned an error.");
+        throw new CertifiedStreamError(
+          chunk.error ?? "Certified provider returned an error.",
+          chunk.errorMetadata
+        );
       }
     }
 
@@ -509,16 +525,18 @@ async function callCertifiedModelOnce(
     // the original error) so message-text consumers — `statusForRunError` in
     // run-engine.ts and `isProviderFailureMessage` — keep matching exactly
     // what they always have.
+    const errorMetadata = certifiedProviderErrorMetadata(error);
     const providerError = new CertifiedProviderError(
       message,
-      classifyProviderFailure(message),
+      classifyProviderFailure(message, errorMetadata),
       {
         traceId,
         latencyMs,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         estimatedUsd: trace.estimatedUsd ?? null,
-      }
+      },
+      errorMetadata
     );
     surfacedError = providerError;
     throw providerError;
@@ -568,13 +586,46 @@ async function callCertifiedModelOnce(
 export async function callCertifiedModel(
   input: CallCertifiedModelInput
 ): Promise<CertifiedModelCallResult> {
-  const delays = input.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const delays = (input.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS).slice(
+    0,
+    CERTIFIED_RETRY_DELAYS_MS.length
+  );
+  const runtime = input.retryRuntime ?? DEFAULT_CERTIFIED_RETRY_RUNTIME;
   const retryAttempts: CertifiedModelCallAttemptUsage[] = [];
   let lastError: unknown;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) {
-      const jitterMs = Math.floor(Math.random() * 500);
-      await sleepUnlessAborted(delays[attempt - 1] + jitterMs, input.signal);
+      const transientError = lastError as CertifiedProviderError;
+      const delayMs = certifiedRetryDelayMs(
+        delays[attempt - 1]!,
+        transientError.retryAfterMs,
+        runtime.random()
+      );
+      try {
+        assertRetryFitsWallClock(input, runtime, delayMs);
+      } catch (error) {
+        await recordCertifiedBudgetEvent(input, error);
+        throw error;
+      }
+      throwIfCertifiedRunAborted(input.signal);
+      input.context.reportRetry?.({
+        providerId: input.model.providerId,
+        modelId: input.model.modelId,
+        participantId: input.participantId,
+        resultSetId: input.context.resultSetIdForAttempt(input.attemptId ?? ""),
+        retry: attempt,
+        maxRetries: 5,
+        delayMs,
+        reason: sanitizedRetryReason(transientError),
+      });
+      await runtime.sleep(delayMs, input.signal);
+      throwIfCertifiedRunAborted(input.signal);
+      try {
+        assertRetryFitsWallClock(input, runtime, 0);
+      } catch (error) {
+        await recordCertifiedBudgetEvent(input, error);
+        throw error;
+      }
     }
     throwIfCertifiedRunAborted(input.signal);
     try {
@@ -596,34 +647,73 @@ export async function callCertifiedModel(
   throw lastError;
 }
 
-/**
- * Sleeps for `ms`, but rejects immediately (with the same abort error
- * `throwIfCertifiedRunAborted` would throw) if `signal` fires first — abort
- * always wins over a pending retry sleep. The pending timer is always
- * cleared so an aborted run never leaves a dangling timer behind.
- */
-async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    throwIfCertifiedRunAborted(signal);
-    return;
+/** Physical usage expansion keeps failed retries ordered before the success. */
+export function expandCertifiedPhysicalUsages(
+  call: CertifiedModelCallResult
+): CertifiedModelCallAttemptUsage[] {
+  return [
+    ...(call.retryAttempts ?? []),
+    {
+      traceId: call.traceId,
+      latencyMs: call.latencyMs,
+      inputTokens: call.inputTokens,
+      outputTokens: call.outputTokens,
+      estimatedUsd: call.estimatedUsd,
+    },
+  ];
+}
+
+function assertRetryFitsWallClock(
+  input: CallCertifiedModelInput,
+  runtime: CertifiedRetryRuntime,
+  delayMs: number
+): void {
+  const maxWallClockMs = input.context.modelBudget.maxWallClockMs;
+  if (maxWallClockMs == null) return;
+  const startedMs = Date.parse(input.context.startedAt);
+  if (
+    Number.isFinite(startedMs) &&
+    runtime.now() - startedMs + delayMs > maxWallClockMs
+  ) {
+    throw new CertifiedBudgetExceededError(
+      `Certified budget exceeded before provider retry: delay ${delayMs}ms cannot fit within maxWallClockMs ${maxWallClockMs}.`
+    );
   }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortedError(signal as AbortSignal));
+}
+
+function sanitizedRetryReason(error: CertifiedProviderError): string {
+  if (error.statusCode) return `Temporary provider failure (HTTP ${error.statusCode})`;
+  if (
+    error.code &&
+    /^[A-Za-z0-9_.-]{1,64}$/.test(error.code) &&
+    !/key|token|secret|authorization/i.test(error.code)
+  ) {
+    return `Temporary provider failure (${error.code})`;
+  }
+  return "Temporary provider failure";
+}
+
+class CertifiedStreamError extends Error {
+  constructor(
+    message: string,
+    readonly metadata?: CertifiedProviderErrorMetadata
+  ) {
+    super(message);
+  }
+}
+
+function certifiedProviderErrorMetadata(
+  error: unknown
+): CertifiedProviderErrorMetadata | undefined {
+  if (error instanceof CertifiedStreamError) return error.metadata;
+  if (error instanceof CertifiedProviderError) {
+    return {
+      statusCode: error.statusCode,
+      code: error.code,
+      retryAfterMs: error.retryAfterMs,
     };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    if (signal) {
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  });
+  }
+  return undefined;
 }
 
 async function recordCertifiedBudgetEvent(

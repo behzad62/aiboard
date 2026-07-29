@@ -14,6 +14,7 @@ import type {
   CertifiedModelCallReservation,
   CertifiedModelCallUsage,
 } from "./budget";
+import type { CertifiedRetryProgress } from "./retry-policy";
 
 export interface CertifiedRunBudget {
   maxUsd?: number;
@@ -58,6 +59,7 @@ export interface CertifiedRunContext {
   reserveModelCall?(input?: CertifiedModelCallReservation): void;
   recordModelCallUsage?(input: CertifiedModelCallUsage): void;
   budgetSnapshot?(): CertifiedBudgetSnapshot;
+  reportRetry?(event: CertifiedRetryProgress): void;
 }
 
 export interface CertifiedRunPersistenceSnapshot {

@@ -5,11 +5,12 @@ import { streamOpenAICompatibleChat } from "./openai-compat";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
-function createOpenRouterClient(apiKey: string) {
+function createOpenRouterClient(apiKey: string, disableAutomaticRetries = false) {
   return new OpenAI({
     apiKey,
     baseURL: OPENROUTER_BASE_URL,
     dangerouslyAllowBrowser: true,
+    ...(disableAutomaticRetries ? { maxRetries: 0 } : {}),
     defaultHeaders: {
       "HTTP-Referer": process.env.APP_URL ?? "http://localhost:3000",
       "X-Title": "AI Board",
@@ -39,7 +40,10 @@ export const openrouterProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = createOpenRouterClient(params.apiKey);
+    const client = createOpenRouterClient(
+      params.apiKey,
+      params.disableAutomaticRetries
+    );
     yield* streamOpenAICompatibleChat(
       client,
       params,
