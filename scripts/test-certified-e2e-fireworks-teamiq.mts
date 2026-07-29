@@ -44,13 +44,17 @@ upsertProviderKey({
   updatedAt: now,
 });
 
-let pendingObservedBeforeProviderAdmission = false;
+let pendingResultSetsAtFirstProviderAdmission: Awaited<
+  ReturnType<typeof listBenchmarkResultSets>
+> = [];
+let providerAdmissionCount = 0;
 const originalStreamChat = openaiProvider.streamChat;
 openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
-  pendingObservedBeforeProviderAdmission ||=
-    (await listBenchmarkResultSets()).some(
-      (resultSet) => resultSet.status === "pending"
-    );
+  if (providerAdmissionCount++ === 0) {
+    pendingResultSetsAtFirstProviderAdmission = (
+      await listBenchmarkResultSets()
+    ).filter((resultSet) => resultSet.status === "pending");
+  }
   yield {
     type: "token",
     content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
@@ -89,7 +93,42 @@ try {
 
 const attempts = await listBenchmarkAttemptsV2();
 const resultSets = await listBenchmarkResultSets();
-assert.equal(pendingObservedBeforeProviderAdmission, true);
+assert.equal(pendingResultSetsAtFirstProviderAdmission.length, 3);
+assert.equal(
+  new Set(pendingResultSetsAtFirstProviderAdmission.map((resultSet) => resultSet.id))
+    .size,
+  3
+);
+assert.equal(
+  pendingResultSetsAtFirstProviderAdmission.every(
+    (resultSet) => resultSet.status === "pending"
+  ),
+  true
+);
+assert.deepEqual(
+  [...new Set(
+    pendingResultSetsAtFirstProviderAdmission.map(
+      (resultSet) => resultSet.executionId
+    )
+  )],
+  ["execution-real-fireworks-publication"]
+);
+assert.deepEqual(
+  pendingResultSetsAtFirstProviderAdmission
+    .map((resultSet) =>
+      resultSet.configuration.subjectKind === "model"
+        ? `model:${resultSet.configuration.modelId}`
+        : `team:${resultSet.configuration.roles
+            .map((role) => role.modelId)
+            .join("+")}`
+    )
+    .sort(),
+  [
+    "model:openai:fireworks-real-a",
+    "model:openai:fireworks-real-b",
+    "team:openai:fireworks-real-a+openai:fireworks-real-b",
+  ]
+);
 assert.equal(resultSets.length, 3);
 assert.equal(
   resultSets.every((resultSet) => resultSet.status === "completed"),
