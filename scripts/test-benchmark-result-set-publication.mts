@@ -8,6 +8,8 @@ import {
   saveBenchmarkCaseV2,
   saveBenchmarkRun,
   saveBenchmarkResultSet,
+  saveBenchmarkToolCallTrace,
+  saveBenchmarkTrace,
   saveBenchmarkVerifierResult,
 } from "../lib/benchmark/store";
 import {
@@ -217,6 +219,79 @@ await saveEvidence(zeroExpected, zeroSet.id, 0);
 const publishedZero = await publishBenchmarkResultSetIfComplete(zeroSet.id);
 assert.equal(publishedZero.status, "completed");
 assert.equal(publishedZero.metrics?.overallScore, 0);
+
+for (const traceKind of ["model", "tool"] as const) {
+  await reset();
+  const traceRunId = `run-incomplete-${traceKind}-trace`;
+  const traceCaseId = `case-incomplete-${traceKind}-trace`;
+  const traceResultSetId = `incomplete-${traceKind}-trace`;
+  const traceExpected = expected(
+    traceRunId,
+    "toolreliability",
+    traceCaseId
+  );
+  await saveBenchmarkRun(run(traceRunId, "toolreliability"));
+  const traceSet = await createPendingBenchmarkResultSet({
+    id: traceResultSetId,
+    schemaVersion: 1,
+    executionId: `execution-${traceResultSetId}`,
+    anchorRunId: traceRunId,
+    runIds: [traceRunId],
+    configurationKey: `${traceResultSetId}-key`,
+    configuration,
+    expectedAttempts: [traceExpected],
+  });
+  await saveBenchmarkCaseV2(
+    benchmarkCase(traceExpected.caseId, traceExpected.track)
+  );
+  await saveBenchmarkRun({
+    ...(await listBenchmarkRuns())[0]!,
+    caseIds: [traceExpected.caseId],
+  });
+  const traceAttemptId = `attempt:${traceExpected.caseId}:${traceExpected.track}`;
+  await saveBenchmarkVerifierResult(
+    verifier(
+      `verifier:${traceAttemptId}`,
+      traceAttemptId,
+      traceResultSetId
+    )
+  );
+  if (traceKind === "model") {
+    await saveBenchmarkTrace({
+      id: "incomplete-model-trace",
+      runId: traceRunId,
+      attemptId: traceAttemptId,
+      modelId: "test:luna",
+      providerId: "test",
+      startedAt: now,
+      retryHistory: [],
+      resultSetId: traceResultSetId,
+    });
+  } else {
+    await saveBenchmarkToolCallTrace({
+      id: "incomplete-tool-trace",
+      attemptId: traceAttemptId,
+      caseId: traceExpected.caseId,
+      toolName: "test-tool",
+      status: "ok",
+      startedAt: now,
+      resultSetId: traceResultSetId,
+    });
+  }
+  await saveBenchmarkAttemptV2({
+    ...attempt(traceAttemptId, traceExpected, traceResultSetId, 100),
+    traceIds: traceKind === "model" ? ["incomplete-model-trace"] : [],
+  });
+  await assert.rejects(
+    publishBenchmarkResultSetIfComplete(traceSet.id),
+    /trace|terminal|completed/i
+  );
+  assert.equal(
+    (await listBenchmarkResultSets()).find((item) => item.id === traceSet.id)
+      ?.status,
+    "pending"
+  );
+}
 
 await reset();
 const game = expected("run-game", "gameiq", "game");

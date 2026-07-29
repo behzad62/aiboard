@@ -3,6 +3,8 @@ import {
   listBenchmarkCaseV2,
   listBenchmarkResultSets,
   listBenchmarkRuns,
+  listBenchmarkToolCallTraces,
+  listBenchmarkTraces,
   listBenchmarkVerifierResults,
   saveBenchmarkResultSet,
 } from "@/lib/benchmark/store";
@@ -77,11 +79,20 @@ async function validateAndPublishBenchmarkResultSet(
     );
   }
 
-  const [allAttempts, cases, verifierResults, runs] = await Promise.all([
+  const [
+    allAttempts,
+    cases,
+    verifierResults,
+    runs,
+    traces,
+    toolCallTraces,
+  ] = await Promise.all([
     listBenchmarkAttemptsV2(),
     listBenchmarkCaseV2(),
     listBenchmarkVerifierResults(),
     listBenchmarkRuns(),
+    listBenchmarkTraces(),
+    listBenchmarkToolCallTraces(),
   ]);
   const ownedAttempts = allAttempts.filter(
     (attempt) => attempt.resultSetId === resultSetId
@@ -208,6 +219,12 @@ async function validateAndPublishBenchmarkResultSet(
   if (scoreableAttempts.length !== resultSet.expectedAttempts.length) {
     return resultSet;
   }
+  assertTerminalPhysicalTraceEvidence(
+    resultSetId,
+    scoreableAttempts,
+    traces,
+    toolCallTraces
+  );
   const metrics = materializeCertifiedResultSnapshotMetrics(
     resultSetId,
     scoreableAttempts,
@@ -228,6 +245,48 @@ async function validateAndPublishBenchmarkResultSet(
   };
   await saveBenchmarkResultSet(completed);
   return completed;
+}
+
+function assertTerminalPhysicalTraceEvidence(
+  resultSetId: string,
+  attempts: readonly BenchmarkAttemptV2[],
+  traces: Awaited<ReturnType<typeof listBenchmarkTraces>>,
+  toolCallTraces: Awaited<ReturnType<typeof listBenchmarkToolCallTraces>>
+): void {
+  const tracesById = new Map(traces.map((trace) => [trace.id, trace]));
+  const terminal = (value: string | undefined) =>
+    typeof value === "string" && Number.isFinite(Date.parse(value));
+  for (const attempt of attempts) {
+    for (const traceId of attempt.traceIds) {
+      const trace = tracesById.get(traceId);
+      if (
+        !trace ||
+        trace.resultSetId !== resultSetId ||
+        (trace.attemptId !== undefined && trace.attemptId !== attempt.id) ||
+        !terminal(trace.completedAt)
+      ) {
+        throw new Error(
+          `Benchmark result set ${resultSetId} has incomplete referenced model trace ${traceId}.`
+        );
+      }
+    }
+  }
+  for (const trace of traces) {
+    if (trace.resultSetId !== resultSetId) continue;
+    if (!terminal(trace.completedAt)) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} has incomplete owned model trace ${trace.id}.`
+      );
+    }
+  }
+  for (const trace of toolCallTraces) {
+    if (trace.resultSetId !== resultSetId) continue;
+    if (!terminal(trace.completedAt)) {
+      throw new Error(
+        `Benchmark result set ${resultSetId} has incomplete owned tool trace ${trace.id}.`
+      );
+    }
+  }
 }
 
 export async function failBenchmarkResultSet(

@@ -5,6 +5,7 @@ import {
   __clearClientStoreForTests,
   __getBenchmarkRunBlobsForTests,
   __loadClientStoreFromAdapterForTests,
+  __exportBenchmarkStoreForTests,
   __resetClientStoreForTests,
   __resetBenchmarkStoreForTests,
   __setAdapterForTests,
@@ -75,11 +76,14 @@ function memoryAdapter(
   runBlobs: Map<string, string>;
   failDeleteRunId?: string;
   failSaveRunId?: string;
+  failSaveOnCall?: number;
+  saveCallCount: number;
 } {
   const runBlobs = new Map(Object.entries(initialRunBlobs));
   return {
     kind: "filesystem",
     runBlobs,
+    saveCallCount: 0,
     async load() { return null; },
     async save() {},
     async listDiscussionIds() { return []; },
@@ -90,6 +94,11 @@ function memoryAdapter(
     async listBenchmarkRunIds() { return [...runBlobs.keys()]; },
     async loadBenchmarkRun(id) { return runBlobs.get(id) ?? null; },
     async saveBenchmarkRun(id, blob) {
+      this.saveCallCount += 1;
+      if (this.failSaveOnCall === this.saveCallCount) {
+        this.failSaveOnCall = undefined;
+        throw new Error("injected later benchmark write failure");
+      }
       if (this.failSaveRunId === id) {
         this.failSaveRunId = undefined;
         throw new Error("injected benchmark write failure");
@@ -105,6 +114,15 @@ function memoryAdapter(
     },
     label() { return "result-set-memory"; },
   };
+}
+
+function benchmarkState(): Omit<
+  ReturnType<typeof exportBenchmarkReportBundleV2>,
+  "exportedAt" | "bundleHash"
+> {
+  const { exportedAt: _exportedAt, bundleHash: _bundleHash, ...state } =
+    exportBenchmarkReportBundleV2();
+  return state;
 }
 
 async function main(): Promise<void> {
@@ -205,6 +223,39 @@ async function main(): Promise<void> {
   assert.ok(
     !(await listBenchmarkResultSets()).some((set) => set.id === "import-failure-set")
   );
+  __setAdapterForTests(null);
+
+  // A later multi-run import write failure restores every earlier durable
+  // overwrite/deletion, so a fresh reload is byte-for-byte the pre-import
+  // benchmark state rather than a partially imported graph.
+  __resetClientStoreForTests({ benchmarkRuns: [run("import-existing-run")] });
+  const laterWriteAdapter = memoryAdapter();
+  __setAdapterForTests(laterWriteAdapter);
+  await saveBenchmarkRun(run("import-existing-run"));
+  const beforeLaterWriteMemory = structuredClone(__exportBenchmarkStoreForTests());
+  const beforeLaterWriteState = benchmarkState();
+  const beforeLaterWriteBlobs = new Map(laterWriteAdapter.runBlobs);
+  laterWriteAdapter.failSaveOnCall = laterWriteAdapter.saveCallCount + 2;
+  await assert.rejects(
+    importBenchmarkReportBundleV2({
+      ...emptyBundle(),
+      runs: [
+        {
+          ...run("import-existing-run"),
+          name: "mutated by rejected import",
+          completedAt: "2026-07-29T11:00:00.000Z",
+        },
+        run("import-new-run"),
+      ],
+    }),
+    /injected later benchmark write failure/
+  );
+  assert.deepEqual(__exportBenchmarkStoreForTests(), beforeLaterWriteMemory);
+  assert.deepEqual(laterWriteAdapter.runBlobs, beforeLaterWriteBlobs);
+  __clearClientStoreForTests();
+  await __loadClientStoreFromAdapterForTests(laterWriteAdapter);
+  assert.deepEqual(benchmarkState(), beforeLaterWriteState);
+  assert.deepEqual(laterWriteAdapter.runBlobs, beforeLaterWriteBlobs);
   __setAdapterForTests(null);
 
   // Terminal records and tombstones cannot be resurrected by direct saves.

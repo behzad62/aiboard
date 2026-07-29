@@ -34,6 +34,8 @@ import {
   isInitialized,
   setBenchmarkResultSetDeletionResumer,
   replaceStore,
+  restoreBenchmarkRunBlobs,
+  snapshotBenchmarkRunBlobs,
   upsertBenchmarkArtifact,
   upsertBenchmarkAttempt,
   upsertBenchmarkAttemptV2,
@@ -933,25 +935,26 @@ async function mergeBenchmarkReportBundle(
     acceptedResultSets,
     next
   );
+  const completedAnchorIds = new Set(
+    acceptedResultSets
+      .filter((resultSet) => resultSet.status === "completed")
+      .map((resultSet) => resultSet.anchorRunId)
+  );
+  const completedEvidenceIds = acceptedResultSets
+    .filter((resultSet) => resultSet.status === "completed")
+    .flatMap((resultSet) =>
+      resultSet.runIds.filter((runId) => runId !== resultSet.anchorRunId)
+    );
+  const affectedRunIds = new Set([
+    ...bundle.runs.map((run) => run.id),
+    ...bundle.attempts.map((attempt) => attempt.runId).filter(isString),
+    ...bundle.attemptsV2.map((attempt) => attempt.runId),
+    ...acceptedResultSets.flatMap((resultSet) => resultSet.runIds),
+  ]);
+  const durableRunSnapshot = await snapshotBenchmarkRunBlobs(affectedRunIds);
 
   try {
     replaceStore({ ...current, ...next });
-    const completedAnchorIds = new Set(
-      acceptedResultSets
-        .filter((resultSet) => resultSet.status === "completed")
-        .map((resultSet) => resultSet.anchorRunId)
-    );
-    const completedEvidenceIds = acceptedResultSets
-      .filter((resultSet) => resultSet.status === "completed")
-      .flatMap((resultSet) =>
-        resultSet.runIds.filter((runId) => runId !== resultSet.anchorRunId)
-      );
-    const affectedRunIds = new Set([
-      ...bundle.runs.map((run) => run.id),
-      ...bundle.attempts.map((attempt) => attempt.runId).filter(isString),
-      ...bundle.attemptsV2.map((attempt) => attempt.runId),
-      ...acceptedResultSets.flatMap((resultSet) => resultSet.runIds),
-    ]);
     await persistBenchmarkRunIds(
       completedEvidenceIds.filter((runId) => !completedAnchorIds.has(runId))
     );
@@ -963,6 +966,15 @@ async function mergeBenchmarkReportBundle(
     return importResult;
   } catch (error) {
     replaceStore(current);
+    try {
+      await restoreBenchmarkRunBlobs(durableRunSnapshot);
+      await flush();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "Benchmark import failed and its durable rollback was incomplete."
+      );
+    }
     throw error;
   }
 }

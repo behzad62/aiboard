@@ -1681,6 +1681,79 @@ export async function saveBenchmarkRunBlob(
   await serializeAdapterWrite(() => currentAdapter.saveBenchmarkRun(runId, blob));
 }
 
+export interface BenchmarkRunBlobSnapshot {
+  runId: string;
+  raw: string | null;
+  merged: boolean;
+  corrupt: boolean;
+}
+
+/**
+ * Captures the exact durable bytes and tracking state for a bounded set of
+ * benchmark run blobs. Import uses this before its first write so a later
+ * failure can compensate every earlier overwrite or creation.
+ */
+export async function snapshotBenchmarkRunBlobs(
+  runIds: Iterable<string>
+): Promise<BenchmarkRunBlobSnapshot[]> {
+  const uniqueRunIds = Array.from(
+    new Set(Array.from(runIds).filter(Boolean))
+  );
+  return Promise.all(
+    uniqueRunIds.map(async (runId) => ({
+      runId,
+      raw: benchmarkRunBlobStorageForTests
+        ? benchmarkRunBlobStorageForTests.get(runId) ?? null
+        : adapter
+          ? await adapter.loadBenchmarkRun(runId)
+          : null,
+      merged: mergedBenchmarkRunIds.has(runId),
+      corrupt: corruptBenchmarkRunIds.has(runId),
+    }))
+  );
+}
+
+/**
+ * Restores an exact snapshot captured by snapshotBenchmarkRunBlobs. All
+ * entries are attempted so one rollback error does not strand unrelated
+ * earlier writes without a restoration attempt.
+ */
+export async function restoreBenchmarkRunBlobs(
+  snapshots: readonly BenchmarkRunBlobSnapshot[]
+): Promise<void> {
+  const errors: unknown[] = [];
+  for (const snapshot of snapshots) {
+    try {
+      if (benchmarkRunBlobStorageForTests) {
+        if (snapshot.raw === null) {
+          benchmarkRunBlobStorageForTests.delete(snapshot.runId);
+        } else {
+          benchmarkRunBlobStorageForTests.set(snapshot.runId, snapshot.raw);
+        }
+      } else if (adapter) {
+        const currentAdapter = adapter;
+        await serializeAdapterWrite(() =>
+          snapshot.raw === null
+            ? currentAdapter.deleteBenchmarkRun(snapshot.runId)
+            : currentAdapter.saveBenchmarkRun(snapshot.runId, snapshot.raw)
+        );
+      }
+      if (snapshot.merged) mergedBenchmarkRunIds.add(snapshot.runId);
+      else mergedBenchmarkRunIds.delete(snapshot.runId);
+      if (snapshot.corrupt) corruptBenchmarkRunIds.add(snapshot.runId);
+      else corruptBenchmarkRunIds.delete(snapshot.runId);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(
+      errors,
+      "Failed to restore benchmark run blobs after an interrupted import."
+    );
+  }
+}
+
 export async function deleteBenchmarkRunBlob(runId: string): Promise<void> {
   mergedBenchmarkRunIds.delete(runId);
   corruptBenchmarkRunIds.delete(runId);
