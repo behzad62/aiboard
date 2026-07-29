@@ -421,7 +421,7 @@ assert.equal(
 
 await reset();
 await saveBenchmarkRun(run("run-stale", "gameiq"));
-await createPendingBenchmarkResultSet({
+const staleResultSet = await createPendingBenchmarkResultSet({
   id: "stale",
   schemaVersion: 1,
   executionId: "execution-stale",
@@ -430,6 +430,10 @@ await createPendingBenchmarkResultSet({
   configurationKey: "stale-key",
   configuration,
   expectedAttempts: [],
+});
+await saveBenchmarkResultSet({
+  ...staleResultSet,
+  createdAt: now,
 });
 assert.equal(
   await reconcileStaleBenchmarkResultSets({
