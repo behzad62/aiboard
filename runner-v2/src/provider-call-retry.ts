@@ -1,5 +1,6 @@
 import type { ProviderFailure } from "./provider-health.js";
 import type { RunnerProviderRetryEvent } from "./contracts.js";
+import { ProviderTransportError } from "./account-runner-model.js";
 
 export const RUNNER_PROVIDER_RETRY_DELAYS_MS =
   [2_000, 5_000, 15_000, 30_000, 60_000] as const;
@@ -12,6 +13,15 @@ export interface RunnerProviderRetryRuntime {
   now(): number;
   random(): number;
   sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
+export function runnerProviderRetryDeadlineMs(
+  maxActiveMs: number | undefined,
+  usedActiveMs: number,
+  nowMs: number
+): number | undefined {
+  if (maxActiveMs === undefined) return undefined;
+  return nowMs + Math.max(0, maxActiveMs - usedActiveMs);
 }
 
 export class ProviderRetryDeadlineError extends Error {
@@ -33,6 +43,7 @@ export async function completeWithProviderRetry<T>(input: {
   runtimeId?: string;
   providerId?: string;
   modelId?: string;
+  retryIdentity?: string;
 }): Promise<T> {
   const now = input.now ?? Date.now;
   const random = input.random ?? Math.random;
@@ -51,7 +62,9 @@ export async function completeWithProviderRetry<T>(input: {
       const delayMs = retryDelayMs(
         RUNNER_PROVIDER_RETRY_DELAYS_MS[attempt - 1],
         failure.retryAfterMs,
-        random()
+        input.retryIdentity
+          ? stableRetryRandom(input.retryIdentity, attempt)
+          : random()
       );
       throwIfAborted(input.signal);
       assertBeforeDeadline(input.deadlineMs, now(), delayMs);
@@ -76,10 +89,31 @@ export async function completeWithProviderRetry<T>(input: {
       return await input.complete();
     } catch (error) {
       lastError = error;
-      if (!isRetryable(input.classify(error))) throw error;
+      if (!isTypedProviderFailure(error) || !isRetryable(input.classify(error))) {
+        throw error;
+      }
     }
   }
   throw lastError;
+}
+
+function isTypedProviderFailure(error: unknown): boolean {
+  return error instanceof ProviderTransportError ||
+    (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { name?: unknown }).name === "ProviderTransportError"
+    );
+}
+
+function stableRetryRandom(identity: string, retry: number): number {
+  let hash = 2_166_136_261;
+  const value = `${identity}:retry:${retry}`;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0) / 0x1_0000_0000;
 }
 
 function retryDelayMs(

@@ -206,6 +206,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           runtimeId: candidate.runtimeId,
           providerId: candidate.providerId,
           modelId: candidate.modelId,
+          deadlineMs: assignment.providerRetryDeadlineMs,
           classify: classifyProviderFailure,
           onRetry: (event) => this.persistProviderRetry(
             assignment.runId,
@@ -219,6 +220,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
               }
             : {}),
         },
+        signal: assignment.signal,
         continuationMessages: workerContinuationMessages(
           {
             id: `context:${context.digest}`,
@@ -477,6 +479,9 @@ export function recoverableWorkerSuspension(
       type: "paused",
       reason: `budget_exhausted:${_error ?? "hard limit reached"}`,
     };
+  }
+  if (reason === "cancelled") {
+    return { type: "paused", reason: "worker_cancelled" };
   }
   return undefined;
 }

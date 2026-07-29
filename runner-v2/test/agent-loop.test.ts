@@ -61,6 +61,7 @@ test("prose completion and model EOF never complete a task", async () => {
 });
 
 test("model budget exhaustion is a typed budget suspension, not a provider failure", async () => {
+  let sleeps = 0;
   const model = new ScriptedModel([
     new BudgetExceededError("run_1", "modelCalls", 201, 200),
   ]);
@@ -69,10 +70,21 @@ test("model budget exhaustion is a typed budget suspension, not a provider failu
     registry: new ToolRegistry(),
     context: context(),
     initialMessages,
+    providerRetry: {
+      runtimeId: "runtime_1",
+      providerId: "provider_1",
+      modelId: "model_1",
+      classify: classifyProviderFailure,
+      sleep: async () => {
+        sleeps += 1;
+      },
+    },
   });
   assert.equal(result.status, "suspended");
   assert.equal(result.reason, "budget_exhausted");
   assert.match(result.error ?? "", /modelCalls/);
+  assert.equal(model.requests.length, 1);
+  assert.equal(sleeps, 0);
 });
 
 test("native tool results feed the next turn and only submit_task submits work", async () => {

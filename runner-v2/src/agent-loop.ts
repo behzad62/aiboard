@@ -14,6 +14,7 @@ import {
 import { BudgetExceededError } from "./budget-ledger.js";
 import {
   completeWithProviderRetry,
+  ProviderRetryDeadlineError,
   type RunnerProviderRetryEvent,
 } from "./provider-call-retry.js";
 import type { ProviderFailure } from "./provider-health.js";
@@ -266,19 +267,23 @@ export async function runAgentLoop(
             runtimeId: options.providerRetry.runtimeId,
             providerId: options.providerRetry.providerId,
             modelId: options.providerRetry.modelId,
+            retryIdentity: `${request.sessionId}:turn:${turnNumber}`,
           })
         : await options.model.complete(request);
     } catch (error) {
+      const budgetExhausted =
+        error instanceof BudgetExceededError ||
+        error instanceof ProviderRetryDeadlineError;
       return suspended(
         options.signal?.aborted
           ? "cancelled"
-          : error instanceof BudgetExceededError
+          : budgetExhausted
             ? "budget_exhausted"
             : "provider_error",
         turnNumber - 1,
         messages,
         error instanceof Error ? error.message : String(error),
-        error instanceof BudgetExceededError ? undefined : providerErrorDetails(error)
+        budgetExhausted ? undefined : providerErrorDetails(error)
       );
     }
 

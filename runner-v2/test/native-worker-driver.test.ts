@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
+import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import {
@@ -92,6 +93,10 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
   assert.deepEqual(
     recoverableWorkerSuspension("budget_exhausted", "maxToolCalls reached"),
     { type: "paused", reason: "budget_exhausted:maxToolCalls reached" }
+  );
+  assert.deepEqual(
+    recoverableWorkerSuspension("cancelled", "Build paused."),
+    { type: "paused", reason: "worker_cancelled" }
   );
   assert.equal(recoverableWorkerSuspension("checkpoint_error", "write failed"), undefined);
 
@@ -198,7 +203,10 @@ test("native worker fails over with the same session, context, tools, and eviden
       candidates,
       models: new Map([
         ["primary:code", new ScriptedModel(
-          Array.from({ length: 6 }, () => new Error("provider down secret-token"))
+          Array.from(
+            { length: 6 },
+            () => new ProviderTransportError("provider down secret-token", 503)
+          )
         )],
         ["fallback:code", fallback],
       ]),
@@ -236,9 +244,14 @@ test("native worker fails over with the same session, context, tools, and eviden
       (event) => event.type === "provider.retry_scheduled"
     );
     assert.equal(retryEvents.length, 5);
-    assert.deepEqual(retryEvents.map((event) => event.payload.delayMs), [
-      2_000, 5_000, 15_000, 30_000, 60_000,
-    ]);
+    assert.deepEqual(retryEvents.map((event) => event.payload.retry), [1, 2, 3, 4, 5]);
+    retryEvents.forEach((event, index) => {
+      const base = [2_000, 5_000, 15_000, 30_000, 60_000][index];
+      assert.ok(
+        Number(event.payload.delayMs) >= base * 0.8 &&
+          Number(event.payload.delayMs) <= base * 1.2
+      );
+    });
     assert.ok(retryEvents.every(
       (event) => !String(event.payload.reason).includes("secret-token")
     ));
@@ -257,6 +270,118 @@ test("native worker fails over with the same session, context, tools, and eviden
     assert.match(contextText, /focused testing evidence/);
     assert.match(contextText, /newline-terminated text/);
     assert.equal(evidence.list({ runId: "run_1", taskId: "task_a" }).length, 1);
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    scheduler?.close();
+    evidence?.close();
+    memory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("native worker cancellation interrupts an admitted provider retry sleep", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-cancel-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let memory: SqliteProjectMemoryStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_1",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_1",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_a");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    seedRunningTask(scheduler);
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "primary:code",
+      providerId: "primary",
+      modelId: "code",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const model = new ScriptedModel([
+      new ProviderTransportError("temporary outage", 503),
+    ]);
+    const health = new ProviderHealthRegistry();
+    let sleepSignal: AbortSignal | undefined;
+    let sleepStarted!: () => void;
+    const sleeping = new Promise<void>((resolve) => {
+      sleepStarted = resolve;
+    });
+    const driver = new NativeWorkerDriver({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({
+        candidates: [candidate],
+        health,
+      }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, model]]),
+      permissionProfile: "full",
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore: evidence,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      projectId: "project_1",
+      projectRoot: project,
+      providerRetryRuntime: {
+        now: () => 0,
+        random: () => 0.5,
+        sleep: async (_ms, signal) => {
+          sleepSignal = signal;
+          sleepStarted();
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => reject(signal.reason),
+              { once: true }
+            );
+          });
+        },
+      },
+    });
+    const controller = new AbortController();
+    const outcomePromise = driver.run({
+      runId: "run_1",
+      task: rebuildTask(scheduler),
+      attempt: 1,
+      workerId: "worker_task_a_1",
+      workspacePath: workspace.path,
+      signal: controller.signal,
+      providerRetryDeadlineMs: 60_000,
+    });
+    await sleeping;
+    assert.equal(sleepSignal, controller.signal);
+    controller.abort(new DOMException("Build paused.", "AbortError"));
+    const outcome = await outcomePromise;
+    assert.deepEqual(outcome, { type: "paused", reason: "worker_cancelled" });
+    assert.equal(model.requests.length, 1);
+    assert.equal(scheduler.readRun("run_1").filter(
+      (event) => event.type === "provider.retry_scheduled"
+    ).length, 1);
   } finally {
     sessions?.close();
     ledger?.close();

@@ -122,6 +122,33 @@ test("restart resumes the same running attempt without incrementing it", async (
   }
 });
 
+test("scheduler threads the active lifecycle signal and absolute retry deadline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-lifecycle-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const driver = new DeferredDriver();
+  const controller = new AbortController();
+  try {
+    store.append(planEvent("run_1", [task("a")]));
+    const scheduler = new TaskScheduler({
+      runId: "run_1",
+      store,
+      driver,
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/a",
+      lifecycleSignal: () => controller.signal,
+      providerRetryDeadlineMs: () => 12_345,
+    });
+    await scheduler.tick();
+    assert.equal(driver.assignments[0].signal, controller.signal);
+    assert.equal(driver.assignments[0].providerRetryDeadlineMs, 12_345);
+    driver.resolve("a", { type: "paused", reason: "test_complete" });
+    await scheduler.awaitIdle();
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function planEvent(runId: string, tasks: BuildTask[]) {
   return {
     runId,

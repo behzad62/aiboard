@@ -87,6 +87,7 @@ export interface RunWorkerTaskOptions {
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
   providerRetry?: RunAgentLoopOptions["providerRetry"];
+  signal?: AbortSignal;
 }
 
 export interface WorkerTaskResult {
@@ -313,8 +314,10 @@ export async function runWorkerTask(
       sessionId: options.sessionId,
       actor: { role: "worker", id: options.actorId },
       workspacePath: options.workspace.path,
+      signal: options.signal,
     },
     initialMessages: messages,
+    signal: options.signal,
     ...(options.providerRetry ? { providerRetry: options.providerRetry } : {}),
     onCheckpoint: async (checkpoint) => {
       await options.sessions.checkpoint(options.sessionId, checkpoint, clock());

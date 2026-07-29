@@ -41,6 +41,7 @@ import {
   resolvedProviderBillingBasis,
 } from "./provider-config-store.js";
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
+import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import {
   rebuildSchedulerProjection,
@@ -283,6 +284,14 @@ export class NativeBuildFactory {
           occurredAt,
           idempotencyKey,
         });
+      },
+      providerRetryDeadlineMs: () => {
+        const usedActiveMs = budgetLedger.snapshot(spec.runId).effective.activeMs;
+        return runnerProviderRetryDeadlineMs(
+          spec.budgetLimits.maxActiveMs,
+          usedActiveMs,
+          Date.now()
+        );
       },
     });
     let closed = false;

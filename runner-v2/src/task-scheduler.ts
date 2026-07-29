@@ -12,6 +12,8 @@ export interface WorkerAssignment {
   attempt: number;
   workerId: string;
   workspacePath: string;
+  signal?: AbortSignal;
+  providerRetryDeadlineMs?: number;
 }
 
 export type WorkerOutcome =
@@ -41,6 +43,8 @@ export interface TaskSchedulerOptions {
   ) => Promise<string | WorkspaceAllocation>;
   maxTaskAttempts?: number;
   clock?: () => string;
+  lifecycleSignal?: () => AbortSignal;
+  providerRetryDeadlineMs?: () => number | undefined;
 }
 
 export interface WorkspaceAllocation {
@@ -57,6 +61,8 @@ export class TaskScheduler {
   private readonly workspaceFor: TaskSchedulerOptions["workspaceFor"];
   private readonly maxTaskAttempts: number;
   private readonly clock: () => string;
+  private readonly lifecycleSignal?: TaskSchedulerOptions["lifecycleSignal"];
+  private readonly providerRetryDeadlineMs?: TaskSchedulerOptions["providerRetryDeadlineMs"];
   private readonly active = new Map<string, Promise<void>>();
   private tickQueue = Promise.resolve();
 
@@ -71,6 +77,8 @@ export class TaskScheduler {
     this.workspaceFor = options.workspaceFor;
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.clock = options.clock ?? (() => new Date().toISOString());
+    this.lifecycleSignal = options.lifecycleSignal;
+    this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
   }
 
   projection(): SchedulerProjection {
@@ -175,12 +183,17 @@ export class TaskScheduler {
   }
 
   private dispatch(task: BuildTask, workspacePath: string): void {
+    const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
     const assignment: WorkerAssignment = {
       runId: this.runId,
       task: { ...task },
       attempt: task.attempt,
       workerId: task.assignedWorkerId ?? `worker_${task.id}_${task.attempt}`,
       workspacePath,
+      ...(this.lifecycleSignal ? { signal: this.lifecycleSignal() } : {}),
+      ...(providerRetryDeadlineMs !== undefined
+        ? { providerRetryDeadlineMs }
+        : {}),
     };
     const operation = Promise.resolve()
       .then(async () => await this.driver.run(assignment))

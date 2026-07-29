@@ -117,6 +117,49 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
   }
 });
 
+test("pausing a Build aborts the active Architect lifecycle signal and carries its deadline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-cancel-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let request: ArchitectActionRequest | undefined;
+  let admit!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+    admit = resolve;
+  });
+  const architect: ArchitectRuntimeDriver = {
+    run: async (value) => {
+      request = value;
+      admit();
+      await new Promise<void>((resolve) => {
+        value.context.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    },
+  };
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_cancel",
+      store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: architect,
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+      providerRetryDeadlineMs: () => 54_321,
+    });
+    const step = runtime.step();
+    await admitted;
+    assert.equal(request?.providerRetryDeadlineMs, 54_321);
+    assert.equal(request?.context.signal?.aborted, false);
+    runtime.pause("user", "pause:cancel-active");
+    assert.equal(request?.context.signal?.aborted, true);
+    assert.equal((await step).status, "paused");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("plan-only Builds stay behind the scheduling boundary and require explicit handoff", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-plan-only-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));

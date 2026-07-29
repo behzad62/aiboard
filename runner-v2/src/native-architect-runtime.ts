@@ -289,6 +289,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         runtimeId: candidate.runtimeId,
         providerId: candidate.providerId,
         modelId: candidate.modelId,
+        deadlineMs: request.providerRetryDeadlineMs,
         classify: classifyProviderFailure,
         onRetry: (event) => this.persistProviderRetry(request.runId, event),
         ...(this.options.providerRetryRuntime

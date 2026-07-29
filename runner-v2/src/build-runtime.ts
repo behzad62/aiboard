@@ -39,6 +39,7 @@ export interface ArchitectActionRequest {
   projection: SchedulerProjection;
   tools: AgentToolRuntime;
   context: ToolExecutionContext;
+  providerRetryDeadlineMs?: number;
 }
 
 export interface ArchitectRuntimeDriver {
@@ -74,6 +75,7 @@ export interface BuildRuntimeOptions {
   architectId?: string;
   clock?: () => string;
   renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
+  providerRetryDeadlineMs?: () => number | undefined;
 }
 
 export interface BuildStepResult {
@@ -93,6 +95,8 @@ export class BuildRuntime {
   private readonly architectId: string;
   private readonly clock: () => string;
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
+  private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
+  private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
   constructor(options: BuildRuntimeOptions) {
@@ -106,6 +110,7 @@ export class BuildRuntime {
     this.architectId = options.architectId ?? "architect_1";
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.renewBudgetWindow = options.renewBudgetWindow;
+    this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -115,6 +120,8 @@ export class BuildRuntime {
       workspaceFor: options.workspaceFor,
       maxTaskAttempts: options.maxTaskAttempts,
       clock: this.clock,
+      lifecycleSignal: () => this.activeLifecycleSignal(),
+      providerRetryDeadlineMs: this.providerRetryDeadlineMs,
     });
   }
 
@@ -135,6 +142,9 @@ export class BuildRuntime {
     if (projection.status === "completed") {
       throw new Error("A completed Build cannot be paused.");
     }
+    this.lifecycleController.abort(
+      new DOMException(`Build ${this.runId} paused.`, "AbortError")
+    );
     this.store.append({
       runId: this.runId,
       type: "run.paused",
@@ -165,6 +175,9 @@ export class BuildRuntime {
     }
     if (!renewBudgetWindow && projection.status !== "paused") {
       throw new Error("A benchmark continuation requires a paused Build.");
+    }
+    if (this.lifecycleController.signal.aborted) {
+      this.lifecycleController = new AbortController();
     }
     if (projection.projectHandoff?.status === "requested") {
       throw new Error(
@@ -445,6 +458,7 @@ export class BuildRuntime {
     projection: SchedulerProjection
   ): Promise<void> {
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
+    const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
     const tools = new ToolRegistry();
     for (const tool of createArchitectTools({
       store: this.store,
@@ -462,10 +476,14 @@ export class BuildRuntime {
       reason,
       projection,
       tools,
+      ...(providerRetryDeadlineMs !== undefined
+        ? { providerRetryDeadlineMs }
+        : {}),
       context: {
         runId: this.runId,
         sessionId: `architect:${this.runId}`,
         actor: { role: "architect", id: this.architectId },
+        signal: this.activeLifecycleSignal(),
       },
     });
     const sequenceAfter = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
@@ -474,6 +492,16 @@ export class BuildRuntime {
         `Architect returned from ${reason.type} without a typed action.`
       );
     }
+  }
+
+  private activeLifecycleSignal(): AbortSignal {
+    if (
+      this.lifecycleController.signal.aborted &&
+      this.projection().status === "running"
+    ) {
+      this.lifecycleController = new AbortController();
+    }
+    return this.lifecycleController.signal;
   }
 
   private afterArchitect(action: string): BuildStepResult {

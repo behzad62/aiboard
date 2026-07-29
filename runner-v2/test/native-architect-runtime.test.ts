@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
+import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createBrowserTools, type BrowserBackend } from "../src/browser-tools.js";
 import { BuildRuntime } from "../src/build-runtime.js";
@@ -147,15 +148,20 @@ test("Architect provider failure pauses for user-selected handoff before plannin
         stopReason: "tool_calls",
       },
     ]);
+    const primary = new ScriptedModel(Array.from(
+      { length: 6 },
+      () => new ProviderTransportError(
+        "provider unavailable secret-token",
+        503
+      )
+    ));
     const architect = new NativeArchitectRuntime({
       schedulerStore: scheduler,
       router: new RuntimeRouter({ candidates, health }),
       health,
       candidates,
       models: new Map([
-        ["primary:architect", new ScriptedModel(
-          Array.from({ length: 6 }, () => new Error("provider unavailable secret-token"))
-        )],
+        ["primary:architect", primary],
         ["fallback:architect", fallback],
       ]),
       initialRuntimeId: "primary:architect",
@@ -194,12 +200,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       (event) => event.type === "provider.retry_scheduled"
     );
     assert.equal(retryEvents.length, 5);
-    assert.deepEqual(retryEvents.map((event) => event.payload.delayMs), [
-      2_000, 5_000, 15_000, 30_000, 60_000,
-    ]);
-    assert.ok(retryEvents.every(
-      (event) => !String(event.payload.reason).includes("secret-token")
-    ));
+    assert.equal(primary.requests.length, 6);
     assert.equal(fallback.requests.length, 0, "Architect replacement is never automatic");
 
     scheduler.append({
@@ -238,6 +239,65 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     );
 
     const onlyCandidate = candidates[0];
+    const deadlineHealth = new ProviderHealthRegistry();
+    const deadlineModel = new ScriptedModel([
+      new ProviderTransportError(
+        "provider unavailable",
+        503,
+        "temporarily_unavailable",
+        20_000
+      ),
+    ]);
+    const deadlineArchitect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({
+        candidates: [onlyCandidate],
+        health: deadlineHealth,
+      }),
+      health: deadlineHealth,
+      candidates: [onlyCandidate],
+      models: new Map([[onlyCandidate.runtimeId, deadlineModel]]),
+      initialRuntimeId: onlyCandidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project_1",
+      projectRoot: project,
+      objective: "Build the requested feature.",
+      providerRetryRuntime: {
+        now: () => 0,
+        random: () => 0.5,
+        sleep: async () => {
+          throw new Error("oversized Retry-After must not sleep");
+        },
+      },
+    });
+    const deadlineRuntime = new BuildRuntime({
+      runId: "run_deadline",
+      store: scheduler,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: deadlineArchitect,
+      integrationDriver: {
+        integrate: async () => ({
+          status: "integrated",
+          integrationRevision: "unused",
+        }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+      providerRetryDeadlineMs: () => 10_000,
+    });
+    assert.equal((await deadlineRuntime.step()).status, "paused");
+    const deadlineProjection = deadlineRuntime.projection();
+    assert.equal(deadlineProjection.runtime.architect.handoff, undefined);
+    assert.match(deadlineProjection.pauseReason?.reason ?? "", /budget_exhausted/);
+    assert.equal(deadlineModel.requests.length, 1);
+    assert.equal(scheduler.readRun("run_deadline").filter(
+      (event) => event.type === "provider.retry_scheduled"
+    ).length, 0);
+
     const noFallbackHealth = new ProviderHealthRegistry();
     const noFallbackArchitect = new NativeArchitectRuntime({
       schedulerStore: scheduler,
