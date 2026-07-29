@@ -5,7 +5,10 @@ import type {
   ToolExecutionContext,
   ToolResult,
 } from "./agent-contracts.js";
-import { runAgentLoop } from "./agent-loop.js";
+import {
+  runAgentLoop,
+  type AgentProviderRetryEvent,
+} from "./agent-loop.js";
 import {
   buildArchitectContext,
   type ArchitectReviewSubmission,
@@ -61,6 +64,9 @@ import {
   AgentProtocolError,
   type AgentToolRuntime,
 } from "./tool-registry.js";
+import type {
+  RunnerProviderRetryRuntime,
+} from "./provider-call-retry.js";
 
 export interface NativeArchitectRuntimeOptions {
   schedulerStore: SchedulerStore;
@@ -92,6 +98,7 @@ export interface NativeArchitectRuntimeOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  providerRetryRuntime?: RunnerProviderRetryRuntime;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -277,6 +284,21 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         ),
       },
       initialMessages: messages,
+      signal: request.context.signal,
+      providerRetry: {
+        runtimeId: candidate.runtimeId,
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        classify: classifyProviderFailure,
+        onRetry: (event) => this.persistProviderRetry(request.runId, event),
+        ...(this.options.providerRetryRuntime
+          ? {
+              now: this.options.providerRetryRuntime.now,
+              random: this.options.providerRetryRuntime.random,
+              sleep: this.options.providerRetryRuntime.sleep,
+            }
+          : {}),
+      },
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
@@ -369,6 +391,26 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       actor: { role: "runner", id: "runtime-router" },
       idempotencyKey: `provider-health:${providerId}:${count + 1}`,
       payload: { state: this.options.health.get(providerId) },
+    });
+  }
+
+  private persistProviderRetry(
+    runId: string,
+    event: AgentProviderRetryEvent
+  ): void {
+    this.options.schedulerStore.append({
+      runId,
+      type: "provider.retry_scheduled",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "native-architect-runtime" },
+      idempotencyKey: [
+        "provider-retry",
+        event.runtimeId,
+        event.sessionId,
+        event.turn,
+        event.retry,
+      ].join(":"),
+      payload: { ...event },
     });
   }
 

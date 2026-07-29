@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import type {
@@ -14,7 +17,13 @@ import { runAgentLoop } from "../src/agent-loop.js";
 import { compactAgentMessages } from "../src/agent-loop.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 import { BudgetExceededError } from "../src/budget-ledger.js";
-import { AccountRunnerModel } from "../src/account-runner-model.js";
+import { BudgetedAgentModel } from "../src/budgeted-model.js";
+import {
+  AccountRunnerModel,
+  ProviderTransportError,
+} from "../src/account-runner-model.js";
+import { classifyProviderFailure } from "../src/provider-health.js";
+import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -111,6 +120,115 @@ test("native tool results feed the next turn and only submit_task submits work",
       : null,
     "file contents"
   );
+});
+
+test("provider call retry repeats only the exact completion and never replays ledgered tools", async () => {
+  let readExecutions = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "file contents", () => readExecutions++));
+  registry.register(submitTool());
+  const model = new ScriptedModel([
+    {
+      blocks: [
+        { type: "tool_call", callId: "read_once", name: "read_file", arguments: {} },
+      ],
+      stopReason: "tool_calls",
+    },
+    new ProviderTransportError("temporary outage", 503),
+    {
+      blocks: [
+        {
+          type: "tool_call",
+          callId: "submit_after_retry",
+          name: "submit_task",
+          arguments: { changeSetId: "changeset_retry" },
+        },
+      ],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: context(),
+    initialMessages,
+    providerRetry: {
+      runtimeId: "runtime_1",
+      providerId: "provider_1",
+      modelId: "model_1",
+      classify: classifyProviderFailure,
+      random: () => 0.5,
+      sleep: async () => undefined,
+    },
+  });
+
+  assert.equal(result.status, "submitted");
+  assert.equal(readExecutions, 1);
+  assert.equal(model.requests.length, 3);
+  assert.deepEqual(model.requests[1], model.requests[2]);
+});
+
+test("provider call retry accounts for every physical budgeted completion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-retry-budget-"));
+  const ledger = new SqliteBudgetLedger(join(root, "budget.sqlite"), {
+    limitsFor: () => ({ maxModelCalls: 6 }),
+  });
+  try {
+    const model = new BudgetedAgentModel({
+      model: new ScriptedModel([
+        new ProviderTransportError("temporary outage", 503),
+        {
+          blocks: [
+            {
+              type: "tool_call",
+              callId: "submit_budgeted_retry",
+              name: "submit_task",
+              arguments: { changeSetId: "changeset_budgeted_retry" },
+            },
+          ],
+          stopReason: "tool_calls",
+          usage: { inputTokens: 20, outputTokens: 8 },
+        },
+      ]),
+      ledger,
+      scopeId: "run_retry_budget",
+      attribution: {
+        runtimeId: "runtime_1",
+        providerId: "provider_1",
+        modelId: "model_1",
+        role: "worker",
+        sessionId: "session_1",
+      },
+      outputTokenReserve: 32,
+    });
+    const registry = new ToolRegistry();
+    registry.register(submitTool());
+    const result = await runAgentLoop({
+      model,
+      registry,
+      context: context(),
+      initialMessages,
+      providerRetry: {
+        runtimeId: "runtime_1",
+        providerId: "provider_1",
+        modelId: "model_1",
+        classify: classifyProviderFailure,
+        random: () => 0.5,
+        sleep: async () => undefined,
+      },
+    });
+
+    assert.equal(result.status, "submitted", JSON.stringify(result));
+    const budget = ledger.snapshot("run_retry_budget");
+    assert.equal(budget.effective.modelCalls, 2);
+    assert.equal(Object.keys(budget.reservations).length, 2);
+    assert.ok(Object.values(budget.reservations).every(
+      (reservation) => reservation.status === "settled"
+    ));
+  } finally {
+    ledger.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("account-runner textual tool records execute through the agent loop", async () => {

@@ -2,6 +2,17 @@ export const RUNNER_V2_SCHEMA_VERSION = 1 as const;
 
 export type PermissionProfile = "guarded" | "project" | "full";
 
+export interface RunnerProviderRetryEvent {
+  runtimeId: string;
+  providerId: string;
+  modelId: string;
+  retry: number;
+  maxRetries: 5;
+  delayMs: number;
+  reason: string;
+  occurredAt: string;
+}
+
 export type RunState =
   | "created"
   | "running"

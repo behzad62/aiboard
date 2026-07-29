@@ -197,7 +197,9 @@ test("native worker fails over with the same session, context, tools, and eviden
       health,
       candidates,
       models: new Map([
-        ["primary:code", new ScriptedModel([new Error("provider down")])],
+        ["primary:code", new ScriptedModel(
+          Array.from({ length: 6 }, () => new Error("provider down secret-token"))
+        )],
         ["fallback:code", fallback],
       ]),
       permissionProfile: "full",
@@ -210,6 +212,11 @@ test("native worker fails over with the same session, context, tools, and eviden
       memoryStore: memory,
       projectId: "project_1",
       projectRoot: project,
+      providerRetryRuntime: {
+        now: () => 0,
+        random: () => 0.5,
+        sleep: async () => undefined,
+      },
     });
     const assignment: WorkerAssignment = {
       runId: "run_1",
@@ -225,6 +232,16 @@ test("native worker fails over with the same session, context, tools, and eviden
       scheduler.readRun("run_1")
     );
     assert.equal(projection.runtime.workerAssignments["task_a:1"].runtimeId, "fallback:code");
+    const retryEvents = scheduler.readRun("run_1").filter(
+      (event) => event.type === "provider.retry_scheduled"
+    );
+    assert.equal(retryEvents.length, 5);
+    assert.deepEqual(retryEvents.map((event) => event.payload.delayMs), [
+      2_000, 5_000, 15_000, 30_000, 60_000,
+    ]);
+    assert.ok(retryEvents.every(
+      (event) => !String(event.payload.reason).includes("secret-token")
+    ));
     assert.equal(fallback.requests[0].sessionId, "worker:run_1:task_a:1");
     const contextText = fallback.requests[0].messages.map((message) =>
       typeof message.content === "string" ? message.content : ""

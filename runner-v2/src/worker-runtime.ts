@@ -2,7 +2,11 @@ import type {
   AgentMessage,
   AgentModel,
 } from "./agent-contracts.js";
-import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
+import {
+  runAgentLoop,
+  type AgentLoopResult,
+  type RunAgentLoopOptions,
+} from "./agent-loop.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
@@ -82,6 +86,7 @@ export interface RunWorkerTaskOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  providerRetry?: RunAgentLoopOptions["providerRetry"];
 }
 
 export interface WorkerTaskResult {
@@ -310,6 +315,7 @@ export async function runWorkerTask(
       workspacePath: options.workspace.path,
     },
     initialMessages: messages,
+    ...(options.providerRetry ? { providerRetry: options.providerRetry } : {}),
     onCheckpoint: async (checkpoint) => {
       await options.sessions.checkpoint(options.sessionId, checkpoint, clock());
     },

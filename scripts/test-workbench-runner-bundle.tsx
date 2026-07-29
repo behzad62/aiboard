@@ -154,6 +154,32 @@ if (archive) {
     "bundle contains nested Runner V2 CLI",
     archive.file("aiboard-runner-v2/src/cli.ts") !== null
   );
+  const packagedRunnerSources = Object.keys(archive.files)
+    .filter((name) =>
+      name.startsWith("aiboard-runner-v2/src/") && name.endsWith(".ts")
+    )
+    .sort();
+  for (const archivePath of packagedRunnerSources) {
+    const relativePath = archivePath.slice("aiboard-runner-v2/".length);
+    const packaged = await archive.file(archivePath)!.async("string");
+    const source = await readFile(join(repoRoot, "runner-v2", relativePath), "utf8");
+    check(
+      `bundle ${archivePath} matches Runner V2 source`,
+      packaged === source.replace(/\r\n?/g, "\n")
+    );
+  }
+  const packagedRetry = archive.file(
+    "aiboard-runner-v2/src/provider-call-retry.ts"
+  );
+  check("bundle contains standalone Runner V2 provider retry", packagedRetry !== null);
+  if (packagedRetry) {
+    const content = await packagedRetry.async("string");
+    check(
+      "packaged Runner retry has no browser application imports",
+      !/(?:from\s+["'](?:@\/|\.\.\/\.\.\/lib\/)|lib\/benchmark\/certified)/.test(content),
+      content
+    );
+  }
   const readme = archive.file("README.md");
   check("bundle contains an installation README", readme !== null);
   if (readme) {

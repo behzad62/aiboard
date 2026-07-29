@@ -233,10 +233,12 @@ async function checkWorkBenchRunnerArchive(path: string): Promise<void> {
     const archive = await JSZip.loadAsync(readFileSync(path));
     const benchRunner = archive.file("bench-runner.mjs");
     const runnerCli = archive.file("aiboard-runner-v2/src/cli.ts");
+    const runnerRetry = archive.file("aiboard-runner-v2/src/provider-call-retry.ts");
     const runnerPackage = archive.file("aiboard-runner-v2/package.json");
     const readme = archive.file("README.md");
     check(`${path} contains bench-runner.mjs`, benchRunner !== null);
     check(`${path} contains nested Runner V2 CLI`, runnerCli !== null);
+    check(`${path} contains nested standalone provider retry`, runnerRetry !== null);
     check(`${path} contains nested Runner V2 package`, runnerPackage !== null);
     check(`${path} contains an installation README`, readme !== null);
     check(
@@ -247,6 +249,24 @@ async function checkWorkBenchRunnerArchive(path: string): Promise<void> {
       check(
         `${path} benchmark runner matches source`,
         await benchRunner.async("nodebuffer").then((content) => content.equals(readFileSync(sourceBenchRunner)))
+      );
+    }
+    for (const sourcePath of textFilePaths("runner-v2/src", ".ts")) {
+      const archivePath = `aiboard-runner-v2/src/${sourcePath}`;
+      const sourceFile = archive.file(archivePath);
+      check(`${path} contains ${archivePath}`, sourceFile !== null);
+      if (sourceFile) {
+        check(
+          `${path} ${archivePath} matches normalized Runner V2 source`,
+          await sourceFile.async("string") === normalizeLf(read(`runner-v2/src/${sourcePath}`))
+        );
+      }
+    }
+    if (runnerRetry) {
+      const content = await runnerRetry.async("string");
+      check(
+        `${path} standalone retry has no browser application imports`,
+        !/(?:from\s+["'](?:@\/|\.\.\/\.\.\/lib\/)|lib\/benchmark\/certified)/.test(content)
       );
     }
     if (readme) {

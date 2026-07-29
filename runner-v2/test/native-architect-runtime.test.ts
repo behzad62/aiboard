@@ -153,7 +153,9 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       health,
       candidates,
       models: new Map([
-        ["primary:architect", new ScriptedModel([new Error("provider unavailable")])],
+        ["primary:architect", new ScriptedModel(
+          Array.from({ length: 6 }, () => new Error("provider unavailable secret-token"))
+        )],
         ["fallback:architect", fallback],
       ]),
       initialRuntimeId: "primary:architect",
@@ -165,6 +167,11 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       projectId: "project_1",
       projectRoot: project,
       objective: "Build the requested feature.",
+      providerRetryRuntime: {
+        now: () => 0,
+        random: () => 0.5,
+        sleep: async () => undefined,
+      },
     });
     const runtime = new BuildRuntime({
       runId: "run_1",
@@ -183,6 +190,16 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       "primary:architect",
       "fallback:architect",
     ]);
+    const retryEvents = scheduler.readRun("run_1").filter(
+      (event) => event.type === "provider.retry_scheduled"
+    );
+    assert.equal(retryEvents.length, 5);
+    assert.deepEqual(retryEvents.map((event) => event.payload.delayMs), [
+      2_000, 5_000, 15_000, 30_000, 60_000,
+    ]);
+    assert.ok(retryEvents.every(
+      (event) => !String(event.payload.reason).includes("secret-token")
+    ));
     assert.equal(fallback.requests.length, 0, "Architect replacement is never automatic");
 
     scheduler.append({

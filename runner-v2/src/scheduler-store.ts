@@ -34,6 +34,7 @@ export type SchedulerEventType =
   | "run.completed"
   | "project.handoff_requested"
   | "project.handoff_selected"
+  | "provider.retry_scheduled"
   | "provider.health_changed"
   | "worker.runtime_assigned"
   | "architect.runtime_assigned"
@@ -548,6 +549,22 @@ export function reduceSchedulerEvent(
       };
       next.status = "completed";
       delete next.pauseReason;
+      break;
+    }
+    case "provider.retry_scheduled": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may schedule provider retries.");
+      }
+      requiredString(event.payload, "runtimeId");
+      requiredString(event.payload, "providerId");
+      requiredString(event.payload, "modelId");
+      const retry = requiredNumber(event.payload, "retry");
+      const maxRetries = requiredNumber(event.payload, "maxRetries");
+      const delayMs = requiredNumber(event.payload, "delayMs");
+      requiredString(event.payload, "reason");
+      if (retry < 1 || retry > 5 || maxRetries !== 5 || delayMs < 0) {
+        throw new Error("Provider retry schedule is invalid.");
+      }
       break;
     }
     case "provider.health_changed": {

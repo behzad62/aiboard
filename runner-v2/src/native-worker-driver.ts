@@ -1,5 +1,8 @@
 import type { AgentMessage, AgentModel } from "./agent-contracts.js";
-import type { AgentSuspensionReason } from "./agent-loop.js";
+import type {
+  AgentProviderRetryEvent,
+  AgentSuspensionReason,
+} from "./agent-loop.js";
 import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
 import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -39,6 +42,9 @@ import type {
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
+import type {
+  RunnerProviderRetryRuntime,
+} from "./provider-call-retry.js";
 
 export interface NativeWorkerDriverOptions {
   schedulerStore: SchedulerStore;
@@ -69,6 +75,7 @@ export interface NativeWorkerDriverOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  providerRetryRuntime?: RunnerProviderRetryRuntime;
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -195,6 +202,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             ].join("\n"),
           },
         ],
+        providerRetry: {
+          runtimeId: candidate.runtimeId,
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          classify: classifyProviderFailure,
+          onRetry: (event) => this.persistProviderRetry(
+            assignment.runId,
+            event
+          ),
+          ...(this.options.providerRetryRuntime
+            ? {
+                now: this.options.providerRetryRuntime.now,
+                random: this.options.providerRetryRuntime.random,
+                sleep: this.options.providerRetryRuntime.sleep,
+              }
+            : {}),
+        },
         continuationMessages: workerContinuationMessages(
           {
             id: `context:${context.digest}`,
@@ -341,6 +365,26 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       actor: { role: "runner", id: "runtime-router" },
       idempotencyKey: `provider-health:${providerId}:${count + 1}`,
       payload: { state },
+    });
+  }
+
+  private persistProviderRetry(
+    runId: string,
+    event: AgentProviderRetryEvent
+  ): void {
+    this.options.schedulerStore.append({
+      runId,
+      type: "provider.retry_scheduled",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "native-worker-driver" },
+      idempotencyKey: [
+        "provider-retry",
+        event.runtimeId,
+        event.sessionId,
+        event.turn,
+        event.retry,
+      ].join(":"),
+      payload: { ...event },
     });
   }
 

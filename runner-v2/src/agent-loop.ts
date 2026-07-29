@@ -12,6 +12,11 @@ import {
   type AgentToolRuntime,
 } from "./tool-registry.js";
 import { BudgetExceededError } from "./budget-ledger.js";
+import {
+  completeWithProviderRetry,
+  type RunnerProviderRetryEvent,
+} from "./provider-call-retry.js";
+import type { ProviderFailure } from "./provider-health.js";
 
 export type AgentSuspensionReason =
   | "model_ended_without_lifecycle"
@@ -95,6 +100,23 @@ export interface RunAgentLoopOptions {
     warnTurns: number;
     suspendTurns: number;
   };
+  providerRetry?: {
+    runtimeId: string;
+    providerId: string;
+    modelId: string;
+    deadlineMs?: number;
+    classify(error: unknown): ProviderFailure;
+    onRetry?(event: AgentProviderRetryEvent): void;
+    now?: () => number;
+    random?: () => number;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  };
+}
+
+export interface AgentProviderRetryEvent
+  extends Omit<RunnerProviderRetryEvent, "occurredAt"> {
+  sessionId: string;
+  turn: number;
 }
 
 export interface AgentWorkingSetLimits {
@@ -219,12 +241,33 @@ export async function runAgentLoop(
     }
     let turn;
     try {
-      turn = await options.model.complete({
+      const request = {
         sessionId: options.context.sessionId,
         messages: compactAgentMessages(messages, options.workingSet),
         tools: options.registry.definitions(),
         signal: options.signal,
-      });
+      };
+      turn = options.providerRetry
+        ? await completeWithProviderRetry({
+            complete: () => options.model.complete(request),
+            signal: options.signal,
+            deadlineMs: options.providerRetry.deadlineMs,
+            classify: options.providerRetry.classify,
+            onRetry: options.providerRetry.onRetry
+              ? (event) => options.providerRetry!.onRetry!({
+                  ...event,
+                  sessionId: request.sessionId,
+                  turn: turnNumber,
+                })
+              : undefined,
+            now: options.providerRetry.now,
+            random: options.providerRetry.random,
+            sleep: options.providerRetry.sleep,
+            runtimeId: options.providerRetry.runtimeId,
+            providerId: options.providerRetry.providerId,
+            modelId: options.providerRetry.modelId,
+          })
+        : await options.model.complete(request);
     } catch (error) {
       return suspended(
         options.signal?.aborted
