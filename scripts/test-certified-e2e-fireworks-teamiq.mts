@@ -1,215 +1,125 @@
 /* Certified Fireworks TeamIQ e2e checks (run: npx tsx scripts/test-certified-e2e-fireworks-teamiq.mts) */
+import assert from "node:assert/strict";
 import {
   __resetBenchmarkStoreForTests,
   exportBenchmarkReportBundleV2,
   importBenchmarkReportBundleV2,
   listBenchmarkAttemptsV2,
-  listBenchmarkFailures,
   listBenchmarkResultSets,
-  saveBenchmarkCaseV2,
-  saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
+import {
+  runSelected,
+  TEAM_HARNESS,
+} from "../lib/benchmark/certified/run-execution";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
-import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
-  createPendingBenchmarkResultSet,
-  publishBenchmarkResultSetIfComplete,
-} from "../lib/benchmark/certified/result-set-publication";
-import {
-  FIREWORKS_MEMORY_SCENARIOS,
-  FIREWORKS_TACTICS_SCENARIOS,
-  fireworksCaseToBenchmarkCaseV2,
-} from "../lib/benchmark/fireworks/scenario-packs";
-import { runCertifiedTeamIq } from "../lib/benchmark/teamiq";
-import { deriveTeamComposition } from "../lib/benchmark/teamiq";
-import type { BenchmarkTeamCompositionRole } from "../lib/benchmark/types";
-import type { StreamChunk } from "../lib/providers/base";
+  __resetClientStoreForTests,
+  upsertProviderKey,
+} from "../lib/client/store";
+import { openaiProvider } from "../lib/providers/openai";
+import type { SelectedModel, StreamChunk } from "../lib/providers/base";
 
-let failures = 0;
-
-function check(name: string, ok: boolean, detail?: unknown): void {
-  if (!ok) failures++;
-  console.log(
-    `${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`
-  );
-}
-
-const cases = [
-  ...FIREWORKS_TACTICS_SCENARIOS.filter((scenario) => scenario.category === "safe_play").slice(0, 2),
-  ...FIREWORKS_MEMORY_SCENARIOS.filter((scenario) => scenario.category === "combine_color_and_rank").slice(0, 1),
-];
-const caseV2 = fireworksCaseToBenchmarkCaseV2("fireworks-teamiq-e2e");
-const roles: BenchmarkTeamCompositionRole[] = [
+const now = "2026-07-29T10:00:00.000Z";
+const models: SelectedModel[] = [
   {
-    role: "player",
-    slot: "P1",
-    modelId: "openai:fireworks-e2e-a",
+    modelId: "openai:fireworks-real-a",
     providerId: "openai",
-    displayName: "Fireworks E2E A",
-    temperature: 0,
+    displayName: "Fireworks Real A",
   },
   {
-    role: "player",
-    slot: "P2",
-    modelId: "anthropic:fireworks-e2e-b",
-    providerId: "anthropic",
-    displayName: "Fireworks E2E B",
-    temperature: 0,
+    modelId: "openai:fireworks-real-b",
+    providerId: "openai",
+    displayName: "Fireworks Real B",
   },
 ];
-const team = deriveTeamComposition({
-  name: "Fireworks E2E Duo",
-  roles,
-  strategy: "panel",
-});
 
 __resetBenchmarkStoreForTests();
-await saveBenchmarkCaseV2(caseV2);
-await saveBenchmarkTeamComposition(team);
-await createPendingBenchmarkResultSet({
-  id: "result-certified-fireworks-e2e",
-  schemaVersion: 1,
-  executionId: "execution-certified-fireworks-e2e",
-  anchorRunId: "run-certified-fireworks-e2e",
-  runIds: ["run-certified-fireworks-e2e"],
-  configurationKey: "fireworks-e2e-team",
-  configuration: {
-    subjectKind: "team",
-    displayName: team.name,
-    roles: team.roles.map((role) => ({
-      role: role.role,
-      slot: role.slot,
-      providerId: role.providerId,
-      modelId: role.modelId,
-      reasoningEffort: role.reasoningEffort ?? "default",
-      maxTokens: role.maxTokens ?? null,
-    })),
-    tracks: [{
-      track: "teamiq",
-      suiteId: "suite-certified-fireworks",
-      caseManifest: [{
-        caseId: caseV2.id,
-        caseVersion: caseV2.caseVersion,
-        scoringVersion: caseV2.scoring.scoringVersion,
-      }],
-      maxTokens: null,
-    }],
-  },
-  expectedAttempts: [{
-    runId: "run-certified-fireworks-e2e",
-    track: "teamiq",
-    suiteId: "suite-certified-fireworks",
-    caseId: caseV2.id,
-    caseVersion: caseV2.caseVersion,
-    scoringVersion: caseV2.scoring.scoringVersion,
-    teamCompositionId: team.id,
-  }],
+__resetClientStoreForTests();
+upsertProviderKey({
+  providerId: "openai",
+  apiKey: "test-key",
+  defaultModel: null,
+  enabled: true,
+  keyHint: null,
+  updatedAt: now,
 });
-let pendingObservedBeforeFireworksProvider = false;
 
-const summary = await runCertifiedBenchmark({
-  runId: "run-certified-fireworks-e2e",
-  suiteId: "suite-certified-fireworks",
-  track: "teamiq",
-  harnessProfile: "raw-single-model",
-  caseIds: [caseV2.id],
-  teamCompositionIds: [team.id],
-  certification: runHarnessCertification("raw-single-model"),
-  resultSetOwnership: {
-    byTeamCompositionId: {
-      [team.id]: "result-certified-fireworks-e2e",
-    },
-  },
-  onSubjectCompleted: async (teamCompositionId) => {
-    if (teamCompositionId === team.id) {
-      await publishBenchmarkResultSetIfComplete(
-        "result-certified-fireworks-e2e"
-      );
-    }
-  },
-  runner: (context) =>
-    runCertifiedTeamIq({
-      context,
-      teamCompositions: [team],
-      task: {
-        kind: "fireworks",
-        suite: "mixed",
-        cases,
-      },
-      includeSoloBaselines: true,
-      streamChat: async function* (): AsyncIterable<StreamChunk> {
-        pendingObservedBeforeFireworksProvider ||=
-          (await listBenchmarkResultSets()).some(
-            (resultSet) =>
-              resultSet.id === "result-certified-fireworks-e2e" &&
-              resultSet.status === "pending"
-          );
-        yield {
-          type: "token",
-          content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
-        };
-        yield { type: "done" };
-      },
-    }),
-});
+let pendingObservedBeforeProviderAdmission = false;
+const originalStreamChat = openaiProvider.streamChat;
+openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
+  pendingObservedBeforeProviderAdmission ||=
+    (await listBenchmarkResultSets()).some(
+      (resultSet) => resultSet.status === "pending"
+    );
+  yield {
+    type: "token",
+    content: '{"action":"clue_color","targetPlayerId":"P1","color":"red"}',
+  };
+  yield { type: "done" };
+};
+try {
+  await runSelected({
+    selectedTrack: "teamiq",
+    suiteId: "fireworks-teamiq-mixed-v0.1",
+    models,
+    modelId: models[0]!.modelId,
+    teamModelIds: models.map((model) => model.modelId),
+    teamIqStrategy: "panel",
+    fireworksPlayerCount: 2,
+    includeSoloBaselines: true,
+    workBenchModelIds: [],
+    workBenchRoleMode: "solo",
+    workBenchRunnerUrl: "",
+    workBenchRunnerToken: "",
+    effectiveHarnessProfile: TEAM_HARNESS,
+    certification: runHarnessCertification(TEAM_HARNESS),
+    effortByModelId: {},
+    executionId: "execution-real-fireworks-publication",
+    runId: "run-real-fireworks-publication",
+    runAbortRef: { current: null },
+    setRunning: () => {},
+    setRunPhase: () => {},
+    setSummary: () => {},
+    setMessage: () => {},
+    onComplete: async () => {},
+  });
+} finally {
+  openaiProvider.streamChat = originalStreamChat;
+}
 
 const attempts = await listBenchmarkAttemptsV2();
-const teamAttempt = attempts.find((attempt) => attempt.teamCompositionId === team.id);
-const bundle = exportBenchmarkReportBundleV2();
-const scoreBeforeImport = teamAttempt?.jobSuccessScore ?? null;
+const resultSets = await listBenchmarkResultSets();
+assert.equal(pendingObservedBeforeProviderAdmission, true);
+assert.equal(resultSets.length, 3);
+assert.equal(
+  resultSets.every((resultSet) => resultSet.status === "completed"),
+  true
+);
+assert.equal(attempts.length, 3);
+assert.equal(
+  attempts.every((attempt) =>
+    resultSets.some((resultSet) => resultSet.id === attempt.resultSetId)
+  ),
+  true
+);
 
+const bundle = exportBenchmarkReportBundleV2();
+assert.equal(bundle.verifierResults.length, 3);
+assert.ok(bundle.traces.length > 0);
+assert.ok(
+  bundle.artifacts.some((artifact) =>
+    artifact.id.endsWith(":fireworks-transcript")
+  )
+);
 __resetBenchmarkStoreForTests();
 await importBenchmarkReportBundleV2(bundle);
-const importedBundle = exportBenchmarkReportBundleV2();
-const importedAttempt = (await listBenchmarkAttemptsV2()).find(
-  (attempt) => attempt.id === teamAttempt?.id
-);
-const importedFailures = await listBenchmarkFailures();
-const importedResultSet = (await listBenchmarkResultSets()).find(
-  (resultSet) => resultSet.id === "result-certified-fireworks-e2e"
-);
-
-check(
-  "Fireworks TeamIQ route creates solo baselines, mixed attempt, and team lift",
-  summary.status === "completed" &&
-    attempts.length === roles.length + 1 &&
-    teamAttempt?.teamLift === 0,
-  { summary, attempts, teamAttempt }
-);
-check(
-  "Fireworks result manifest exists before provider admission and publishes atomically",
-  pendingObservedBeforeFireworksProvider &&
-    importedResultSet?.status === "completed" &&
-    teamAttempt?.resultSetId === importedResultSet.id,
-  { pendingObservedBeforeFireworksProvider, importedResultSet, teamAttempt }
-);
-check(
-  "v2 bundle export includes Fireworks attempts, verifiers, traces, artifacts, and failures",
-  bundle.attemptsV2.length === roles.length + 1 &&
-    bundle.verifierResults.length === roles.length + 1 &&
-    bundle.traces.length >= cases.length * (roles.length + 1) &&
-    bundle.artifacts.some((artifact) => artifact.id.endsWith(":fireworks-transcript")) &&
-    bundle.failures.length > 0,
-  {
-    attempts: bundle.attemptsV2.length,
-    verifiers: bundle.verifierResults.length,
-    traces: bundle.traces.length,
-    artifacts: bundle.artifacts.length,
-    failures: bundle.failures.length,
-  }
-);
-check(
-  "imported bundle reproduces Fireworks score and failures",
-  importedBundle.attemptsV2.length === bundle.attemptsV2.length &&
-    importedAttempt?.jobSuccessScore === scoreBeforeImport &&
-    importedFailures.length === bundle.failures.length,
-  { importedAttempt, scoreBeforeImport, importedFailures, bundleFailures: bundle.failures }
+const importedAttempts = await listBenchmarkAttemptsV2();
+const importedResultSets = await listBenchmarkResultSets();
+assert.equal(importedResultSets.length, 3);
+assert.equal(importedAttempts.length, 3);
+assert.deepEqual(
+  importedAttempts.map((attempt) => attempt.jobSuccessScore),
+  attempts.map((attempt) => attempt.jobSuccessScore)
 );
 
-if (failures === 0) {
-  console.log("PASS");
-} else {
-  console.log(`FAIL ${failures} check(s) failed`);
-}
-
-process.exit(failures === 0 ? 0 : 1);
+console.log("PASS certified Fireworks TeamIQ through runSelected");

@@ -198,6 +198,7 @@ export interface RunSelectedContext extends CertifiedRunActions {
   workBenchRoleMode: WorkBenchRoleMode;
   workBenchRunnerUrl: string;
   workBenchRunnerToken: string;
+  runNativeWorkBenchBuild?: typeof runNativeWorkBenchBuild;
   effectiveHarnessProfile: HarnessProfile;
   certification: HarnessCertificationResult;
   effortByModelId: BenchmarkModelEffortMap;
@@ -220,6 +221,8 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     workBenchRoleMode,
     workBenchRunnerUrl,
     workBenchRunnerToken,
+    runNativeWorkBenchBuild: executeNativeWorkBenchBuild =
+      runNativeWorkBenchBuild,
     effectiveHarnessProfile,
     certification,
     effortByModelId,
@@ -417,7 +420,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             teamCompositions: [primaryTeam],
             signal: options?.signal,
             runBuild: (buildInput) =>
-              runNativeWorkBenchBuild({
+              executeNativeWorkBenchBuild({
                 ...buildInput,
                 context,
                 models: workBenchSelectedModels,

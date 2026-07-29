@@ -4,205 +4,103 @@ import {
   __resetBenchmarkStoreForTests,
   listBenchmarkAttemptsV2,
   listBenchmarkResultSets,
-  saveBenchmarkCaseV2,
-  saveBenchmarkRun,
-  saveBenchmarkTeamComposition,
 } from "../lib/benchmark/store";
-import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
-import { runCertifiedTeamIq } from "../lib/benchmark/teamiq";
 import {
-  STATEFUL_REFERENCE_TRANSCRIPTS,
-  TOOL_RELIABILITY_CASES,
-} from "../lib/benchmark/toolreliability";
-import {
-  createPendingBenchmarkResultSet,
-  failBenchmarkResultSet,
-  publishBenchmarkResultSetIfComplete,
-} from "../lib/benchmark/certified/result-set-publication";
-import type {
-  BenchmarkCaseV2,
-  BenchmarkResultSet,
-  BenchmarkRun,
-  BenchmarkTeamComposition,
-  HarnessCertificationResult,
-} from "../lib/benchmark/types";
+  runSelected,
+  TEAM_HARNESS,
+} from "../lib/benchmark/certified/run-execution";
+import { runHarnessCertification } from "../lib/benchmark/certified/certification";
+import { upsertProviderKey } from "../lib/client/store";
+import { openaiProvider } from "../lib/providers/openai";
+import type { SelectedModel, StreamChunk } from "../lib/providers/base";
 
 const now = "2026-07-29T10:00:00.000Z";
-const caseRecord: BenchmarkCaseV2 = {
-  id: "team-case",
-  schemaVersion: 2,
-  track: "teamiq",
-  title: "Team case",
-  description: "Team case",
-  difficulty: "easy",
-  tags: [],
-  caseVersion: "case-v1",
-  createdAt: now,
-  updatedAt: now,
-  prompt: { userRequest: "team" },
-  environment: { type: "browser", timeoutSeconds: 30, network: "none" },
-  verifier: { scorer: "rule-checker" },
-  budget: {},
-  scoring: {
-    scoringVersion: "teamiq-toolreliability-v2",
-    primary: "team_lift",
-  },
-  contamination: {
-    originalTask: true,
-    canary: "team-case-canary",
-    referenceSolutionPrivate: true,
-  },
-};
-const certification: HarnessCertificationResult = {
-  id: "cert",
-  createdAt: now,
-  aiboardVersion: "v1",
-  benchmarkEngineVersion: "v1",
-  harnessProfile: "aiboard-panel",
-  harnessVersion: "v1",
-  promptSetVersion: "v1",
-  passed: true,
-  checks: [],
-};
-const teams: BenchmarkTeamComposition[] = [
+const models: SelectedModel[] = [
   {
-    id: "solo-a",
-    name: "Solo A",
-    comboHash: "solo-a",
-    strategy: "solo",
-    roles: [{
-      role: "single", slot: "single", providerId: "test", modelId: "a",
-      displayName: "A", reasoningEffort: "medium", temperature: 0,
-    }],
+    modelId: "openai:publication-a",
+    providerId: "openai",
+    displayName: "Publication A",
   },
   {
-    id: "team-b",
-    name: "Team B",
-    comboHash: "team-b",
-    strategy: "architect_worker",
-    roles: [{
-      role: "architect", slot: "architect", providerId: "test", modelId: "b",
-      displayName: "B", reasoningEffort: "medium", temperature: 0,
-    }],
+    modelId: "openai:publication-b",
+    providerId: "openai",
+    displayName: "Publication B",
   },
 ];
 
-function runRecord(): BenchmarkRun {
-  return {
-    id: "shared-team-run",
-    suiteId: "suite-teamiq",
-    name: "team",
-    domain: "model-call",
-    status: "running",
-    startedAt: now,
-    source: "manual",
-    modelIds: [],
-    caseIds: [caseRecord.id],
-    summaryJson: JSON.stringify({ mode: "certified", track: "teamiq" }),
-    metricValueIds: [],
-    artifactIds: [],
-    failureIds: [],
-    resultSetIds: [],
-  };
-}
-
-function pending(id: string): Omit<BenchmarkResultSet, "status" | "createdAt" | "metrics"> {
-  return {
-    id,
-    schemaVersion: 1,
-    executionId: "execution-team",
-    anchorRunId: "shared-team-run",
-    runIds: ["shared-team-run"],
-    configurationKey: `${id}-key`,
-    configuration: {
-      subjectKind: id.startsWith("solo") ? "model" : "team",
-      displayName: id,
-      roles: [],
-      tracks: [{
-        track: "teamiq",
-        suiteId: "suite-teamiq",
-        caseManifest: [{
-          caseId: caseRecord.id,
-          caseVersion: caseRecord.caseVersion,
-          scoringVersion: caseRecord.scoring.scoringVersion,
-        }],
-        maxTokens: null,
-      }],
-    },
-    expectedAttempts: [{
-      runId: "shared-team-run",
-      track: "teamiq",
-      suiteId: "suite-teamiq",
-      caseId: caseRecord.id,
-      caseVersion: caseRecord.caseVersion,
-      scoringVersion: caseRecord.scoring.scoringVersion,
-      teamCompositionId: id,
-    }],
-  };
-}
-
 __clearClientStoreForTests();
 __resetBenchmarkStoreForTests();
-await saveBenchmarkCaseV2(caseRecord);
-await saveBenchmarkRun(runRecord());
-for (const team of teams) await saveBenchmarkTeamComposition(team);
-for (const team of teams) await createPendingBenchmarkResultSet(pending(team.id));
+upsertProviderKey({
+  providerId: "openai",
+  apiKey: "test-key",
+  defaultModel: null,
+  enabled: true,
+  keyHint: null,
+  updatedAt: now,
+});
 
-const callbacks: string[] = [];
-const toolCase = TOOL_RELIABILITY_CASES.find(
-  (candidate) => candidate.kind === "write-scope"
-)!;
-const summary = await runCertifiedBenchmark({
-  runId: "shared-team-run",
-  suiteId: "suite-teamiq",
-  track: "teamiq",
-  harnessProfile: "aiboard-panel",
-  caseIds: [caseRecord.id],
-  teamCompositionIds: teams.map((team) => team.id),
-  certification,
-  resultSetOwnership: {
-    byTeamCompositionId: { "solo-a": "solo-a", "team-b": "team-b" },
-  },
-  onSubjectCompleted: async (teamCompositionId) => {
-    callbacks.push(teamCompositionId);
-    await publishBenchmarkResultSetIfComplete(teamCompositionId);
-  },
-  runner: (context) =>
-    runCertifiedTeamIq({
-      context,
-      teamCompositions: teams,
-      task: { kind: "toolreliability", casePack: [toolCase] },
-      includeSoloBaselines: false,
-      streamChat: async function* ({ params }) {
-        if (params.model === "b") {
-          throw new Error("composition B infrastructure failed");
-        }
-        const prompt = params.messages
-          .map((message) => message.content)
-          .join("\n");
-        const turn =
-          (prompt.match(/Turn \d+ - you replied:/g) ?? []).length;
-        yield {
-          type: "token",
-          content:
-            STATEFUL_REFERENCE_TRANSCRIPTS[toolCase.id]?.[turn] ?? "done",
-        };
-        yield { type: "done" };
-      },
-    }),
-});
-assert.equal(summary.status, "failed");
-await failBenchmarkResultSet("team-b", {
-  kind: "infrastructure",
-  code: "runner_failed",
-  message: "composition B infrastructure failed",
-});
-assert.deepEqual(callbacks, ["solo-a"]);
-assert.deepEqual(
-  (await listBenchmarkResultSets()).map(({ id, status }) => [id, status]),
-  [["solo-a", "completed"], ["team-b", "failed"]]
+let pendingCountAtFirstProviderAdmission = 0;
+let message: string | null = null;
+const originalStreamChat = openaiProvider.streamChat;
+openaiProvider.streamChat = async function* (params): AsyncIterable<StreamChunk> {
+  if (pendingCountAtFirstProviderAdmission === 0) {
+    pendingCountAtFirstProviderAdmission = (
+      await listBenchmarkResultSets()
+    ).filter((resultSet) => resultSet.status === "pending").length;
+  }
+  if (params.model === "publication-b") {
+    throw new Error("composition B infrastructure failed");
+  }
+  yield { type: "token", content: "{}" };
+  yield { type: "done" };
+};
+try {
+  await runSelected({
+    selectedTrack: "teamiq",
+    suiteId: "teamiq-toolreliability-current-quick",
+    models,
+    modelId: models[0]!.modelId,
+    teamModelIds: models.map((model) => model.modelId),
+    teamIqStrategy: "panel",
+    fireworksPlayerCount: 2,
+    includeSoloBaselines: true,
+    workBenchModelIds: [],
+    workBenchRoleMode: "solo",
+    workBenchRunnerUrl: "",
+    workBenchRunnerToken: "",
+    effectiveHarnessProfile: TEAM_HARNESS,
+    certification: runHarnessCertification(TEAM_HARNESS),
+    effortByModelId: {},
+    executionId: "execution-real-teamiq-publication",
+    runId: "run-real-teamiq-publication",
+    runAbortRef: { current: null },
+    setRunning: () => {},
+    setRunPhase: () => {},
+    setSummary: () => {},
+    setMessage: (next) => {
+      message = next;
+    },
+    onComplete: async () => {},
+  });
+} finally {
+  openaiProvider.streamChat = originalStreamChat;
+}
+
+const resultSets = await listBenchmarkResultSets();
+const attempts = await listBenchmarkAttemptsV2();
+const completed = resultSets.filter((resultSet) => resultSet.status === "completed");
+assert.equal(pendingCountAtFirstProviderAdmission, 3);
+assert.equal(completed.length, 1, JSON.stringify({ resultSets, attempts, message }));
+assert.equal(resultSets.some((resultSet) => resultSet.status === "pending"), false);
+assert.equal(resultSets.filter((resultSet) => resultSet.status === "failed").length, 2);
+assert.ok(message?.includes("composition B infrastructure failed"));
+assert.ok(
+  attempts.some(
+    (attempt) =>
+      attempt.resultSetId === completed[0]!.id &&
+      attempt.teamCompositionId ===
+        completed[0]!.expectedAttempts[0]!.teamCompositionId
+  )
 );
-const ownedA = (await listBenchmarkAttemptsV2()).find((item) => item.teamCompositionId === "solo-a");
-assert.equal(ownedA?.resultSetId, "solo-a");
 
-console.log("PASS benchmark team result publication");
+console.log("PASS benchmark team result publication through runSelected");

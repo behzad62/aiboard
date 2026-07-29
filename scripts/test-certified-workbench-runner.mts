@@ -15,11 +15,13 @@ import {
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
 import {
-  createPendingBenchmarkResultSet,
-  publishBenchmarkResultSetIfComplete,
-} from "../lib/benchmark/certified/result-set-publication";
+  runSelected,
+  type RunSelectedContext,
+} from "../lib/benchmark/certified/run-execution";
+import type { CertifiedRunSummary } from "../lib/benchmark/certified/run-status";
 import { runCertifiedWorkBench } from "../lib/benchmark/workbench/certified-runner";
 import { toBenchmarkCaseV2 } from "../lib/benchmark/workbench/case-loader";
+import type { SelectedModel } from "../lib/providers/base";
 import type { BenchmarkTeamComposition } from "../lib/benchmark/types";
 import type { WorkBenchCase } from "../lib/benchmark/workbench/types";
 
@@ -44,16 +46,23 @@ async function startPassingBenchRunner(preparedAttemptId: string): Promise<{
   });
   const server = createServer(async (req, res) => {
     const path = req.url ?? "/";
-    await readJsonRequest(req);
+    const request = await readJsonRequest(req);
     if (req.headers["x-runner-token"] !== token) {
       sendJsonResponse(res, 401, { error: "token required" });
       return;
     }
     switch (path) {
+      case "/bench/health":
+        sendJsonResponse(res, 200, {
+          ok: true,
+          version: 2,
+          runnerV2: { ready: true },
+        });
+        return;
       case "/bench/prepare":
         sendJsonResponse(res, 200, {
           attemptId: preparedAttemptId,
-          caseId: "workbench-certified-runner",
+          caseId: request.caseId,
           root: "/fake/workspace",
         });
         return;
@@ -209,135 +218,93 @@ const roleTeam: BenchmarkTeamComposition = {
   ],
 };
 
-__resetBenchmarkStoreForTests();
-await saveBenchmarkCaseV2(toBenchmarkCaseV2(workBenchCase, "2026-06-28T10:00:00.000Z"));
-await saveBenchmarkTeamComposition(team);
-await saveBenchmarkTeamComposition(roleTeam);
-const workBenchCaseV2 = toBenchmarkCaseV2(
-  workBenchCase,
-  "2026-06-28T10:00:00.000Z"
-);
-await createPendingBenchmarkResultSet({
-  id: "result-certified-workbench",
-  schemaVersion: 1,
-  executionId: "execution-certified-workbench",
-  anchorRunId: "run-certified-workbench",
-  runIds: ["run-certified-workbench"],
-  configurationKey: "workbench-certified-team",
-  configuration: {
-    subjectKind: "team",
-    displayName: team.name,
-    roles: team.roles.map((role) => ({
-      role: role.role,
-      slot: role.slot,
-      providerId: role.providerId,
-      modelId: role.modelId,
-      reasoningEffort: role.reasoningEffort ?? "default",
-      maxTokens: role.maxTokens ?? null,
-    })),
-    tracks: [{
-      track: "workbench",
-      suiteId: "suite-certified-workbench",
-      caseManifest: [{
-        caseId: workBenchCaseV2.id,
-        caseVersion: workBenchCaseV2.caseVersion,
-        scoringVersion: workBenchCaseV2.scoring.scoringVersion,
-      }],
-      maxTokens: null,
-    }],
-  },
-  expectedAttempts: [{
-    runId: "run-certified-workbench",
-    track: "workbench",
-    suiteId: "suite-certified-workbench",
-    caseId: workBenchCaseV2.id,
-    caseVersion: workBenchCaseV2.caseVersion,
-    scoringVersion: workBenchCaseV2.scoring.scoringVersion,
-    teamCompositionId: team.id,
-  }],
-});
-
 const runner = await startPassingBenchRunner("prepared-workbench-attempt");
 try {
-  let pendingObservedBeforeWorkBenchAdmission = false;
-  const traceStore: Array<{
-    id: string;
-    runId?: string;
-    attemptId?: string;
-    caseId?: string;
-    modelId: string;
-    providerId: string;
-    startedAt: string;
-    retryHistory: Array<{ attempt: number; status: "parsed"; message: string }>;
-  }> = [];
-  const summary = await runCertifiedBenchmark({
-    runId: "run-certified-workbench",
-    suiteId: "suite-certified-workbench",
-    track: "workbench",
-    harnessProfile: "aiboard-build-multi-worker",
-    caseIds: [workBenchCase.id],
-    teamCompositionIds: [team.id],
-    certification: runHarnessCertification("aiboard-build-multi-worker"),
-    resultSetOwnership: {
-      byTeamCompositionId: {
-        [team.id]: "result-certified-workbench",
-      },
+  const models: SelectedModel[] = [{
+    modelId: "openai:gpt-workbench",
+    providerId: "openai",
+    displayName: "GPT WorkBench",
+  }];
+  let latestSummary: CertifiedRunSummary | null = null;
+  const selectedContext = (
+    executionId: string,
+    runId: string
+  ): RunSelectedContext => ({
+    selectedTrack: "workbench",
+    suiteId: "workbench-current-language-json",
+    models,
+    modelId: models[0]!.modelId,
+    teamModelIds: [],
+    teamIqStrategy: "panel",
+    fireworksPlayerCount: 2,
+    includeSoloBaselines: false,
+    workBenchModelIds: [models[0]!.modelId],
+    workBenchRoleMode: "solo",
+    workBenchRunnerUrl: runner.url,
+    workBenchRunnerToken: runner.token,
+    effectiveHarnessProfile: "aiboard-build-single-worker",
+    certification: runHarnessCertification("aiboard-build-single-worker"),
+    effortByModelId: {},
+    executionId,
+    runId,
+    runAbortRef: { current: null },
+    setRunning: () => {},
+    setRunPhase: () => {},
+    setSummary: (summary) => {
+      latestSummary = summary;
     },
-    onSubjectCompleted: async (teamCompositionId) => {
-      if (teamCompositionId === team.id) {
-        await publishBenchmarkResultSetIfComplete(
-          "result-certified-workbench"
-        );
-      }
-    },
-    runner: (context) =>
-      runCertifiedWorkBench({
-        context,
-        cases: [workBenchCase],
-        runner: { url: runner.url, token: runner.token },
-        teamCompositionIds: [team.id],
-        models: [
-          {
-            modelId: "openai:gpt-workbench",
-            providerId: "openai",
-            displayName: "GPT WorkBench",
-          },
-        ],
-        runBuildDiscussion: async (_discussion, _models, _emit, hooks) => {
-          pendingObservedBeforeWorkBenchAdmission ||=
-            (await listBenchmarkResultSets()).some(
-              (resultSet) =>
-                resultSet.id === "result-certified-workbench" &&
-                resultSet.status === "pending"
-            );
-          const benchmark = hooks?.benchmark;
-          if (!benchmark) throw new Error("missing benchmark hook");
-          traceStore.push({
-            id: `${benchmark.attemptId}:trace:model`,
-            runId: benchmark.runId,
-            attemptId: benchmark.attemptId,
-            caseId: benchmark.caseId,
-            modelId: "openai:gpt-workbench",
-            providerId: "openai",
-            startedAt: "2026-06-28T10:00:00.000Z",
-            retryHistory: [{ attempt: 1, status: "parsed", message: "ok" }],
-          });
-        },
-        getBenchmarkTraces: () => traceStore,
-      }),
+    setMessage: () => {},
+    onComplete: async () => {},
   });
+
+  __resetBenchmarkStoreForTests();
+  let pendingObservedBeforeWorkBenchAdmission = false;
+  const successContext = selectedContext(
+    "execution-real-workbench-publication",
+    "run-real-workbench-publication"
+  );
+  successContext.runNativeWorkBenchBuild = async (input) => {
+    pendingObservedBeforeWorkBenchAdmission =
+      (await listBenchmarkResultSets()).some(
+        (resultSet) => resultSet.status === "pending"
+      );
+    const traceId = `${input.attemptId}:trace:model`;
+    await input.context.recordTrace({
+      id: traceId,
+      runId: input.context.runId,
+      attemptId: input.attemptId,
+      caseId: input.case.id,
+      modelId: models[0]!.modelId,
+      providerId: models[0]!.providerId,
+      startedAt: input.context.startedAt,
+      completedAt: new Date().toISOString(),
+      latencyMs: 12,
+      inputTokens: 17,
+      outputTokens: 5,
+      estimatedUsd: 0.02,
+      retryHistory: [{ attempt: 1, status: "parsed", message: "ok" }],
+    });
+    return {
+      traceIds: [traceId],
+      costUsd: 0.02,
+      inputTokens: 17,
+      outputTokens: 5,
+      modelCalls: 1,
+      toolCalls: 1,
+      validToolCalls: 1,
+      durationMs: 12,
+    };
+  };
+  await runSelected(successContext);
 
   const attempts = await listBenchmarkAttemptsV2();
   const verifiers = await listBenchmarkVerifierResults();
   const bundle = exportBenchmarkReportBundleV2();
   const attempt = attempts[0];
-  const resultSet = (await listBenchmarkResultSets()).find(
-    (item) => item.id === "result-certified-workbench"
-  );
+  const resultSet = (await listBenchmarkResultSets())[0];
 
-  check("certified WorkBench run completes", summary.status === "completed" && summary.attemptCount === 1 && summary.verifierCount === 1, summary);
   check(
-    "WorkBench result manifest exists before build admission and publishes atomically",
+    "runSelected plans WorkBench before native admission and publishes atomically",
     pendingObservedBeforeWorkBenchAdmission &&
       resultSet?.status === "completed" &&
       attempt?.resultSetId === resultSet.id,
@@ -346,10 +313,40 @@ try {
   check("certified WorkBench attempt persists verifier score", attempt?.id === "prepared-workbench-attempt" && attempt.status === "passed" && attempt.verifiedQuality === 1, attempt);
   check("certified WorkBench verifier persists", verifiers[0]?.attemptId === attempt?.id && verifiers[0]?.passed, verifiers[0]);
   check("certified WorkBench artifacts persist", bundle.artifacts.some((artifact) => artifact.attemptId === attempt?.id && artifact.kind === "patch"), bundle.artifacts);
-  check("certified WorkBench dashboard updates", summary.dashboard.summary.certifiedAttempts === 1 && summary.dashboard.summary.verifiedPassRate === 1, summary.dashboard.summary);
+  check(
+    "certified WorkBench dashboard updates",
+    latestSummary?.dashboard.summary.certifiedAttempts === 1 &&
+      latestSummary.dashboard.summary.verifiedPassRate === 1,
+    latestSummary?.dashboard.summary
+  );
+
+  __resetBenchmarkStoreForTests();
+  let failedAdmissionObserved = false;
+  const failureContext = selectedContext(
+    "execution-real-workbench-failure",
+    "run-real-workbench-failure"
+  );
+  failureContext.runNativeWorkBenchBuild = async () => {
+    failedAdmissionObserved = true;
+    throw new Error("deterministic native build failure");
+  };
+  await runSelected(failureContext);
+  const failedResultSets = await listBenchmarkResultSets();
+  check(
+    "runSelected terminalizes WorkBench early native failure with no pending set",
+    failedAdmissionObserved &&
+      failedResultSets.length === 1 &&
+      failedResultSets[0]?.status === "failed",
+    { failedAdmissionObserved, failedResultSets }
+  );
 } finally {
   await runner.stop();
 }
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(toBenchmarkCaseV2(workBenchCase, "2026-06-28T10:00:00.000Z"));
+await saveBenchmarkTeamComposition(team);
+await saveBenchmarkTeamComposition(roleTeam);
 
 const roleRunner = await startPassingBenchRunner("prepared-workbench-role-attempt");
 try {
