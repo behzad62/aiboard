@@ -16,6 +16,11 @@ import {
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import {
+  createPendingBenchmarkResultSet,
+  publishBenchmarkResultSetIfComplete,
+} from "../lib/benchmark/certified/result-set-publication";
+import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
 import { reconcileStaleCertifiedRuns } from "../lib/benchmark/certified/run-persistence";
 import { certifiedRunBudgetForCase } from "../lib/benchmark/certified/run-budget";
 import type {
@@ -24,6 +29,7 @@ import type {
   BenchmarkFailure,
   BenchmarkModelCallTrace,
   BenchmarkRun,
+  BenchmarkResultConfiguration,
   BenchmarkTeamComposition,
   BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
@@ -250,6 +256,51 @@ await saveBenchmarkCaseV2(caseOne);
 await saveBenchmarkCaseV2(caseTwo);
 await saveBenchmarkTeamComposition(team);
 
+const completedRunConfiguration: BenchmarkResultConfiguration = {
+  subjectKind: "model",
+  displayName: team.name,
+  providerId: "openai",
+  modelId: "openai:gpt-engine",
+  roles: team.roles.map((role) => ({
+    role: role.role,
+    slot: role.slot,
+    providerId: role.providerId,
+    modelId: role.modelId,
+    reasoningEffort: "default",
+    maxTokens: role.maxTokens ?? null,
+  })),
+  tracks: [
+    {
+      track: "gameiq",
+      suiteId: "suite-engine",
+      maxTokens: 512,
+      caseManifest: [caseOne, caseTwo].map((item) => ({
+        caseId: item.id,
+        caseVersion: item.caseVersion,
+        scoringVersion: item.scoring.scoringVersion,
+      })),
+    },
+  ],
+};
+const completedResultSetId = "result-set-certified-engine";
+await createPendingBenchmarkResultSet({
+  id: completedResultSetId,
+  schemaVersion: 1,
+  executionId: "execution-certified-engine",
+  anchorRunId: "run-certified-engine",
+  runIds: ["run-certified-engine"],
+  configurationKey: benchmarkResultConfigurationKey(completedRunConfiguration),
+  configuration: completedRunConfiguration,
+  expectedAttempts: [caseOne, caseTwo].map((item) => ({
+    runId: "run-certified-engine",
+    track: "gameiq",
+    suiteId: "suite-engine",
+    caseId: item.id,
+    caseVersion: item.caseVersion,
+    scoringVersion: item.scoring.scoringVersion,
+    teamCompositionId: team.id,
+  })),
+});
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-engine",
   suiteId: "suite-engine",
@@ -261,6 +312,13 @@ const summary = await runCertifiedBenchmark({
   modelBudget: {
     maxUsd: 1,
     maxModelCalls: 4,
+  },
+  resultSetOwnership: {
+    defaultResultSetId: completedResultSetId,
+    byTeamCompositionId: { [team.id]: completedResultSetId },
+  },
+  onSubjectCompleted: async () => {
+    await publishBenchmarkResultSetIfComplete(completedResultSetId);
   },
   runner: async (context) => {
     const passedAttemptId = `${context.runId}:${caseOne.id}:${team.id}`;
@@ -391,7 +449,9 @@ const summary = await runCertifiedBenchmark({
     });
     await context.recordFailure(failure);
     await context.recordAttempt(passedAttempt);
-    return [failedAttempt];
+    await context.recordAttempt(failedAttempt);
+    await context.subjectCompleted?.(team.id);
+    return [];
   },
 });
 
@@ -540,6 +600,47 @@ check(
       providerCrashAttempt.failureIds.includes(failure.id)
     ),
   { attempt: providerCrashAttempt, failures: providerCrashBundle.failures }
+);
+
+__resetBenchmarkStoreForTests();
+await saveBenchmarkCaseV2(caseOne);
+await saveBenchmarkTeamComposition(team);
+const persistedSecret = "sk-proj-run-engine-secret-1234567890";
+const secretCrashSummary = await runCertifiedBenchmark({
+  runId: "run-certified-engine-secret-crash",
+  suiteId: "suite-engine",
+  track: "gameiq",
+  harnessProfile: "raw-single-model",
+  caseIds: [caseOne.id],
+  teamCompositionIds: [team.id],
+  certification: passingCertification,
+  runner: async () => {
+    throw new Error(
+      `Unauthorized api key ${persistedSecret}; Authorization: Bearer ${persistedSecret}; C:\\Users\\Alice\\private\\runner.log`
+    );
+  },
+});
+const secretCrashBundle = exportBenchmarkReportBundleV2();
+const secretCrashBlob = JSON.stringify({
+  summary: secretCrashSummary,
+  runs: secretCrashBundle.runs,
+  attempts: secretCrashBundle.attemptsV2,
+  failures: secretCrashBundle.failures,
+});
+check(
+  "run summary, synthesized attempt, and failure persist only typed secret-safe reasons",
+  secretCrashSummary.error ===
+    "Certified provider request failed because the account or configuration is unavailable." &&
+    secretCrashBundle.failures.some(
+      (failure) =>
+        failure.code === "run_engine_failed" &&
+        failure.message ===
+          "Certified provider request failed because the account or configuration is unavailable."
+    ) &&
+    !secretCrashBlob.includes(persistedSecret) &&
+    !secretCrashBlob.includes("Authorization") &&
+    !secretCrashBlob.includes("Alice"),
+  secretCrashBlob
 );
 
 __resetBenchmarkStoreForTests();

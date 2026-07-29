@@ -11,7 +11,15 @@ import {
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
-import { getGameIqScenarioPack } from "../lib/benchmark/gameiq";
+import {
+  createPendingBenchmarkResultSet,
+  publishBenchmarkResultSetIfComplete,
+} from "../lib/benchmark/certified/result-set-publication";
+import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
+import {
+  GAMEIQ_SCORING_VERSION,
+  getGameIqScenarioPack,
+} from "../lib/benchmark/gameiq";
 import { runCertifiedGameIq } from "../lib/benchmark/gameiq/certified-runner";
 import type { BenchmarkCaseV2, BenchmarkTeamComposition } from "../lib/benchmark/types";
 import type {
@@ -66,7 +74,7 @@ const caseV2: BenchmarkCaseV2 = {
     maxModelCalls: pack.scenarios.length,
   },
   scoring: {
-    scoringVersion: "certified-gameiq-v0.1",
+    scoringVersion: GAMEIQ_SCORING_VERSION,
     primary: "game_iq",
   },
   contamination: {
@@ -109,7 +117,7 @@ const team: BenchmarkTeamComposition = {
       displayName: "GPT GameIQ",
       reasoningEffort: "xhigh",
       temperature: 0,
-      maxTokens: 512,
+      maxTokens: 16_384,
     },
   ],
 };
@@ -127,6 +135,51 @@ const passingCertification = {
 __resetBenchmarkStoreForTests();
 await saveBenchmarkCaseV2(caseV2);
 await saveBenchmarkTeamComposition(team);
+const gameIqConfiguration = {
+  subjectKind: "model" as const,
+  displayName: team.name,
+  providerId: team.roles[0]!.providerId,
+  modelId: team.roles[0]!.modelId,
+  reasoningEffort: "xhigh",
+  strategy: "solo" as const,
+  roles: [{
+    role: "single" as const,
+    slot: "single",
+    providerId: team.roles[0]!.providerId,
+    modelId: team.roles[0]!.modelId,
+    reasoningEffort: "xhigh",
+    maxTokens: 16_384,
+  }],
+  tracks: [{
+    track: "gameiq" as const,
+    suiteId: "suite-certified-gameiq",
+    caseManifest: [{
+      caseId: caseV2.id,
+      caseVersion: caseV2.caseVersion,
+      scoringVersion: caseV2.scoring.scoringVersion,
+    }],
+    maxTokens: 16_384,
+  }],
+};
+const gameIqResultSetId = "result-certified-gameiq";
+await createPendingBenchmarkResultSet({
+  id: gameIqResultSetId,
+  schemaVersion: 1,
+  executionId: "execution-certified-gameiq",
+  anchorRunId: "run-certified-gameiq",
+  runIds: ["run-certified-gameiq"],
+  configurationKey: benchmarkResultConfigurationKey(gameIqConfiguration),
+  configuration: gameIqConfiguration,
+  expectedAttempts: [{
+    runId: "run-certified-gameiq",
+    track: "gameiq",
+    suiteId: "suite-certified-gameiq",
+    caseId: caseV2.id,
+    caseVersion: caseV2.caseVersion,
+    scoringVersion: caseV2.scoring.scoringVersion,
+    teamCompositionId: team.id,
+  }],
+});
 
 let callIndex = 0;
 let observedStructuredOutput: StructuredOutputFormat | undefined;
@@ -140,6 +193,13 @@ const summary = await runCertifiedBenchmark({
   caseIds: [pack.id],
   teamCompositionIds: [team.id],
   certification: passingCertification,
+  resultSetOwnership: {
+    defaultResultSetId: gameIqResultSetId,
+    byTeamCompositionId: { [team.id]: gameIqResultSetId },
+  },
+  onSubjectCompleted: async () => {
+    await publishBenchmarkResultSetIfComplete(gameIqResultSetId);
+  },
   runner: (context) =>
     runCertifiedGameIq({
       context,
@@ -179,7 +239,12 @@ check("certified GameIQ calls one model per scenario", callIndex === pack.scenar
 check("certified GameIQ attempt persists verified score", attempt?.status === "passed" && attempt.gameIqScore === 100 && attempt.verifiedQuality === 1, attempt);
 check("certified GameIQ attempt accumulates traces and cost", attempt?.traceIds.length === pack.scenarios.length && attempt.modelCalls === pack.scenarios.length && attempt.costUsd !== null && attempt.costUsd > 0, attempt);
 check("certified GameIQ verifier records scenario assertions", verifier?.attemptId === attempt?.id && verifier.assertionResults.length === pack.scenarios.length && verifier.passed, verifier);
-check("certified GameIQ dashboard updates", summary.dashboard.summary.certifiedAttempts === 1 && summary.dashboard.summary.verifiedPassRate === 1, summary.dashboard.summary);
+check(
+  "certified GameIQ dashboard updates",
+  summary.dashboard.summary.certifiedAttempts === 1 &&
+    summary.dashboard.summary.verifiedPassRate === 1,
+  { summary: summary.dashboard.summary, resultSets: bundle.resultSets, team }
+);
 check("certified GameIQ traces export", bundle.traces.length === pack.scenarios.length && bundle.traces.every((trace) => trace.runId === "run-certified-gameiq"), bundle.traces);
 check(
   "certified GameIQ structured output has no open object schemas",

@@ -7,6 +7,7 @@ import type { NativeToolCall, NativeToolDefinition } from "./base";
 import { getModelCapabilities } from "./capabilities";
 import { formatModelId } from "./base";
 import type { StreamChunk } from "./base";
+import { safeProviderErrorMetadata } from "./base";
 import { openAIReasoningEffort, openRouterReasoningEffort } from "./reasoning";
 import { DISCUSSION_TRANSCRIPT_MARKER } from "../orchestrator/prompts";
 import { openAICompatibleStructuredOutputField } from "./structured-output";
@@ -489,6 +490,7 @@ export async function* streamOpenAICompatibleChat(
     yield {
       type: "error",
       error: err instanceof Error ? err.message : `${errorLabel} request failed`,
+      errorMetadata: safeProviderErrorMetadata(err),
     };
   }
 }

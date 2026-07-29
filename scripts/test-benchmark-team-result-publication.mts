@@ -4,12 +4,14 @@ import {
   __resetBenchmarkStoreForTests,
   listBenchmarkAttemptsV2,
   listBenchmarkResultSets,
+  listBenchmarkTeamCompositions,
 } from "../lib/benchmark/store";
 import {
   runSelected,
   TEAM_HARNESS,
 } from "../lib/benchmark/certified/run-execution";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
+import { rebuildCertifiedDashboardData } from "../lib/benchmark/certified/run-persistence";
 import { upsertProviderKey } from "../lib/client/store";
 import { openaiProvider } from "../lib/providers/openai";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
@@ -88,12 +90,23 @@ try {
 
 const resultSets = await listBenchmarkResultSets();
 const attempts = await listBenchmarkAttemptsV2();
+const teamCompositions = await listBenchmarkTeamCompositions();
+const dashboard = await rebuildCertifiedDashboardData();
 const completed = resultSets.filter((resultSet) => resultSet.status === "completed");
 assert.equal(pendingCountAtFirstProviderAdmission, 3);
 assert.equal(completed.length, 1, JSON.stringify({ resultSets, attempts, message }));
 assert.equal(resultSets.some((resultSet) => resultSet.status === "pending"), false);
 assert.equal(resultSets.filter((resultSet) => resultSet.status === "failed").length, 2);
-assert.ok(message?.includes("composition B infrastructure failed"));
+assert.equal(message, "Certified provider request failed temporarily.");
+assert.equal(dashboard.summary.certifiedAttempts, 1);
+assert.equal(dashboard.audit.completedSnapshots, 1);
+assert.equal(completed[0]?.configuration.roles[0]?.maxTokens, 16_384);
+assert.equal(
+  teamCompositions.find(
+    (team) => team.id === completed[0]?.expectedAttempts[0]?.teamCompositionId
+  )?.roles[0]?.maxTokens,
+  16_384
+);
 assert.ok(
   attempts.some(
     (attempt) =>

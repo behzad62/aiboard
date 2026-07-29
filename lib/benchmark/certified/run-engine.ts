@@ -30,6 +30,8 @@ import type { CertifiedRunBudget } from "./run-context";
 import { throwIfCertifiedRunAborted } from "./model-call";
 import type { ResultSetOwnershipMap } from "./result-set-publication";
 import type { CertifiedRetryProgress } from "./retry-policy";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
+import type { CertifiedProviderErrorMetadata } from "@/lib/providers/base";
 
 export interface RunCertifiedBenchmarkInput {
   runId?: string;
@@ -106,11 +108,15 @@ export async function runCertifiedBenchmark(
       context,
       await input.runner(context, { signal: input.signal })
     );
+    for (const teamCompositionId of context.teamCompositionIds) {
+      await context.subjectCompleted?.(teamCompositionId);
+      throwIfCertifiedRunAborted(input.signal);
+    }
     throwIfCertifiedRunAborted(input.signal);
   } catch (error) {
     throwIfCertifiedRunAborted(input.signal);
     status = "failed";
-    errorMessage = error instanceof Error ? error.message : String(error);
+    errorMessage = persistedRunErrorMessage(error);
     const runFailure = createRunEngineFailure({
       runId,
       track: input.track,
@@ -133,8 +139,27 @@ export async function runCertifiedBenchmark(
   throwIfCertifiedRunAborted(input.signal);
   const completedAt = new Date().toISOString();
   const snapshot = context.snapshot();
-  const dashboard = await rebuildCertifiedDashboardData();
+  const provisionalDashboard = await rebuildCertifiedDashboardData();
   throwIfCertifiedRunAborted(input.signal);
+  const provisionalSummary = createCertifiedRunSummary({
+    context,
+    completedAt,
+    status,
+    snapshot,
+    dashboard: provisionalDashboard,
+    error: errorMessage,
+  });
+  throwIfCertifiedRunAborted(input.signal);
+  run = completeBenchmarkRunRecord({
+    run,
+    completedAt,
+    status,
+    summary: provisionalSummary,
+    snapshot,
+  });
+  await persistCertifiedRunRecord(run);
+  throwIfCertifiedRunAborted(input.signal);
+  const dashboard = await rebuildCertifiedDashboardData();
   const summary = createCertifiedRunSummary({
     context,
     completedAt,
@@ -143,16 +168,7 @@ export async function runCertifiedBenchmark(
     dashboard,
     error: errorMessage,
   });
-  throwIfCertifiedRunAborted(input.signal);
-  await persistCertifiedRunRecord(
-    completeBenchmarkRunRecord({
-      run,
-      completedAt,
-      status,
-      summary,
-      snapshot,
-    })
-  );
+  await persistCertifiedRunRecord({ ...run, summaryJson: JSON.stringify(summary) });
   throwIfCertifiedRunAborted(input.signal);
 
   return summary;
@@ -362,4 +378,52 @@ function createRunEngineFailure(input: {
     message: input.message,
     createdAt: new Date().toISOString(),
   };
+}
+
+function persistedRunErrorMessage(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const classification = classifyProviderFailure(
+    rawMessage,
+    safeErrorMetadata(error)
+  );
+  if (classification === "fatal") {
+    return "Certified provider request failed because the account or configuration is unavailable.";
+  }
+  if (classification === "transient" || isProviderFailureMessage(rawMessage)) {
+    return "Certified provider request failed temporarily.";
+  }
+  return sanitizeBenchmarkDisplayText(rawMessage);
+}
+
+function safeErrorMetadata(
+  error: unknown
+): CertifiedProviderErrorMetadata | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as {
+    statusCode?: unknown;
+    code?: unknown;
+    retryAfterMs?: unknown;
+  };
+  const statusCode =
+    typeof candidate.statusCode === "number" &&
+    Number.isInteger(candidate.statusCode) &&
+    candidate.statusCode >= 100 &&
+    candidate.statusCode <= 599
+      ? candidate.statusCode
+      : undefined;
+  const code =
+    typeof candidate.code === "string" && candidate.code.length <= 128
+      ? candidate.code
+      : undefined;
+  const retryAfterMs =
+    typeof candidate.retryAfterMs === "number" &&
+    Number.isFinite(candidate.retryAfterMs) &&
+    candidate.retryAfterMs >= 0
+      ? candidate.retryAfterMs
+      : undefined;
+  return statusCode !== undefined ||
+    code !== undefined ||
+    retryAfterMs !== undefined
+    ? { statusCode, code, retryAfterMs }
+    : undefined;
 }

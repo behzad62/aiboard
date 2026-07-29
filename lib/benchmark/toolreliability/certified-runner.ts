@@ -8,6 +8,7 @@ import {
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
+import { TOOL_RELIABILITY_EFFECTIVE_MAX_TOKENS } from "@/lib/benchmark/certified/effective-max-tokens";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamComposition,
@@ -61,7 +62,8 @@ export interface RunCertifiedToolReliabilityInput {
  * turn loop (teamiq/certified-runner.ts) uses the identical cap rather than
  * re-declaring a drift-prone copy.
  */
-export const TOOL_RELIABILITY_STATEFUL_MAX_TOKENS = 16384;
+export const TOOL_RELIABILITY_STATEFUL_MAX_TOKENS =
+  TOOL_RELIABILITY_EFFECTIVE_MAX_TOKENS;
 
 export async function runCertifiedToolReliability(
   input: RunCertifiedToolReliabilityInput

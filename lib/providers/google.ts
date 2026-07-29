@@ -16,6 +16,7 @@ import type {
   StreamChunk,
 } from "./base";
 import { getModelCapabilities } from "./capabilities";
+import { safeProviderErrorMetadata } from "./base";
 import { formatModelId } from "./base";
 import { geminiThinkingConfig } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
@@ -321,6 +322,7 @@ export const googleProvider: AIProvider = {
       yield {
         type: "error",
         error: err instanceof Error ? err.message : "Google request failed",
+        errorMetadata: safeProviderErrorMetadata(err),
       };
     }
   },

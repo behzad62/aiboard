@@ -92,6 +92,65 @@ export interface CertifiedProviderErrorMetadata {
   retryAfterMs?: number;
 }
 
+export function safeProviderErrorMetadata(
+  error: unknown,
+  nowMs = Date.now()
+): CertifiedProviderErrorMetadata | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const record = error as Record<string, unknown>;
+  const response =
+    record.response && typeof record.response === "object"
+      ? (record.response as Record<string, unknown>)
+      : undefined;
+  const statusCandidate = record.status ?? record.statusCode ?? response?.status;
+  const codeCandidate = record.code;
+  const headersCandidate = record.headers ?? response?.headers;
+  const retryAfterValue = readSafeHeader(headersCandidate, "retry-after");
+  const statusCode =
+    typeof statusCandidate === "number" &&
+    Number.isInteger(statusCandidate) &&
+    statusCandidate >= 100 &&
+    statusCandidate <= 599
+      ? statusCandidate
+      : undefined;
+  const code =
+    typeof codeCandidate === "string" &&
+    /^[A-Za-z0-9_.-]{1,64}$/.test(codeCandidate) &&
+    !/key|token|secret|authorization/i.test(codeCandidate)
+      ? codeCandidate
+      : undefined;
+  const retryAfterMs = parseSafeRetryAfter(retryAfterValue, nowMs);
+  return statusCode !== undefined || code !== undefined || retryAfterMs !== undefined
+    ? {
+        ...(statusCode !== undefined ? { statusCode } : {}),
+        ...(code !== undefined ? { code } : {}),
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      }
+    : undefined;
+}
+
+function readSafeHeader(headers: unknown, name: string): string | null {
+  if (!headers || typeof headers !== "object") return null;
+  if ("get" in headers && typeof (headers as { get?: unknown }).get === "function") {
+    const value = (headers as { get(name: string): unknown }).get(name);
+    return typeof value === "string" ? value : null;
+  }
+  const record = headers as Record<string, unknown>;
+  const value = record[name] ?? record[name.toLowerCase()];
+  return typeof value === "string" ? value : null;
+}
+
+function parseSafeRetryAfter(value: string | null, nowMs: number): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1_000);
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || timestamp < nowMs) return undefined;
+  return Math.round(timestamp - nowMs);
+}
+
 /**
  * Provider-reported token usage for a single model call. Fields are optional
  * because providers differ in what they surface (some report only output

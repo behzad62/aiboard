@@ -6,6 +6,7 @@ import {
 } from "@/lib/benchmark/certified/model-call";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
+import { GAMEIQ_EFFECTIVE_MAX_TOKENS } from "@/lib/benchmark/certified/effective-max-tokens";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamComposition,
@@ -96,7 +97,6 @@ const GAMEIQ_ACTION_OUTPUT_BY_GAME: Record<
 // GameIQ calls emitting thousands of thinking tokens before a ~20-token
 // action). Conciseness is controlled by the structured-output schema +
 // prompt, never by maxTokens as a length control (repo convention).
-const DEFAULT_GAMEIQ_MAX_TOKENS = 16_384;
 
 export interface RunCertifiedGameIqInput {
   context: CertifiedRunContext;
@@ -206,7 +206,7 @@ async function runCertifiedGameIqAttempt(input: RunCertifiedGameIqInput & {
           user: gameIqScenarioPrompt(scenario, scenarioIndex, totalScenarios),
           ...(memoryMessages ? { messages: memoryMessages } : {}),
           structuredOutput: gameIqStructuredOutputForScenario(scenario),
-          maxTokens: input.maxTokens ?? DEFAULT_GAMEIQ_MAX_TOKENS,
+          maxTokens: input.maxTokens ?? GAMEIQ_EFFECTIVE_MAX_TOKENS,
           temperature: 0,
           allowInvalidStructuredOutput: true,
           context: input.context,

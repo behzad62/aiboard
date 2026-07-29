@@ -6,13 +6,13 @@ import {
   listBenchmarkVerifierResults,
   saveBenchmarkResultSet,
 } from "@/lib/benchmark/store";
-import { aggregateCertifiedRunScores } from "@/lib/benchmark/scoring/aggregate";
+import { materializeCertifiedResultSnapshotMetrics } from "./result-set-selectors";
 import type {
   BenchmarkAttemptV2,
   BenchmarkExpectedResultAttempt,
   BenchmarkResultSet,
-  CertifiedResultSnapshotMetrics,
 } from "@/lib/benchmark/types";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 
 const STALE_PENDING_RESULT_SET_MS = 24 * 60 * 60 * 1000;
 const SCOREABLE_STATUSES = new Set<BenchmarkAttemptV2["status"]>([
@@ -208,12 +208,12 @@ async function validateAndPublishBenchmarkResultSet(
   if (scoreableAttempts.length !== resultSet.expectedAttempts.length) {
     return resultSet;
   }
-  const rows = aggregateCertifiedRunScores({
-    resultSetIds: new Set([resultSetId]),
-    attempts: scoreableAttempts,
-    cases,
-  });
-  if (rows.length !== 1) {
+  const metrics = materializeCertifiedResultSnapshotMetrics(
+    resultSetId,
+    scoreableAttempts,
+    cases
+  );
+  if (!metrics) {
     throw new Error(
       `Benchmark result set ${resultSetId} must resolve to exactly one scoreable subject.`
     );
@@ -224,7 +224,7 @@ async function validateAndPublishBenchmarkResultSet(
     status: "completed",
     completedAt,
     terminalAt: completedAt,
-    metrics: intrinsicMetrics(rows[0]!),
+    metrics,
   };
   await saveBenchmarkResultSet(completed);
   return completed;
@@ -246,7 +246,7 @@ export async function failBenchmarkResultSet(
     failure: {
       kind: failure.kind,
       code: failure.code,
-      message: failure.message,
+      message: sanitizeBenchmarkDisplayText(failure.message),
     },
   });
 }
@@ -264,7 +264,7 @@ export async function cancelBenchmarkResultSet(
     failure: {
       kind: "cancelled",
       code: "cancelled_user",
-      message,
+      message: sanitizeBenchmarkDisplayText(message),
     },
   });
 }
@@ -333,38 +333,4 @@ async function requireResultSet(resultSetId: string): Promise<BenchmarkResultSet
     throw new Error(`Unknown benchmark result set: ${resultSetId}`);
   }
   return record;
-}
-
-function intrinsicMetrics(
-  row: ReturnType<typeof aggregateCertifiedRunScores>[number]
-): CertifiedResultSnapshotMetrics {
-  return {
-    attempts: row.attempts,
-    passed: row.passed,
-    failed: row.failed,
-    verifiedPassRate: row.verifiedPassRate,
-    verifiedQuality: row.verifiedQuality,
-    overallScore: row.overallScore,
-    trackBreakdown: row.trackBreakdown.map((track) => ({
-      track: track.track as BenchmarkAttemptV2["track"],
-      attempts: track.attempts,
-      passed: track.passed,
-      verifiedPassRate: track.verifiedPassRate,
-      averageVerifiedQuality: track.averageVerifiedQuality,
-    })),
-    jobSuccessScore: row.jobSuccessScore,
-    efficiencyScore: row.efficiencyScore,
-    toolReliabilityScore: row.toolReliabilityScore,
-    toolReliabilitySamples: row.toolReliabilitySamples,
-    costUsd: row.costUsd,
-    averageCostUsd: row.averageCostUsd,
-    durationMs: row.durationMs,
-    costPerPass: row.costPerPass,
-    speedPerPassMs: row.speedPerPassMs,
-    inputTokens: row.inputTokens,
-    outputTokens: row.outputTokens,
-    totalTokens: row.totalTokens,
-    tokensPerPass: row.tokensPerPass,
-    costBasis: row.costBasis,
-  };
 }

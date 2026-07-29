@@ -435,6 +435,66 @@ test("account runner transport maps native tool calls, usage, and tool results",
   }
 });
 
+test("account runner preserves typed SSE errors and settles the reader before rejection", async () => {
+  for (const metadata of [
+    { statusCode: 401, code: "unauthorized" },
+    { statusCode: 429, code: "rate_limit", retryAfterMs: 12_000 },
+    { statusCode: 503, code: "overloaded", retryAfterMs: 9_000 },
+  ]) {
+    let cancelled = false;
+    let released = false;
+    let reads = 0;
+    const reader = {
+      async read() {
+        reads += 1;
+        if (reads > 1) return { done: true, value: undefined };
+        return {
+          done: false,
+          value: new TextEncoder().encode(
+            `data: ${JSON.stringify({
+              type: "error",
+              error: "Safe provider failure.",
+              errorMetadata: metadata,
+            })}\n\n`
+          ),
+        };
+      },
+      async cancel() {
+        cancelled = true;
+      },
+      releaseLock() {
+        released = true;
+      },
+    };
+    const model = new AccountRunnerModel({
+      baseUrl: "http://runner.example",
+      runnerPath: "chatgpt",
+      runnerToken: "local-token",
+      modelId: "gpt-test",
+      fetch: async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/event-stream" }),
+          body: { getReader: () => reader },
+        }) as unknown as Response,
+    });
+
+    await assert.rejects(
+      model.complete({ sessionId: `sse-${metadata.statusCode}`, messages: [], tools: [] }),
+      (error: unknown) => {
+        assert.ok(error instanceof ProviderTransportError);
+        assert.equal(error.status, metadata.statusCode);
+        assert.equal(error.code, metadata.code);
+        assert.equal(error.retryAfterMs, metadata.retryAfterMs);
+        return true;
+      }
+    );
+    assert.equal(cancelled, true);
+    assert.equal(released, true);
+  }
+});
+
 test("account runner normalizes strict textual tool-call records from streamed tokens", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });

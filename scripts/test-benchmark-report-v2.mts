@@ -395,17 +395,33 @@ check(
   certified.summary
 );
 
+const completedFixture = withCompletedResultSetFixtures({
+  caseV2: bundle.caseV2,
+  attemptsV2: bundle.attemptsV2.map((item) =>
+    item.id === failedAttemptWithPartialQuality.id
+      ? {
+          ...item,
+          verifiedQuality: 0.9,
+          jobSuccessScore: 90,
+          efficiencyScore: 90,
+        }
+      : item
+  ),
+  verifierResults: bundle.verifierResults,
+  teamCompositions: bundle.teamCompositions,
+  harnessCertifications: bundle.harnessCertifications,
+});
 const completedBundle: BenchmarkReportBundleV2 = {
   ...bundle,
-  runs: certifiedFixture.runs,
-  caseV2: certifiedFixture.caseV2,
-  attemptsV2: certifiedFixture.attemptsV2,
-  verifierResults: certifiedFixture.verifierResults,
-  artifacts: certifiedFixture.artifacts,
-  failures: certifiedFixture.failures,
-  traces: certifiedFixture.traces,
-  runEvents: certifiedFixture.runEvents,
-  toolCallTraces: certifiedFixture.toolCallTraces,
+  runs: completedFixture.runs,
+  caseV2: completedFixture.caseV2,
+  attemptsV2: completedFixture.attemptsV2,
+  verifierResults: completedFixture.verifierResults,
+  artifacts: completedFixture.artifacts,
+  failures: completedFixture.failures,
+  traces: completedFixture.traces,
+  runEvents: completedFixture.runEvents,
+  toolCallTraces: completedFixture.toolCallTraces,
   harnessCertifications: [{
     id: "unscoped-certification",
     createdAt: "2026-06-27T10:00:00.000Z",
@@ -417,20 +433,7 @@ const completedBundle: BenchmarkReportBundleV2 = {
     passed: true,
     checks: [],
   }],
-  resultSets: certifiedFixture.resultSets.map((resultSet) => ({
-    ...resultSet,
-    metrics: {
-      ...resultSet.metrics!,
-      verifiedQuality: 0.9,
-      overallScore: 0.9,
-      jobSuccessScore: 90,
-      efficiencyScore: 90,
-      trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
-        ...track,
-        averageVerifiedQuality: 0.9,
-      })),
-    },
-  })),
+  resultSets: completedFixture.resultSets,
 };
 const markdown = formatBenchmarkMarkdownReport(completedBundle, {
   summary: {
@@ -557,12 +560,14 @@ const exactReportFixture = withCompletedResultSetFixtures({
       id: "attempt-max-100",
       runId: "run-max-100",
       teamCompositionId: lowVariantTeam.id,
+      verifiedQuality: 0.3,
     },
     {
       ...attempt,
       id: "attempt-max-200",
       runId: "run-max-200",
       teamCompositionId: lowVariantTeam.id,
+      verifiedQuality: 0.8,
     },
   ],
   verifierResults: [],
@@ -578,20 +583,10 @@ const exactReportResultSets = exactReportFixture.resultSets.map(
         maxTokens: index === 0 ? 100 : 200,
       })),
     };
-    const quality = index === 0 ? 0.3 : 0.8;
     return {
       ...resultSet,
       configuration,
       configurationKey: benchmarkResultConfigurationKey(configuration),
-      metrics: {
-        ...resultSet.metrics!,
-        verifiedQuality: quality,
-        overallScore: quality,
-        trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
-          ...track,
-          averageVerifiedQuality: quality,
-        })),
-      },
     };
   }
 );

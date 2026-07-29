@@ -12,6 +12,7 @@ import {
   TEAM_HARNESS,
 } from "../lib/benchmark/certified/run-execution";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
+import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
 import {
   __resetClientStoreForTests,
   upsertProviderKey,
@@ -130,6 +131,35 @@ assert.deepEqual(
   ]
 );
 assert.equal(resultSets.length, 3);
+assert.equal(
+  resultSets.every(
+    (resultSet) =>
+      resultSet.configuration.roles.every((role) => role.maxTokens === 512) &&
+      resultSet.configuration.tracks.every((track) => track.maxTokens === 512)
+  ),
+  true
+);
+const plannedFireworksSolo = resultSets.find(
+  (resultSet) =>
+    resultSet.configuration.subjectKind === "model" &&
+    resultSet.configuration.modelId === models[0]!.modelId
+);
+assert.ok(plannedFireworksSolo);
+const sameModelAtToolCap = {
+  ...plannedFireworksSolo.configuration,
+  roles: plannedFireworksSolo.configuration.roles.map((role) => ({
+    ...role,
+    maxTokens: 16_384,
+  })),
+  tracks: plannedFireworksSolo.configuration.tracks.map((track) => ({
+    ...track,
+    maxTokens: 16_384,
+  })),
+};
+assert.notEqual(
+  benchmarkResultConfigurationKey(plannedFireworksSolo.configuration),
+  benchmarkResultConfigurationKey(sameModelAtToolCap)
+);
 assert.equal(
   resultSets.every((resultSet) => resultSet.status === "completed"),
   true

@@ -13,6 +13,7 @@ import { formatModelId } from "./base";
 import { anthropicReasoningFields } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
 import { anthropicStructuredToolConfig } from "./structured-output";
+import { safeProviderErrorMetadata } from "./base";
 
 type AnthropicImageMedia =
   | "image/jpeg"
@@ -429,6 +430,7 @@ export async function* streamAnthropicChat(
       yield {
         type: "error",
         error: err instanceof Error ? err.message : `${errorLabel} request failed`,
+        errorMetadata: safeProviderErrorMetadata(err),
       };
     }
   }

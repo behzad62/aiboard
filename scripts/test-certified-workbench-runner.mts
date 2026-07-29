@@ -14,6 +14,7 @@ import {
 } from "../lib/benchmark/store";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import { isPublishableBenchmarkResultSet } from "../lib/benchmark/certified/result-set-selectors";
 import {
   runSelected,
   type RunSelectedContext,
@@ -61,7 +62,10 @@ async function startPassingBenchRunner(preparedAttemptId: string): Promise<{
         return;
       case "/bench/prepare":
         sendJsonResponse(res, 200, {
-          attemptId: preparedAttemptId,
+          attemptId:
+            preparedAttemptId === "echo-request-attempt"
+              ? String(request.attemptId)
+              : preparedAttemptId,
           caseId: request.caseId,
           root: "/fake/workspace",
         });
@@ -319,6 +323,139 @@ try {
       latestSummary.dashboard.summary.verifiedPassRate === 1,
     latestSummary?.dashboard.summary
   );
+
+  const baselineRunner = await startPassingBenchRunner("echo-request-attempt");
+  try {
+    __resetBenchmarkStoreForTests();
+    const teamModels: SelectedModel[] = [
+      {
+        modelId: "openai:gpt-workbench-architect",
+        providerId: "openai",
+        displayName: "GPT WorkBench Architect",
+      },
+      {
+        modelId: "anthropic:claude-workbench-worker",
+        providerId: "anthropic",
+        displayName: "Claude WorkBench Worker",
+      },
+    ];
+    let baselineSummary: CertifiedRunSummary | null = null;
+    const buildScopes: Array<{
+      teamCompositionId: string;
+      modelIds: string[];
+    }> = [];
+    const baselineContext: RunSelectedContext = {
+      selectedTrack: "workbench",
+      suiteId: "workbench-current-language-json",
+      models: teamModels,
+      modelId: teamModels[0]!.modelId,
+      teamModelIds: teamModels.map((item) => item.modelId),
+      teamIqStrategy: "panel",
+      fireworksPlayerCount: 2,
+      includeSoloBaselines: true,
+      workBenchModelIds: teamModels.map((item) => item.modelId),
+      workBenchRoleMode: "architect_worker",
+      workBenchRunnerUrl: baselineRunner.url,
+      workBenchRunnerToken: baselineRunner.token,
+      effectiveHarnessProfile: "aiboard-build-multi-worker",
+      certification: runHarnessCertification("aiboard-build-multi-worker"),
+      effortByModelId: {},
+      executionId: "execution-real-workbench-baselines",
+      runId: "run-real-workbench-baselines",
+      runAbortRef: { current: null },
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: (next) => {
+        baselineSummary = next;
+      },
+      setMessage: () => {},
+      onComplete: async () => {},
+      runNativeWorkBenchBuild: async (input) => {
+        buildScopes.push({
+          teamCompositionId: input.teamComposition.id,
+          modelIds: input.models.map((item) => item.modelId),
+        });
+        const traceId = `${input.attemptId}:trace:model`;
+        const participant = input.models[0]!;
+        await input.context.recordTrace({
+          id: traceId,
+          runId: input.context.runId,
+          attemptId: input.attemptId,
+          caseId: input.case.id,
+          modelId: participant.modelId,
+          providerId: participant.providerId,
+          startedAt: input.context.startedAt,
+          completedAt: new Date().toISOString(),
+          latencyMs: 12,
+          inputTokens: 17,
+          outputTokens: 5,
+          estimatedUsd: 0.02,
+          retryHistory: [{ attempt: 1, status: "parsed", message: "ok" }],
+        });
+        return {
+          traceIds: [traceId],
+          costUsd: 0.02,
+          inputTokens: 17,
+          outputTokens: 5,
+          modelCalls: 1,
+          toolCalls: 1,
+          validToolCalls: 1,
+          durationMs: 12,
+        };
+      },
+    };
+    await runSelected(baselineContext);
+    const baselineSets = await listBenchmarkResultSets();
+    const baselineAttempts = await listBenchmarkAttemptsV2();
+    const teamRow = baselineSummary?.dashboard.overallLeaderboard.find(
+      (row) => row.isTeam
+    );
+    check(
+      "production WorkBench team run publishes both member solos under one execution",
+      baselineSets.length === 3 &&
+        baselineSets.every(
+          (set) =>
+            set.status === "completed" &&
+            set.executionId === "execution-real-workbench-baselines"
+        ) &&
+        baselineAttempts.length === 3 &&
+        buildScopes.length === 3 &&
+        buildScopes.filter((scope) => scope.modelIds.length === 1).length === 2 &&
+        buildScopes.filter((scope) => scope.modelIds.length === 2).length === 1,
+      { baselineSets, baselineAttempts, buildScopes }
+    );
+    check(
+      "production WorkBench team row computes same-execution lift",
+      teamRow?.teamLift === 0 && teamRow.teamLiftTracks.includes("workbench"),
+      { teamRow, dashboard: baselineSummary?.dashboard, baselineSets }
+    );
+    const baselineBundle = exportBenchmarkReportBundleV2();
+    const teamSet = baselineSets.find(
+      (set) => set.configuration.subjectKind === "team"
+    )!;
+    check(
+      "reversed role evidence cannot satisfy an ordered team configuration",
+      !isPublishableBenchmarkResultSet(teamSet, {
+        runs: baselineBundle.runs,
+        attempts: baselineBundle.attemptsV2,
+        cases: baselineBundle.caseV2,
+        verifierResults: baselineBundle.verifierResults,
+        artifacts: baselineBundle.artifacts,
+        failures: baselineBundle.failures,
+        traces: baselineBundle.traces,
+        runEvents: baselineBundle.runEvents,
+        toolCallTraces: baselineBundle.toolCallTraces,
+        teamCompositions: baselineBundle.teamCompositions.map((team) =>
+          team.id === teamSet.expectedAttempts[0]?.teamCompositionId
+            ? { ...team, roles: [...team.roles].reverse() }
+            : team
+        ),
+      }),
+      teamSet
+    );
+  } finally {
+    await baselineRunner.stop();
+  }
 
   __resetBenchmarkStoreForTests();
   let failedAdmissionObserved = false;

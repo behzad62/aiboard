@@ -20,13 +20,14 @@ import {
   setBenchmarkResultSetDeletionResumer,
 } from "../lib/benchmark/store";
 import { refreshBenchmarkDashboardStorage } from "../components/benchmark/useBenchmarkDashboard";
+import { failBenchmarkResultSet } from "../lib/benchmark/certified/result-set-publication";
 import type { StorageAdapter } from "../lib/client/storage-adapter";
 import type { BenchmarkAttemptV2, BenchmarkResultSet, BenchmarkRun } from "../lib/benchmark/types";
 
 const now = "2026-07-29T10:00:00.000Z";
 const metrics = {
   attempts: 1, passed: 1, failed: 0, verifiedPassRate: 1, verifiedQuality: 1,
-  overallScore: 100, trackBreakdown: [{
+  overallScore: 1, trackBreakdown: [{
     track: "toolreliability" as const, attempts: 1, passed: 1,
     verifiedPassRate: 1, averageVerifiedQuality: 1,
   }],
@@ -70,7 +71,11 @@ function emptyBundle() {
 
 function memoryAdapter(
   initialRunBlobs: Record<string, string> = {}
-): StorageAdapter & { runBlobs: Map<string, string>; failDeleteRunId?: string } {
+): StorageAdapter & {
+  runBlobs: Map<string, string>;
+  failDeleteRunId?: string;
+  failSaveRunId?: string;
+} {
   const runBlobs = new Map(Object.entries(initialRunBlobs));
   return {
     kind: "filesystem",
@@ -84,7 +89,13 @@ function memoryAdapter(
     async deleteDiscussion() {},
     async listBenchmarkRunIds() { return [...runBlobs.keys()]; },
     async loadBenchmarkRun(id) { return runBlobs.get(id) ?? null; },
-    async saveBenchmarkRun(id, blob) { runBlobs.set(id, blob); },
+    async saveBenchmarkRun(id, blob) {
+      if (this.failSaveRunId === id) {
+        this.failSaveRunId = undefined;
+        throw new Error("injected benchmark write failure");
+      }
+      runBlobs.set(id, blob);
+    },
     async deleteBenchmarkRun(id) {
       if (this.failDeleteRunId === id) {
         this.failDeleteRunId = undefined;
@@ -152,6 +163,50 @@ async function main(): Promise<void> {
   assert.equal(completionWrites.at(-1), "anchor:completed");
   __setAdapterForTests(null);
 
+  // Failed completion-anchor persistence restores the exact prior visible state.
+  __clearClientStoreForTests();
+  __resetClientStoreForTests({ benchmarkRuns: [run("rollback-anchor")] });
+  const rollbackAdapter = memoryAdapter();
+  __setAdapterForTests(rollbackAdapter);
+  const rollbackPending = resultSet("rollback-set", "rollback-anchor");
+  await saveBenchmarkResultSet(rollbackPending);
+  rollbackAdapter.failSaveRunId = "rollback-anchor";
+  await assert.rejects(
+    saveBenchmarkResultSet(completedResultSet(rollbackPending)),
+    /injected benchmark write failure/
+  );
+  assert.equal((await listBenchmarkResultSets())[0]?.status, "pending");
+  __clearClientStoreForTests();
+  await __loadClientStoreFromAdapterForTests(rollbackAdapter);
+  assert.equal((await listBenchmarkResultSets())[0]?.status, "pending");
+  await assert.rejects(
+    deleteBenchmarkResultSetCascade(rollbackPending.id),
+    /pending|active|running/i
+  );
+  await saveBenchmarkResultSet(completedResultSet(rollbackPending));
+  assert.equal((await listBenchmarkResultSets())[0]?.status, "completed");
+
+  // A failed import write likewise leaves neither candidate manifests nor
+  // candidate child evidence visible in memory or after reload.
+  rollbackAdapter.failSaveRunId = "import-failure-run";
+  await assert.rejects(
+    importBenchmarkReportBundleV2({
+      ...emptyBundle(),
+      runs: [run("import-failure-run")],
+      resultSets: [resultSet("import-failure-set", "import-failure-run")],
+    }),
+    /injected benchmark write failure/
+  );
+  assert.ok(
+    !(await listBenchmarkResultSets()).some((set) => set.id === "import-failure-set")
+  );
+  __clearClientStoreForTests();
+  await __loadClientStoreFromAdapterForTests(rollbackAdapter);
+  assert.ok(
+    !(await listBenchmarkResultSets()).some((set) => set.id === "import-failure-set")
+  );
+  __setAdapterForTests(null);
+
   // Terminal records and tombstones cannot be resurrected by direct saves.
   for (const terminal of [
     { ...resultSet("failed", "failed-run"), status: "failed" as const, terminalAt: now,
@@ -189,6 +244,94 @@ async function main(): Promise<void> {
   assert.equal(collisionImport.updatedByCategory.resultSets ?? 0, 0);
   assert.equal(collisionImport.resultSetCount, 0);
   assert.equal(collisionImport.completedResultSetCount, 0);
+
+  const graphSet = completedResultSet(resultSet("graph", "graph-run"));
+  const graphRun = { ...run("graph-run"), resultSetIds: [graphSet.id] };
+  const graphAttempt = {
+    ...attempt("graph-attempt", graphRun.id),
+    resultSetId: graphSet.id,
+  };
+  const graphArtifact = {
+    id: "graph-artifact", runId: graphRun.id, attemptId: graphAttempt.id,
+    kind: "patch" as const, label: "original", mimeType: "text/plain",
+    content: "original", createdAt: now, resultSetId: graphSet.id,
+  };
+  const graphFailure = {
+    id: "graph-failure", runId: graphRun.id, attemptId: graphAttempt.id,
+    domain: "model-call" as const, source: "provider" as const, code: "original",
+    severity: "error" as const, message: "original", createdAt: now,
+    resultSetId: graphSet.id,
+  };
+  const graphTrace = {
+    id: "graph-trace", runId: graphRun.id, attemptId: graphAttempt.id,
+    modelId: "provider:model", providerId: "provider", startedAt: now,
+    completedAt: now, retryHistory: [], resultSetId: graphSet.id,
+  };
+  const graphEvent = {
+    id: "graph-event", attemptId: graphAttempt.id, caseId: "case-1",
+    type: "run_failed" as const, phase: "original", at: now, message: "original",
+    resultSetId: graphSet.id,
+  };
+  const graphToolTrace = {
+    id: "graph-tool", attemptId: graphAttempt.id, caseId: "case-1",
+    toolName: "tool", status: "ok" as const, startedAt: now, completedAt: now,
+    resultSetId: graphSet.id,
+  };
+  const later = "2026-07-29T11:00:00.000Z";
+  const immutableGraphCases = [
+    {
+      label: "run",
+      current: { benchmarkRuns: [graphRun] },
+      incoming: { runs: [{ ...graphRun, name: "mutated", completedAt: later }] },
+    },
+    {
+      label: "attempt",
+      current: { benchmarkRuns: [graphRun], benchmarkAttemptsV2: [graphAttempt] },
+      incoming: {
+        runs: [graphRun],
+        attemptsV2: [{ ...graphAttempt, completedAt: later, verifiedQuality: 0 }],
+      },
+    },
+    {
+      label: "artifact",
+      current: { benchmarkRuns: [graphRun], benchmarkAttemptsV2: [graphAttempt], benchmarkArtifacts: [graphArtifact] },
+      incoming: { runs: [graphRun], artifacts: [{ ...graphArtifact, label: "mutated", createdAt: later }] },
+    },
+    {
+      label: "failure",
+      current: { benchmarkRuns: [graphRun], benchmarkAttemptsV2: [graphAttempt], benchmarkFailures: [graphFailure] },
+      incoming: { runs: [graphRun], failures: [{ ...graphFailure, message: "mutated", createdAt: later }] },
+    },
+    {
+      label: "model trace",
+      current: { benchmarkRuns: [graphRun], benchmarkAttemptsV2: [graphAttempt], benchmarkTraces: [graphTrace] },
+      incoming: { runs: [graphRun], traces: [{ ...graphTrace, completedAt: later, error: "mutated" }] },
+    },
+    {
+      label: "run event",
+      current: { benchmarkRuns: [graphRun], benchmarkAttemptsV2: [graphAttempt], benchmarkRunEvents: [graphEvent] },
+      incoming: { runs: [graphRun], runEvents: [{ ...graphEvent, at: later, message: "mutated" }] },
+    },
+    {
+      label: "tool trace",
+      current: { benchmarkRuns: [graphRun], benchmarkAttemptsV2: [graphAttempt], benchmarkToolCallTraces: [graphToolTrace] },
+      incoming: { runs: [graphRun], toolCallTraces: [{ ...graphToolTrace, completedAt: later, error: "mutated" }] },
+    },
+  ];
+  for (const testCase of immutableGraphCases) {
+    __resetClientStoreForTests({
+      benchmarkResultSets: [graphSet],
+      ...testCase.current,
+    });
+    await assert.rejects(
+      importBenchmarkReportBundleV2({
+        ...emptyBundle(),
+        ...testCase.incoming,
+      } as never),
+      /immutable terminal benchmark evidence/i,
+      testCase.label
+    );
+  }
 
   const malformed = [
     { ...resultSet("bad-anchor", "missing"), runIds: ["other"] },
@@ -350,6 +493,23 @@ async function main(): Promise<void> {
   });
   assert.equal(lateRecoveryFinished, true);
   await setBenchmarkResultSetDeletionResumer(() => resumeDeletingBenchmarkResultSets());
+
+  __resetBenchmarkStoreForTests();
+  const secretResultSet = resultSet("secret-failure", "secret-run");
+  await saveBenchmarkResultSet(secretResultSet);
+  const resultSetSecret = "sk-proj-result-set-secret-1234567890";
+  await failBenchmarkResultSet(secretResultSet.id, {
+    kind: "provider",
+    code: "provider_unavailable",
+    message:
+      `Authorization: Bearer ${resultSetSecret}; api key ${resultSetSecret}; C:\\Users\\Alice\\private\\result.json`,
+  });
+  const storedSecretFailure = (await listBenchmarkResultSets()).find(
+    (set) => set.id === secretResultSet.id
+  )?.failure?.message;
+  assert.ok(storedSecretFailure);
+  assert.equal(storedSecretFailure.includes(resultSetSecret), false);
+  assert.equal(storedSecretFailure.includes("Alice"), false);
 
   // Dashboard refresh behaviorally rescans and completes a newly discovered
   // tombstone before returning data to callers.

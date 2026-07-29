@@ -12,6 +12,7 @@ import { streamOpenAICompatibleChat } from "./openai-compat";
 import { openAIReasoningEffort } from "./reasoning";
 import { openAIResponsesTextFormatField } from "./structured-output";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
+import { safeProviderErrorMetadata } from "./base";
 
 type OpenAIResponseInputMessage = {
   role: "user" | "assistant";
@@ -314,6 +315,7 @@ async function* streamOpenAIResponses(
     yield {
       type: "error",
       error: err instanceof Error ? err.message : "OpenAI request failed",
+      errorMetadata: safeProviderErrorMetadata(err),
     };
   }
 }

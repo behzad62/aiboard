@@ -137,9 +137,9 @@ export function getTeamCompositionMemberComparisonKeys(
   team: BenchmarkTeamComposition | undefined
 ): string[] {
   if (!team) return [];
-  return normalizeTeamRoles(team.roles)
-    .map(benchmarkMemberComparisonKey)
-    .sort();
+  return Array.from(
+    new Set(normalizeTeamRoles(team.roles).map(benchmarkMemberComparisonKey))
+  ).sort();
 }
 
 /**

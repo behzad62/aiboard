@@ -85,6 +85,7 @@ import {
 } from "@/lib/benchmark/workbench";
 import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import {
   normalizeBenchmarkEffortForModel,
   normalizeBenchmarkReasoningEffort,
@@ -100,6 +101,10 @@ import {
   type ResultSetOwnershipMap,
 } from "./result-set-publication";
 import type { CertifiedRetryProgress } from "./retry-policy";
+import {
+  effectiveCertifiedRoleMaxTokens,
+  effectiveCertifiedTrackMaxTokens,
+} from "./effective-max-tokens";
 
 export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 export const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
@@ -180,11 +185,19 @@ function linkRunController(parent?: AbortSignal): {
 
 function abortReasonMessage(signal: AbortSignal): string {
   const reason = signal.reason;
-  if (reason instanceof Error) return reason.message;
-  if (typeof reason === "string" && reason.length > 0) return reason;
+  if (reason instanceof Error) return sanitizeBenchmarkDisplayText(reason.message);
+  if (typeof reason === "string" && reason.length > 0) {
+    return sanitizeBenchmarkDisplayText(reason);
+  }
   return reason === undefined
     ? "Certified run aborted by user."
-    : String(reason);
+    : sanitizeBenchmarkDisplayText(String(reason));
+}
+
+function persistedExecutionErrorMessage(error: unknown): string {
+  return sanitizeBenchmarkDisplayText(
+    error instanceof Error ? error.message : String(error)
+  );
 }
 
 export interface RunSelectedContext extends CertifiedRunActions {
@@ -296,7 +309,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     : [];
   try {
     throwIfCertifiedRunAborted(abortController.signal);
-    const initialTeams =
+    const initialTeamsWithoutEffectiveCaps =
       selectedTrack === "teamiq"
         ? teamIqCompositionsForRun({
             models,
@@ -324,14 +337,26 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
                     model!,
                     effortByModelId[model!.modelId]
                   ),
-                }),
+              }),
           ];
+    const initialTeams = initialTeamsWithoutEffectiveCaps.map((team) =>
+      teamWithEffectiveMaxTokens(team, selectedTrack, suiteId)
+    );
     const teams =
       selectedTrack === "teamiq"
         ? expandTeamIqTeamsBeforeExecution(
             initialTeams,
-            isFireworksSuite(suiteId) ? includeSoloBaselines : true
+            isFireworksSuite(suiteId) ? includeSoloBaselines : true,
+            suiteId,
+            "teamiq"
           )
+        : selectedTrack === "workbench" && includeSoloBaselines
+          ? expandTeamIqTeamsBeforeExecution(
+              initialTeams,
+              true,
+              suiteId,
+              "workbench"
+            )
         : initialTeams;
     const primaryTeam = teams[0]!;
     for (const team of teams) {
@@ -366,10 +391,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
         : await planResultSetsForRun({
             executionId: runExecutionId,
             runId,
-            suiteId:
-              selectedTrack === "workbench"
-                ? suiteId
-                : `suite-${selectedTrack}`,
+            suiteId,
             track: selectedTrack,
             teams,
             cases: caseRecords,
@@ -377,7 +399,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     throwIfCertifiedRunAborted(abortController.signal);
     const result = await runCertifiedBenchmark({
       runId,
-      suiteId: selectedTrack === "workbench" ? suiteId : `suite-${selectedTrack}`,
+      suiteId,
       name:
         selectedTrack === "workbench" && selectedWorkBenchPack
           ? selectedWorkBenchPack.label
@@ -428,16 +450,25 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
               url: workBenchRunnerUrl.trim(),
               token: workBenchRunnerToken.trim(),
             },
-            teamCompositionIds: [primaryTeam.id],
-            teamCompositions: [primaryTeam],
+            teamCompositionIds: teams.map((team) => team.id),
+            teamCompositions: teams,
             signal: options?.signal,
-            runBuild: (buildInput) =>
-              executeNativeWorkBenchBuild({
+            runBuild: (buildInput) => {
+              const teamComposition =
+                teams.find(
+                  (team) => team.id === buildInput.teamCompositionId
+                ) ?? primaryTeam;
+              return executeNativeWorkBenchBuild({
                 ...buildInput,
                 context,
-                models: workBenchSelectedModels,
-                teamComposition: primaryTeam,
-              }),
+                models: workBenchSelectedModels.filter((candidate) =>
+                  teamComposition.roles.some(
+                    (role) => role.modelId === candidate.modelId
+                  )
+                ),
+                teamComposition,
+              });
+            },
           });
         }
         return runCertifiedTeamIq({
@@ -572,6 +603,10 @@ export async function runGameIqMultiModel(
           model,
           effortByModelId[model.modelId]
         ),
+        maxTokens: effectiveCertifiedTrackMaxTokens(
+          "gameiq",
+          suiteId
+        ) ?? undefined,
       }),
     ])
   );
@@ -618,7 +653,7 @@ export async function runGameIqMultiModel(
           : await planResultSetsForRun({
               executionId: execution,
               runId: plannedRunIds[model.modelId]!,
-              suiteId: "suite-gameiq",
+              suiteId,
               track: "gameiq",
               teams: [team],
               cases: caseRecords,
@@ -645,7 +680,7 @@ export async function runGameIqMultiModel(
       let capturedAttempts: BenchmarkAttempt[] = [];
       const result = await runCertifiedBenchmark({
         runId,
-        suiteId: "suite-gameiq",
+        suiteId,
         track: "gameiq",
         harnessProfile: DIRECT_MODEL_HARNESS,
         caseIds: caseRecords.map((caseRecord) => caseRecord.id),
@@ -817,8 +852,7 @@ export async function runGameIqMultiModel(
                 await failBenchmarkResultSet(resultSetId, {
                   kind: "infrastructure",
                   code: "unpublished_infrastructure_failure",
-                  message:
-                    error instanceof Error ? error.message : String(error),
+                  message: persistedExecutionErrorMessage(error),
                 });
               }
             }
@@ -1047,7 +1081,9 @@ export function caseForSelection(
 
 function expandTeamIqTeamsBeforeExecution(
   teams: BenchmarkTeamComposition[],
-  includeSoloBaselines: boolean
+  includeSoloBaselines: boolean,
+  suiteId: string,
+  track: "teamiq" | "workbench"
 ): BenchmarkTeamComposition[] {
   if (!includeSoloBaselines) return teams;
   const solos = new Map<string, BenchmarkTeamComposition>();
@@ -1057,6 +1093,11 @@ function expandTeamIqTeamsBeforeExecution(
         role.providerId,
         role.modelId,
         normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+        effectiveCertifiedRoleMaxTokens({
+          track,
+          suiteId,
+          roleMaxTokens: role.maxTokens,
+        }),
       ].join("\u0000");
       if (solos.has(key)) continue;
       solos.set(
@@ -1074,6 +1115,44 @@ function expandTeamIqTeamsBeforeExecution(
   }
   const soloIds = new Set([...solos.values()].map((team) => team.id));
   return [...solos.values(), ...teams.filter((team) => !soloIds.has(team.id))];
+}
+
+function teamWithEffectiveMaxTokens(
+  team: BenchmarkTeamComposition,
+  track: RunnableTrack,
+  suiteId: string
+): BenchmarkTeamComposition {
+  const roles = team.roles.map((role) => ({
+    ...role,
+    maxTokens:
+      effectiveCertifiedRoleMaxTokens({
+        track,
+        suiteId,
+        roleMaxTokens: role.maxTokens,
+      }) ?? undefined,
+  }));
+  if (roles.every((role, index) => role.maxTokens === team.roles[index]?.maxTokens)) {
+    return team;
+  }
+  if (roles.length === 1 && roles[0]?.role === "single") {
+    const role = roles[0];
+    return deriveSoloTeamComposition({
+      modelId: role.modelId,
+      providerId: role.providerId,
+      displayName: role.displayName,
+      reasoningEffort: role.reasoningEffort,
+      temperature: role.temperature,
+      maxTokens: role.maxTokens,
+      name: team.name,
+      strategy: "solo",
+    });
+  }
+  return deriveTeamComposition({
+    name: team.name,
+    roles,
+    strategy:
+      team.strategy && team.strategy !== "solo" ? team.strategy : undefined,
+  });
 }
 
 async function planResultSetsForRun(input: {
@@ -1115,7 +1194,11 @@ async function planResultSetsForRun(input: {
         providerId: role.providerId,
         modelId: role.modelId,
         reasoningEffort: role.reasoningEffort ?? "default",
-        maxTokens: role.maxTokens ?? null,
+        maxTokens: effectiveCertifiedRoleMaxTokens({
+          track: input.track,
+          suiteId: input.suiteId,
+          roleMaxTokens: role.maxTokens,
+        }),
       })),
       tracks: [
         {
@@ -1126,7 +1209,10 @@ async function planResultSetsForRun(input: {
             caseVersion: item.caseVersion,
             scoringVersion: item.scoring.scoringVersion,
           })),
-          maxTokens: null,
+          maxTokens: effectiveCertifiedTrackMaxTokens(
+            input.track,
+            input.suiteId
+          ),
         },
       ],
     };
@@ -1200,7 +1286,7 @@ async function terminalizeRunPublication(
         await publishBenchmarkResultSetIfComplete(resultSetId);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = persistedExecutionErrorMessage(error);
       await failBenchmarkResultSet(resultSetId, {
         kind: "infrastructure",
         code: "incomplete_benchmark_output",
@@ -1571,6 +1657,9 @@ async function planModelIqPresetPublication(
         model,
         ctx.effortByModelId[model.modelId]
       ),
+      maxTokens:
+        effectiveCertifiedTrackMaxTokens("gameiq", gameLeg.suiteId) ??
+        undefined,
     });
     await saveBenchmarkTeamComposition(team);
     const gameRunId = `ui-gameiq-${slugForRunId(executionId)}-${index}`;
@@ -1581,23 +1670,29 @@ async function planModelIqPresetPublication(
     const tracks = [
       {
         track: "gameiq" as const,
-        suiteId: "suite-gameiq",
+        suiteId: gameLeg.suiteId,
         caseManifest: gameCases.map((item) => ({
           caseId: item.id,
           caseVersion: item.caseVersion,
           scoringVersion: item.scoring.scoringVersion,
         })),
-        maxTokens: null,
+        maxTokens: effectiveCertifiedTrackMaxTokens(
+          "gameiq",
+          gameLeg.suiteId
+        ),
       },
       {
         track: "toolreliability" as const,
-        suiteId: "suite-toolreliability",
+        suiteId: toolLeg.suiteId,
         caseManifest: [{
           caseId: toolCase.id,
           caseVersion: toolCase.caseVersion,
           scoringVersion: toolCase.scoring.scoringVersion,
         }],
-        maxTokens: null,
+        maxTokens: effectiveCertifiedTrackMaxTokens(
+          "toolreliability",
+          toolLeg.suiteId
+        ),
       },
     ];
     const configuration = {
@@ -1612,7 +1707,13 @@ async function planModelIqPresetPublication(
         providerId: role.providerId,
         modelId: role.modelId,
         reasoningEffort: role.reasoningEffort ?? "default",
-        maxTokens: role.maxTokens ?? null,
+        maxTokens:
+          role.maxTokens ??
+          Math.max(
+            ...tracks
+              .map((track) => track.maxTokens)
+              .filter((value): value is number => value !== null)
+          ),
       })),
       tracks,
     };
@@ -1628,7 +1729,7 @@ async function planModelIqPresetPublication(
         ...gameCases.map((item) => ({
           runId: gameRunId,
           track: "gameiq" as const,
-          suiteId: "suite-gameiq",
+          suiteId: gameLeg.suiteId,
           caseId: item.id,
           caseVersion: item.caseVersion,
           scoringVersion: item.scoring.scoringVersion,
@@ -1637,7 +1738,7 @@ async function planModelIqPresetPublication(
         {
           runId: toolRunId,
           track: "toolreliability" as const,
-          suiteId: "suite-toolreliability",
+          suiteId: toolLeg.suiteId,
           caseId: toolCase.id,
           caseVersion: toolCase.caseVersion,
           scoringVersion: toolCase.scoring.scoringVersion,
@@ -1720,9 +1821,16 @@ export async function runPreset(
               legIndex,
               ctx,
               onProgress,
-              modelIqPublication
+              modelIqPublication,
+              presetExecutionId
             )
-          : await runTeamLeg(leg, legIndex, ctx, onProgress);
+          : await runTeamLeg(
+              leg,
+              legIndex,
+              ctx,
+              onProgress,
+              presetExecutionId
+            );
       onProgress({ type: "leg", legIndex, leg, status: result.status, detail: result.detail });
     } catch (error) {
       onProgress({
@@ -1794,7 +1902,8 @@ async function runSoloLeg(
   legIndex: number,
   ctx: RunPresetContext,
   onProgress: (event: PresetProgressEvent) => void,
-  publication?: ModelIqPublicationPlan
+  publication: ModelIqPublicationPlan | undefined,
+  presetExecutionId: string
 ): Promise<PresetLegResult> {
   const selectedModels = ctx.soloModelIds
     .map((id) => ctx.models.find((candidate) => candidate.modelId === id))
@@ -1857,7 +1966,7 @@ async function runSoloLeg(
       setMessage: () => {},
       setGameIqModelRuns,
       onComplete: async () => {},
-      executionId: publication?.executionId,
+      executionId: publication?.executionId ?? presetExecutionId,
       runIdsByModelId: publication?.gameRunIdsByModelId,
       resultSetIdsByModelId: publication?.resultSetIdsByModelId,
     });
@@ -1955,7 +2064,7 @@ async function runSoloLeg(
             });
           },
           onComplete: async () => {},
-          executionId: publication?.executionId,
+          executionId: publication?.executionId ?? presetExecutionId,
           runId: publication?.toolRunIdsByModelId[model.modelId],
           resultSetOwnership: plannedResultSetId
             ? {
@@ -2032,7 +2141,8 @@ async function runTeamLeg(
   leg: BenchmarkPresetLeg,
   _legIndex: number,
   ctx: RunPresetContext,
-  _onProgress: (event: PresetProgressEvent) => void
+  _onProgress: (event: PresetProgressEvent) => void,
+  presetExecutionId: string
 ): Promise<PresetLegResult> {
   if (ctx.teamModelIds.length === 0) {
     return { status: "skipped", detail: "No team composition selected." };
@@ -2090,6 +2200,7 @@ async function runTeamLeg(
         });
       },
       onComplete: async () => {},
+      executionId: presetExecutionId,
     });
   } catch (error) {
     outcome.error = error instanceof Error ? error.message : String(error);

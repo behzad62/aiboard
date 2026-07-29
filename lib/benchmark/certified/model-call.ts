@@ -14,6 +14,7 @@ import {
   resolveModelCallUsage,
 } from "@/lib/client/token-usage";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import {
   formatModelId,
   parseModelId,
@@ -59,9 +60,8 @@ export const DEFAULT_RETRY_DELAYS_MS: number[] = [...CERTIFIED_RETRY_DELAYS_MS];
  * with a classification so the retry loop in `callCertifiedModel` (and
  * downstream containment logic in the GameIQ runner) can tell a transient
  * transport blip from a fatal account/config problem without re-parsing the
- * message string. The message itself is preserved byte-for-byte from the
- * original error so `statusForRunError` (run-engine.ts) and
- * `isProviderFailureMessage` keep matching on the same text they always have.
+ * message string. Its public message is a typed, secret-safe failure reason;
+ * routing uses the structured classification and provider metadata.
  */
 export class CertifiedProviderError extends Error {
   readonly classification: ProviderFailureClass;
@@ -297,6 +297,7 @@ async function callCertifiedModelOnce(
   };
   let iterator: AsyncIterator<StreamChunk> | undefined;
   let attemptSucceeded = false;
+  let iteratorSettled = false;
   let surfacedError: unknown;
 
   try {
@@ -323,20 +324,15 @@ async function callCertifiedModelOnce(
       }
       if (chunk.type === "token" && chunk.content) {
         rawResponse += chunk.content;
-        try {
-          assertProjectedUsdWithinBudget(
-            input,
-            estimateModelCallUsage({
-              messages,
-              output: rawResponse,
-              maxTokens: input.maxTokens,
-            }),
-            "model-call streaming"
-          );
-        } catch (error) {
-          await recordCertifiedBudgetEvent(input, error);
-          throw error;
-        }
+        assertProjectedUsdWithinBudget(
+          input,
+          estimateModelCallUsage({
+            messages,
+            output: rawResponse,
+            maxTokens: input.maxTokens,
+          }),
+          "model-call streaming"
+        );
       } else if (chunk.type === "usage" && chunk.usage) {
         reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
       } else if (chunk.type === "tool_call" && chunk.toolCall) {
@@ -450,18 +446,37 @@ async function callCertifiedModelOnce(
       providerCostUnit: usage.providerCostUnit,
     };
   } catch (error) {
-    const effectiveError =
+    let effectiveError =
       attemptAbortSource === "parent" && input.signal?.aborted
         ? abortedError(input.signal)
         : error;
-    surfacedError = effectiveError;
+    const parentCancellationWon =
+      attemptAbortSource === "parent" && input.signal?.aborted === true;
+    abortAttempt("failure", effectiveError);
+    const teardownError = iterator
+      ? await closeIteratorBeforeRetry(iterator, effectiveError)
+      : undefined;
+    iteratorSettled = true;
     if (
-      (attemptAbortSource === "parent" && input.signal?.aborted) ||
-      effectiveError instanceof CertifiedBudgetExceededError
+      teardownError &&
+      !parentCancellationWon &&
+      !(effectiveError instanceof CertifiedBudgetExceededError)
     ) {
-      throw effectiveError;
+      effectiveError = teardownError;
     }
-    const message = errorMessage(effectiveError);
+    surfacedError = effectiveError;
+    const rawMessage = errorMessage(effectiveError);
+    const errorMetadata = certifiedProviderErrorMetadata(effectiveError);
+    const classification =
+      effectiveError instanceof CertifiedProviderError
+        ? effectiveError.classification
+        : classifyProviderFailure(rawMessage, errorMetadata);
+    const message = persistedModelCallErrorMessage({
+      error: effectiveError,
+      parsePhase,
+      parentCancellationWon,
+      classification,
+    });
     const usage = resolveModelCallUsage({
       messages,
       output: rawResponse,
@@ -518,6 +533,7 @@ async function callCertifiedModelOnce(
         estimatedUsd: trace.estimatedUsd,
       },
     });
+    let accountingBudgetEventRecorded = false;
     try {
       input.context.recordModelCallUsage?.({
         inputTokens: usage.inputTokens,
@@ -527,20 +543,35 @@ async function callCertifiedModelOnce(
     } catch (recordError) {
       if (recordError instanceof CertifiedBudgetExceededError) {
         await recordCertifiedBudgetEvent(input, recordError);
-        surfacedError = recordError;
-        throw recordError;
+        accountingBudgetEventRecorded = true;
+        if (
+          !parentCancellationWon &&
+          !(effectiveError instanceof CertifiedBudgetExceededError)
+        ) {
+          surfacedError = recordError;
+          throw recordError;
+        }
       }
       // Otherwise preserve the provider/parser error that caused the failed model call.
     }
-    // Wrap in a classified, typed error for the retry loop above. The
-    // message is preserved byte-for-byte (via `message`, computed above from
-    // the original error) so message-text consumers — `statusForRunError` in
-    // run-engine.ts and `isProviderFailureMessage` — keep matching exactly
-    // what they always have.
-    const errorMetadata = certifiedProviderErrorMetadata(error);
+    // Cancellation and budget errors retain their exact winning identity.
+    // Other failures are wrapped below with typed routing metadata and a
+    // secret-safe public message.
+    if (
+      parentCancellationWon ||
+      effectiveError instanceof CertifiedBudgetExceededError
+    ) {
+      if (
+        effectiveError instanceof CertifiedBudgetExceededError &&
+        !accountingBudgetEventRecorded
+      ) {
+        await recordCertifiedBudgetEvent(input, effectiveError);
+      }
+      throw effectiveError;
+    }
     const providerError = new CertifiedProviderError(
       message,
-      classifyProviderFailure(message, errorMetadata),
+      classification,
       {
         traceId,
         latencyMs,
@@ -558,7 +589,7 @@ async function callCertifiedModelOnce(
         const winningError =
           surfacedError ?? new Error("Certified provider attempt exited without success.");
         abortAttempt("failure", winningError);
-        const teardownError = iterator
+        const teardownError = iterator && !iteratorSettled
           ? await closeIteratorBeforeRetry(iterator, winningError)
           : undefined;
         const parentCancellationWon =
@@ -978,4 +1009,34 @@ function abortedError(signal: AbortSignal): unknown {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function persistedModelCallErrorMessage(input: {
+  error: unknown;
+  parsePhase: boolean;
+  parentCancellationWon: boolean;
+  classification: ProviderFailureClass;
+}): string {
+  if (input.parentCancellationWon) {
+    return "Certified model call was cancelled.";
+  }
+  if (input.error instanceof CertifiedBudgetExceededError) {
+    return sanitizeBenchmarkDisplayText(input.error.message);
+  }
+  if (
+    input.error instanceof CertifiedProviderError &&
+    /provider iterator teardown/i.test(input.error.message)
+  ) {
+    return sanitizeBenchmarkDisplayText(input.error.message);
+  }
+  if (input.parsePhase) {
+    return "Certified provider response could not be parsed.";
+  }
+  if (input.classification === "fatal") {
+    return "Certified provider request failed because the account or configuration is unavailable.";
+  }
+  if (input.classification === "transient") {
+    return "Certified provider request failed temporarily.";
+  }
+  return "Certified provider request failed.";
 }

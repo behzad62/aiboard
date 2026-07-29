@@ -53,7 +53,18 @@ type RunnerEvent =
       type: "usage";
       usage?: { inputTokens?: number; outputTokens?: number };
     }
-  | { type: "error"; error?: string; code?: string }
+  | {
+      type: "error";
+      error?: string;
+      code?: string;
+      status?: number;
+      retryAfterMs?: number;
+      errorMetadata?: {
+        statusCode?: number;
+        code?: string;
+        retryAfterMs?: number;
+      };
+    }
   | { type: "done" };
 
 export class AccountRunnerModel implements AgentModel {
@@ -165,10 +176,12 @@ export class AccountRunnerModel implements AgentModel {
             : {}),
         };
       } else if (event.type === "error") {
+        const metadata = safeRunnerErrorMetadata(event);
         throw new ProviderTransportError(
           event.error ?? "Account runner stream failed.",
-          response.status,
-          event.code
+          metadata.status ?? response.status,
+          metadata.code,
+          metadata.retryAfterMs
         );
       }
     }
@@ -477,22 +490,33 @@ async function* readSse(response: Response): AsyncIterable<RunnerEvent> {
   if (!reader) return;
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  let completed = false;
+  try {
     for (;;) {
-      const match = buffer.match(/\r?\n\r?\n/);
-      if (!match) break;
-      const index = match.index ?? 0;
-      const block = buffer.slice(0, index);
-      buffer = buffer.slice(index + match[0].length);
-      const event = parseSseBlock(block);
-      if (event) yield event;
+      const { value, done } = await reader.read();
+      if (done) {
+        completed = true;
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const match = buffer.match(/\r?\n\r?\n/);
+        if (!match) break;
+        const index = match.index ?? 0;
+        const block = buffer.slice(0, index);
+        buffer = buffer.slice(index + match[0].length);
+        const event = parseSseBlock(block);
+        if (event) yield event;
+      }
     }
+    const tail = parseSseBlock(buffer);
+    if (tail) yield tail;
+  } finally {
+    if (!completed) {
+      await reader.cancel().catch(() => undefined);
+    }
+    reader.releaseLock();
   }
-  const tail = parseSseBlock(buffer);
-  if (tail) yield tail;
 }
 
 function parseSseBlock(block: string): RunnerEvent | undefined {
@@ -515,4 +539,31 @@ function retryAfter(value: string | null): number | undefined {
   if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
   const date = Date.parse(value);
   return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+function safeRunnerErrorMetadata(event: Extract<RunnerEvent, { type: "error" }>): {
+  status?: number;
+  code?: string;
+  retryAfterMs?: number;
+} {
+  const nested = event.errorMetadata;
+  const statusCandidate = nested?.statusCode ?? event.status;
+  const codeCandidate = nested?.code ?? event.code;
+  const retryAfterCandidate = nested?.retryAfterMs ?? event.retryAfterMs;
+  return {
+    ...(Number.isInteger(statusCandidate) &&
+    statusCandidate! >= 100 &&
+    statusCandidate! <= 599
+      ? { status: statusCandidate }
+      : {}),
+    ...(typeof codeCandidate === "string" &&
+    /^[A-Za-z0-9_.-]{1,64}$/.test(codeCandidate)
+      ? { code: codeCandidate }
+      : {}),
+    ...(typeof retryAfterCandidate === "number" &&
+    Number.isFinite(retryAfterCandidate) &&
+    retryAfterCandidate >= 0
+      ? { retryAfterMs: Math.round(retryAfterCandidate) }
+      : {}),
+  };
 }

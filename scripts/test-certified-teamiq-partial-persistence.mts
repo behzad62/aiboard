@@ -5,6 +5,7 @@ import {
   __resetBenchmarkStoreForTests,
   listBenchmarkAttemptsV2,
   listBenchmarkFailures,
+  listBenchmarkResultSets,
   listBenchmarkRuns,
   listBenchmarkTeamCompositions,
   listBenchmarkTraces,
@@ -13,17 +14,28 @@ import {
 } from "../lib/benchmark/store";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ModelEvidenceProfile } from "../components/benchmark/results/ModelEvidenceProfile";
-import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
-import { readLeaderboard } from "../lib/benchmark/certified/dashboard-selectors";
-import { rebuildCertifiedDashboardData } from "../lib/benchmark/certified/run-persistence";
+import {
+  BenchmarkResultSetAudit,
+  buildBenchmarkResultSetAuditRows,
+} from "../components/benchmark/BenchmarkResultSetAudit";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { runCertifiedBenchmark } from "../lib/benchmark/certified/run-engine";
+import {
+  createPendingBenchmarkResultSet,
+  failBenchmarkResultSet,
+  publishBenchmarkResultSetIfComplete,
+} from "../lib/benchmark/certified/result-set-publication";
+import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
+import {
+  effectiveCertifiedRoleMaxTokens,
+  effectiveCertifiedTrackMaxTokens,
+} from "../lib/benchmark/certified/effective-max-tokens";
 import {
   STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
 } from "../lib/benchmark/toolreliability";
 import { runCertifiedTeamIq } from "../lib/benchmark/teamiq";
+import { deriveSoloTeamComposition } from "../lib/benchmark/teamiq/compositions";
 import type {
   BenchmarkCaseV2,
   BenchmarkTeamComposition,
@@ -144,21 +156,103 @@ await saveBenchmarkCaseV2(benchmarkCase);
 await saveBenchmarkTeamComposition(firstTeam);
 await saveBenchmarkTeamComposition(secondTeam);
 
+const runId = "run-certified-teamiq-partial-persistence";
+const suiteId = "suite-certified-teamiq";
+const executionId = "execution-certified-teamiq-partial-persistence";
+const plannedTeams = [
+  deriveSoloTeamComposition({
+    ...firstSolo.roles[0]!,
+  }),
+  deriveSoloTeamComposition({
+    ...secondSolo.roles[0]!,
+  }),
+  firstTeam,
+  secondTeam,
+];
+const resultSetIdByTeamCompositionId: Record<string, string> = {};
+for (const team of plannedTeams) {
+  const configuration = {
+    subjectKind:
+      team.strategy === "solo" || team.roles.length === 1
+        ? ("model" as const)
+        : ("team" as const),
+    displayName: team.name,
+    ...(team.roles.length === 1
+      ? {
+          providerId: team.roles[0]!.providerId,
+          modelId: team.roles[0]!.modelId,
+          reasoningEffort: team.roles[0]!.reasoningEffort,
+        }
+      : {}),
+    strategy: team.strategy,
+    roles: team.roles.map((role) => ({
+      role: role.role,
+      slot: role.slot,
+      providerId: role.providerId,
+      modelId: role.modelId,
+      reasoningEffort: role.reasoningEffort ?? "default",
+      maxTokens: effectiveCertifiedRoleMaxTokens({
+        track: "teamiq",
+        suiteId,
+        roleMaxTokens: role.maxTokens,
+      }),
+    })),
+    tracks: [{
+      track: "teamiq" as const,
+      suiteId,
+      caseManifest: [{
+        caseId: benchmarkCase.id,
+        caseVersion: benchmarkCase.caseVersion,
+        scoringVersion: benchmarkCase.scoring.scoringVersion,
+      }],
+      maxTokens: effectiveCertifiedTrackMaxTokens("teamiq", suiteId),
+    }],
+  };
+  const resultSetId = `result-partial-${team.id}`;
+  await createPendingBenchmarkResultSet({
+    id: resultSetId,
+    schemaVersion: 1,
+    executionId,
+    anchorRunId: runId,
+    runIds: [runId],
+    configurationKey: benchmarkResultConfigurationKey(configuration),
+    configuration,
+    expectedAttempts: [{
+      runId,
+      track: "teamiq",
+      suiteId,
+      caseId: benchmarkCase.id,
+      caseVersion: benchmarkCase.caseVersion,
+      scoringVersion: benchmarkCase.scoring.scoringVersion,
+      teamCompositionId: team.id,
+    }],
+  });
+  resultSetIdByTeamCompositionId[team.id] = resultSetId;
+}
+
 const originalDateNow = Date.now;
 let controlledNowMs = originalDateNow();
 let secondProviderCalls = 0;
 let durableCompositionIdsAtFirstExecution: string[] = [];
 Date.now = () => controlledNowMs;
+let runResult: Awaited<ReturnType<typeof runCertifiedBenchmark>>;
 try {
-  await runCertifiedBenchmark({
-    runId: "run-certified-teamiq-partial-persistence",
-    suiteId: "suite-certified-teamiq",
+  runResult = await runCertifiedBenchmark({
+    runId,
+    suiteId,
     track: "teamiq",
     harnessProfile: "raw-single-model",
     caseIds: [benchmarkCase.id],
     teamCompositionIds: [firstTeam.id, secondTeam.id],
     modelBudget: { maxWallClockMs: 3_600_000 },
     certification: runHarnessCertification("raw-single-model"),
+    resultSetOwnership: {
+      byTeamCompositionId: resultSetIdByTeamCompositionId,
+    },
+    onSubjectCompleted: async (teamCompositionId) => {
+      const resultSetId = resultSetIdByTeamCompositionId[teamCompositionId];
+      if (resultSetId) await publishBenchmarkResultSetIfComplete(resultSetId);
+    },
     runner: (context) =>
       runCertifiedTeamIq({
         context,
@@ -207,6 +301,15 @@ try {
   });
 } finally {
   Date.now = originalDateNow;
+}
+for (const resultSet of await listBenchmarkResultSets()) {
+  if (resultSet.status !== "pending") continue;
+  await failBenchmarkResultSet(resultSet.id, {
+    kind: "infrastructure",
+    code: "unpublished_infrastructure_failure",
+    message:
+      runResult!.error ?? "Certified benchmark output was not publishable.",
+  });
 }
 
 const attempts = await listBenchmarkAttemptsV2();
@@ -292,36 +395,38 @@ check(
   { failed, failedOwnedTraces, completed }
 );
 
-const dashboardWithMetadata = withCertifiedDeleteMetadata(
-  await rebuildCertifiedDashboardData(),
-  attempts,
-  persistedTeams,
-  await listBenchmarkFailures()
-);
-const failedRow = readLeaderboard(
-  dashboardWithMetadata,
-  "teamiq",
-  "overall"
-).find((row) => row.teamCompositionId === failed?.teamCompositionId);
-const profileMarkup = failedRow
-  ? renderToStaticMarkup(
-      createElement(ModelEvidenceProfile, {
-        id: "budget-profile",
-        row: failedRow,
-        onClose: () => undefined,
-      })
+const resultSets = await listBenchmarkResultSets();
+const auditRows = buildBenchmarkResultSetAuditRows(resultSets, attempts, {
+  traces,
+  failures: await listBenchmarkFailures(),
+});
+const failedResultSet = resultSets.find(
+  (resultSet) =>
+    resultSet.status === "failed" &&
+    resultSet.expectedAttempts.some(
+      (expected) => expected.teamCompositionId === failed?.teamCompositionId
     )
-  : "";
+);
+const failedAuditRow = auditRows.find(
+  (row) => row.resultSet?.id === failedResultSet?.id
+);
+const auditMarkup = renderToStaticMarkup(
+  createElement(BenchmarkResultSetAudit, {
+    rows: auditRows,
+    deletingIds: new Set<string>(),
+    deleteInFlight: false,
+    onDelete: () => undefined,
+  })
+);
 check(
-  "exact all-modes budget provenance reaches row metadata and rendered profile",
-  failedRow?.failureDetails.some((detail) =>
-    detail.message.includes("maxWallClockMs 3600000")
-  ) === true && profileMarkup.includes("maxWallClockMs 3600000"),
+  "exact all-modes budget provenance reaches failed snapshot audit metadata",
+  failedAuditRow?.failureMessage.includes("maxWallClockMs 3600000") === true &&
+    auditMarkup.includes("maxWallClockMs 3600000"),
   {
     failedCompositionId: failed?.teamCompositionId,
-    leaderboard: readLeaderboard(dashboardWithMetadata, "teamiq", "overall"),
-    failureDetails: failedRow?.failureDetails,
-    profileMarkup,
+    failedResultSet,
+    failedAuditRow,
+    auditMarkup,
   }
 );
 

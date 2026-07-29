@@ -254,11 +254,11 @@ const exactConfigBase = withCompletedResultSetFixtures({
   caseV2: [],
   attemptsV2: [
     {
-      ...attempt("exact-config-100", low.id, 0.1, "workbench"),
+      ...attempt("exact-config-100", low.id, 0.9, "workbench"),
       caseId: "exact-config-case",
     },
     {
-      ...attempt("exact-config-200", low.id, 0.2, "workbench"),
+      ...attempt("exact-config-200", low.id, 0.7, "workbench"),
       caseId: "exact-config-case",
     },
   ],
@@ -275,22 +275,10 @@ const exactConfigResultSets = exactConfigBase.resultSets.map(
         maxTokens: index === 0 ? 100 : 200,
       })),
     };
-    const quality = index === 0 ? 0.9 : 0.7;
     return {
       ...resultSet,
       configuration,
       configurationKey: benchmarkResultConfigurationKey(configuration),
-      metrics: {
-        ...resultSet.metrics!,
-        verifiedQuality: quality,
-        overallScore: quality,
-        jobSuccessScore: quality * 100,
-        efficiencyScore: quality * 100,
-        trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
-          ...track,
-          averageVerifiedQuality: quality,
-        })),
-      },
     };
   }
 );
@@ -333,11 +321,11 @@ const exactComboBase = withCompletedResultSetFixtures({
   caseV2: [],
   attemptsV2: [
     {
-      ...attempt("exact-combo-100", exactTeam.id, 0.1, "workbench"),
+      ...attempt("exact-combo-100", exactTeam.id, 0.4, "workbench"),
       caseId: "exact-combo-case",
     },
     {
-      ...attempt("exact-combo-200", exactTeam.id, 0.2, "workbench"),
+      ...attempt("exact-combo-200", exactTeam.id, 0.85, "workbench"),
       caseId: "exact-combo-case",
     },
   ],
@@ -353,21 +341,10 @@ const exactComboResultSets = exactComboBase.resultSets.map((resultSet, index) =>
       maxTokens: index === 0 ? 100 : 200,
     })),
   };
-  const quality = index === 0 ? 0.4 : 0.85;
   return {
     ...resultSet,
     configuration,
     configurationKey: benchmarkResultConfigurationKey(configuration),
-    metrics: {
-      ...resultSet.metrics!,
-      verifiedQuality: quality,
-      overallScore: quality,
-      jobSuccessScore: quality * 100,
-      trackBreakdown: resultSet.metrics!.trackBreakdown.map((track) => ({
-        ...track,
-        averageVerifiedQuality: quality,
-      })),
-    },
   };
 });
 const exactComboDashboard = buildCertifiedBenchmarkDashboardData({

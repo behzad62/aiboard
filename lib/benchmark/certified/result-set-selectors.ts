@@ -17,7 +17,8 @@ import type {
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
-import { normalizeTeamRoles } from "@/lib/benchmark/teamiq/compositions";
+import { aggregateCertifiedRunScores } from "@/lib/benchmark/scoring/aggregate";
+import type { CertifiedResultSnapshotMetrics } from "@/lib/benchmark/types";
 
 const SCOREABLE_STATUSES = new Set<BenchmarkAttemptV2["status"]>([
   "passed",
@@ -154,8 +155,6 @@ export function isPublishableBenchmarkResultSet(
       !SCOREABLE_STATUSES.has(attempt.status) ||
       attempt.scoringVersion !== expected.scoringVersion ||
       !run ||
-      run.status !== "completed" ||
-      !run.completedAt ||
       run.suiteId !== expected.suiteId ||
       !run.caseIds.includes(expected.caseId) ||
       !run.resultSetIds?.includes(resultSet.id) ||
@@ -168,12 +167,6 @@ export function isPublishableBenchmarkResultSet(
       !allOwnedReferencesExist(
         attempt.artifactIds,
         artifactsById,
-        resultSet.id,
-        attempt.id
-      ) ||
-      !allOwnedReferencesExist(
-        attempt.failureIds,
-        failuresById,
         resultSet.id,
         attempt.id
       ) ||
@@ -192,6 +185,13 @@ export function isPublishableBenchmarkResultSet(
         verifier.resultSetId === resultSet.id &&
         verifier.attemptId === attempt.id &&
         verifier.caseId === expected.caseId &&
+        allOwnedFailureReferencesExist(
+          attempt.failureIds,
+          failuresById,
+          resultSet.id,
+          attempt.id,
+          verifier
+        ) &&
         allOwnedReferencesExist(
           verifier.artifactIds,
           artifactsById,
@@ -201,6 +201,18 @@ export function isPublishableBenchmarkResultSet(
     );
   });
   if (!expectedEvidenceIsComplete) return false;
+  const canonicalMetrics = materializeCertifiedResultSnapshotMetrics(
+    resultSet.id,
+    ownedAttempts,
+    evidence.cases
+  );
+  if (
+    !canonicalMetrics ||
+    !hasValidSnapshotMetricInvariants(resultSet.metrics) ||
+    JSON.stringify(canonicalMetrics) !== JSON.stringify(resultSet.metrics)
+  ) {
+    return false;
+  }
 
   return (
     evidence.verifierResults
@@ -218,19 +230,10 @@ export function isPublishableBenchmarkResultSet(
       ) &&
     resultSet.runIds.every((runId) => {
       const run = runsById.get(runId);
-      return (
-        run?.resultSetIds?.includes(resultSet.id) === true &&
-        allOwnedReferencesExist(
-          run.artifactIds,
-          artifactsById,
-          resultSet.id
-        ) &&
-        allOwnedReferencesExist(
-          run.failureIds,
-          failuresById,
-          resultSet.id
-        )
-      );
+      // A shared execution run aggregates artifact/failure ids for every
+      // subject. Subject publication validates only this result set's owned
+      // children below; sibling-owned run references must not hide it.
+      return run?.resultSetIds?.includes(resultSet.id) === true;
     }) &&
     everyOwnedRecordHasValidReferences(
       evidence.artifacts,
@@ -253,19 +256,46 @@ export function isPublishableBenchmarkResultSet(
       ownedCaseIds,
       ownedAttemptIds
     ) &&
+    evidence.traces
+      .filter((record) => record.resultSetId === resultSet.id)
+      .every((record) => isTerminalTimestamp(record.completedAt)) &&
     everyOwnedAttemptRecordHasValidReferences(
       evidence.runEvents,
       resultSet.id,
-      ownedCaseIds,
       ownedAttemptIds
     ) &&
     everyOwnedAttemptRecordHasValidReferences(
       evidence.toolCallTraces,
       resultSet.id,
-      ownedCaseIds,
       ownedAttemptIds
-    )
+    ) &&
+    evidence.toolCallTraces
+      .filter((record) => record.resultSetId === resultSet.id)
+      .every((record) => isTerminalTimestamp(record.completedAt))
   );
+}
+
+function allOwnedFailureReferencesExist(
+  ids: readonly string[],
+  failuresById: ReadonlyMap<string, BenchmarkFailure>,
+  resultSetId: string,
+  attemptId: string,
+  verifier: BenchmarkVerifierResult
+): boolean {
+  return ids.every((id) => {
+    const failure = failuresById.get(id);
+    if (
+      failure?.resultSetId === resultSetId &&
+      (failure.attemptId === undefined || failure.attemptId === attemptId)
+    ) {
+      return true;
+    }
+    // TeamIQ Tool Reliability keeps deterministic per-case failures nested in
+    // the owned verifier rather than materializing a top-level failure row.
+    return verifier.assertionResults.some(
+      (assertion) => !assertion.passed && id === `${assertion.id}:result`
+    );
+  });
 }
 
 function compositionMatchesConfiguration(
@@ -274,7 +304,7 @@ function compositionMatchesConfiguration(
 ): boolean {
   if (!composition) return false;
   const configuration = resultSet.configuration;
-  const roles = normalizeTeamRoles(composition.roles).map((role) => ({
+  const roles = composition.roles.map((role) => ({
     role: role.role,
     slot: role.slot,
     providerId: role.providerId,
@@ -282,18 +312,10 @@ function compositionMatchesConfiguration(
     reasoningEffort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
     maxTokens: role.maxTokens ?? null,
   }));
-  const configuredRoles = [...configuration.roles]
-    .map((role) => ({
-      ...role,
-      reasoningEffort: normalizeBenchmarkReasoningEffort(
-        role.reasoningEffort
-      ),
-    }))
-    .sort((left, right) =>
-      `${left.slot}\u0000${left.role}\u0000${left.providerId}\u0000${left.modelId}`.localeCompare(
-        `${right.slot}\u0000${right.role}\u0000${right.providerId}\u0000${right.modelId}`
-      )
-    );
+  const configuredRoles = configuration.roles.map((role) => ({
+    ...role,
+    reasoningEffort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+  }));
   if (
     roles.length !== configuredRoles.length ||
     roles.some((role, index) => {
@@ -383,7 +405,9 @@ function everyOwnedRecordHasValidReferences<
     .every(
       (record) =>
         (record.runId === undefined || runIds.has(record.runId)) &&
-        (record.caseId === undefined || caseIds.has(record.caseId)) &&
+        (record.caseId === undefined ||
+          caseIds.has(record.caseId) ||
+          (record.attemptId !== undefined && attemptIds.has(record.attemptId))) &&
         (record.attemptId === undefined || attemptIds.has(record.attemptId))
     );
 }
@@ -393,15 +417,106 @@ function everyOwnedAttemptRecordHasValidReferences<
 >(
   records: readonly T[],
   resultSetId: string,
-  caseIds: ReadonlySet<string>,
   attemptIds: ReadonlySet<string>
 ): boolean {
   return records
     .filter((record) => record.resultSetId === resultSetId)
-    .every(
-      (record) =>
-        caseIds.has(record.caseId) && attemptIds.has(record.attemptId)
-    );
+    .every((record) => attemptIds.has(record.attemptId));
+}
+
+function isTerminalTimestamp(value: string | undefined): boolean {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+export function materializeCertifiedResultSnapshotMetrics(
+  resultSetId: string,
+  attempts: readonly BenchmarkAttemptV2[],
+  cases: readonly BenchmarkCaseV2[]
+): CertifiedResultSnapshotMetrics | null {
+  const rows = aggregateCertifiedRunScores({
+    resultSetIds: new Set([resultSetId]),
+    attempts: [...attempts],
+    cases: [...cases],
+  });
+  if (rows.length !== 1) return null;
+  const row = rows[0]!;
+  return {
+    attempts: row.attempts,
+    passed: row.passed,
+    failed: row.failed,
+    verifiedPassRate: row.verifiedPassRate,
+    verifiedQuality: row.verifiedQuality,
+    overallScore: row.overallScore,
+    trackBreakdown: row.trackBreakdown.map((track) => ({
+      track: track.track as BenchmarkAttemptV2["track"],
+      attempts: track.attempts,
+      passed: track.passed,
+      verifiedPassRate: track.verifiedPassRate,
+      averageVerifiedQuality: track.averageVerifiedQuality,
+    })),
+    jobSuccessScore: row.jobSuccessScore,
+    efficiencyScore: row.efficiencyScore,
+    toolReliabilityScore: row.toolReliabilityScore,
+    toolReliabilitySamples: row.toolReliabilitySamples,
+    costUsd: row.costUsd,
+    averageCostUsd: row.averageCostUsd,
+    durationMs: row.durationMs,
+    costPerPass: row.costPerPass,
+    speedPerPassMs: row.speedPerPassMs,
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    totalTokens: row.totalTokens,
+    tokensPerPass: row.tokensPerPass,
+    costBasis: row.costBasis,
+  };
+}
+
+export function hasValidSnapshotMetricInvariants(
+  metrics: CertifiedResultSnapshotMetrics
+): boolean {
+  const count = (value: number) =>
+    Number.isInteger(value) && Number.isFinite(value) && value >= 0;
+  const fraction = (value: number | null) =>
+    value === null || (Number.isFinite(value) && value >= 0 && value <= 1);
+  const score100 = (value: number | null) =>
+    value === null || (Number.isFinite(value) && value >= 0 && value <= 100);
+  const nonNegative = (value: number | null) =>
+    value === null || (Number.isFinite(value) && value >= 0);
+  return (
+    count(metrics.attempts) &&
+    count(metrics.passed) &&
+    count(metrics.failed) &&
+    metrics.passed + metrics.failed === metrics.attempts &&
+    fraction(metrics.verifiedPassRate) &&
+    fraction(metrics.verifiedQuality) &&
+    fraction(metrics.overallScore) &&
+    score100(metrics.jobSuccessScore) &&
+    score100(metrics.efficiencyScore) &&
+    score100(metrics.toolReliabilityScore) &&
+    count(metrics.toolReliabilitySamples) &&
+    nonNegative(metrics.costUsd) &&
+    nonNegative(metrics.averageCostUsd) &&
+    nonNegative(metrics.durationMs) &&
+    nonNegative(metrics.costPerPass) &&
+    nonNegative(metrics.speedPerPassMs) &&
+    nonNegative(metrics.inputTokens) &&
+    nonNegative(metrics.outputTokens) &&
+    nonNegative(metrics.totalTokens) &&
+    nonNegative(metrics.tokensPerPass) &&
+    metrics.trackBreakdown.length > 0 &&
+    new Set(metrics.trackBreakdown.map((track) => track.track)).size ===
+      metrics.trackBreakdown.length &&
+    metrics.trackBreakdown.every(
+      (track) =>
+        count(track.attempts) &&
+        count(track.passed) &&
+        track.passed <= track.attempts &&
+        fraction(track.verifiedPassRate) &&
+        fraction(track.averageVerifiedQuality)
+    ) &&
+    metrics.trackBreakdown.reduce((sum, track) => sum + track.attempts, 0) ===
+      metrics.attempts
+  );
 }
 
 function attemptEvidenceKey(

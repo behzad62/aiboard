@@ -12,6 +12,7 @@ import {
 } from "./openai";
 import { xAIReasoningEffort } from "./reasoning";
 import { openAIResponsesTextFormatField } from "./structured-output";
+import { safeProviderErrorMetadata } from "./base";
 
 const XAI_BASE_URL = "https://api.x.ai/v1";
 
@@ -257,6 +258,7 @@ async function* streamXAIResponses(
     yield {
       type: "error",
       error: err instanceof Error ? err.message : "xAI request failed",
+      errorMetadata: safeProviderErrorMetadata(err),
     };
   }
 }

@@ -98,7 +98,8 @@ export function buildBenchmarkResultSetAuditRows(
       physicalCalls: usage.physicalCalls,
       totalTokens: usage.totalTokens,
       failureMessage: sanitizeBenchmarkDisplayText(resultSet.failure?.message ?? ""),
-      canDelete: resultSet.status !== "deleting",
+      canDelete:
+        resultSet.status !== "pending" && resultSet.status !== "deleting",
     };
   });
   if (legacyAttempts.length > 0) {

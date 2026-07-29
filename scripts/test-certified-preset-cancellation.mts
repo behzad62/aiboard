@@ -641,7 +641,10 @@ assert.deepEqual(gameIqBoundaryFailures, []);
       event.modelId.endsWith("isolated-1") &&
       event.status === "failed"
   );
-  assert.equal(failedModelProgress?.detail, "isolated provider failure");
+  assert.equal(
+    failedModelProgress?.detail,
+    "Certified provider request failed temporarily."
+  );
   assert.doesNotMatch(failedModelProgress?.detail ?? "", /completed|success/i);
   for (const model of models.slice(1)) {
     assert.equal(
@@ -659,6 +662,11 @@ assert.deepEqual(gameIqBoundaryFailures, []);
       (resultSet) => resultSet.status === "pending"
     ),
     false
+  );
+  assert.equal(
+    new Set((await listBenchmarkResultSets()).map((set) => set.executionId)).size,
+    1,
+    "every independently published subject in one preset launch shares its execution ID"
   );
   console.log("PASS one Tool Reliability provider failure does not abort siblings");
 }

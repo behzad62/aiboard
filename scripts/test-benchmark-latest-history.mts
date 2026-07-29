@@ -245,7 +245,7 @@ const oldSet = resultSet({
   team: luna,
   completedAt: "2026-07-29T10:00:00.000Z",
   overallScore: 0.65,
-  passRate: 0.6,
+  passRate: 1,
 });
 const latestSet = resultSet({
   id: "luna-new-complete",
@@ -254,7 +254,7 @@ const latestSet = resultSet({
   team: luna,
   completedAt: "2026-07-29T11:00:00.000Z",
   overallScore: 0.72,
-  passRate: 0.8,
+  passRate: 1,
 });
 const failedSet: BenchmarkResultSet = {
   ...resultSet({
@@ -357,6 +357,125 @@ assert.deepEqual(
 assert.equal(dashboard.audit.completedSnapshots, 3);
 assert.equal(dashboard.audit.unpublishedSnapshots, 2);
 assert.equal(dashboard.audit.legacyAttempts, 1);
+
+for (const sharedRunStatus of ["running", "failed"] as const) {
+  const subjectScoped = buildCertifiedBenchmarkDashboardData({
+    resultSets,
+    ...evidence,
+    runs: runs.map((run) =>
+      run.id === latestSet.anchorRunId
+        ? {
+            ...run,
+            status: sharedRunStatus,
+            completedAt:
+              sharedRunStatus === "failed" ? "2026-07-29T11:01:00.000Z" : undefined,
+          }
+        : run
+    ),
+    caseV2: [benchmarkCase],
+    attemptsV2: attempts,
+    verifierResults,
+    teamCompositions: [luna, sol],
+    harnessCertifications: [],
+  });
+  assert.ok(
+    subjectScoped.leaderboard.some((row) => row.resultSetId === latestSet.id),
+    `a completed subject remains publishable while a shared run is ${sharedRunStatus}`
+  );
+}
+
+const tamperedMetricsDashboard = buildCertifiedBenchmarkDashboardData({
+  resultSets: [
+    ...resultSets.filter((record) => record.id !== latestSet.id),
+    {
+      ...latestSet,
+      metrics: { ...latestSet.metrics!, overallScore: 0.99, passed: -1 },
+    },
+  ],
+  ...evidence,
+  caseV2: [benchmarkCase],
+  attemptsV2: attempts,
+  verifierResults,
+  teamCompositions: [luna, sol],
+  harnessCertifications: [],
+});
+assert.ok(
+  !tamperedMetricsDashboard.leaderboard.some(
+    (row) => row.resultSetId === latestSet.id
+  ),
+  "tampered or out-of-range frozen metrics remain audit-only"
+);
+
+const unsettledTrace = {
+  id: "unsettled-owned-trace",
+  runId: latestAttempt.runId,
+  caseId: latestAttempt.caseId,
+  attemptId: latestAttempt.id,
+  resultSetId: latestSet.id,
+  modelId: "chatgpt:gpt-5.6-luna",
+  providerId: "chatgpt",
+  participantId: latestAttempt.teamCompositionId,
+  schemaMode: "text" as const,
+  promptHash: "hash",
+  promptPreview: "",
+  promptChars: 0,
+  rawResponse: "",
+  parsedResponseJson: undefined,
+  startedAt: "2026-07-29T11:00:00.000Z",
+  latencyMs: 0,
+  inputTokens: 1,
+  outputTokens: 0,
+  totalTokens: 1,
+  finalStatus: "provider_error" as const,
+};
+const unsettledAttempt = {
+  ...latestAttempt,
+  traceIds: [unsettledTrace.id],
+};
+const unsettledTraceDashboard = buildCertifiedBenchmarkDashboardData({
+  resultSets,
+  ...evidence,
+  traces: [unsettledTrace],
+  caseV2: [benchmarkCase],
+  attemptsV2: attempts.map((record) =>
+    record.id === latestAttempt.id ? unsettledAttempt : record
+  ),
+  verifierResults,
+  teamCompositions: [luna, sol],
+  harnessCertifications: [],
+});
+assert.ok(
+  !unsettledTraceDashboard.leaderboard.some(
+    (row) => row.resultSetId === latestSet.id
+  ),
+  "a referenced physical trace must be terminal before publication"
+);
+
+const unsettledToolTrace = {
+  id: "unsettled-owned-tool-trace",
+  attemptId: latestAttempt.id,
+  caseId: latestAttempt.caseId,
+  resultSetId: latestSet.id,
+  toolName: "fixture-tool",
+  status: "ok" as const,
+  startedAt: "2026-07-29T11:00:00.000Z",
+};
+const unsettledToolDashboard = buildCertifiedBenchmarkDashboardData({
+  resultSets,
+  ...evidence,
+  toolCallTraces: [unsettledToolTrace],
+  caseV2: [benchmarkCase],
+  attemptsV2: attempts,
+  verifierResults,
+  teamCompositions: [luna, sol],
+  harnessCertifications: [],
+});
+assert.ok(
+  !unsettledToolDashboard.leaderboard.some(
+    (row) => row.resultSetId === latestSet.id
+  ),
+  "an owned physical tool trace must be terminal before publication"
+);
 
 const missingCompositionDashboard = buildCertifiedBenchmarkDashboardData({
   resultSets,

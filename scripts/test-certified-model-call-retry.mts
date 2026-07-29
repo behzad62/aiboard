@@ -1112,13 +1112,15 @@ for (const variant of ["parent cancellation", "budget cancellation"] as const) {
     (err) =>
       err instanceof CertifiedProviderError &&
       err.classification === "fatal" &&
-      err.message === "Your prepayment credits are depleted."
+      err.message ===
+        "Certified provider request failed because the account or configuration is unavailable."
   );
   check("fatal error made exactly 1 stream invocation", calls === 1, calls);
   check(
-    "fatal error preserves the original message text",
+    "fatal error persists only the typed account/configuration reason",
     error instanceof CertifiedProviderError &&
-      error.message === "Your prepayment credits are depleted.",
+      error.message ===
+        "Certified provider request failed because the account or configuration is unavailable.",
     error
   );
 }
@@ -1157,9 +1159,9 @@ for (const variant of ["parent cancellation", "budget cancellation"] as const) {
   );
   check("exhausted retries made exactly 3 stream invocations", calls === 3, calls);
   check(
-    "exhausted retries surface the last transient error's message",
+    "exhausted retries surface only the typed transient reason",
     error instanceof CertifiedProviderError &&
-      error.message === "ChatGPT request failed: 503",
+      error.message === "Certified provider request failed temporarily.",
     error
   );
 

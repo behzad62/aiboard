@@ -123,7 +123,7 @@ await expectReject(
         yield { type: "error", error: "Provider 503 before output" };
       },
     }),
-  /provider 503/i
+  /provider request failed temporarily/i
 );
 
 await expectReject(
@@ -147,6 +147,34 @@ await expectReject(
       },
     }),
   /empty response|no output|provider/i
+);
+
+const providerSecret = "sk-proj-persisted-provider-secret-1234567890";
+const providerSecretError =
+  `Unauthorized api key ${providerSecret}; Authorization: Bearer ${providerSecret}; failed at C:\\Users\\Alice\\private\\config.json`;
+await expectReject(
+  "raw provider errors are classified before their text is discarded",
+  () =>
+    callCertifiedModel({
+      model,
+      system: "System",
+      user: "User",
+      maxTokens: 16,
+      temperature: 0,
+      context,
+      caseId: "case-model-call",
+      attemptId: "attempt-model-call-secret",
+      participantId: "single",
+      retryDelaysMs: [],
+      streamChat: async function* (): AsyncIterable<StreamChunk> {
+        yield {
+          type: "error",
+          error: providerSecretError,
+          errorMetadata: { statusCode: 401, code: "invalid_api_key" },
+        };
+      },
+    }),
+  /account or configuration is unavailable/i
 );
 
 const customServer = await startOpenAICompatibleServer();
@@ -218,6 +246,7 @@ const bundle = exportBenchmarkReportBundleV2();
 const successTrace = bundle.traces.find((trace) => trace.id === result.traceId);
 const errorTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-model-call-error");
 const emptyTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-model-call-empty");
+const secretTrace = bundle.traces.find((trace) => trace.attemptId === "attempt-model-call-secret");
 check("successful model call trace persisted", successTrace?.rawResponse === "{\"move\":3}" && successTrace.parsedResponseJson?.includes("\"move\":3") === true, successTrace);
 check("model call trace links certified run metadata", successTrace?.runId === context.runId && successTrace.caseId === "case-model-call" && successTrace.attemptId === "attempt-model-call", successTrace);
 check(
@@ -225,13 +254,33 @@ check(
   successTrace?.reasoningEffort === "xhigh",
   successTrace
 );
-check("provider error trace persisted", errorTrace?.error?.includes("Provider 503") === true && errorTrace.retryHistory.some((attempt) => attempt.status === "provider_error"), errorTrace);
+check(
+  "provider error trace persists only the typed transient reason",
+  errorTrace?.error === "Certified provider request failed temporarily." &&
+    errorTrace.retryHistory.some((attempt) => attempt.status === "provider_error"),
+  errorTrace
+);
 check(
   "empty response trace persisted as provider error",
   emptyTrace?.rawResponse === "" &&
-    emptyTrace.error?.toLowerCase().includes("empty response") === true &&
+    emptyTrace.error === "Certified provider request failed temporarily." &&
     emptyTrace.retryHistory.some((attempt) => attempt.status === "provider_error"),
   emptyTrace
+);
+const secretEvidence = JSON.stringify({
+  trace: secretTrace,
+  events: context
+    .snapshot()
+    .events.filter((event) => event.attemptId === "attempt-model-call-secret"),
+});
+check(
+  "persisted model-call trace and events contain only a typed secret-safe reason",
+  secretTrace?.error ===
+    "Certified provider request failed because the account or configuration is unavailable." &&
+    !secretEvidence.includes(providerSecret) &&
+    !secretEvidence.includes("Authorization") &&
+    !secretEvidence.includes("Alice"),
+  secretEvidence
 );
 const modelCallEvents = context.snapshot().events.filter(
   (event) => event.attemptId === "attempt-model-call"
@@ -338,7 +387,7 @@ try {
 assert.equal(budgetSignal.aborted, true);
 assert.equal(budgetSignal.reason, budgetError);
 check(
-  "streaming USD budget emits a budget event before completion",
+  "streaming USD budget persists a terminal trace, known usage, and budget event",
   usdStreamingBudgetContext
     .snapshot()
     .events.some(
@@ -347,9 +396,15 @@ check(
         event.type === "run_blocked" &&
         event.phase === "budget"
     ) &&
-    !usdStreamingBudgetContext
+    usdStreamingBudgetContext
       .snapshot()
-      .traces.some((trace) => trace.attemptId === "attempt-budget-usd-streaming"),
+      .traces.some(
+        (trace) =>
+          trace.attemptId === "attempt-budget-usd-streaming" &&
+          trace.completedAt !== undefined &&
+          (trace.outputTokens ?? 0) > 0
+      ) &&
+    (usdStreamingBudgetContext.budgetSnapshot?.().outputTokens ?? 0) > 0,
   usdStreamingBudgetContext.snapshot()
 );
 
@@ -463,10 +518,16 @@ await expectReject(
   /wall.?clock|budget/i
 );
 check(
-  "wall-clock budget aborts before a completed trace is recorded",
-  !wallClockContext
+  "wall-clock budget persists terminal partial-use evidence",
+  wallClockContext
     .snapshot()
-    .traces.some((trace) => trace.attemptId === "attempt-wallclock"),
+    .traces.some(
+      (trace) =>
+        trace.attemptId === "attempt-wallclock" &&
+        trace.completedAt !== undefined &&
+        (trace.outputTokens ?? 0) > 0
+    ) &&
+    (wallClockContext.budgetSnapshot?.().outputTokens ?? 0) > 0,
   wallClockContext.snapshot().traces
 );
 
@@ -520,7 +581,7 @@ await expectReject(
         });
       },
     }),
-  /^Certified model call timed out after 25ms\.$/
+  /^Certified provider request failed temporarily\.$/
 );
 check(
   "timeout provider receives a cancellation signal",
@@ -542,7 +603,7 @@ const timeoutTrace = timeoutContext
   .traces.find((trace) => trace.attemptId === "attempt-timeout");
 check(
   "timeout trace records provider error evidence",
-  timeoutTrace?.error?.toLowerCase().includes("timed out") === true &&
+  timeoutTrace?.error === "Certified provider request failed temporarily." &&
     timeoutTrace.retryHistory.some((attempt) => attempt.status === "provider_error"),
   timeoutTrace
 );
@@ -559,6 +620,8 @@ const parentAbortContext = createCertifiedRunContext({
 const parentController = new AbortController();
 const parentAbortReason = new Error("User cancelled the certified model call.");
 let parentProviderSignalAborted = false;
+let parentProviderIteratorReturned = false;
+let parentProviderNextCalls = 0;
 let releaseParentProviderStarted: (() => void) | undefined;
 const parentProviderStarted = new Promise<void>((resolve) => {
   releaseParentProviderStarted = resolve;
@@ -581,8 +644,15 @@ const parentAbortError = await expectReject(
       streamChat: ({ params }): AsyncIterable<StreamChunk> => ({
         [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
           return {
-            next: () =>
-              new Promise<IteratorResult<StreamChunk>>((_, reject) => {
+            next: () => {
+              parentProviderNextCalls += 1;
+              if (parentProviderNextCalls === 1) {
+                return Promise.resolve({
+                  done: false,
+                  value: { type: "token", content: "partially consumed output" },
+                });
+              }
+              return new Promise<IteratorResult<StreamChunk>>((_, reject) => {
                 const signal = params.signal;
                 releaseParentProviderStarted?.();
                 if (!signal) return;
@@ -596,7 +666,12 @@ const parentAbortError = await expectReject(
                   return;
                 }
                 signal.addEventListener("abort", onAbort, { once: true });
-              }),
+              });
+            },
+            return: async () => {
+              parentProviderIteratorReturned = true;
+              return { done: true, value: undefined };
+            },
           };
         },
       }),
@@ -612,6 +687,17 @@ check(
   "parent abort reaches the provider signal with the caller reason",
   parentProviderSignalAborted,
   parentProviderSignalAborted
+);
+const parentAbortTrace = parentAbortContext
+  .snapshot()
+  .traces.find((trace) => trace.attemptId === "attempt-parent-abort");
+check(
+  "parent abort settles the iterator before persisting terminal known usage",
+  parentProviderIteratorReturned &&
+    parentAbortTrace?.completedAt !== undefined &&
+    (parentAbortTrace.outputTokens ?? 0) > 0 &&
+    (parentAbortContext.budgetSnapshot?.().outputTokens ?? 0) > 0,
+  { parentProviderIteratorReturned, parentAbortTrace, budget: parentAbortContext.budgetSnapshot?.() }
 );
 
 if (failures === 0) {

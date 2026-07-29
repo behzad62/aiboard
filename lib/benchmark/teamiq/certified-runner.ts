@@ -19,7 +19,6 @@ import type {
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
-  benchmarkVariantKey,
   normalizeBenchmarkReasoningEffort,
 } from "@/lib/benchmark/model-effort";
 import {
@@ -38,6 +37,7 @@ import {
   summarizeToolReliabilityDiagnostics,
 } from "@/lib/benchmark/toolreliability/diagnostics";
 import {
+  benchmarkMemberComparisonKey,
   deriveSoloTeamComposition,
   isSoloTeamComposition,
 } from "./compositions";
@@ -152,7 +152,7 @@ async function expandTeamIqCompositions(
   const byVariant = new Map<string, BenchmarkTeamComposition>();
   for (const team of input.teamCompositions) {
     for (const role of team.roles) {
-      const variantKey = benchmarkVariantKey(role.modelId, role.reasoningEffort);
+      const variantKey = benchmarkMemberComparisonKey(role);
       if (byVariant.has(variantKey)) continue;
       const solo = deriveSoloTeamComposition({
         modelId: role.modelId,

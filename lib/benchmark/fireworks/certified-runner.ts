@@ -11,6 +11,7 @@ import type {
   PersistentCertifiedRunContext,
 } from "@/lib/benchmark/certified/run-context";
 import type { CertifiedRetryRuntime } from "@/lib/benchmark/certified/retry-policy";
+import { FIREWORKS_EFFECTIVE_MAX_TOKENS } from "@/lib/benchmark/certified/effective-max-tokens";
 import { createJsonArtifact } from "@/lib/benchmark/artifacts";
 import { saveBenchmarkTeamComposition } from "@/lib/benchmark/store";
 import type {
@@ -23,13 +24,13 @@ import type {
 } from "@/lib/benchmark/types";
 import { linkTeamLiftBaselines } from "@/lib/benchmark/teamiq/baselines";
 import {
+  benchmarkMemberComparisonKey,
   deriveSoloTeamComposition,
   isSoloTeamComposition,
 } from "@/lib/benchmark/teamiq/compositions";
 import type { ModelPricing } from "@/lib/providers/pricing";
 import type { SelectedModel } from "@/lib/providers/base";
 import {
-  benchmarkVariantKey,
   normalizeBenchmarkReasoningEffort,
 } from "@/lib/benchmark/model-effort";
 import {
@@ -165,7 +166,7 @@ async function expandFireworksCompositions(
   const byVariant = new Map<string, BenchmarkTeamComposition>();
   for (const team of input.teamCompositions) {
     for (const role of team.roles) {
-      const variantKey = benchmarkVariantKey(role.modelId, role.reasoningEffort);
+      const variantKey = benchmarkMemberComparisonKey(role);
       if (byVariant.has(variantKey)) continue;
       const solo = deriveSoloTeamComposition({
         modelId: role.modelId,
@@ -551,7 +552,10 @@ async function callFireworksAction(params: {
       user,
       ...(episode ? { messages: episode.messages } : {}),
       structuredOutput: buildFireworksActionSchema(),
-      maxTokens: params.input.maxTokens ?? role.maxTokens ?? 512,
+      maxTokens:
+        params.input.maxTokens ??
+        role.maxTokens ??
+        FIREWORKS_EFFECTIVE_MAX_TOKENS,
       temperature: 0,
       reasoningEffort: certifiedReasoningEffort(role.reasoningEffort),
       context: params.input.context,
