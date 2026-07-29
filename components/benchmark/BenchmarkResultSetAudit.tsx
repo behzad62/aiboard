@@ -3,13 +3,21 @@
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { redactAbsoluteLocalPaths, redactKnownSecrets } from "@/lib/benchmark/redaction";
-import type { BenchmarkAttemptV2, BenchmarkResultSet } from "@/lib/benchmark/types";
+import {
+  benchmarkConfigurationDisplay,
+  sanitizeBenchmarkDisplayText,
+} from "@/lib/benchmark/configuration-display";
+import type {
+  BenchmarkAttemptV2,
+  BenchmarkModelCallTrace,
+  BenchmarkResultSet,
+} from "@/lib/benchmark/types";
 
 export type BenchmarkResultSetAuditStatus =
   | "Published"
   | "Running"
   | "Provider failed"
+  | "Unpublished"
   | "Cancelled"
   | "Interrupted"
   | "Deleting"
@@ -32,7 +40,11 @@ export interface BenchmarkResultSetAuditRow {
 
 export function buildBenchmarkResultSetAuditRows(
   resultSets: readonly BenchmarkResultSet[],
-  attempts: readonly BenchmarkAttemptV2[]
+  attempts: readonly BenchmarkAttemptV2[],
+  options: {
+    traces?: readonly BenchmarkModelCallTrace[];
+    publishedResultSetIds?: ReadonlySet<string>;
+  } = {}
 ): BenchmarkResultSetAuditRow[] {
   const attemptsByResultSet = new Map<string, BenchmarkAttemptV2[]>();
   const legacyAttempts: BenchmarkAttemptV2[] = [];
@@ -45,27 +57,34 @@ export function buildBenchmarkResultSetAuditRows(
     owned.push(attempt);
     attemptsByResultSet.set(attempt.resultSetId, owned);
   }
+  const tracesByResultSet = new Map<string, BenchmarkModelCallTrace[]>();
+  for (const trace of options.traces ?? []) {
+    if (!trace.resultSetId) continue;
+    const owned = tracesByResultSet.get(trace.resultSetId) ?? [];
+    owned.push(trace);
+    tracesByResultSet.set(trace.resultSetId, owned);
+  }
   const rows = resultSets.map((resultSet): BenchmarkResultSetAuditRow => {
     const owned = attemptsByResultSet.get(resultSet.id) ?? [];
+    const display = benchmarkConfigurationDisplay(resultSet);
+    const usage = auditUsage(
+      owned,
+      tracesByResultSet.get(resultSet.id) ?? [],
+      resultSet
+    );
     return {
       id: resultSet.id,
       resultSet,
-      statusLabel: auditStatus(resultSet),
-      subject: resultSet.configuration.displayName,
-      configuration: configurationLabel(resultSet),
-      tracks: resultSet.configuration.tracks.map((track) => trackLabel(track.track)),
+      statusLabel: auditStatus(resultSet, options.publishedResultSetIds),
+      subject: display.subject,
+      configuration: display.identity,
+      tracks: display.tracks,
       createdAt: resultSet.createdAt,
       terminalAt:
         resultSet.completedAt ?? resultSet.terminalAt ?? null,
-      physicalCalls: owned.reduce((sum, attempt) => sum + attempt.modelCalls, 0),
-      totalTokens:
-        owned.length > 0
-          ? owned.reduce(
-              (sum, attempt) => sum + attempt.inputTokens + attempt.outputTokens,
-              0
-            )
-          : resultSet.metrics?.totalTokens ?? 0,
-      failureMessage: sanitizeAuditText(resultSet.failure?.message ?? ""),
+      physicalCalls: usage.physicalCalls,
+      totalTokens: usage.totalTokens,
+      failureMessage: sanitizeBenchmarkDisplayText(resultSet.failure?.message ?? ""),
       canDelete: resultSet.status !== "deleting",
     };
   });
@@ -120,6 +139,28 @@ export function latestCompletedResultSetIds(
   return new Set(
     [...latestByConfiguration.values()].map((resultSet) => resultSet.id)
   );
+}
+
+export function promotableLatestResultSetIds(
+  resultSets: readonly BenchmarkResultSet[]
+): ReadonlySet<string> {
+  const completedByConfiguration = new Map<string, BenchmarkResultSet[]>();
+  for (const resultSet of resultSets) {
+    if (resultSet.status !== "completed" || !resultSet.completedAt) continue;
+    const group = completedByConfiguration.get(resultSet.configurationKey) ?? [];
+    group.push(resultSet);
+    completedByConfiguration.set(resultSet.configurationKey, group);
+  }
+  const promotable = new Set<string>();
+  for (const group of completedByConfiguration.values()) {
+    group.sort(
+      (left, right) =>
+        Date.parse(right.completedAt!) - Date.parse(left.completedAt!) ||
+        right.id.localeCompare(left.id)
+    );
+    if (group.length > 1) promotable.add(group[0]!.id);
+  }
+  return promotable;
 }
 
 export function BenchmarkResultSetAudit({
@@ -212,8 +253,15 @@ function AuditMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function auditStatus(resultSet: BenchmarkResultSet): BenchmarkResultSetAuditStatus {
-  if (resultSet.status === "completed") return "Published";
+function auditStatus(
+  resultSet: BenchmarkResultSet,
+  publishedResultSetIds: ReadonlySet<string> | undefined
+): BenchmarkResultSetAuditStatus {
+  if (resultSet.status === "completed") {
+    return publishedResultSetIds?.has(resultSet.id) === true
+      ? "Published"
+      : "Unpublished";
+  }
   if (resultSet.status === "pending") return "Running";
   if (resultSet.status === "cancelled") return "Cancelled";
   if (resultSet.status === "deleting") return "Deleting";
@@ -227,24 +275,11 @@ function auditStatus(resultSet: BenchmarkResultSet): BenchmarkResultSetAuditStat
   ) {
     return "Interrupted";
   }
-  return "Provider failed";
-}
-
-function configurationLabel(resultSet: BenchmarkResultSet): string {
-  const configuration = resultSet.configuration;
-  const identity =
-    configuration.subjectKind === "team"
-      ? `${configuration.strategy ?? "team"} · ${configuration.roles
-          .map((role) => `${role.role}: ${role.modelId} · ${role.reasoningEffort}`)
-          .join(", ")}`
-      : `${configuration.providerId ?? "provider"} · ${
-          configuration.modelId ?? configuration.displayName
-        } · ${configuration.reasoningEffort ?? "default"} reasoning`;
-  return sanitizeAuditText(identity);
-}
-
-function sanitizeAuditText(value: string): string {
-  return redactAbsoluteLocalPaths(redactKnownSecrets(value));
+  return kind === "provider" ||
+    code === "provider_unavailable" ||
+    code.startsWith("provider_")
+    ? "Provider failed"
+    : "Unpublished";
 }
 
 function trackLabel(track: string): string {
@@ -274,4 +309,42 @@ function maxDate(values: string[]): string | null {
   return values
     .filter((value) => Number.isFinite(Date.parse(value)))
     .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
+}
+
+function auditUsage(
+  attempts: readonly BenchmarkAttemptV2[],
+  traces: readonly BenchmarkModelCallTrace[],
+  resultSet: BenchmarkResultSet
+): { physicalCalls: number; totalTokens: number } {
+  if (traces.length > 0) {
+    const unique = Array.from(
+      new Map(traces.map((trace) => [trace.id, trace])).values()
+    );
+    return {
+      physicalCalls: unique.length,
+      totalTokens: unique.reduce(
+        (sum, trace) =>
+          sum +
+          (trace.totalTokens ??
+            (trace.inputTokens ?? 0) + (trace.outputTokens ?? 0)),
+        0
+      ),
+    };
+  }
+  if (attempts.length > 0) {
+    return {
+      physicalCalls: attempts.reduce(
+        (sum, attempt) => sum + attempt.modelCalls,
+        0
+      ),
+      totalTokens: attempts.reduce(
+        (sum, attempt) => sum + attempt.inputTokens + attempt.outputTokens,
+        0
+      ),
+    };
+  }
+  return {
+    physicalCalls: 0,
+    totalTokens: resultSet.metrics?.totalTokens ?? 0,
+  };
 }

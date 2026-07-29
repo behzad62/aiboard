@@ -40,6 +40,7 @@ import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persi
 import { reconcileStaleBenchmarkResultSets } from "@/lib/benchmark/certified/result-set-publication";
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
+import { benchmarkConfigurationDisplay } from "@/lib/benchmark/configuration-display";
 import type { CertifiedFailureDetail } from "@/lib/benchmark/certified/dashboard-selectors";
 import {
   buildBenchmarkResultSetAuditRows,
@@ -213,7 +214,17 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       )
     );
     setResultSetAuditRows(
-      buildBenchmarkResultSetAuditRows(resultSets, benchmarkAttemptsV2)
+      buildBenchmarkResultSetAuditRows(resultSets, benchmarkAttemptsV2, {
+        traces: benchmarkTraces,
+        publishedResultSetIds: new Set([
+          ...certifiedDashboardData.leaderboard.flatMap((row) =>
+            row.resultSetId ? [row.resultSetId] : []
+          ),
+          ...certifiedDashboardData.resultHistory.flatMap((series) =>
+            series.older.map((row) => row.resultSetId)
+          ),
+        ]),
+      })
     );
     setSuiteCount(benchmarkSuites.length);
     setTraceCount(benchmarkTraces.length);
@@ -303,6 +314,7 @@ export function withCertifiedDeleteMetadata(
   );
   const attemptsByTeam = new Map<string, BenchmarkAttemptV2[]>();
   const teamById = new Map(teams.map((team) => [team.id, team]));
+  const resultSetById = new Map(resultSets.map((resultSet) => [resultSet.id, resultSet]));
   for (const attempt of certifiedAttempts) {
     const list = attemptsByTeam.get(attempt.teamCompositionId) ?? [];
     list.push(attempt);
@@ -330,6 +342,9 @@ export function withCertifiedDeleteMetadata(
       .find((candidate) => candidate !== undefined);
     const failureDetails = certifiedFailureDetails(teamAttempts, failures);
     const failedAttemptCountByTrack = failedAttemptCountsByTrack(teamAttempts);
+    const resultSet = row.resultSetId
+      ? resultSetById.get(row.resultSetId)
+      : undefined;
     return {
       ...row,
       latestAttemptId: latest?.id,
@@ -359,6 +374,9 @@ export function withCertifiedDeleteMetadata(
       failureDetails,
       failedAttemptCount: countFailedAttempts(teamAttempts),
       failedAttemptCountByTrack,
+      configurationDetails: resultSet
+        ? benchmarkConfigurationDisplay(resultSet).concise
+        : undefined,
     };
   };
 

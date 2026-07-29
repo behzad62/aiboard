@@ -184,6 +184,11 @@ export function DecisionLeaderboard({
                             {row.attempts} scored attempt
                             {row.attempts === 1 ? "" : "s"}
                           </div>
+                          {row.configurationDetails && (
+                            <p className="mt-0.5 max-w-xl break-words text-[11px] leading-snug text-muted-foreground">
+                              {row.configurationDetails}
+                            </p>
+                          )}
                           <div className="mt-0.5 text-xs text-muted-foreground">
                             {formatCompletion(row.completedAt)}
                           </div>
@@ -343,6 +348,11 @@ export function DecisionLeaderboard({
                       <div className="mt-2">
                         <VariantRosterBadges details={row.reasoningEffortDetails} />
                       </div>
+                    )}
+                    {row.configurationDetails && (
+                      <p className="mt-2 break-words text-[11px] leading-snug text-muted-foreground">
+                        {row.configurationDetails}
+                      </p>
                     )}
                     <FailureEvidenceNotice row={row} />
                     <div className="mt-2 text-xs text-muted-foreground">

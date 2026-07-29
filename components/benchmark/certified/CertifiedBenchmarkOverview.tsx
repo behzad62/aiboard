@@ -25,6 +25,7 @@ import {
   WorkBenchRoleLeaderboards,
 } from "@/components/benchmark/certified/CertifiedResultTables";
 import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
+import { promotableLatestResultSetIds } from "@/components/benchmark/BenchmarkResultSetAudit";
 import type { BenchmarkResultSet } from "@/lib/benchmark/types";
 import {
   normalizeTrack,
@@ -105,7 +106,7 @@ export function CertifiedBenchmarkOverview({
   const deletion = useBenchmarkResultSetDeletion({
     onRefresh: onRefresh ?? (async () => undefined),
     setMessage: setMessage ?? (() => undefined),
-    latestResultSetIds: new Set(leaderboard.map((row) => row.resultSetId)),
+    promotableResultSetIds: promotableLatestResultSetIds(resultSets),
   });
   const deleteResultSet = (resultSetId: string, label: string) => {
     const resultSet = resultSetById.get(resultSetId);

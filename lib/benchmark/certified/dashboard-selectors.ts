@@ -174,6 +174,7 @@ export interface CertifiedLeaderboardRow {
   failureDetails: CertifiedFailureDetail[];
   failedAttemptCount?: number | null;
   failedAttemptCountByTrack?: Record<string, number>;
+  configurationDetails?: string;
   resultSetId: string;
   executionId: string;
   configurationKey: string;
@@ -324,6 +325,7 @@ export function readLeaderboard(
             failureDetails: meta.failureDetails,
             failedAttemptCount: meta.failedAttemptCount,
             failedAttemptCountByTrack: meta.failedAttemptCountByTrack,
+            configurationDetails: meta.configurationDetails,
             resultSetId: meta.resultSetId,
             executionId: meta.executionId,
             configurationKey: meta.configurationKey,
@@ -511,6 +513,7 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     failedAttemptCountByTrack: readNumberByTrack(
       row.failedAttemptCountByTrack
     ),
+    configurationDetails: readString(row.configurationDetails) ?? undefined,
     resultSetId: readString(row.resultSetId) ?? id,
     executionId: readString(row.executionId) ?? "",
     configurationKey: readString(row.configurationKey) ?? "",

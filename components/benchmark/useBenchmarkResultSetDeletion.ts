@@ -7,7 +7,7 @@ import type { BenchmarkResultSet } from "@/lib/benchmark/types";
 export function useBenchmarkResultSetDeletion(input: {
   onRefresh: () => Promise<void>;
   setMessage: (message: string | null) => void;
-  latestResultSetIds?: ReadonlySet<string>;
+  promotableResultSetIds?: ReadonlySet<string>;
 }): {
   deletingIds: ReadonlySet<string>;
   deleteInFlight: boolean;
@@ -34,7 +34,7 @@ export function useBenchmarkResultSetDeletion(input: {
     ) {
       return;
     }
-    const promoted = input.latestResultSetIds?.has(resultSet.id) === true;
+    const promoted = input.promotableResultSetIds?.has(resultSet.id) === true;
     inFlight.current = true;
     setDeleteInFlight(true);
     setDeletingIds((current) => new Set(current).add(resultSet.id));

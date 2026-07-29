@@ -87,6 +87,11 @@ export function ResultHistoryRows({
                   <div className="mt-0.5 text-xs">
                     {formatCompletion(row.completedAt)}
                   </div>
+                  {row.configurationDetails && (
+                    <div className="mt-1 max-w-xl break-words text-[11px] leading-snug">
+                      {row.configurationDetails}
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-3 text-right font-medium tabular-nums text-foreground">
                   {formatNormalizedScore(row.overallScore)}
@@ -169,6 +174,11 @@ export function ResultHistoryRows({
               <div className="mt-0.5 text-xs text-muted-foreground">
                 {formatCompletion(row.completedAt)}
               </div>
+              {row.configurationDetails && (
+                <p className="mt-1 break-words text-[11px] leading-snug text-muted-foreground">
+                  {row.configurationDetails}
+                </p>
+              )}
               <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
                 <HistoryMetric label="Overall index" value={formatNormalizedScore(row.overallScore)} />
                 <HistoryMetric label="Pass" value={formatPercent(row.passRate)} />

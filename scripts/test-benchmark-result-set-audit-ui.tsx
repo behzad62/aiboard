@@ -8,6 +8,7 @@ import {
 } from "../components/benchmark/BenchmarkResultSetAudit";
 import type {
   BenchmarkAttemptV2,
+  BenchmarkModelCallTrace,
   BenchmarkResultSet,
 } from "../lib/benchmark/types";
 
@@ -84,10 +85,16 @@ function attempt(resultSetId: string): BenchmarkAttemptV2 {
 const sets = [
   resultSet("pending", "pending"),
   resultSet("completed", "completed"),
+  resultSet("unpublished-completed", "completed"),
   resultSet("provider", "failed", {
     kind: "provider",
     code: "provider_unavailable",
     message: "Provider unavailable. Authorization: Bearer secret-token-value",
+  }),
+  resultSet("infrastructure", "failed", {
+    kind: "infrastructure",
+    code: "persistence_failed",
+    message: "Could not persist the result set.",
   }),
   resultSet("cancelled", "cancelled"),
   resultSet("interrupted", "failed", {
@@ -99,17 +106,94 @@ const sets = [
 ];
 const attempts = [...sets.map((set) => attempt(set.id)), attempt("legacy")];
 attempts[attempts.length - 1]!.resultSetId = undefined;
+const infrastructureSet = sets.find((set) => set.id === "infrastructure")!;
+infrastructureSet.configuration = {
+  subjectKind: "team",
+  displayName: "Builder team",
+  strategy: "architect_worker",
+  roles: [
+    {
+      role: "architect",
+      slot: "architect",
+      providerId: "account",
+      modelId: "architect-model",
+      reasoningEffort: "high",
+      maxTokens: 12288,
+    },
+    {
+      role: "worker",
+      slot: "worker",
+      providerId: "local",
+      modelId: "worker-model",
+      reasoningEffort: "medium",
+      maxTokens: 4096,
+    },
+  ],
+  tracks: infrastructureSet.configuration.tracks,
+};
 
-const rows = buildBenchmarkResultSetAuditRows(sets, attempts);
+const traceOnlySet = resultSet("trace-only", "failed", {
+  kind: "provider",
+  code: "provider_unavailable",
+  message: "Provider unavailable.",
+});
+traceOnlySet.configuration.displayName =
+  "Authorization: Bearer secret-token-value C:\\Users\\someone\\private-model";
+traceOnlySet.configuration.modelId =
+  "C:\\Users\\someone\\models\\private-model";
+traceOnlySet.configuration.tracks = [
+  {
+    track: "gameiq",
+    suiteId: "suite-v2",
+    caseManifest: [
+      {
+        caseId: "case-a",
+        caseVersion: "case-v3",
+        scoringVersion: "score-v5",
+      },
+    ],
+    maxTokens: 8192,
+  },
+];
+const traceOnlyTrace: BenchmarkModelCallTrace = {
+  id: "trace-only-call",
+  resultSetId: traceOnlySet.id,
+  runId: traceOnlySet.anchorRunId,
+  modelId: "private-model",
+  providerId: "account",
+  startedAt: traceOnlySet.createdAt,
+  completedAt: traceOnlySet.terminalAt,
+  inputTokens: 321,
+  outputTokens: 79,
+  totalTokens: 400,
+  retryHistory: [
+    {
+      attempt: 1,
+      status: "provider_error",
+      message: "Provider unavailable.",
+    },
+  ],
+};
+const rows = buildBenchmarkResultSetAuditRows(
+  [...sets, traceOnlySet],
+  attempts,
+  {
+    traces: [traceOnlyTrace],
+    publishedResultSetIds: new Set(["completed"]),
+  }
+);
 assert.deepEqual(
   rows.map((row) => row.statusLabel),
   [
     "Running",
     "Published",
+    "Unpublished",
     "Provider failed",
+    "Unpublished",
     "Cancelled",
     "Interrupted",
     "Deleting",
+    "Provider failed",
     "Legacy evidence",
   ]
 );
@@ -119,7 +203,22 @@ assert.equal(rows.at(-1)!.canDelete, false);
 assert.equal(rows.find((row) => row.id === "provider")!.canDelete, true);
 assert.ok(!rows.find((row) => row.id === "provider")!.failureMessage.includes("secret-token-value"));
 assert.ok(!rows.find((row) => row.id === "interrupted")!.failureMessage.includes("C:\\Users"));
-assert.deepEqual([...latestCompletedResultSetIds(rows)], ["completed"]);
+assert.equal(rows.find((row) => row.id === "trace-only")!.physicalCalls, 1);
+assert.equal(rows.find((row) => row.id === "trace-only")!.totalTokens, 400);
+assert.match(
+  rows.find((row) => row.id === "infrastructure")!.configuration,
+  /architect: account\/architect-model.*high reasoning.*12,288 tokens.*worker: local\/worker-model.*4,096 tokens/
+);
+assert.ok(!rows.find((row) => row.id === "trace-only")!.subject.includes("secret-token-value"));
+assert.ok(!rows.find((row) => row.id === "trace-only")!.subject.includes("C:\\Users"));
+assert.match(
+  rows.find((row) => row.id === "trace-only")!.tracks.join(" "),
+  /suite-v2.*8,192.*case-a@case-v3.*score-v5/
+);
+assert.deepEqual([...latestCompletedResultSetIds(rows)].sort(), [
+  "completed",
+  "unpublished-completed",
+]);
 
 const markup = renderToStaticMarkup(
   <BenchmarkResultSetAudit
@@ -131,6 +230,7 @@ const markup = renderToStaticMarkup(
 );
 for (const label of [
   "Published",
+  "Unpublished",
   "Running",
   "Provider failed",
   "Cancelled",

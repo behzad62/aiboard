@@ -56,14 +56,19 @@ export function BenchmarkDecisionDashboard({
     () => new Map(resultSets.map((resultSet) => [resultSet.id, resultSet])),
     [resultSets]
   );
-  const latestResultSetIds = useMemo(
-    () => new Set(allRows.map((row) => row.resultSetId)),
-    [allRows]
+  const promotableResultSetIds = useMemo(
+    () =>
+      new Set(
+        history
+          .filter((series) => series.older.length > 0)
+          .map((series) => series.latestResultSetId)
+      ),
+    [history]
   );
   const deletion = useBenchmarkResultSetDeletion({
     onRefresh,
     setMessage,
-    latestResultSetIds,
+    promotableResultSetIds,
   });
 
   return (
@@ -108,7 +113,7 @@ export function BenchmarkDecisionDashboard({
             const resultSet = resultSetById.get(row.resultSetId);
             if (resultSet) void deletion.requestDelete(resultSet, row.label);
           }}
-          hasRawEvidence={resultSets.length > 0}
+          hasRawEvidence={hasBenchmarkRawEvidence(certified)}
         />
       </section>
 
@@ -127,6 +132,28 @@ export function BenchmarkDecisionDashboard({
         <DecisionTradeoffCharts rows={filteredRows} />
       </section>
     </div>
+  );
+}
+
+export function hasBenchmarkRawEvidence(certified: unknown): boolean {
+  if (!certified || typeof certified !== "object") return false;
+  const record = certified as {
+    resultSets?: unknown;
+    audit?: {
+      completedSnapshots?: unknown;
+      unpublishedSnapshots?: unknown;
+      legacyAttempts?: unknown;
+    };
+  };
+  if (Array.isArray(record.resultSets) && record.resultSets.length > 0) {
+    return true;
+  }
+  return [
+    record.audit?.completedSnapshots,
+    record.audit?.unpublishedSnapshots,
+    record.audit?.legacyAttempts,
+  ].some(
+    (value) => typeof value === "number" && Number.isFinite(value) && value > 0
   );
 }
 

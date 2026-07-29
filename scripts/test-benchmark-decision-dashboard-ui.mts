@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DecisionLeaderboard } from "../components/benchmark/results/DecisionLeaderboard";
+import { hasBenchmarkRawEvidence } from "../components/benchmark/results/BenchmarkDecisionDashboard";
 import { DecisionVerdicts } from "../components/benchmark/results/DecisionVerdicts";
 import {
   DecisionTradeoffPointShape,
@@ -71,6 +72,18 @@ function contrastRatio(
 function source(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
+
+check(
+  "legacy-only certified evidence selects the Data-directed Results empty state",
+  hasBenchmarkRawEvidence({
+    audit: {
+      completedSnapshots: 0,
+      unpublishedSnapshots: 0,
+      legacyAttempts: 1,
+    },
+    resultSets: [],
+  })
+);
 
 const dashboard = source("components/benchmark/results/BenchmarkDecisionDashboard.tsx");
 const verdicts = source("components/benchmark/results/DecisionVerdicts.tsx");

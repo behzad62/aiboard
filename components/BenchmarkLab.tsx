@@ -18,7 +18,7 @@ import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashbo
 import { useBenchmarkReportActions } from "@/components/benchmark/useBenchmarkReportActions";
 import {
   BenchmarkResultSetAudit,
-  latestCompletedResultSetIds,
+  promotableLatestResultSetIds,
 } from "@/components/benchmark/BenchmarkResultSetAudit";
 import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
 
@@ -58,7 +58,9 @@ export function BenchmarkLab() {
   const resultSetDeletion = useBenchmarkResultSetDeletion({
     onRefresh: refresh,
     setMessage,
-    latestResultSetIds: latestCompletedResultSetIds(resultSetAuditRows),
+    promotableResultSetIds: promotableLatestResultSetIds(
+      resultSetAuditRows.flatMap((row) => (row.resultSet ? [row.resultSet] : []))
+    ),
   });
 
   if (locked) {

@@ -54,6 +54,8 @@ function row(id: string, completedAt: string, score: number): DecisionRow {
     providerIds: ["account"],
     reasoningEfforts: ["medium"],
     failureDetails: [],
+    configurationDetails:
+      "account · account:gpt-5.6-luna · medium reasoning · max 4,096 tokens · GameIQ suite-v2 / case-a@case-v3 / score-v5",
   };
 }
 
@@ -143,6 +145,10 @@ assert.ok(latestMarkup.includes("Pass -3 pp"));
 assert.ok(latestMarkup.includes("Overall higher by 7 points"));
 assert.ok(latestMarkup.includes("Pass lower by 3 percentage points"));
 assert.ok(latestMarkup.includes("8 runs"));
+assert.ok(latestMarkup.includes("max 4,096 tokens"));
+assert.ok(latestMarkup.includes("suite-v2"));
+assert.ok(latestMarkup.includes("case-a@case-v3"));
+assert.ok(latestMarkup.includes("score-v5"));
 assert.ok(latestMarkup.includes('aria-expanded="false"'));
 assert.ok(
   latestMarkup.includes(

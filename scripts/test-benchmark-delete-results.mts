@@ -36,6 +36,7 @@ import type {
   BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
 import { selectBenchmarkResultSeries } from "../lib/benchmark/certified/result-set-selectors";
+import { promotableLatestResultSetIds } from "../components/benchmark/BenchmarkResultSetAudit";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -464,6 +465,16 @@ check(
   "deleting latest promotes the previous completed snapshot",
   promotedSeries[0]?.latest.id === olderSnapshot.id,
   promotedSeries
+);
+check(
+  "promotion copy is eligible only when a completed predecessor exists",
+  promotableLatestResultSetIds([olderSnapshot, latestSnapshot]).has(
+    latestSnapshot.id
+  )
+);
+check(
+  "sole latest snapshot does not claim predecessor promotion",
+  !promotableLatestResultSetIds([latestSnapshot]).has(latestSnapshot.id)
 );
 
 if (failures > 0) {
