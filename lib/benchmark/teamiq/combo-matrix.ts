@@ -29,6 +29,11 @@ export interface TeamIqComboMatrixInput {
   teamCompositions: BenchmarkTeamComposition[];
   track?: BenchmarkAttemptV2["track"];
   includeSolos?: boolean;
+  executionIdByResultSetId?: ReadonlyMap<string, string>;
+  comparisonKeysByResultSetId?: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string>
+  >;
 }
 
 export interface TeamIqComboMatrixRow {
@@ -109,6 +114,8 @@ export function buildTeamIqComboMatrixRows(
       teamAttempts,
       teamCompositions: input.teamCompositions,
       track: input.track,
+      executionIdByResultSetId: input.executionIdByResultSetId,
+      comparisonKeysByResultSetId: input.comparisonKeysByResultSetId,
     }).map((link) => [link.teamAttempt.id, link])
   );
   const groups = new Map<string, MutableComboRow>();

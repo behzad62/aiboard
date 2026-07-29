@@ -1,4 +1,5 @@
 import {
+  buildCertifiedBenchmarkDashboardData,
   isScoredCertifiedAttempt,
   type BenchmarkDashboardData,
 } from "@/lib/benchmark/metrics";
@@ -128,7 +129,31 @@ function appendCertifiedReportSections(
   lines: string[],
   bundle: BenchmarkReportBundleV2
 ): void {
-  const certifiedAttempts = bundle.attemptsV2.filter(isCertifiedModeAttempt);
+  const certifiedDashboard = buildCertifiedBenchmarkDashboardData({
+    resultSets: bundle.resultSets ?? [],
+    runs: bundle.runs,
+    caseV2: bundle.caseV2,
+    attemptsV2: bundle.attemptsV2,
+    verifierResults: bundle.verifierResults,
+    artifacts: bundle.artifacts,
+    failures: bundle.failures,
+    traces: bundle.traces,
+    runEvents: bundle.runEvents,
+    toolCallTraces: bundle.toolCallTraces,
+    teamCompositions: bundle.teamCompositions,
+    harnessCertifications: bundle.harnessCertifications,
+  });
+  const latestResultSetIds = new Set(
+    certifiedDashboard.leaderboard.flatMap((row) =>
+      row.resultSetId ? [row.resultSetId] : []
+    )
+  );
+  const certifiedAttempts = bundle.attemptsV2.filter(
+    (attempt) =>
+      isCertifiedModeAttempt(attempt) &&
+      attempt.resultSetId !== undefined &&
+      latestResultSetIds.has(attempt.resultSetId)
+  );
   const scoredAttempts = certifiedAttempts.filter(isScoredCertifiedAttempt);
   const excludedAttempts = certifiedAttempts.filter(
     (attempt) => !isScoredCertifiedAttempt(attempt)
@@ -201,6 +226,37 @@ function appendCertifiedReportSections(
   lines.push(`- Average verified quality: ${formatNormalizedScore(averageQuality)}`);
   lines.push(`- Average cost: ${formatUsd(averageCost)}`);
   lines.push(`- Average duration: ${formatDuration(averageDuration)}`);
+  lines.push("");
+
+  lines.push("## Latest Certified Snapshots");
+  if (certifiedDashboard.leaderboard.length === 0) {
+    lines.push("- No validated completed benchmark snapshots recorded.");
+  } else {
+    for (const row of certifiedDashboard.leaderboard) {
+      lines.push(
+        `- ${row.resultSetId}: ${row.displayName}, completed ${row.completedAt}, overall ${formatNormalizedScore(
+          row.overallScore
+        )}, pass rate ${formatPct(row.verifiedPassRate)}`
+      );
+    }
+  }
+  lines.push("");
+
+  lines.push("## Certified Snapshot History");
+  const historyRows = certifiedDashboard.resultHistory.flatMap(
+    (series) => series.older
+  );
+  if (historyRows.length === 0) {
+    lines.push("- No older validated completed snapshots recorded.");
+  } else {
+    for (const row of historyRows) {
+      lines.push(
+        `- ${row.resultSetId}: ${row.displayName}, completed ${row.completedAt}, overall ${formatNormalizedScore(
+          row.overallScore
+        )}, pass rate ${formatPct(row.verifiedPassRate)}`
+      );
+    }
+  }
   lines.push("");
 
   appendTopCertifiedTeams(lines, bundle, scoredAttempts);

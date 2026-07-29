@@ -104,7 +104,8 @@ export function dedupeCrossTrackAttempts(
     }
     const persistedTeamId = attempt.teamCompositionId ?? "unknown";
     const teamId = teamIdentityById.get(persistedTeamId) ?? persistedTeamId;
-    const key = `${teamId}::${decisionId}`;
+    const resultSetId = attempt.resultSetId ?? "";
+    const key = `${resultSetId}::${teamId}::${decisionId}`;
     const group = groups.get(key);
     if (!group) {
       groups.set(key, { winningTrack: attempt.track, attempts: [attempt] });
@@ -174,6 +175,8 @@ interface MutableCertifiedRunScore {
   displayName: string;
   modelIds: string[];
   modelVariantKeys: string[];
+  resultSetId?: string;
+  executionId?: string;
   isTeam: boolean;
   tracks: Set<string>;
   // Per-track quality accumulators feeding the equal-weighted overall score.
@@ -182,7 +185,12 @@ interface MutableCertifiedRunScore {
   // and then take the simple (equal-weight) mean of those track averages.
   trackQuality: Map<
     string,
-    { attempts: number; passed: number; verifiedQualitySum: number }
+    {
+      attempts: number;
+      passed: number;
+      verifiedQualitySum: number;
+      comparisonKey?: string;
+    }
   >;
   caseIds: Set<string>;
   // Case ids in first-appearance order across this row's attempts. The Set above
@@ -214,6 +222,12 @@ export function aggregateCertifiedRunScores(
   );
   const teams = Array.isArray(input) ? [] : input.teamCompositions ?? [];
   const cases = Array.isArray(input) ? [] : input.cases ?? [];
+  const executionIdByResultSetId = Array.isArray(input)
+    ? undefined
+    : input.executionIdByResultSetId;
+  const trackComparisonKeysByResultSetId = Array.isArray(input)
+    ? undefined
+    : input.trackComparisonKeysByResultSetId;
   const teamIdentityById = new Map(
     teams.map((team) => [team.id, canonicalTeamCompositionKey(team)])
   );
@@ -223,8 +237,9 @@ export function aggregateCertifiedRunScores(
   const teamCompositionIdsByIdentity = new Map<string, Set<string>>();
   for (const attempt of rawAttempts as AttemptLike[]) {
     const persistedTeamId = attempt.teamCompositionId ?? "unknown";
-    const identity =
-      teamIdentityById.get(persistedTeamId) ?? persistedTeamId;
+    const identity = attempt.resultSetId
+      ? `result-set:${attempt.resultSetId}`
+      : teamIdentityById.get(persistedTeamId) ?? persistedTeamId;
     const representedIds =
       teamCompositionIdsByIdentity.get(identity) ?? new Set<string>();
     representedIds.add(persistedTeamId);
@@ -240,12 +255,18 @@ export function aggregateCertifiedRunScores(
   for (const attempt of attempts as AttemptLike[]) {
     const teamId = attempt.teamCompositionId ?? "unknown";
     const team = teamById.get(teamId);
-    const groupKey = teamIdentityById.get(teamId) ?? teamId;
+    const groupKey = attempt.resultSetId
+      ? `result-set:${attempt.resultSetId}`
+      : teamIdentityById.get(teamId) ?? teamId;
     const group = groupFor(
       groups,
       groupKey,
       teamId,
-      team
+      team,
+      attempt.resultSetId,
+      attempt.resultSetId
+        ? executionIdByResultSetId?.get(attempt.resultSetId)
+        : undefined
     );
     for (const representedId of
       teamCompositionIdsByIdentity.get(groupKey) ?? [teamId]) {
@@ -284,7 +305,16 @@ export function aggregateCertifiedRunScores(
     group.tracks.add(track);
     const trackQuality =
       group.trackQuality.get(track) ??
-      { attempts: 0, passed: 0, verifiedQualitySum: 0 };
+      {
+        attempts: 0,
+        passed: 0,
+        verifiedQualitySum: 0,
+        comparisonKey: attempt.resultSetId
+          ? trackComparisonKeysByResultSetId
+              ?.get(attempt.resultSetId)
+              ?.get(track)
+          : undefined,
+      };
     trackQuality.attempts += 1;
     if (attemptPassed) trackQuality.passed += 1;
     trackQuality.verifiedQualitySum += verifiedQuality;
@@ -441,7 +471,9 @@ function groupFor(
   groups: Map<string, MutableCertifiedRunScore>,
   groupKey: string,
   teamId: string,
-  team: TeamLike | undefined
+  team: TeamLike | undefined,
+  resultSetId?: string,
+  executionId?: string
 ): MutableCertifiedRunScore {
   const existing = groups.get(groupKey);
   if (existing) return existing;
@@ -474,6 +506,8 @@ function groupFor(
     displayName,
     modelIds,
     modelVariantKeys,
+    resultSetId,
+    executionId,
     isTeam,
     tracks: new Set(),
     trackQuality: new Map(),
@@ -531,6 +565,7 @@ function finalizeGroup(
   const trackBreakdown = Array.from(group.trackQuality.entries())
     .map(([track, acc]) => ({
       track,
+      comparisonKey: acc.comparisonKey,
       attempts: acc.attempts,
       passed: acc.passed,
       verifiedPassRate: rate(acc.passed, acc.attempts),
@@ -593,6 +628,8 @@ function finalizeGroup(
     teamLift: null,
     teamLiftLabel: null,
     teamLiftTracks: [],
+    resultSetId: group.resultSetId,
+    executionId: group.executionId,
   };
 }
 
@@ -601,15 +638,24 @@ function applyTeamLift(rows: CertifiedRunScore[]): void {
   for (const row of rows) {
     if (row.isTeam || row.modelVariantKeys.length !== 1) continue;
     const variantKey = row.modelVariantKeys[0];
-    const existing = soloScoreByVariant.get(variantKey);
+    const comparisonKey = `${row.executionId ?? ""}\u0000${variantKey}`;
+    const existing = soloScoreByVariant.get(comparisonKey);
     if (!existing || row.jobSuccessScore > existing.jobSuccessScore) {
-      soloScoreByVariant.set(variantKey, row);
+      soloScoreByVariant.set(comparisonKey, row);
     }
   }
 
   for (const row of rows) {
     if (!row.isTeam) continue;
-    const lift = computeComparableTrackTeamLift(row, soloScoreByVariant);
+    const scopedSolos = new Map(
+      row.modelVariantKeys.flatMap((variantKey) => {
+        const solo = soloScoreByVariant.get(
+          `${row.executionId ?? ""}\u0000${variantKey}`
+        );
+        return solo ? [[variantKey, solo] as const] : [];
+      })
+    );
+    const lift = computeComparableTrackTeamLift(row, scopedSolos);
     if (!lift) continue;
     row.bestSoloScore = lift.bestSoloScore;
     row.teamLift = lift.teamLift;

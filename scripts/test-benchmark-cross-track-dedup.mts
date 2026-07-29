@@ -16,6 +16,7 @@ import {
   dedupeCrossTrackAttempts,
 } from "../lib/benchmark/scoring/aggregate";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -178,13 +179,13 @@ check(
 );
 
 // Full dashboard: per-track trackRows keep BOTH samples; summary de-dups.
-const dashboard = buildCertifiedBenchmarkDashboardData({
+const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: cases,
   attemptsV2: attempts,
   verifierResults: [],
   teamCompositions: [teamX, teamY],
   harnessCertifications: [],
-});
+}));
 const gameiqTrackRow = dashboard.trackRows.find((r) => r.track === "gameiq");
 const teamiqTrackRow = dashboard.trackRows.find((r) => r.track === "teamiq");
 check(
@@ -320,13 +321,13 @@ const mixedAttempts: BenchmarkAttemptV2[] = [
     efficiencyScore: 10,
   }),
 ];
-const mixedDashboard = buildCertifiedBenchmarkDashboardData({
+const mixedDashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: cases,
   attemptsV2: mixedAttempts,
   verifierResults: [],
   teamCompositions: [teamX],
   harnessCertifications: [],
-});
+}));
 check(
   "summary pass rate uses deduped decisions (drops teamiq re-wrap sample)",
   mixedDashboard.summary.verifiedPassRate === 1,

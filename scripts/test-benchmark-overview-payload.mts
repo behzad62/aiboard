@@ -8,6 +8,7 @@
    that they are present and populated so a lib refactor can't silently blank the
    verdict card or the token efficiency axis. */
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamComposition,
@@ -77,7 +78,7 @@ function attempt(
 const teamPriced = soloTeam("solo-priced", "prov:priced");
 const teamTokenOnly = soloTeam("solo-token", "prov:token");
 
-const dashboard = buildCertifiedBenchmarkDashboardData({
+const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [],
   attemptsV2: [
     // Priced model, higher quality, three attempts -> confident winner.
@@ -114,7 +115,7 @@ const dashboard = buildCertifiedBenchmarkDashboardData({
   verifierResults: [],
   teamCompositions: [teamPriced, teamTokenOnly],
   harnessCertifications: [],
-});
+}));
 
 check(
   "dashboard payload carries a modelIntelligence array",

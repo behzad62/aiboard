@@ -1,7 +1,14 @@
 import type {
+  BenchmarkArtifact,
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
+  BenchmarkFailure,
+  BenchmarkModelCallTrace,
+  BenchmarkResultSet,
+  BenchmarkRun,
+  BenchmarkRunEvent,
   BenchmarkTeamComposition,
+  BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
@@ -95,6 +102,11 @@ export interface CertifiedAggregateInput {
   cases?: BenchmarkCaseV2[];
   teamCompositions?: BenchmarkTeamComposition[];
   verifierResults?: BenchmarkVerifierResult[];
+  executionIdByResultSetId?: ReadonlyMap<string, string>;
+  trackComparisonKeysByResultSetId?: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string>
+  >;
 }
 
 export interface CertifiedRunScore {
@@ -147,6 +159,7 @@ export interface CertifiedRunScore {
    */
   trackBreakdown: Array<{
     track: string;
+    comparisonKey?: string;
     attempts: number;
     passed: number;
     verifiedPassRate: number | null;
@@ -183,6 +196,28 @@ export interface CertifiedRunScore {
   teamLift: number | null;
   teamLiftLabel: TeamLiftLabel | null;
   teamLiftTracks: string[];
+  resultSetId?: string;
+  executionId?: string;
+  configurationKey?: string;
+  completedAt?: string;
+  overallDelta?: number | null;
+  passRateDelta?: number | null;
+  historyCount?: number;
+}
+
+export interface CertifiedResultHistoryRow extends CertifiedRunScore {
+  resultSetId: string;
+  executionId: string;
+  configurationKey: string;
+  completedAt: string;
+}
+
+export interface CertifiedResultHistorySeriesData {
+  configurationKey: string;
+  latestResultSetId: string;
+  overallDelta: number | null;
+  passRateDelta: number | null;
+  older: CertifiedResultHistoryRow[];
 }
 
 export interface WorkBenchRoleLeaderboardRow {
@@ -202,9 +237,16 @@ export interface WorkBenchRoleLeaderboardRow {
 }
 
 export interface CertifiedBenchmarkDashboardInput {
+  resultSets: BenchmarkResultSet[];
+  runs: BenchmarkRun[];
   caseV2: BenchmarkCaseV2[];
   attemptsV2: BenchmarkAttemptV2[];
   verifierResults: BenchmarkVerifierResult[];
+  artifacts: BenchmarkArtifact[];
+  failures: BenchmarkFailure[];
+  traces: BenchmarkModelCallTrace[];
+  runEvents: BenchmarkRunEvent[];
+  toolCallTraces: BenchmarkToolCallTrace[];
   teamCompositions: BenchmarkTeamComposition[];
   harnessCertifications: HarnessCertificationResult[];
 }
@@ -290,6 +332,12 @@ export interface CertifiedBenchmarkDashboardData {
       averageVerifiedQuality: number;
     }>;
   }>;
+  resultHistory: CertifiedResultHistorySeriesData[];
+  audit: {
+    completedSnapshots: number;
+    unpublishedSnapshots: number;
+    legacyAttempts: number;
+  };
 }
 
 export function clamp(value: number, min: number, max: number): number {

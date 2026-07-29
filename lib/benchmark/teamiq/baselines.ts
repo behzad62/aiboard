@@ -14,6 +14,11 @@ export interface TeamIqBaselineInput {
   teamAttempts: BenchmarkAttemptV2[];
   teamCompositions: BenchmarkTeamComposition[];
   track?: BenchmarkAttemptV2["track"];
+  executionIdByResultSetId?: ReadonlyMap<string, string>;
+  comparisonKeysByResultSetId?: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string>
+  >;
 }
 
 export interface TeamIqBaselineLink {
@@ -56,7 +61,13 @@ export function linkTeamLiftBaselines(
 
     const memberSoloAttempts = variantKeys
       .map((variantKey) =>
-        bestSoloAttemptForVariant(soloCandidates, variantKey, teamAttempt)
+        bestSoloAttemptForVariant(
+          soloCandidates,
+          variantKey,
+          teamAttempt,
+          input.executionIdByResultSetId,
+          input.comparisonKeysByResultSetId
+        )
       )
       .filter((attempt): attempt is BenchmarkAttemptV2 => attempt !== null);
     if (memberSoloAttempts.length !== variantKeys.length) continue;
@@ -88,11 +99,43 @@ export function linkTeamLiftBaselines(
 function bestSoloAttemptForVariant(
   candidates: SoloCandidate[],
   variantKey: string,
-  teamAttempt: BenchmarkAttemptV2
+  teamAttempt: BenchmarkAttemptV2,
+  executionIdByResultSetId?: ReadonlyMap<string, string>,
+  comparisonKeysByResultSetId?: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string>
+  >
 ): BenchmarkAttemptV2 | null {
+  const teamExecutionId = teamAttempt.resultSetId
+    ? executionIdByResultSetId?.get(teamAttempt.resultSetId)
+    : undefined;
+  const teamComparisonKey = teamAttempt.resultSetId
+    ? comparisonKeysByResultSetId
+        ?.get(teamAttempt.resultSetId)
+        ?.get(teamAttempt.track)
+    : undefined;
   const matches = candidates.filter(
     (candidate) =>
       candidate.variantKey === variantKey &&
+      (
+        executionIdByResultSetId === undefined ||
+        (
+          teamExecutionId !== undefined &&
+          candidate.attempt.resultSetId !== undefined &&
+          executionIdByResultSetId.get(candidate.attempt.resultSetId) ===
+            teamExecutionId
+        )
+      ) &&
+      (
+        comparisonKeysByResultSetId === undefined ||
+        (
+          teamComparisonKey !== undefined &&
+          candidate.attempt.resultSetId !== undefined &&
+          comparisonKeysByResultSetId
+            .get(candidate.attempt.resultSetId)
+            ?.get(candidate.attempt.track) === teamComparisonKey
+        )
+      ) &&
       candidate.attempt.caseId === teamAttempt.caseId &&
       candidate.attempt.track === teamAttempt.track &&
       candidate.attempt.harnessVersion === teamAttempt.harnessVersion &&

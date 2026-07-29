@@ -6,6 +6,7 @@ import {
 } from "../lib/benchmark/metrics";
 import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { scoreTeamLift } from "../lib/benchmark/scoring/teamiq";
 import { scoreToolReliability } from "../lib/benchmark/scoring/toolreliability";
 import { scoreWorkBenchAttempt } from "../lib/benchmark/scoring/workbench";
@@ -556,13 +557,13 @@ const scoringVerifierResults: BenchmarkVerifierResult[] = [
   verifierResult("scored-budget-b", false, 0.8),
   verifierResult("scored-model-b", false, 0.7),
 ];
-const certifiedDashboard = buildCertifiedBenchmarkDashboardData({
+const certifiedDashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: certifiedCases,
   attemptsV2: scoringAttempts,
   verifierResults: scoringVerifierResults,
   teamCompositions: [soloTeamA, teamAB],
   harnessCertifications: [],
-});
+}));
 const soloRow = certifiedDashboard.leaderboard.find(
   (row) => row.teamCompositionId === soloTeamA.id
 );
@@ -583,10 +584,11 @@ check(
   soloRow
 );
 check(
-  "failed budget and failed model still count in scored team averages",
-  teamRow?.attempts === 2 &&
-    teamRow?.verifiedQuality === 0.75 &&
-    teamRow?.averageCostUsd === 1.3,
+  "budget failure is audit-only while failed-model output remains scoreable",
+  teamRow?.attempts === 1 &&
+    teamRow?.verifiedQuality === 0.7 &&
+    teamRow?.averageCostUsd === 1.4 &&
+    teamRow.historyCount === 0,
   teamRow
 );
 check(
@@ -599,22 +601,23 @@ check(
   }))
 );
 check(
-  "summary averages and pass rate use only scored attempts",
-  certifiedDashboard.summary.scoredAttempts === 3 &&
-    certifiedDashboard.summary.certifiedAttempts === 7 &&
-    certifiedDashboard.summary.verifiedPassRate === 0.3333333333333333 &&
-    certifiedDashboard.summary.averageVerifiedQuality === 0.7167 &&
-    certifiedDashboard.summary.averageCostUsd === 1 &&
-    certifiedDashboard.summary.averageDurationMs === 7000,
+  "summary averages and pass rate use only latest completed snapshots",
+  certifiedDashboard.summary.scoredAttempts === 2 &&
+    certifiedDashboard.summary.certifiedAttempts === 2 &&
+    certifiedDashboard.summary.verifiedPassRate === 0.5 &&
+    certifiedDashboard.summary.averageVerifiedQuality === 0.675 &&
+    certifiedDashboard.summary.averageCostUsd === 0.9 &&
+    certifiedDashboard.summary.averageDurationMs === 6500,
   certifiedDashboard.summary
 );
 check(
-  "summary reports excluded certified evidence by source",
-  certifiedDashboard.summary.excludedAttempts === 4 &&
-    certifiedDashboard.summary.excludedProviderAttempts === 1 &&
-    certifiedDashboard.summary.excludedHarnessAttempts === 1 &&
-    certifiedDashboard.summary.excludedEnvironmentAttempts === 1 &&
-    certifiedDashboard.summary.excludedUserAttempts === 1,
+  "summary keeps unpublished evidence out while audit retains legacy attempts",
+  certifiedDashboard.summary.excludedAttempts === 0 &&
+    certifiedDashboard.summary.excludedProviderAttempts === 0 &&
+    certifiedDashboard.summary.excludedHarnessAttempts === 0 &&
+    certifiedDashboard.summary.excludedEnvironmentAttempts === 0 &&
+    certifiedDashboard.summary.excludedUserAttempts === 0 &&
+    certifiedDashboard.audit.legacyAttempts === 5,
   certifiedDashboard.summary
 );
 check(
@@ -622,9 +625,9 @@ check(
   trackRowWorkbench?.attempts === 1 &&
     trackRowWorkbench?.verifiedPassRate === 1 &&
     trackRowWorkbench?.averageVerifiedQuality === 0.65 &&
-    trackRowTeamIq?.attempts === 2 &&
+    trackRowTeamIq?.attempts === 1 &&
     trackRowTeamIq?.verifiedPassRate === 0 &&
-    trackRowTeamIq?.averageVerifiedQuality === 0.75,
+    trackRowTeamIq?.averageVerifiedQuality === 0.7,
   certifiedDashboard.trackRows
 );
 

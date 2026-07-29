@@ -34,6 +34,7 @@ export interface ComparableTrackRowLike extends TeamLiftRowLike {
   modelVariantKeys: string[];
   trackBreakdown: Array<{
     track: string;
+    comparisonKey?: string;
     averageVerifiedQuality: number;
   }>;
 }
@@ -64,7 +65,13 @@ export function computeComparableTrackTeamLift(
     .filter((teamTrack) =>
       solos.every((solo) =>
         solo.trackBreakdown.some(
-          (soloTrack) => soloTrack.track === teamTrack.track
+          (soloTrack) =>
+            soloTrack.track === teamTrack.track &&
+            (
+              teamTrack.comparisonKey === undefined ||
+              soloTrack.comparisonKey === undefined ||
+              soloTrack.comparisonKey === teamTrack.comparisonKey
+            )
         )
       )
     )
@@ -82,7 +89,13 @@ export function computeComparableTrackTeamLift(
         ...solos.map(
           (solo) =>
             solo.trackBreakdown.find(
-              (soloTrack) => soloTrack.track === teamTrack.track
+              (soloTrack) =>
+                soloTrack.track === teamTrack.track &&
+                (
+                  teamTrack.comparisonKey === undefined ||
+                  soloTrack.comparisonKey === undefined ||
+                  soloTrack.comparisonKey === teamTrack.comparisonKey
+                )
             )!.averageVerifiedQuality * 100
         )
       );

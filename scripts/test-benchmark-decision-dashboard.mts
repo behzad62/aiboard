@@ -11,6 +11,7 @@ import { readLeaderboard } from "../lib/benchmark/certified/dashboard-selectors"
 import { withCertifiedDeleteMetadata } from "../components/benchmark/useBenchmarkDashboard";
 import { readDecisionDashboardRows } from "../components/benchmark/results/BenchmarkDecisionDashboard";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkFailure,
   BenchmarkTeamComposition,
@@ -207,8 +208,7 @@ const explicitDefaultTeam = {
   comboHash: "explicit-default",
   roles: [{ ...legacyTeam.roles[0], reasoningEffort: "default" as const }],
 } as BenchmarkTeamComposition;
-const compatibleMetadata = withCertifiedDeleteMetadata(
-  buildCertifiedBenchmarkDashboardData({
+const compatibleFixture = withCompletedResultSetFixtures({
     caseV2: [],
     attemptsV2: [
       {
@@ -227,7 +227,7 @@ const compatibleMetadata = withCertifiedDeleteMetadata(
         caseId: "same-default-decision",
         mode: "certified",
         teamCompositionId: "explicit-default",
-        track: "gameiq",
+        track: "teamiq",
         status: "passed",
         startedAt: "2026-07-26T00:01:00.000Z",
       },
@@ -235,40 +235,23 @@ const compatibleMetadata = withCertifiedDeleteMetadata(
     verifierResults: [],
     teamCompositions: [legacyTeam, explicitDefaultTeam],
     harnessCertifications: [],
-  }),
-  [
-    {
-      id: "attempt-legacy",
-      runId: "run-compatible",
-      caseId: "same-default-decision",
-      mode: "certified",
-      teamCompositionId: "legacy-default",
-      track: "teamiq",
-      status: "passed",
-      startedAt: "2026-07-26T00:00:00.000Z",
-    },
-    {
-      id: "attempt-explicit",
-      runId: "run-compatible",
-      caseId: "same-default-decision",
-      mode: "certified",
-      teamCompositionId: "explicit-default",
-      track: "gameiq",
-      status: "passed",
-      startedAt: "2026-07-26T00:01:00.000Z",
-    },
-  ] as never,
+  });
+const compatibleDashboard = withCertifiedDeleteMetadata(
+  buildCertifiedBenchmarkDashboardData(compatibleFixture),
+  compatibleFixture.attemptsV2,
   [legacyTeam, explicitDefaultTeam]
-).leaderboard[0];
+);
+const compatibleMetadata = compatibleDashboard.leaderboard[0];
 check(
-  "canonical default rows retain delete metadata across persisted composition aliases",
+  "latest canonical snapshot keeps only its own delete metadata",
   compatibleMetadata?.latestAttemptId === "attempt-explicit" &&
     compatibleMetadata.attempts === 1 &&
-    compatibleMetadata.teamCompositionIds?.slice().sort().join(",") ===
-      "explicit-default,legacy-default" &&
+    compatibleMetadata.teamCompositionIds?.join(",") ===
+      "explicit-default" &&
     Object.keys(compatibleMetadata.latestAttemptsByTrack ?? {})
-      .sort()
-      .join(",") === "gameiq,teamiq",
+      .join(",") === "teamiq" &&
+    compatibleDashboard.resultHistory[0]?.older[0]?.latestAttemptId ===
+      "attempt-legacy",
   compatibleMetadata
 );
 
@@ -486,7 +469,7 @@ const disjointAttempts = [
     jobSuccessScore: 100,
   },
 ] as never;
-const disjointDashboard = buildCertifiedBenchmarkDashboardData({
+const disjointDashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [],
   attemptsV2: disjointAttempts,
   verifierResults: [],
@@ -496,7 +479,7 @@ const disjointDashboard = buildCertifiedBenchmarkDashboardData({
     disjointTeamComposition,
   ],
   harnessCertifications: [],
-});
+}));
 const disjointTeam = disjointDashboard.leaderboard.find(
   (item) => item.teamCompositionId === disjointTeamComposition.id
 );

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
 import { formatBenchmarkImportMessage } from "../components/benchmark/useBenchmarkReportActions";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import {
   __resetBenchmarkStoreForTests,
   __exportBenchmarkStoreForTests,
@@ -362,36 +363,51 @@ check(
   newerBuildCheckpointImport
 );
 
-const certified = buildCertifiedBenchmarkDashboardData({
+const certifiedFixture = withCompletedResultSetFixtures({
   caseV2: bundle.caseV2,
   attemptsV2: bundle.attemptsV2,
   verifierResults: bundle.verifierResults,
   teamCompositions: bundle.teamCompositions,
   harnessCertifications: bundle.harnessCertifications,
 });
+const certified = buildCertifiedBenchmarkDashboardData(certifiedFixture);
 
-check("certified dashboard counts certified runs and cases", certified.summary.certifiedRuns === 3 && certified.summary.certifiedCases === 1, certified.summary);
-check("certified dashboard filters non-certified attempts", certified.summary.certifiedAttempts === 3, certified.summary);
+check("certified dashboard counts only latest completed runs and cases", certified.summary.certifiedRuns === 1 && certified.summary.certifiedCases === 1, certified.summary);
+check("certified dashboard filters non-certified and historical attempts", certified.summary.certifiedAttempts === 1, certified.summary);
 check(
-  "certified dashboard separates scored and excluded certified attempts",
-  certified.summary.scoredAttempts === 2 &&
-    certified.summary.excludedAttempts === 1 &&
-    certified.summary.excludedProviderAttempts === 1,
+  "certified dashboard keeps unpublished exclusions audit-only",
+  certified.summary.scoredAttempts === 1 &&
+    certified.summary.excludedAttempts === 0 &&
+    certified.summary.excludedProviderAttempts === 0 &&
+    certified.audit.legacyAttempts === 1,
   certified.summary
 );
-check("certified dashboard does not pass failed partial-quality attempts", certified.summary.verifiedPassRate === 0.5, certified.summary);
-check("certified dashboard ranks verified quality", certified.leaderboard[0]?.verifiedQuality === 0.75, certified.leaderboard);
-check("certified leaderboard pass count uses status", certified.leaderboard[0]?.passed === 1 && certified.leaderboard[0]?.failed === 1, certified.leaderboard[0]);
+check("certified dashboard preserves honest failed-verifier quality", certified.summary.verifiedPassRate === 0, certified.summary);
+check("certified dashboard uses the latest immutable snapshot", certified.leaderboard[0]?.verifiedQuality === 0.5 && certified.leaderboard[0]?.historyCount === 1, certified.leaderboard);
+check("certified leaderboard pass count uses latest snapshot status", certified.leaderboard[0]?.passed === 0 && certified.leaderboard[0]?.failed === 1, certified.leaderboard[0]);
 check("certified dashboard filters non-certified verifier assertions", !certified.verifierAssertionRows.some((row) => row.id === "publish-only"), certified.verifierAssertionRows);
 check(
-  "certified dashboard excludes provider-unavailable quality and cost from averages",
-  certified.summary.averageVerifiedQuality === 0.75 &&
-    certified.summary.averageCostUsd === 0.015 &&
+  "certified dashboard excludes historical and provider-unavailable evidence from averages",
+  certified.summary.averageVerifiedQuality === 0.5 &&
+    certified.summary.averageCostUsd === 0.02 &&
     certified.summary.averageDurationMs === 1000,
   certified.summary
 );
 
-const markdown = formatBenchmarkMarkdownReport(bundle, {
+const completedBundle: BenchmarkReportBundleV2 = {
+  ...bundle,
+  runs: certifiedFixture.runs,
+  caseV2: certifiedFixture.caseV2,
+  attemptsV2: certifiedFixture.attemptsV2,
+  verifierResults: certifiedFixture.verifierResults,
+  artifacts: certifiedFixture.artifacts,
+  failures: certifiedFixture.failures,
+  traces: certifiedFixture.traces,
+  runEvents: certifiedFixture.runEvents,
+  toolCallTraces: certifiedFixture.toolCallTraces,
+  resultSets: certifiedFixture.resultSets,
+};
+const markdown = formatBenchmarkMarkdownReport(completedBundle, {
   summary: {
     totalRuns: 0,
     totalCases: 0,
@@ -441,25 +457,40 @@ const highVariantTeam: BenchmarkTeamComposition = {
     },
   ],
 };
+const variantFixture = withCompletedResultSetFixtures({
+  caseV2: bundle.caseV2,
+  attemptsV2: [
+    {
+      ...attempt,
+      id: "attempt-variant-low",
+      runId: "run-variant-low",
+      teamCompositionId: lowVariantTeam.id,
+    },
+    {
+      ...attempt,
+      id: "attempt-variant-high",
+      runId: "run-variant-high",
+      teamCompositionId: highVariantTeam.id,
+    },
+  ],
+  verifierResults: [],
+  teamCompositions: [lowVariantTeam, highVariantTeam],
+  harnessCertifications: [],
+});
 const variantMarkdown = formatBenchmarkMarkdownReport(
   {
     ...bundle,
-    attemptsV2: [
-      {
-        ...attempt,
-        id: "attempt-variant-low",
-        runId: "run-variant-low",
-        teamCompositionId: lowVariantTeam.id,
-      },
-      {
-        ...attempt,
-        id: "attempt-variant-high",
-        runId: "run-variant-high",
-        teamCompositionId: highVariantTeam.id,
-      },
-    ],
-    verifierResults: [],
-    teamCompositions: [lowVariantTeam, highVariantTeam],
+    runs: variantFixture.runs,
+    caseV2: variantFixture.caseV2,
+    attemptsV2: variantFixture.attemptsV2,
+    verifierResults: variantFixture.verifierResults,
+    artifacts: variantFixture.artifacts,
+    failures: variantFixture.failures,
+    traces: variantFixture.traces,
+    runEvents: variantFixture.runEvents,
+    toolCallTraces: variantFixture.toolCallTraces,
+    teamCompositions: variantFixture.teamCompositions,
+    resultSets: variantFixture.resultSets,
   },
   {
     summary: {
@@ -509,21 +540,22 @@ check("markdown report includes team lift matrix", markdown.includes("Team Lift 
 check("markdown report includes failure taxonomy", markdown.includes("Failure Taxonomy"), markdown);
 check("markdown report reports certified evidence counts", markdown.includes("Certified attempts: 3"), markdown);
 check(
-  "markdown report reports excluded certified evidence counts",
-  markdown.includes("Scored attempts: 2") &&
-    markdown.includes("Excluded attempts: 1") &&
-    markdown.includes("provider 1"),
+  "markdown report keeps unpublished evidence out of certified counts",
+  markdown.includes("Scored attempts: 1") &&
+    markdown.includes("Excluded attempts: 0") &&
+    markdown.includes("provider 0"),
   markdown
 );
-check("markdown report filters non-certified verifier pass rate", markdown.includes("Verified pass rate: 50%"), markdown);
+check("markdown report uses the latest snapshot verifier pass rate", markdown.includes("Verified pass rate: 0%"), markdown);
 check("markdown report filters non-certified verifier assertions", !markdown.includes("Publish-only assertion"), markdown);
-check("markdown report scores completed attempts without excluded provider attempts", markdown.includes("Completed attempts: 2"), markdown);
+check("markdown report scores one latest completed snapshot", markdown.includes("Completed attempts: 1"), markdown);
 check(
-  "markdown report excludes provider-unavailable attempt from scoring rows",
-  markdown.includes("Average verified quality: 75/100") &&
-    markdown.includes("Average cost: $0.015") &&
+  "markdown report excludes history and provider-unavailable attempts from latest scoring rows",
+  markdown.includes("Average verified quality: 50/100") &&
+    markdown.includes("Average cost: $0.020") &&
     markdown.includes("Average duration: 1.0s") &&
-    markdown.includes("GPT solo: quality 75/100, pass rate 50%, 2 attempt(s), avg cost $0.015"),
+    markdown.includes("GPT solo: quality 50/100, pass rate 0%, 1 attempt(s), avg cost $0.020") &&
+    markdown.includes("Certified Snapshot History"),
   markdown
 );
 check("markdown report includes v2 raw counts", markdown.includes("Verifier results: 2"), markdown);

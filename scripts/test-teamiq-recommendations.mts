@@ -7,6 +7,7 @@ import {
 } from "../lib/benchmark/teamiq";
 import type { TeamIqComboMatrixRow } from "../lib/benchmark/teamiq/combo-matrix";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import {
   readTeamIqComboMatrixRow,
   readTeamIqRecommendationCards,
@@ -217,7 +218,7 @@ check(
   sampleGuardBestQuality
 );
 
-const dashboard = buildCertifiedBenchmarkDashboardData({
+const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [
     {
       id: "case-teamiq",
@@ -246,17 +247,17 @@ const dashboard = buildCertifiedBenchmarkDashboardData({
   verifierResults: [],
   teamCompositions,
   harnessCertifications: [],
-});
+}));
 
 check(
-  "certified dashboard exposes TeamIQ combo matrix rows",
-  dashboard.teamIqComboMatrixRows.length === rows.length &&
+  "certified dashboard exposes one latest TeamIQ combo row per configuration",
+  dashboard.teamIqComboMatrixRows.length === 2 &&
     dashboard.teamIqComboMatrixRows.some((row) => row.teamCompositionId === strongTeam.id),
   dashboard.teamIqComboMatrixRows
 );
 check(
-  "certified dashboard exposes TeamIQ recommendation cards",
-  dashboard.teamIqRecommendationCards.some((card) => card.kind === "best_team_lift"),
+  "historical repeats do not manufacture recommendation-card maturity",
+  dashboard.teamIqRecommendationCards.length === 0,
   dashboard.teamIqRecommendationCards
 );
 const legacyComboRow = readTeamIqComboMatrixRow({

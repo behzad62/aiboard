@@ -13,6 +13,7 @@ import {
   rankByOverall,
 } from "../lib/benchmark/scoring/aggregate";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkCaseV2,
@@ -278,7 +279,7 @@ check(
 // ---------------------------------------------------------------------------
 const teamA = soloTeam("solo-a", "prov:a");
 const teamB = soloTeam("solo-b", "prov:b");
-const dashboard = buildCertifiedBenchmarkDashboardData({
+const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [
     certifiedCase("case-a-wb", "workbench"),
     certifiedCase("case-a-gi", "gameiq"),
@@ -294,7 +295,7 @@ const dashboard = buildCertifiedBenchmarkDashboardData({
   verifierResults: [],
   teamCompositions: [teamA, teamB],
   harnessCertifications: [],
-});
+}));
 
 check(
   "dashboard payload carries an overallLeaderboard array",
@@ -304,19 +305,17 @@ check(
 );
 
 // Team A: overall = (workbench 0.6 + gameiq 1.0) / 2 = 0.8, two tracks.
-// Team B: overall = workbench 0.7 only (single track, 3 attempts) = 0.7.
-// So overall ranking puts A (0.8) ahead of B (0.7) despite A's thin evidence
-// being NOT preliminary (2 attempts < 3 -> A IS preliminary; B has 3 -> mature).
-// Preliminary demotion therefore ranks B first.
+// Team B's repeated executions are history, so its latest snapshot has one
+// attempt. Both latest rows are preliminary and rank by current overall score.
 const overallFirst = dashboard.overallLeaderboard[0];
 const overallSecond = dashboard.overallLeaderboard[1];
 check(
-  "overall ranking demotes the preliminary (2-attempt) row below the mature one",
-  overallFirst?.teamCompositionId === teamB.id &&
-    overallFirst?.overallScore === 0.7 &&
-    overallFirst?.preliminary === false &&
-    overallSecond?.teamCompositionId === teamA.id &&
-    overallSecond?.overallScore === 0.8 &&
+  "overall ranking never uses historical repeats to manufacture maturity",
+  overallFirst?.teamCompositionId === teamA.id &&
+    overallFirst?.overallScore === 0.8 &&
+    overallFirst?.preliminary === true &&
+    overallSecond?.teamCompositionId === teamB.id &&
+    overallSecond?.overallScore === 0.7 &&
     overallSecond?.preliminary === true,
   dashboard.overallLeaderboard.map((r) => ({
     team: r.teamCompositionId,

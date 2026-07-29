@@ -28,6 +28,7 @@ import {
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
   listBenchmarkRunEvents,
+  listBenchmarkResultSets,
   listBenchmarkTeamCompositions,
   listBenchmarkToolCallTraces,
   listBenchmarkVerifierResults,
@@ -158,6 +159,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       toolCallTraces,
       teamCompositions,
       harnessCertifications,
+      resultSets,
     ] = await Promise.all([
       listBenchmarkCaseV2(),
       listBenchmarkAttemptsV2(),
@@ -166,6 +168,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       listBenchmarkToolCallTraces(),
       listBenchmarkTeamCompositions(),
       listHarnessCertificationResults(),
+      listBenchmarkResultSets(),
     ]);
     setDashboard(
       buildBenchmarkDashboardData({
@@ -176,9 +179,16 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       })
     );
     const certifiedDashboardData = buildCertifiedBenchmarkDashboardData({
+      resultSets,
+      runs: benchmarkRuns,
       caseV2: benchmarkCaseV2,
       attemptsV2: benchmarkAttemptsV2,
       verifierResults,
+      artifacts: benchmarkArtifacts,
+      failures: benchmarkFailures,
+      traces: benchmarkTraces,
+      runEvents,
+      toolCallTraces,
       teamCompositions,
       harnessCertifications,
     });
@@ -280,54 +290,74 @@ export function withCertifiedDeleteMetadata(
     attemptsByTeam.set(attempt.teamCompositionId, list);
   }
 
+  const attachSnapshotMetadata = <
+    T extends CertifiedDashboardWithLeaderboard["leaderboard"][number]
+  >(
+    row: T
+  ) => {
+    const representedTeamIds =
+      row.teamCompositionIds?.length
+        ? row.teamCompositionIds
+        : [row.teamCompositionId];
+    const teamAttempts = representedTeamIds
+      .flatMap((teamId) => attemptsByTeam.get(teamId) ?? [])
+      .filter(
+        (attempt) =>
+          !row.resultSetId || attempt.resultSetId === row.resultSetId
+      );
+    const latest = newestAttempt(teamAttempts);
+    const team = representedTeamIds
+      .map((teamId) => teamById.get(teamId))
+      .find((candidate) => candidate !== undefined);
+    const failureDetails = certifiedFailureDetails(teamAttempts, failures);
+    const failedAttemptCountByTrack = failedAttemptCountsByTrack(teamAttempts);
+    return {
+      ...row,
+      latestAttemptId: latest?.id,
+      latestAttemptStatus: latest?.status,
+      latestAttemptTrack: latest?.track,
+      latestAttemptsByTrack: latestAttemptsByTrack(teamAttempts),
+      providerUnavailableAttemptIds: teamAttempts
+        .filter((attempt) => attempt.status === "provider_unavailable")
+        .map((attempt) => attempt.id),
+      providerUnavailableAttemptIdsByTrack:
+        providerUnavailableAttemptIdsByTrack(teamAttempts),
+      providerIds: uniqueStrings(
+        (team?.roles ?? []).map((role) => role.providerId)
+      ),
+      reasoningEfforts: uniqueStrings(
+        (team?.roles ?? []).map((role) =>
+          normalizeBenchmarkReasoningEffort(role.reasoningEffort)
+        )
+      ),
+      reasoningEffortDetails: (team?.roles ?? []).map((role) => ({
+        role: role.role,
+        displayName: role.displayName ?? role.modelId,
+        effort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+      })),
+      latestCompletedAt:
+        row.completedAt || latest?.completedAt || latest?.startedAt,
+      failureDetails,
+      failedAttemptCount: countFailedAttempts(teamAttempts),
+      failedAttemptCountByTrack,
+    };
+  };
+
   return {
     ...dashboard,
-    leaderboard: dashboard.leaderboard.map((row) => {
-      const representedTeamIds =
-        row.teamCompositionIds?.length
-          ? row.teamCompositionIds
-          : [row.teamCompositionId];
-      const teamAttempts = representedTeamIds.flatMap(
-        (teamId) => attemptsByTeam.get(teamId) ?? []
-      );
-      const latest = newestAttempt(teamAttempts);
-      const team = representedTeamIds
-        .map((teamId) => teamById.get(teamId))
-        .find((candidate) => candidate !== undefined);
-      const failureDetails = certifiedFailureDetails(teamAttempts, failures);
-      const failedAttemptCountByTrack =
-        failedAttemptCountsByTrack(teamAttempts);
-      return {
-        ...row,
-        latestAttemptId: latest?.id,
-        latestAttemptStatus: latest?.status,
-        latestAttemptTrack: latest?.track,
-        latestAttemptsByTrack: latestAttemptsByTrack(teamAttempts),
-        providerUnavailableAttemptIds: teamAttempts
-          .filter((attempt) => attempt.status === "provider_unavailable")
-          .map((attempt) => attempt.id),
-        providerUnavailableAttemptIdsByTrack:
-          providerUnavailableAttemptIdsByTrack(teamAttempts),
-        providerIds: uniqueStrings(
-          (team?.roles ?? []).map((role) => role.providerId)
-        ),
-        reasoningEfforts: uniqueStrings(
-          (team?.roles ?? []).map((role) =>
-            normalizeBenchmarkReasoningEffort(role.reasoningEffort)
-          )
-        ),
-        reasoningEffortDetails: (team?.roles ?? []).map((role) => ({
-          role: role.role,
-          displayName: role.displayName ?? role.modelId,
-          effort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
-        })),
-        latestCompletedAt: latest?.completedAt ?? latest?.startedAt,
-        failureDetails,
-        failedAttemptCount: countFailedAttempts(teamAttempts),
-        failedAttemptCountByTrack,
-      };
-    }),
+    leaderboard: dashboard.leaderboard.map(attachSnapshotMetadata),
+    resultHistory: (dashboard.resultHistory ?? []).map((series) => ({
+      ...series,
+      older: series.older.map(attachSnapshotMetadata),
+    })),
     providerErrorAttempts: certifiedAttempts
+      .filter(
+        (attempt) =>
+          attempt.resultSetId !== undefined &&
+          dashboard.leaderboard.some(
+            (row) => row.resultSetId === attempt.resultSetId
+          )
+      )
       .filter((attempt) => attempt.status === "provider_unavailable")
       .map((attempt) => ({
         id: attempt.id,

@@ -474,6 +474,75 @@ check(
   workBenchComboRow
 );
 
+const crossExecutionAttempts = [
+  {
+    ...workBenchAttempt("solo-gpt-cross", soloGptWb.id, 70, 1, 100_000),
+    resultSetId: "solo-gpt-set",
+  },
+  {
+    ...workBenchAttempt("solo-claude-cross", soloClaudeWb.id, 55, 0.9, 90_000),
+    resultSetId: "solo-claude-set",
+  },
+  {
+    ...workBenchAttempt("team-cross", workBenchTeam.id, 90, 1.5, 120_000),
+    resultSetId: "team-set",
+  },
+];
+const crossExecutionMap = new Map([
+  ["solo-gpt-set", "solo-execution"],
+  ["solo-claude-set", "solo-execution"],
+  ["team-set", "team-execution"],
+]);
+const crossExecutionRows = buildTeamIqComboMatrixRows({
+  attempts: crossExecutionAttempts,
+  teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
+  track: "workbench",
+  executionIdByResultSetId: crossExecutionMap,
+});
+check(
+  "team lift never borrows solo baselines from another execution",
+  crossExecutionRows.find((row) => row.teamCompositionId === workBenchTeam.id)
+    ?.teamLift === null,
+  crossExecutionRows
+);
+const siblingExecutionRows = buildTeamIqComboMatrixRows({
+  attempts: crossExecutionAttempts,
+  teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
+  track: "workbench",
+  executionIdByResultSetId: new Map([
+    ["solo-gpt-set", "shared-execution"],
+    ["solo-claude-set", "shared-execution"],
+    ["team-set", "shared-execution"],
+  ]),
+});
+check(
+  "team lift uses completed solo siblings from the same execution",
+  siblingExecutionRows.find((row) => row.teamCompositionId === workBenchTeam.id)
+    ?.teamLift === 20,
+  siblingExecutionRows
+);
+const mismatchedPackRows = buildTeamIqComboMatrixRows({
+  attempts: crossExecutionAttempts,
+  teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
+  track: "workbench",
+  executionIdByResultSetId: new Map([
+    ["solo-gpt-set", "shared-execution"],
+    ["solo-claude-set", "shared-execution"],
+    ["team-set", "shared-execution"],
+  ]),
+  comparisonKeysByResultSetId: new Map([
+    ["solo-gpt-set", new Map([["workbench", "pack-a"]])],
+    ["solo-claude-set", new Map([["workbench", "pack-a"]])],
+    ["team-set", new Map([["workbench", "pack-b"]])],
+  ]),
+});
+check(
+  "team lift requires the exact suite, case, harness, and scoring bundle",
+  mismatchedPackRows.find((row) => row.teamCompositionId === workBenchTeam.id)
+    ?.teamLift === null,
+  mismatchedPackRows
+);
+
 // --- (c) missing baseline -> null + dash rendering contract ---------------
 const partialSoloByModel = new Map<string, TeamLiftRowLike>([
   [

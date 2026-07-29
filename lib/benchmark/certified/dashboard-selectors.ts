@@ -174,6 +174,21 @@ export interface CertifiedLeaderboardRow {
   failureDetails: CertifiedFailureDetail[];
   failedAttemptCount?: number | null;
   failedAttemptCountByTrack?: Record<string, number>;
+  resultSetId: string;
+  executionId: string;
+  configurationKey: string;
+  completedAt: string;
+  overallDelta: number | null;
+  passRateDelta: number | null;
+  historyCount: number;
+}
+
+export interface CertifiedResultHistorySeriesData {
+  configurationKey: string;
+  latestResultSetId: string;
+  overallDelta: number | null;
+  passRateDelta: number | null;
+  older: CertifiedLeaderboardRow[];
 }
 
 export interface ModelIntelligenceTrackBreakdown {
@@ -309,6 +324,13 @@ export function readLeaderboard(
             failureDetails: meta.failureDetails,
             failedAttemptCount: meta.failedAttemptCount,
             failedAttemptCountByTrack: meta.failedAttemptCountByTrack,
+            resultSetId: meta.resultSetId,
+            executionId: meta.executionId,
+            configurationKey: meta.configurationKey,
+            completedAt: meta.completedAt,
+            overallDelta: meta.overallDelta,
+            passRateDelta: meta.passRateDelta,
+            historyCount: meta.historyCount,
             passed: row.passed ?? meta.passed,
             toolReliabilitySamples:
               row.toolReliabilitySamples ?? meta.toolReliabilitySamples,
@@ -489,7 +511,41 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
     failedAttemptCountByTrack: readNumberByTrack(
       row.failedAttemptCountByTrack
     ),
+    resultSetId: readString(row.resultSetId) ?? id,
+    executionId: readString(row.executionId) ?? "",
+    configurationKey: readString(row.configurationKey) ?? "",
+    completedAt:
+      readString(row.completedAt) ??
+      readString(row.latestCompletedAt) ??
+      "",
+    overallDelta: readNumber(row.overallDelta),
+    passRateDelta: readNumber(row.passRateDelta),
+    historyCount: readNumber(row.historyCount) ?? 0,
   };
+}
+
+export function readCertifiedResultHistory(
+  certified: unknown
+): CertifiedResultHistorySeriesData[] {
+  return readArray(readRecord(certified).resultHistory)
+    .map((value) => {
+      const series = readRecord(value);
+      const configurationKey = readString(series.configurationKey);
+      const latestResultSetId = readString(series.latestResultSetId);
+      if (!configurationKey || !latestResultSetId) return null;
+      return {
+        configurationKey,
+        latestResultSetId,
+        overallDelta: readNumber(series.overallDelta),
+        passRateDelta: readNumber(series.passRateDelta),
+        older: readArray(series.older)
+          .map(readLeaderboardRow)
+          .filter((row): row is CertifiedLeaderboardRow => row !== null),
+      };
+    })
+    .filter(
+      (series): series is CertifiedResultHistorySeriesData => series !== null
+    );
 }
 
 function readFailureDetails(value: unknown): CertifiedFailureDetail[] {

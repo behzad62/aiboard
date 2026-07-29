@@ -4,6 +4,7 @@ import {
   buildModelIntelligenceRows,
 } from "../lib/benchmark/metrics";
 import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import {
   readModelIntelligence,
   readTeamIqComboMatrixRows,
@@ -224,7 +225,7 @@ assert.deepEqual(
   ]
 );
 
-const dashboard = buildCertifiedBenchmarkDashboardData({
+const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [],
   attemptsV2: [
     attempt("workbench-low", low.id, 0.4, "workbench"),
@@ -233,7 +234,7 @@ const dashboard = buildCertifiedBenchmarkDashboardData({
   verifierResults: [],
   teamCompositions: [low, high],
   harnessCertifications: [],
-});
+}));
 assert.deepEqual(
   dashboard.workBenchRoleLeaderboards.worker.map((row) => ({
     variantKey: row.variantKey,

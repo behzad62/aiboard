@@ -5,6 +5,7 @@ import type {
   BenchmarkFailure,
   BenchmarkMetricValue,
   BenchmarkRun,
+  BenchmarkResultSet,
   BenchmarkTeamComposition,
   BenchmarkTrack,
   BenchmarkVerifierResult,
@@ -27,6 +28,10 @@ import type {
   CertifiedBenchmarkDashboardInput,
   WorkBenchRoleLeaderboardRow,
 } from "@/lib/benchmark/scoring/types";
+import {
+  isPublishableBenchmarkResultSet,
+  selectBenchmarkResultSeries,
+} from "@/lib/benchmark/certified/result-set-selectors";
 import {
   buildTeamIqComboMatrixRows,
   buildTeamIqRecommendationCards,
@@ -353,8 +358,62 @@ export function buildBenchmarkDashboardData(
 }
 
 export function buildCertifiedBenchmarkDashboardData(
-  input: CertifiedBenchmarkDashboardInput
+  rawInput: CertifiedBenchmarkDashboardInput
 ): CertifiedBenchmarkDashboardData {
+  const suppliedResultSets = rawInput.resultSets;
+  const evidence = {
+    runs: rawInput.runs,
+    attempts: rawInput.attemptsV2,
+    cases: rawInput.caseV2,
+    verifierResults: rawInput.verifierResults,
+    artifacts: rawInput.artifacts,
+    failures: rawInput.failures,
+    traces: rawInput.traces,
+    runEvents: rawInput.runEvents,
+    toolCallTraces: rawInput.toolCallTraces,
+  };
+  const publishableResultSets = suppliedResultSets.filter((resultSet) =>
+    isPublishableBenchmarkResultSet(resultSet, evidence)
+  );
+  const resultSeries = selectBenchmarkResultSeries(
+    publishableResultSets,
+    () => true
+  );
+  const latestResultSetIds = new Set(
+    resultSeries.map((series) => series.latest.id)
+  );
+  const publishableResultSetIds = new Set(
+    publishableResultSets.map((resultSet) => resultSet.id)
+  );
+  const executionIdByResultSetId = new Map(
+    publishableResultSets.map((resultSet) => [
+      resultSet.id,
+      resultSet.executionId,
+    ])
+  );
+  const trackComparisonKeysByResultSetId = new Map(
+    publishableResultSets.map((resultSet) => [
+      resultSet.id,
+      resultSetTrackComparisonKeys(resultSet, rawInput.attemptsV2),
+    ])
+  );
+  const latestAttempts = rawInput.attemptsV2.filter(
+    (attempt) =>
+      attempt.resultSetId !== undefined &&
+      latestResultSetIds.has(attempt.resultSetId)
+  );
+  const latestAttemptIds = new Set(latestAttempts.map((attempt) => attempt.id));
+  const latestCaseIds = new Set(latestAttempts.map((attempt) => attempt.caseId));
+  const input = {
+    ...rawInput,
+    resultSets: suppliedResultSets,
+    attemptsV2: latestAttempts,
+    caseV2: rawInput.caseV2.filter((item) => latestCaseIds.has(item.id)),
+    verifierResults: rawInput.verifierResults.filter((result) =>
+      latestAttemptIds.has(result.attemptId)
+    ),
+    harnessCertifications: rawInput.harnessCertifications.slice(0, 0),
+  } satisfies CertifiedBenchmarkDashboardInput;
   const certifiedAttempts = input.attemptsV2.filter(isCertifiedAttempt);
   const scoredAttempts = certifiedAttempts.filter(isScoredCertifiedAttempt);
   const excludedAttempts = certifiedAttempts.filter(
@@ -367,12 +426,32 @@ export function buildCertifiedBenchmarkDashboardData(
   const verifierByAttemptId = new Map(
     verifierResults.map((result) => [result.attemptId, result])
   );
+  const baseLeaderboard = aggregateCertifiedRunScores({
+    attempts: scoredAttempts,
+    cases: input.caseV2,
+    teamCompositions: input.teamCompositions,
+    verifierResults,
+    executionIdByResultSetId,
+    trackComparisonKeysByResultSetId,
+  });
+  const seriesByLatestId = new Map(
+    resultSeries.map((series) => [series.latest.id, series])
+  );
+  const resultSetById = new Map(
+    publishableResultSets.map((resultSet) => [resultSet.id, resultSet])
+  );
   const leaderboard = rankByVerifiedQuality(
-    aggregateCertifiedRunScores({
-      attempts: scoredAttempts,
-      cases: input.caseV2,
-      teamCompositions: input.teamCompositions,
-      verifierResults,
+    baseLeaderboard.map((row) => {
+      if (!row.resultSetId) return row;
+      const resultSet = resultSetById.get(row.resultSetId);
+      const series = seriesByLatestId.get(row.resultSetId);
+      return resultSet
+        ? withSnapshotMetrics(row, resultSet, {
+            overallDelta: series?.overallDelta ?? null,
+            passRateDelta: series?.passRateDelta ?? null,
+            historyCount: series?.older.length ?? 0,
+          })
+        : row;
     })
   );
   const confidentLeaderboard = leaderboard.filter(
@@ -415,11 +494,15 @@ export function buildCertifiedBenchmarkDashboardData(
       attempts: scoredAttempts,
       teamCompositions: input.teamCompositions,
       track: "teamiq",
+      executionIdByResultSetId,
+      comparisonKeysByResultSetId: trackComparisonKeysByResultSetId,
     }),
     ...buildTeamIqComboMatrixRows({
       attempts: scoredAttempts,
       teamCompositions: input.teamCompositions,
       track: "workbench",
+      executionIdByResultSetId,
+      comparisonKeysByResultSetId: trackComparisonKeysByResultSetId,
     }),
   ]);
   // Summary quality/pass/cost/duration averages MERGE every track into one set
@@ -515,7 +598,159 @@ export function buildCertifiedBenchmarkDashboardData(
       teamCompositions: input.teamCompositions,
       verifierResults,
     }),
+    resultHistory: buildResultHistory({
+      resultSeries,
+      resultSets: publishableResultSets,
+      attempts: rawInput.attemptsV2.filter(
+        (attempt) =>
+          attempt.resultSetId !== undefined &&
+          publishableResultSetIds.has(attempt.resultSetId)
+      ),
+      cases: rawInput.caseV2,
+      teams: rawInput.teamCompositions,
+      verifierResults: rawInput.verifierResults,
+      executionIdByResultSetId,
+      trackComparisonKeysByResultSetId,
+    }),
+    audit: {
+      completedSnapshots: publishableResultSets.length,
+      unpublishedSnapshots:
+        suppliedResultSets.length - publishableResultSets.length,
+      legacyAttempts: rawInput.attemptsV2.filter(
+        (attempt) =>
+          attempt.mode === "certified" && attempt.resultSetId === undefined
+      ).length,
+    },
   };
+}
+
+function withSnapshotMetrics(
+  row: ReturnType<typeof aggregateCertifiedRunScores>[number],
+  resultSet: BenchmarkResultSet,
+  comparisons: {
+    overallDelta: number | null;
+    passRateDelta: number | null;
+    historyCount: number;
+  }
+) {
+  const metrics = resultSet.metrics!;
+  return {
+    ...row,
+    resultSetId: resultSet.id,
+    executionId: resultSet.executionId,
+    configurationKey: resultSet.configurationKey,
+    completedAt: resultSet.completedAt!,
+    overallDelta: comparisons.overallDelta,
+    passRateDelta: comparisons.passRateDelta,
+    historyCount: comparisons.historyCount,
+    attempts: metrics.attempts,
+    passed: metrics.passed,
+    failed: metrics.failed,
+    verifiedPassRate: metrics.verifiedPassRate,
+    verifiedQuality: metrics.verifiedQuality,
+    overallScore: metrics.overallScore,
+    trackBreakdown: metrics.trackBreakdown,
+    jobSuccessScore: metrics.jobSuccessScore,
+    efficiencyScore: metrics.efficiencyScore,
+    toolReliabilityScore: metrics.toolReliabilityScore,
+    toolReliabilitySamples: metrics.toolReliabilitySamples,
+    costUsd: metrics.costUsd,
+    averageCostUsd: metrics.averageCostUsd,
+    durationMs: metrics.durationMs,
+    costPerPass: metrics.costPerPass,
+    speedPerPassMs: metrics.speedPerPassMs,
+    inputTokens: metrics.inputTokens,
+    outputTokens: metrics.outputTokens,
+    totalTokens: metrics.totalTokens,
+    tokensPerPass: metrics.tokensPerPass,
+    costBasis: metrics.costBasis,
+  };
+}
+
+function buildResultHistory(input: {
+  resultSeries: ReturnType<typeof selectBenchmarkResultSeries>;
+  resultSets: BenchmarkResultSet[];
+  attempts: BenchmarkAttemptV2[];
+  cases: BenchmarkCaseV2[];
+  teams: BenchmarkTeamComposition[];
+  verifierResults: BenchmarkVerifierResult[];
+  executionIdByResultSetId: ReadonlyMap<string, string>;
+  trackComparisonKeysByResultSetId: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string>
+  >;
+}): CertifiedBenchmarkDashboardData["resultHistory"] {
+  const rows = aggregateCertifiedRunScores({
+    attempts: input.attempts.filter(isScoredCertifiedAttempt),
+    cases: input.cases,
+    teamCompositions: input.teams,
+    verifierResults: input.verifierResults,
+    executionIdByResultSetId: input.executionIdByResultSetId,
+    trackComparisonKeysByResultSetId: input.trackComparisonKeysByResultSetId,
+  });
+  const rowByResultSetId = new Map(
+    rows.flatMap((row) =>
+      row.resultSetId ? [[row.resultSetId, row] as const] : []
+    )
+  );
+  const resultSetById = new Map(
+    input.resultSets.map((resultSet) => [resultSet.id, resultSet])
+  );
+  return input.resultSeries.map((series) => ({
+    configurationKey: series.configurationKey,
+    latestResultSetId: series.latest.id,
+    overallDelta: series.overallDelta,
+    passRateDelta: series.passRateDelta,
+    older: series.older.flatMap((resultSet) => {
+      const row = rowByResultSetId.get(resultSet.id);
+      const stored = resultSetById.get(resultSet.id);
+      return row && stored
+        ? [
+            withSnapshotMetrics(row, stored, {
+              overallDelta: null,
+              passRateDelta: null,
+              historyCount: 0,
+            }),
+          ]
+        : [];
+    }),
+  }));
+}
+
+function resultSetTrackComparisonKeys(
+  resultSet: BenchmarkResultSet,
+  attempts: readonly BenchmarkAttemptV2[]
+): ReadonlyMap<string, string> {
+  const ownedAttempts = attempts.filter(
+    (attempt) => attempt.resultSetId === resultSet.id
+  );
+  return new Map(
+    resultSet.configuration.tracks.map((track) => {
+      const attemptVersions = ownedAttempts
+        .filter((attempt) => attempt.track === track.track)
+        .map((attempt) => ({
+          caseId: attempt.caseId,
+          harnessVersion: attempt.harnessVersion,
+          scoringVersion: attempt.scoringVersion,
+        }))
+        .sort((left, right) =>
+          JSON.stringify(left).localeCompare(JSON.stringify(right))
+        );
+      return [
+        track.track,
+        JSON.stringify({
+          suiteId: track.suiteId,
+          maxTokens: track.maxTokens,
+          caseManifest: [...track.caseManifest].sort((left, right) =>
+            `${left.caseId}\u0000${left.caseVersion}\u0000${left.scoringVersion}`.localeCompare(
+              `${right.caseId}\u0000${right.caseVersion}\u0000${right.scoringVersion}`
+            )
+          ),
+          attemptVersions,
+        }),
+      ];
+    })
+  );
 }
 
 function buildWorkBenchRoleLeaderboards(

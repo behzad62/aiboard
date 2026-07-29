@@ -14,6 +14,7 @@ import { listCertifiedSuiteOptions } from "../lib/benchmark/certified/suite-opti
 import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
 import { buildAttemptDetailViewModel } from "../lib/benchmark/certified/attempt-detail";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
+import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { createWorkBenchTeamComposition } from "../lib/benchmark/certified/run-execution";
 import type {
   BenchmarkArtifact,
@@ -439,7 +440,7 @@ check(
   detail
 );
 
-const roleDashboard = buildCertifiedBenchmarkDashboardData({
+const roleDashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [detailCase],
   attemptsV2: [
     {
@@ -483,7 +484,7 @@ const roleDashboard = buildCertifiedBenchmarkDashboardData({
     },
   ],
   harnessCertifications: [],
-});
+}));
 check(
   "certified dashboard exposes WorkBench role leaderboards",
   roleDashboard.workBenchRoleLeaderboards.architect[0]?.modelId === "openai:gpt-architect" &&
