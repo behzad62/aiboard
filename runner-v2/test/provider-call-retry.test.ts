@@ -185,6 +185,30 @@ test("provider call retry fails closed for budget and untyped local failures", a
   }
 });
 
+test("provider call retry rejects a local error spoofing the transport error name", async () => {
+  const failure = new Error("temporary timeout");
+  failure.name = "ProviderTransportError";
+  let calls = 0;
+  let sleeps = 0;
+
+  await assert.rejects(
+    completeWithProviderRetry({
+      complete: async () => {
+        calls += 1;
+        throw failure;
+      },
+      classify: classifyProviderFailure,
+      sleep: async () => {
+        sleeps += 1;
+      },
+    }),
+    failure
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(sleeps, 0);
+});
+
 test("stable logical retry identity reuses byte-equivalent durable jitter", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-retry-event-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));

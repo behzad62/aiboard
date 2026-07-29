@@ -98,12 +98,7 @@ export async function completeWithProviderRetry<T>(input: {
 }
 
 function isTypedProviderFailure(error: unknown): boolean {
-  return error instanceof ProviderTransportError ||
-    (
-      typeof error === "object" &&
-      error !== null &&
-      (error as { name?: unknown }).name === "ProviderTransportError"
-    );
+  return error instanceof ProviderTransportError;
 }
 
 function stableRetryRandom(identity: string, retry: number): number {
