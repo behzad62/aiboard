@@ -22,6 +22,7 @@ import {
 import type {
   BenchmarkAttemptV2,
   BenchmarkFailure,
+  BenchmarkResultSet,
   BenchmarkTeamComposition,
 } from "@/lib/benchmark/types";
 import {
@@ -40,6 +41,10 @@ import { reconcileStaleBenchmarkResultSets } from "@/lib/benchmark/certified/res
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 import type { CertifiedFailureDetail } from "@/lib/benchmark/certified/dashboard-selectors";
+import {
+  buildBenchmarkResultSetAuditRows,
+  type BenchmarkResultSetAuditRow,
+} from "@/components/benchmark/BenchmarkResultSetAudit";
 
 export interface BenchmarkDashboardState {
   dashboard: BenchmarkDashboardData | null;
@@ -51,6 +56,7 @@ export interface BenchmarkDashboardState {
   traceCount: number;
   reportCounts: BenchmarkReportCounts;
   benchmarkFailures: BenchmarkFailure[];
+  resultSetAuditRows: BenchmarkResultSetAuditRow[];
   /** Run files that could not be read this session (surface as a warning line). */
   corruptRunFileCount: number;
   load: () => Promise<void>;
@@ -74,6 +80,7 @@ export interface BenchmarkReportCounts {
   toolCallTraces: number;
   teamCompositions: number;
   harnessCertifications: number;
+  resultSets: number;
 }
 
 const EMPTY_REPORT_COUNTS: BenchmarkReportCounts = {
@@ -92,6 +99,7 @@ const EMPTY_REPORT_COUNTS: BenchmarkReportCounts = {
   toolCallTraces: 0,
   teamCompositions: 0,
   harnessCertifications: 0,
+  resultSets: 0,
 };
 
 export async function refreshBenchmarkDashboardStorage(): Promise<boolean> {
@@ -117,6 +125,8 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
   const [reportCounts, setReportCounts] =
     useState<BenchmarkReportCounts>(EMPTY_REPORT_COUNTS);
   const [benchmarkFailures, setBenchmarkFailures] = useState<BenchmarkFailure[]>([]);
+  const [resultSetAuditRows, setResultSetAuditRows] =
+    useState<BenchmarkResultSetAuditRow[]>([]);
   const [corruptRunFileCount, setCorruptRunFileCount] = useState(0);
 
   const load = useCallback(async () => {
@@ -130,6 +140,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       setTraceCount(0);
       setReportCounts(EMPTY_REPORT_COUNTS);
       setBenchmarkFailures([]);
+      setResultSetAuditRows([]);
       setCorruptRunFileCount(0);
       setLoading(false);
       return;
@@ -197,8 +208,12 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
         certifiedDashboardData,
         benchmarkAttemptsV2,
         teamCompositions,
-        benchmarkFailures
+        benchmarkFailures,
+        resultSets
       )
+    );
+    setResultSetAuditRows(
+      buildBenchmarkResultSetAuditRows(resultSets, benchmarkAttemptsV2)
     );
     setSuiteCount(benchmarkSuites.length);
     setTraceCount(benchmarkTraces.length);
@@ -220,6 +235,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       toolCallTraces: toolCallTraces.length,
       teamCompositions: teamCompositions.length,
       harnessCertifications: harnessCertifications.length,
+      resultSets: resultSets.length,
     });
     setBenchmarkFailures(benchmarkFailures);
     setCorruptRunFileCount(getCorruptBenchmarkRunCount());
@@ -251,6 +267,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     traceCount,
     reportCounts,
     benchmarkFailures,
+    resultSetAuditRows,
     corruptRunFileCount,
     load,
     refresh,
@@ -266,7 +283,8 @@ export function withCertifiedDeleteMetadata(
   dashboard: CertifiedDashboardWithLeaderboard,
   attempts: BenchmarkAttemptV2[],
   teams: BenchmarkTeamComposition[],
-  failures: BenchmarkFailure[] = []
+  failures: BenchmarkFailure[] = [],
+  resultSets: BenchmarkResultSet[] = []
 ): Omit<CertifiedDashboardWithLeaderboard, "leaderboard"> & {
   leaderboard: Array<
     CertifiedDashboardWithLeaderboard["leaderboard"][number] & {
@@ -278,6 +296,7 @@ export function withCertifiedDeleteMetadata(
     track: string;
     teamCompositionId: string;
   }>;
+  resultSets: BenchmarkResultSet[];
 } {
   const certifiedAttempts = attempts.filter(
     (attempt) => attempt.mode === "certified"
@@ -364,6 +383,7 @@ export function withCertifiedDeleteMetadata(
         track: attempt.track,
         teamCompositionId: attempt.teamCompositionId,
       })),
+    resultSets,
   };
 }
 

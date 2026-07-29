@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Card,
   CardContent,
@@ -24,14 +24,14 @@ import {
   trackLabelFor,
   WorkBenchRoleLeaderboards,
 } from "@/components/benchmark/certified/CertifiedResultTables";
-import { deleteBenchmarkAttemptsCascade } from "@/lib/benchmark/store";
+import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
+import type { BenchmarkResultSet } from "@/lib/benchmark/types";
 import {
   normalizeTrack,
   readCertifiedSummary,
   readLeaderboard,
   readModelIntelligence,
   readParetoIds,
-  readProviderErrorAttemptIds,
   readTeamIqComboMatrixRows,
   readTeamIqRecommendationCards,
   readTrackRows,
@@ -74,11 +74,6 @@ export function CertifiedBenchmarkOverview({
   onRefresh?: () => Promise<void>;
   setMessage?: (message: string | null) => void;
 }) {
-  const [deletingAttemptIds, setDeletingAttemptIds] = useState<Set<string>>(
-    () => new Set()
-  );
-  const deletionInFlightRef = useRef(false);
-  const [deleteInFlight, setDeleteInFlight] = useState(false);
   const [sortKey, setSortKey] = useState<LeaderboardSortKey>("quality");
   const summary = readCertifiedSummary(certified, counts);
   const isTrackView = track !== "all";
@@ -91,7 +86,6 @@ export function CertifiedBenchmarkOverview({
   const trackStat = isTrackView
     ? trackRows.find((row) => normalizeTrack(row.track) === track) ?? null
     : null;
-  const providerErrorAttemptIds = readProviderErrorAttemptIds(certified, track);
   const teamIqRows = readTeamIqComboMatrixRows(certified);
   const teamIqCards = readTeamIqRecommendationCards(certified);
   const modelIntelligence = useMemo(
@@ -105,8 +99,18 @@ export function CertifiedBenchmarkOverview({
     workBenchRoleBoards.reviewer.length > 0;
   const hasCertifiedData = counts.certifiedCases > 0 || counts.certifiedAttempts > 0;
   const hasTrackData = leaderboard.length > 0 || (!isTrackView && hasCertifiedData);
-  const shouldRenderLeaderboardSection =
-    hasTrackData || providerErrorAttemptIds.length > 0;
+  const shouldRenderLeaderboardSection = hasTrackData;
+  const resultSets = readResultSets(certified);
+  const resultSetById = new Map(resultSets.map((resultSet) => [resultSet.id, resultSet]));
+  const deletion = useBenchmarkResultSetDeletion({
+    onRefresh: onRefresh ?? (async () => undefined),
+    setMessage: setMessage ?? (() => undefined),
+    latestResultSetIds: new Set(leaderboard.map((row) => row.resultSetId)),
+  });
+  const deleteResultSet = (resultSetId: string, label: string) => {
+    const resultSet = resultSetById.get(resultSetId);
+    if (resultSet) void deletion.requestDelete(resultSet, label);
+  };
 
   return (
     <section className="space-y-4">
@@ -118,8 +122,7 @@ export function CertifiedBenchmarkOverview({
           Certified data is kept separate from lab evidence because it requires
           current cases, verifier output, harness metadata, and reproducibility
           hashes. Provider, harness, environment, and user-aborted certified
-          results remain visible as evidence and removable records, but they are
-          excluded from model score averages and leaderboard math.
+          results remain visible in Data, but they never enter leaderboard math.
         </p>
       </div>
 
@@ -163,21 +166,9 @@ export function CertifiedBenchmarkOverview({
             sortKey={sortKey}
             onSortChange={setSortKey}
             paretoIds={paretoIds}
-            deletingAttemptIds={deletingAttemptIds}
-            deleteInFlight={deleteInFlight}
-            providerErrorCount={providerErrorAttemptIds.length}
-            onDeleteAttempt={(attemptId, label) =>
-              void deleteAttempts(
-                [attemptId],
-                `Remove the latest certified result for ${label}? This deletes the attempt, verifier result, failures, and traces but keeps cases, teams, and harness certifications.`
-              )
-            }
-            onDeleteProviderErrors={() =>
-              void deleteAttempts(
-                providerErrorAttemptIds,
-                `Remove ${providerErrorAttemptIds.length} provider-error certified result(s)? This deletes attempts, verifier results, failures, and traces but keeps cases, teams, and harness certifications.`
-              )
-            }
+            deletingResultSetIds={deletion.deletingIds}
+            deleteInFlight={deletion.deleteInFlight}
+            onDeleteResultSet={deleteResultSet}
           />
         </>
       ) : (
@@ -189,75 +180,24 @@ export function CertifiedBenchmarkOverview({
           teamIqRows={teamIqRows}
           teamIqCards={teamIqCards}
           workBenchRoleBoards={workBenchRoleBoards}
-          deletingAttemptIds={deletingAttemptIds}
-          deleteInFlight={deleteInFlight}
-          providerErrorAttemptIds={providerErrorAttemptIds}
-          onDeleteAttempt={(attemptId, label) =>
-            void deleteAttempts(
-              [attemptId],
-              `Remove the latest certified result for ${label}? This deletes the attempt, verifier result, failures, and traces but keeps cases, teams, and harness certifications.`
-            )
-          }
-          onDeleteProviderErrors={() =>
-            void deleteAttempts(
-              providerErrorAttemptIds,
-              `Remove ${providerErrorAttemptIds.length} provider-error certified result(s)? This deletes attempts, verifier results, failures, and traces but keeps cases, teams, and harness certifications.`
-            )
-          }
+          deletingResultSetIds={deletion.deletingIds}
+          deleteInFlight={deletion.deleteInFlight}
+          onDeleteResultSet={deleteResultSet}
         />
       )}
     </section>
   );
 
-  async function deleteAttempts(
-    attemptIds: string[],
-    confirmMessage: string
-  ): Promise<void> {
-    const uniqueAttemptIds = Array.from(new Set(attemptIds)).filter(Boolean);
-    if (uniqueAttemptIds.length === 0) return;
-    if (deletionInFlightRef.current) return;
-    if (!window.confirm(confirmMessage)) return;
-
-    deletionInFlightRef.current = true;
-    setDeleteInFlight(true);
-    markDeleting(uniqueAttemptIds, true);
-    let mutationFailed = false;
-    try {
-      const summary = await deleteBenchmarkAttemptsCascade(uniqueAttemptIds);
-      const removedAttempts = summary.attempts;
-      setMessage?.(
-        `Removed ${removedAttempts} certified result${removedAttempts === 1 ? "" : "s"}.`
-      );
-    } catch (error) {
-      mutationFailed = true;
-      setMessage?.(`Could not remove certified result: ${formatDeleteError(error)}`);
-    } finally {
-      try {
-        await onRefresh?.();
-      } catch (error) {
-        if (!mutationFailed) {
-          setMessage?.(
-            `Removed certified result, but could not refresh: ${formatDeleteError(error)}`
-          );
-        }
-      } finally {
-        markDeleting(uniqueAttemptIds, false);
-        deletionInFlightRef.current = false;
-        setDeleteInFlight(false);
-      }
-    }
-  }
-
-  function markDeleting(attemptIds: string[], deleting: boolean): void {
-    setDeletingAttemptIds((current) => {
-      const next = new Set(current);
-      for (const attemptId of attemptIds) {
-        if (deleting) next.add(attemptId);
-        else next.delete(attemptId);
-      }
-      return next;
-    });
-  }
+}
+function readResultSets(certified: unknown): BenchmarkResultSet[] {
+  if (!certified || typeof certified !== "object") return [];
+  const value = (certified as { resultSets?: unknown }).resultSets;
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is BenchmarkResultSet =>
+          Boolean(item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string")
+      )
+    : [];
 }
 
 function CorruptRunFileNotice({ count }: { count: number }) {
@@ -563,8 +503,4 @@ function CertifiedFullStatGrid({
       </div>
     </div>
   );
-}
-
-function formatDeleteError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

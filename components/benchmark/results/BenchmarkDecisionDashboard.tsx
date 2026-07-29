@@ -10,6 +10,7 @@ import { DecisionLeaderboard } from "./DecisionLeaderboard";
 import { DecisionTradeoffCharts } from "./DecisionTradeoffCharts";
 import { DecisionVerdicts } from "./DecisionVerdicts";
 import {
+  readCertifiedResultHistory,
   readLeaderboard,
   type LeaderboardSortKey,
 } from "@/lib/benchmark/certified/dashboard-selectors";
@@ -19,13 +20,23 @@ import {
   type DecisionFilters as DecisionFilterState,
   type DecisionRow,
 } from "@/lib/benchmark/certified/decision-dashboard";
+import type { BenchmarkResultSet } from "@/lib/benchmark/types";
+import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
 
-export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }) {
+export function BenchmarkDecisionDashboard({
+  certified,
+  onRefresh,
+  setMessage,
+}: {
+  certified: unknown;
+  onRefresh: () => Promise<void>;
+  setMessage: (message: string | null) => void;
+}) {
   const [filters, setFilters] = useState<DecisionFilterState>(
     EMPTY_DECISION_FILTERS
   );
   const [sortKey, setSortKey] = useState<LeaderboardSortKey>("overall");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedResultSetId, setSelectedResultSetId] = useState<string | null>(null);
 
   const allRows = useMemo(
     () => readLeaderboard(certified, "all", "quality") as DecisionRow[],
@@ -39,7 +50,21 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
     () => readLeaderboard(certified, filters.track, sortKey).length,
     [certified, filters.track, sortKey]
   );
-  const selected = filteredRows.find((row) => row.id === selectedId) ?? null;
+  const history = useMemo(() => readCertifiedResultHistory(certified), [certified]);
+  const resultSets = useMemo(() => readResultSets(certified), [certified]);
+  const resultSetById = useMemo(
+    () => new Map(resultSets.map((resultSet) => [resultSet.id, resultSet])),
+    [resultSets]
+  );
+  const latestResultSetIds = useMemo(
+    () => new Set(allRows.map((row) => row.resultSetId)),
+    [allRows]
+  );
+  const deletion = useBenchmarkResultSetDeletion({
+    onRefresh,
+    setMessage,
+    latestResultSetIds,
+  });
 
   return (
     <div className="space-y-8">
@@ -62,7 +87,7 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
           rows={allRows}
           onChange={(next) => {
             setFilters(next);
-            setSelectedId(null);
+            setSelectedResultSetId(null);
           }}
         />
         <DecisionLeaderboard
@@ -70,8 +95,20 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
           totalRows={rankedRowCount}
           sortKey={sortKey}
           onSortChange={setSortKey}
-          selectedId={selected?.id ?? null}
-          onSelect={(row) => setSelectedId((current) => (current === row.id ? null : row.id))}
+          history={history}
+          selectedResultSetId={selectedResultSetId}
+          onSelect={(row) =>
+            setSelectedResultSetId((current) =>
+              current === row.resultSetId ? null : row.resultSetId
+            )
+          }
+          deletingIds={deletion.deletingIds}
+          deleteInFlight={deletion.deleteInFlight}
+          onDelete={(row) => {
+            const resultSet = resultSetById.get(row.resultSetId);
+            if (resultSet) void deletion.requestDelete(resultSet, row.label);
+          }}
+          hasRawEvidence={resultSets.length > 0}
         />
       </section>
 
@@ -91,6 +128,21 @@ export function BenchmarkDecisionDashboard({ certified }: { certified: unknown }
       </section>
     </div>
   );
+}
+
+function readResultSets(certified: unknown): BenchmarkResultSet[] {
+  if (!certified || typeof certified !== "object") return [];
+  const value = (certified as { resultSets?: unknown }).resultSets;
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is BenchmarkResultSet =>
+          Boolean(
+            item &&
+              typeof item === "object" &&
+              typeof (item as { id?: unknown }).id === "string"
+          )
+      )
+    : [];
 }
 
 export function readDecisionDashboardRows(

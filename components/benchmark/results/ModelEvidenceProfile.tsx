@@ -38,6 +38,7 @@ export function ModelEvidenceProfile({
     <Card
       ref={profileRef}
       id={id}
+      data-result-set-id={row.resultSetId}
       role="region"
       aria-labelledby={titleId}
       tabIndex={-1}
@@ -69,6 +70,15 @@ export function ModelEvidenceProfile({
               ))
             )}
           </div>
+          {row.completedAt && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Completed{" "}
+              {new Intl.DateTimeFormat(undefined, {
+                dateStyle: "medium",
+                timeStyle: "short",
+              }).format(new Date(row.completedAt))}
+            </p>
+          )}
         </div>
         <Button
           type="button"

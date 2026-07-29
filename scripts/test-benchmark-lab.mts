@@ -345,13 +345,15 @@ const providerOnlyCertifiedMarkup = renderToStaticMarkup(
   })
 );
 check(
-  "certified provider-error cleanup remains visible when track has only excluded attempts",
-  providerOnlyCertifiedMarkup.includes("Remove provider-error results"),
+  "certified provider-error evidence does not expose attempt-level deletion",
+  !providerOnlyCertifiedMarkup.includes("Remove provider-error results") &&
+    !providerOnlyCertifiedMarkup.includes("Delete snapshot"),
   providerOnlyCertifiedMarkup
 );
 check(
-  "certified provider-only empty state still explains there are no scored attempts",
-  providerOnlyCertifiedMarkup.includes("no scored certified attempts"),
+  "certified provider-only empty state directs incomplete evidence to Data",
+  providerOnlyCertifiedMarkup.includes("No WorkBench scored attempts yet") &&
+    providerOnlyCertifiedMarkup.includes("remain visible in Data"),
   providerOnlyCertifiedMarkup
 );
 

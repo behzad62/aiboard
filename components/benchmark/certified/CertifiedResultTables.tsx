@@ -65,11 +65,9 @@ export function CertifiedLeaderboard({
   sortKey,
   onSortChange,
   paretoIds,
-  deletingAttemptIds,
-  deleteInFlight,
-  providerErrorCount,
-  onDeleteAttempt,
-  onDeleteProviderErrors,
+  deletingResultSetIds = EMPTY_RESULT_SET_IDS,
+  deleteInFlight = false,
+  onDeleteResultSet = () => undefined,
   titleOverride,
   rosterByTeamId,
 }: {
@@ -78,11 +76,9 @@ export function CertifiedLeaderboard({
   sortKey: LeaderboardSortKey;
   onSortChange: (key: LeaderboardSortKey) => void;
   paretoIds: Set<string>;
-  deletingAttemptIds: Set<string>;
-  deleteInFlight: boolean;
-  providerErrorCount: number;
-  onDeleteAttempt: (attemptId: string, label: string) => void;
-  onDeleteProviderErrors: () => void;
+  deletingResultSetIds?: ReadonlySet<string>;
+  deleteInFlight?: boolean;
+  onDeleteResultSet?: (resultSetId: string, label: string) => void;
   /** Overrides the computed "$Track leaderboard" title — used by LensTabs.tsx
    * to label this same table "Solo leaderboard" / "Team leaderboard" without
    * duplicating the table markup. */
@@ -102,24 +98,10 @@ export function CertifiedLeaderboard({
                 : `${TRACK_LABELS[track]} leaderboard`)}
           </CardTitle>
           <CardDescription>
-            {SORT_BASIS_TEXT[sortKey]} Ranked only from scored certified
-            attempts. Excluded provider, harness, environment, and user-aborted
-            results stay visible as evidence and can still be removed.
+            {SORT_BASIS_TEXT[sortKey]} Only fully completed benchmark snapshots
+            appear here. Incomplete evidence is available in Data.
           </CardDescription>
         </div>
-        {providerErrorCount > 0 && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onDeleteProviderErrors}
-            disabled={deleteInFlight}
-            className="shrink-0"
-          >
-            <Trash2 className="h-4 w-4" aria-hidden="true" />
-            Remove provider-error results
-          </Button>
-        )}
       </CardHeader>
       {rows.length > 0 && (
         <div className="px-6 pb-2">
@@ -129,7 +111,7 @@ export function CertifiedLeaderboard({
       {rows.length === 0 ? (
         <CardContent className="py-8 text-center text-sm text-muted-foreground">
           Certified records were loaded, but there are no scored certified
-          attempts for this view yet. Excluded evidence remains removable.
+          snapshots for this view yet. Open Data to inspect incomplete evidence.
         </CardContent>
       ) : (
         <CardContent className="overflow-x-auto">
@@ -250,19 +232,20 @@ export function CertifiedLeaderboard({
                     )}
                   </td>
                   <td className="py-3 pl-3 text-right">
-                    {row.latestAttemptId ? (
+                    {row.resultSetId ? (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => onDeleteAttempt(row.latestAttemptId!, row.label)}
+                        onClick={() => onDeleteResultSet(row.resultSetId, row.label)}
                         disabled={
                           deleteInFlight ||
-                          deletingAttemptIds.has(row.latestAttemptId)
+                          deletingResultSetIds.has(row.resultSetId)
                         }
+                        data-focus-return={row.configurationKey}
                       >
                         <Trash2 className="h-4 w-4" aria-hidden="true" />
-                        Remove
+                        Delete snapshot
                       </Button>
                     ) : (
                       <span className="text-xs text-muted-foreground">n/a</span>
@@ -277,6 +260,8 @@ export function CertifiedLeaderboard({
     </Card>
   );
 }
+
+const EMPTY_RESULT_SET_IDS: ReadonlySet<string> = new Set();
 
 function RosterChips({ roles }: { roles?: RosterRole[] }) {
   if (!roles || roles.length === 0) return null;

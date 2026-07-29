@@ -16,6 +16,11 @@ import { BenchmarkReportSummary } from "@/components/benchmark/BenchmarkReportSu
 import { BenchmarkSummaryStrip } from "@/components/benchmark/BenchmarkSummaryStrip";
 import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { useBenchmarkReportActions } from "@/components/benchmark/useBenchmarkReportActions";
+import {
+  BenchmarkResultSetAudit,
+  latestCompletedResultSetIds,
+} from "@/components/benchmark/BenchmarkResultSetAudit";
+import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
 
 /**
  * Housekeeping view for the benchmark page's "Data" tab: run history counts,
@@ -38,6 +43,7 @@ export function BenchmarkLab() {
     suiteCount,
     traceCount,
     reportCounts,
+    resultSetAuditRows,
     corruptRunFileCount,
     refresh,
     setMessage,
@@ -48,6 +54,11 @@ export function BenchmarkLab() {
     dashboard,
     reload: refresh,
     setMessage,
+  });
+  const resultSetDeletion = useBenchmarkResultSetDeletion({
+    onRefresh: refresh,
+    setMessage,
+    latestResultSetIds: latestCompletedResultSetIds(resultSetAuditRows),
   });
 
   if (locked) {
@@ -102,6 +113,14 @@ export function BenchmarkLab() {
           dashboard={dashboard}
           suiteCount={suiteCount}
           traceCount={traceCount}
+        />
+        <BenchmarkResultSetAudit
+          rows={resultSetAuditRows}
+          deletingIds={resultSetDeletion.deletingIds}
+          deleteInFlight={resultSetDeletion.deleteInFlight}
+          onDelete={(resultSet, label) =>
+            void resultSetDeletion.requestDelete(resultSet, label)
+          }
         />
         <BenchmarkReportSummary counts={reportCounts} />
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3">

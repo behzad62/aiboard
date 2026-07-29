@@ -65,7 +65,11 @@ export function BenchmarkPage() {
         <TabsContent value="results" className="space-y-6">
           <DashboardGate locked={locked} loading={loading}>
             {message && <MessageBanner message={message} />}
-            <BenchmarkDecisionDashboard certified={certifiedDashboard} />
+            <BenchmarkDecisionDashboard
+              certified={certifiedDashboard}
+              onRefresh={refresh}
+              setMessage={setMessage}
+            />
             <details className="overflow-hidden rounded-xl border">
               <summary className="cursor-pointer select-none px-4 py-4">
                 <span className="block text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">

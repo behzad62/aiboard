@@ -2,12 +2,14 @@ import {
   __resetBenchmarkStoreForTests,
   deleteBenchmarkAttemptCascade,
   deleteBenchmarkAttemptsCascade,
+  deleteBenchmarkResultSetCascade,
   deleteBenchmarkRunCascade,
   listBenchmarkAttemptsV2,
   listBenchmarkArtifacts,
   listBenchmarkFailures,
   listBenchmarkRunEvents,
   listBenchmarkRuns,
+  listBenchmarkResultSets,
   listBenchmarkToolCallTraces,
   listBenchmarkTraces,
   listBenchmarkVerifierResults,
@@ -16,6 +18,7 @@ import {
   saveBenchmarkFailure,
   saveHarnessCertificationResult,
   saveBenchmarkRun,
+  saveBenchmarkResultSet,
   saveBenchmarkRunEvent,
   saveBenchmarkToolCallTrace,
   saveBenchmarkTrace,
@@ -28,9 +31,11 @@ import type {
   BenchmarkModelCallTrace,
   BenchmarkRun,
   BenchmarkRunEvent,
+  BenchmarkResultSet,
   BenchmarkToolCallTrace,
   BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
+import { selectBenchmarkResultSeries } from "../lib/benchmark/certified/result-set-selectors";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -368,6 +373,98 @@ check("batch cascade removes verifiers", batchSummary.verifiers === 2, batchSumm
 check("batch cascade removes artifacts", batchSummary.artifacts === 4, batchSummary);
 check("batch cascade leaves no batch attempts", (await listBenchmarkAttemptsV2()).length === 0);
 check("batch cascade leaves no batch artifacts", (await listBenchmarkArtifacts()).length === 0);
+
+__resetBenchmarkStoreForTests();
+const snapshotMetrics: NonNullable<BenchmarkResultSet["metrics"]> = {
+  attempts: 1,
+  passed: 1,
+  failed: 0,
+  verifiedPassRate: 1,
+  verifiedQuality: 1,
+  overallScore: 1,
+  trackBreakdown: [],
+  jobSuccessScore: 100,
+  efficiencyScore: 100,
+  toolReliabilityScore: null,
+  toolReliabilitySamples: 0,
+  costUsd: null,
+  averageCostUsd: null,
+  durationMs: 1,
+  costPerPass: null,
+  speedPerPassMs: 1,
+  inputTokens: 1,
+  outputTokens: 1,
+  totalTokens: 2,
+  tokensPerPass: 2,
+  costBasis: "tokens",
+};
+const snapshotConfiguration: BenchmarkResultSet["configuration"] = {
+  subjectKind: "model",
+  displayName: "Deletion snapshot",
+  providerId: "test",
+  modelId: "test:model",
+  reasoningEffort: "medium",
+  roles: [],
+  tracks: [],
+};
+const olderSnapshot: BenchmarkResultSet = {
+  id: "snapshot-older",
+  schemaVersion: 1,
+  executionId: "execution-older",
+  anchorRunId: "snapshot-shared-run",
+  runIds: ["snapshot-shared-run"],
+  configurationKey: "configuration-delete",
+  configuration: snapshotConfiguration,
+  expectedAttempts: [],
+  status: "completed",
+  createdAt: "2026-07-28T10:00:00.000Z",
+  completedAt: "2026-07-28T11:00:00.000Z",
+  terminalAt: "2026-07-28T11:00:00.000Z",
+  metrics: snapshotMetrics,
+};
+const latestSnapshot: BenchmarkResultSet = {
+  ...olderSnapshot,
+  id: "snapshot-latest",
+  executionId: "execution-latest",
+  createdAt: "2026-07-29T10:00:00.000Z",
+  completedAt: "2026-07-29T11:00:00.000Z",
+  terminalAt: "2026-07-29T11:00:00.000Z",
+};
+await saveBenchmarkRun({
+  ...run,
+  id: "snapshot-shared-run",
+  resultSetIds: [olderSnapshot.id, latestSnapshot.id],
+});
+await saveBenchmarkResultSet(olderSnapshot);
+await saveBenchmarkResultSet(latestSnapshot);
+await saveBenchmarkAttemptV2({
+  ...attempt,
+  id: "attempt-snapshot-older",
+  resultSetId: olderSnapshot.id,
+});
+await saveBenchmarkAttemptV2({
+  ...attempt,
+  id: "attempt-snapshot-latest",
+  resultSetId: latestSnapshot.id,
+});
+const snapshotDeleteSummary = await deleteBenchmarkResultSetCascade(
+  latestSnapshot.id
+);
+const retainedSnapshots = await listBenchmarkResultSets();
+const retainedAttempts = await listBenchmarkAttemptsV2();
+check(
+  "whole-snapshot deletion targets the exact result-set id",
+  snapshotDeleteSummary.resultSets === 1 &&
+    retainedSnapshots.map((item) => item.id).join(",") === olderSnapshot.id &&
+    retainedAttempts.map((item) => item.resultSetId).join(",") === olderSnapshot.id,
+  { snapshotDeleteSummary, retainedSnapshots, retainedAttempts }
+);
+const promotedSeries = selectBenchmarkResultSeries(retainedSnapshots, () => true);
+check(
+  "deleting latest promotes the previous completed snapshot",
+  promotedSeries[0]?.latest.id === olderSnapshot.id,
+  promotedSeries
+);
 
 if (failures > 0) {
   console.log(`FAIL ${failures} check(s) failed`);

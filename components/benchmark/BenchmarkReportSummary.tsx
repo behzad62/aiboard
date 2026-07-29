@@ -24,6 +24,7 @@ export function BenchmarkReportSummary({
     ["Failures", counts.failures],
   ] as const;
   const certifiedRows = [
+    ["Result sets", counts.resultSets],
     ["Certified cases", counts.certifiedCases],
     ["Certified attempts", counts.certifiedAttempts],
     ["Verifier results", counts.verifierResults],

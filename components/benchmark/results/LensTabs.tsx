@@ -44,11 +44,9 @@ export function LensTabs({
   teamIqRows,
   teamIqCards,
   workBenchRoleBoards,
-  deletingAttemptIds,
+  deletingResultSetIds,
   deleteInFlight,
-  providerErrorAttemptIds,
-  onDeleteAttempt,
-  onDeleteProviderErrors,
+  onDeleteResultSet,
 }: {
   /** The "all tracks" leaderboard (already ranked by sortKey). Solo/Teams
    * split it client-side by member count — never re-fetched or re-ranked. */
@@ -59,11 +57,9 @@ export function LensTabs({
   teamIqRows: TeamIqComboMatrixRow[];
   teamIqCards: TeamIqRecommendationCard[];
   workBenchRoleBoards: WorkBenchRoleBoards;
-  deletingAttemptIds: Set<string>;
+  deletingResultSetIds: ReadonlySet<string>;
   deleteInFlight: boolean;
-  providerErrorAttemptIds: string[];
-  onDeleteAttempt: (attemptId: string, label: string) => void;
-  onDeleteProviderErrors: () => void;
+  onDeleteResultSet: (resultSetId: string, label: string) => void;
 }) {
   const [lens, setLens] = useState<Lens>("solo");
 
@@ -115,11 +111,9 @@ export function LensTabs({
             sortKey={sortKey}
             onSortChange={onSortChange}
             paretoIds={paretoIds}
-            deletingAttemptIds={deletingAttemptIds}
+            deletingResultSetIds={deletingResultSetIds}
             deleteInFlight={deleteInFlight}
-            providerErrorCount={providerErrorAttemptIds.length}
-            onDeleteAttempt={onDeleteAttempt}
-            onDeleteProviderErrors={onDeleteProviderErrors}
+            onDeleteResultSet={onDeleteResultSet}
           />
         ))}
 
@@ -135,11 +129,9 @@ export function LensTabs({
               sortKey={sortKey}
               onSortChange={onSortChange}
               paretoIds={paretoIds}
-              deletingAttemptIds={deletingAttemptIds}
+              deletingResultSetIds={deletingResultSetIds}
               deleteInFlight={deleteInFlight}
-              providerErrorCount={0}
-              onDeleteAttempt={onDeleteAttempt}
-              onDeleteProviderErrors={onDeleteProviderErrors}
+              onDeleteResultSet={onDeleteResultSet}
               rosterByTeamId={rosterByTeamId}
             />
           )}

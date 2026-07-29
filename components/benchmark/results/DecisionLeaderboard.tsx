@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useRef } from "react";
-import { ArrowUpDown, Eye } from "lucide-react";
+import { Fragment, useRef, useState } from "react";
+import { ArrowUpDown, ChevronDown, Eye, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,31 +12,91 @@ import {
 import { ModelEvidenceProfile } from "./ModelEvidenceProfile";
 import {
   SORT_OPTIONS,
+  type CertifiedResultHistorySeriesData,
   type LeaderboardSortKey
 } from "@/lib/benchmark/certified/dashboard-selectors";
 import { wilsonInterval, type DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
 import { VariantRosterBadges } from "./VariantRosterBadges";
+import {
+  RESULT_HISTORY_PAGE_SIZE,
+  ResultHistoryRows,
+  encodeIdentity,
+  formatCompletion,
+  historyRegionId,
+} from "./ResultHistoryRows";
 
 export function DecisionLeaderboard({
   rows,
   totalRows,
   sortKey,
   onSortChange,
-  selectedId,
-  onSelect
+  history = [],
+  selectedResultSetId = null,
+  selectedId = null,
+  onSelect,
+  deletingIds = EMPTY_DELETING_IDS,
+  deleteInFlight = false,
+  onDelete = () => undefined,
+  hasRawEvidence = false,
 }: {
   rows: DecisionRow[];
   totalRows: number;
   sortKey: LeaderboardSortKey;
   onSortChange: (key: LeaderboardSortKey) => void;
-  selectedId: string | null;
+  history?: CertifiedResultHistorySeriesData[];
+  selectedResultSetId?: string | null;
+  /** @deprecated Snapshot-aware callers use selectedResultSetId. */
+  selectedId?: string | null;
   onSelect: (row: DecisionRow) => void;
+  deletingIds?: ReadonlySet<string>;
+  deleteInFlight?: boolean;
+  onDelete?: (row: DecisionRow) => void;
+  hasRawEvidence?: boolean;
 }) {
   const triggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
+  const [visibleCounts, setVisibleCounts] = useState<Map<string, number>>(
+    () => new Map()
+  );
+  const historyByLatestId = new Map(
+    history.map((series) => [series.latestResultSetId, series.older])
+  );
+  const selectedSnapshotId = selectedResultSetId ?? selectedId;
 
   function closeProfile(row: DecisionRow, layout: "desktop" | "mobile") {
     onSelect(row);
-    requestAnimationFrame(() => triggerRefs.current.get(profileTriggerKey(row, layout))?.focus());
+    requestAnimationFrame(() => triggerRefs.current.get(resultProfileTriggerKey(row, layout))?.focus());
+  }
+
+  function registerProfileTrigger(
+    row: DecisionRow,
+    layout: "desktop" | "mobile",
+    node: HTMLButtonElement | null
+  ) {
+    const key = resultProfileTriggerKey(row, layout);
+    if (node) triggerRefs.current.set(key, node);
+    else triggerRefs.current.delete(key);
+  }
+
+  function toggleHistory(configurationKey: string) {
+    setExpandedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(configurationKey)) next.delete(configurationKey);
+      else next.add(configurationKey);
+      return next;
+    });
+  }
+
+  function showMore(configurationKey: string) {
+    setVisibleCounts((current) => {
+      const next = new Map(current);
+      next.set(
+        configurationKey,
+        (next.get(configurationKey) ?? RESULT_HISTORY_PAGE_SIZE) +
+          RESULT_HISTORY_PAGE_SIZE
+      );
+      return next;
+    });
   }
 
   return (
@@ -49,6 +109,9 @@ export function DecisionLeaderboard({
           <CardTitle className="mt-1">Model and team leaderboard</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
             Showing {rows.length} of {totalRows} results. Missing measurements remain unavailable.
+          </p>
+          <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
+            Only fully completed benchmark snapshots appear here. Expand a row to compare older runs of the same configuration.
           </p>
         </div>
         <label className="flex min-w-56 items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -69,8 +132,9 @@ export function DecisionLeaderboard({
       </CardHeader>
       {rows.length === 0 ? (
         <CardContent className="py-10 text-center text-sm text-muted-foreground">
-          No certified results match these filters. Reset a filter or run the missing benchmark
-          track.
+          {hasRawEvidence
+            ? "Benchmark evidence is stored, but no fully completed snapshot qualifies for Results. Open Data to inspect incomplete runs."
+            : "No certified results match these filters. Reset a filter or run the missing benchmark track."}
         </CardContent>
       ) : (
         <CardContent className="px-0 pb-0">
@@ -91,10 +155,15 @@ export function DecisionLeaderboard({
               <tbody>
                 {rows.map((row) => {
                   const interval = passInterval(row);
-                  const selected = selectedId === row.id;
+                  const selected = selectedSnapshotId === rowIdentity(row);
                   const profileId = evidenceProfileId(row, "desktop");
+                  const older = historyByLatestId.get(rowIdentity(row)) ?? [];
+                  const expanded = expandedKeys.has(row.configurationKey);
+                  const visibleCount =
+                    visibleCounts.get(row.configurationKey) ??
+                    RESULT_HISTORY_PAGE_SIZE;
                   return (
-                    <Fragment key={row.id}>
+                    <Fragment key={rowIdentity(row)}>
                       <tr
                         className={`border-b ${selected ? "bg-sky-500/[0.06]" : "hover:bg-muted/20"}`}
                       >
@@ -114,6 +183,22 @@ export function DecisionLeaderboard({
                           <div className="mt-0.5 text-xs text-muted-foreground">
                             {row.attempts} scored attempt
                             {row.attempts === 1 ? "" : "s"}
+                          </div>
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {formatCompletion(row.completedAt)}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            <SignedDelta metric="Overall" value={row.overallDelta} />
+                            <SignedDelta metric="Pass" value={row.passRateDelta} percentagePoints />
+                            {older.length > 0 && (
+                              <HistoryToggle
+                                row={row}
+                                layout="desktop"
+                                count={older.length + 1}
+                                expanded={expanded}
+                                onClick={() => toggleHistory(row.configurationKey)}
+                              />
+                            )}
                           </div>
                           {row.isTeam && (
                             <div className="mt-1">
@@ -161,20 +246,30 @@ export function DecisionLeaderboard({
                         </td>
                         <td className="px-5 py-3 text-right">
                           <Button
-                            ref={(node) => {
-                              const key = profileTriggerKey(row, "desktop");
-                              if (node) triggerRefs.current.set(key, node);
-                              else triggerRefs.current.delete(key);
-                            }}
+                            ref={(node) => registerProfileTrigger(row, "desktop", node)}
                             type="button"
                             size="sm"
                             variant={selected ? "secondary" : "outline"}
                             aria-expanded={selected}
                             aria-controls={profileId}
+                            data-result-set-id={row.resultSetId}
                             onClick={() => onSelect(row)}
                           >
                             <Eye className="h-4 w-4" aria-hidden="true" />
                             View profile
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="ml-1"
+                            disabled={deleteInFlight || deletingIds.has(rowIdentity(row))}
+                            data-focus-return={`desktop:${row.configurationKey}`}
+                            data-result-set-id={row.resultSetId}
+                            onClick={() => onDelete(row)}
+                            aria-label="Delete snapshot"
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
                           </Button>
                         </td>
                       </tr>
@@ -191,6 +286,21 @@ export function DecisionLeaderboard({
                           </td>
                         </tr>
                       )}
+                      <ResultHistoryRows
+                        layout="desktop"
+                        latest={row}
+                        older={older}
+                        expanded={expanded}
+                        visibleCount={visibleCount}
+                        selectedResultSetId={selectedSnapshotId}
+                        deletingIds={deletingIds}
+                        deleteInFlight={deleteInFlight}
+                        onShowMore={() => showMore(row.configurationKey)}
+                        onSelectProfile={(historyRow) => onSelect(historyRow)}
+                        onDelete={onDelete}
+                        onCloseProfile={closeProfile}
+                        registerProfileTrigger={registerProfileTrigger}
+                      />
                     </Fragment>
                   );
                 })}
@@ -200,10 +310,15 @@ export function DecisionLeaderboard({
           <ul className="md:hidden">
             {rows.map((row) => {
               const interval = passInterval(row);
-              const selected = selectedId === row.id;
+              const selected = selectedSnapshotId === rowIdentity(row);
               const profileId = evidenceProfileId(row, "mobile");
+              const older = historyByLatestId.get(rowIdentity(row)) ?? [];
+              const expanded = expandedKeys.has(row.configurationKey);
+              const visibleCount =
+                visibleCounts.get(row.configurationKey) ??
+                RESULT_HISTORY_PAGE_SIZE;
               return (
-                <Fragment key={row.id}>
+                <Fragment key={rowIdentity(row)}>
                   <li className={`border-t px-4 py-4 ${selected ? "bg-sky-500/[0.06]" : ""}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -230,6 +345,22 @@ export function DecisionLeaderboard({
                       </div>
                     )}
                     <FailureEvidenceNotice row={row} />
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      {formatCompletion(row.completedAt)}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <SignedDelta metric="Overall" value={row.overallDelta} />
+                      <SignedDelta metric="Pass" value={row.passRateDelta} percentagePoints />
+                      {older.length > 0 && (
+                        <HistoryToggle
+                          row={row}
+                          layout="mobile"
+                          count={older.length + 1}
+                          expanded={expanded}
+                          onClick={() => toggleHistory(row.configurationKey)}
+                        />
+                      )}
+                    </div>
                     <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3">
                       <MobileMetric
                         label="Overall index"
@@ -276,20 +407,29 @@ export function DecisionLeaderboard({
                     </dl>
                     <div className="mt-4 flex justify-end">
                       <Button
-                        ref={(node) => {
-                          const key = profileTriggerKey(row, "mobile");
-                          if (node) triggerRefs.current.set(key, node);
-                          else triggerRefs.current.delete(key);
-                        }}
+                        ref={(node) => registerProfileTrigger(row, "mobile", node)}
                         type="button"
                         size="sm"
                         variant={selected ? "secondary" : "outline"}
                         aria-expanded={selected}
                         aria-controls={profileId}
+                        data-result-set-id={row.resultSetId}
                         onClick={() => onSelect(row)}
                       >
                         <Eye className="h-4 w-4" aria-hidden="true" />
                         View profile
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={deleteInFlight || deletingIds.has(rowIdentity(row))}
+                        data-focus-return={`mobile:${row.configurationKey}`}
+                        data-result-set-id={row.resultSetId}
+                        onClick={() => onDelete(row)}
+                        aria-label="Delete snapshot"
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
                       </Button>
                     </div>
                   </li>
@@ -302,6 +442,21 @@ export function DecisionLeaderboard({
                       />
                     </li>
                   )}
+                  <ResultHistoryRows
+                    layout="mobile"
+                    latest={row}
+                    older={older}
+                    expanded={expanded}
+                    visibleCount={visibleCount}
+                    selectedResultSetId={selectedSnapshotId}
+                    deletingIds={deletingIds}
+                    deleteInFlight={deleteInFlight}
+                    onShowMore={() => showMore(row.configurationKey)}
+                    onSelectProfile={(historyRow) => onSelect(historyRow)}
+                    onDelete={onDelete}
+                    onCloseProfile={closeProfile}
+                    registerProfileTrigger={registerProfileTrigger}
+                  />
                 </Fragment>
               );
             })}
@@ -313,11 +468,85 @@ export function DecisionLeaderboard({
 }
 
 function evidenceProfileId(row: DecisionRow, layout: "desktop" | "mobile"): string {
-  return `benchmark-evidence-${layout}-${encodeRowIdentity(row.id)}`;
+  return `benchmark-evidence-${layout}-${encodeIdentity(rowIdentity(row))}`;
 }
 
-function profileTriggerKey(row: DecisionRow, layout: "desktop" | "mobile"): string {
-  return `${layout}:${row.id}`;
+const EMPTY_DELETING_IDS: ReadonlySet<string> = new Set();
+
+export function resultProfileTriggerKey(
+  row: DecisionRow,
+  layout: "desktop" | "mobile"
+): string {
+  return `${layout}:${rowIdentity(row)}`;
+}
+
+function rowIdentity(row: DecisionRow): string {
+  return row.resultSetId || row.id;
+}
+
+function HistoryToggle({
+  row,
+  layout,
+  count,
+  expanded,
+  onClick,
+}: {
+  row: DecisionRow;
+  layout: "desktop" | "mobile";
+  count: number;
+  expanded: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={historyRegionId(row.configurationKey, layout)}
+      data-focus-return={`${layout}:${row.configurationKey}`}
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-sky-700 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring dark:text-sky-300"
+    >
+      <ChevronDown
+        className={`h-3.5 w-3.5 motion-reduce:transition-none ${
+          expanded ? "rotate-180" : ""
+        }`}
+        aria-hidden="true"
+      />
+      {count} runs
+    </button>
+  );
+}
+
+function SignedDelta({
+  metric,
+  value,
+  percentagePoints = false,
+}: {
+  metric: "Overall" | "Pass";
+  value: number | null;
+  percentagePoints?: boolean;
+}) {
+  if (value == null) return null;
+  const scaled = percentagePoints ? value * 100 : value * 100;
+  const rounded = Math.round(scaled);
+  const direction = rounded > 0 ? "higher" : rounded < 0 ? "lower" : "unchanged";
+  const sign = rounded > 0 ? "+" : "";
+  return (
+    <span
+      aria-label={`${metric} ${direction} by ${Math.abs(rounded)}${
+        percentagePoints ? " percentage points" : " points"
+      } versus the previous completed run`}
+      className={`text-[11px] font-medium tabular-nums ${
+        rounded > 0
+          ? "text-emerald-700 dark:text-emerald-300"
+          : rounded < 0
+            ? "text-rose-700 dark:text-rose-300"
+            : "text-muted-foreground"
+      }`}
+    >
+      {metric} {sign}{rounded}{percentagePoints ? " pp" : ""}
+    </span>
+  );
 }
 
 function passInterval(row: DecisionRow) {
@@ -357,13 +586,6 @@ function formatRankMetric(row: DecisionRow, sortKey: LeaderboardSortKey): string
 
 function isTeamLiftUnavailable(row: DecisionRow): boolean {
   return row.isTeam && (row.teamLift == null || row.teamLiftTracks.length === 0);
-}
-
-function encodeRowIdentity(value: string): string {
-  if (value.length === 0) return "u-empty";
-  return `u-${Array.from(value, (character) =>
-    character.codePointAt(0)!.toString(16).padStart(6, "0")
-  ).join("-")}`;
 }
 
 function formatQualityScore(value: number | null): string {
