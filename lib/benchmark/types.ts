@@ -218,6 +218,109 @@ export interface BenchmarkTeamComposition {
   strategy?: TeamIqStrategy;
 }
 
+export type BenchmarkResultSetStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "deleting";
+
+export interface BenchmarkResultRoleConfiguration {
+  role: BenchmarkTeamCompositionRole["role"];
+  slot: string;
+  providerId: string;
+  modelId: string;
+  reasoningEffort: string;
+  maxTokens: number | null;
+}
+
+export interface BenchmarkResultTrackConfiguration {
+  track: BenchmarkTrack;
+  suiteId: string;
+  caseManifest: Array<{
+    caseId: string;
+    caseVersion: string;
+    scoringVersion: string;
+  }>;
+  maxTokens: number | null;
+}
+
+export interface BenchmarkResultConfiguration {
+  subjectKind: "model" | "team";
+  displayName: string;
+  providerId?: string;
+  modelId?: string;
+  reasoningEffort?: string;
+  strategy?: string;
+  roles: BenchmarkResultRoleConfiguration[];
+  tracks: BenchmarkResultTrackConfiguration[];
+}
+
+export interface BenchmarkExpectedResultAttempt {
+  runId: string;
+  track: BenchmarkTrack;
+  suiteId: string;
+  caseId: string;
+  caseVersion: string;
+  scoringVersion: string;
+  teamCompositionId: string;
+}
+
+export interface CertifiedResultSnapshotMetrics {
+  attempts: number;
+  passed: number;
+  failed: number;
+  verifiedPassRate: number | null;
+  verifiedQuality: number;
+  overallScore: number | null;
+  trackBreakdown: Array<{
+    track: BenchmarkTrack;
+    attempts: number;
+    passed: number;
+    verifiedPassRate: number | null;
+    averageVerifiedQuality: number;
+  }>;
+  jobSuccessScore: number;
+  efficiencyScore: number;
+  toolReliabilityScore: number | null;
+  toolReliabilitySamples: number;
+  costUsd: number | null;
+  averageCostUsd: number | null;
+  durationMs: number | null;
+  costPerPass: number | null;
+  speedPerPassMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  tokensPerPass: number | null;
+  costBasis: "usd" | "tokens" | null;
+}
+
+export interface BenchmarkResultSet {
+  id: string;
+  schemaVersion: 1;
+  executionId: string;
+  anchorRunId: string;
+  runIds: string[];
+  configurationKey: string;
+  configuration: BenchmarkResultConfiguration;
+  expectedAttempts: BenchmarkExpectedResultAttempt[];
+  status: BenchmarkResultSetStatus;
+  createdAt: string;
+  completedAt?: string;
+  terminalAt?: string;
+  failure?: { kind: string; code: string; message: string };
+  metrics?: CertifiedResultSnapshotMetrics;
+}
+
+export interface BenchmarkResultSeries {
+  configurationKey: string;
+  latest: BenchmarkResultSet;
+  older: BenchmarkResultSet[];
+  overallDelta: number | null;
+  passRateDelta: number | null;
+}
+
 export interface BenchmarkVerifierAssertionResult {
   id: string;
   label: string;
