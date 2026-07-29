@@ -64,6 +64,18 @@ export function createBenchmarkRunRecord(input: {
     metricValueIds: [],
     artifactIds: [],
     failureIds: [],
+    resultSetIds: Array.from(
+      new Set([
+        ...(input.context.resultSetIdForAttempt("", undefined)
+          ? [input.context.resultSetIdForAttempt("", undefined)!]
+          : []),
+        ...input.context.teamCompositionIds
+          .map((teamCompositionId) =>
+            input.context.resultSetIdForAttempt("", teamCompositionId)
+          )
+          .filter((id): id is string => Boolean(id)),
+      ])
+    ),
   };
 }
 

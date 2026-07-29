@@ -28,6 +28,7 @@ import { classifyProviderFailure, isProviderFailureMessage } from "./classify-pr
 import { persistReturnedAttempts, type CertifiedTrackRunner } from "./model-runner";
 import type { CertifiedRunBudget } from "./run-context";
 import { throwIfCertifiedRunAborted } from "./model-call";
+import type { ResultSetOwnershipMap } from "./result-set-publication";
 
 export interface RunCertifiedBenchmarkInput {
   runId?: string;
@@ -41,6 +42,8 @@ export interface RunCertifiedBenchmarkInput {
   certification: HarnessCertificationResult;
   runner: CertifiedTrackRunner;
   signal?: AbortSignal;
+  resultSetOwnership?: ResultSetOwnershipMap;
+  onSubjectCompleted?: (teamCompositionId: string) => Promise<void>;
 }
 
 export async function runCertifiedBenchmark(
@@ -65,6 +68,8 @@ export async function runCertifiedBenchmark(
     caseIds: input.caseIds,
     teamCompositionIds: input.teamCompositionIds,
     modelBudget: input.modelBudget,
+    resultSetOwnership: input.resultSetOwnership,
+    onSubjectCompleted: input.onSubjectCompleted,
     async onTeamCompositionIdsChanged(teamCompositionIds) {
       throwIfCertifiedRunAborted(input.signal);
       run = updateRunningBenchmarkRunTeamCompositionIds(

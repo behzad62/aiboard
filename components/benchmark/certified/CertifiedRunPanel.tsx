@@ -91,6 +91,7 @@ import {
   normalizeBenchmarkEffortForModel,
   type BenchmarkModelEffortMap,
 } from "@/lib/benchmark/model-effort";
+import { reconcileStaleBenchmarkResultSets } from "@/lib/benchmark/certified/result-set-publication";
 
 export function CertifiedRunPanel({
   track,
@@ -195,6 +196,14 @@ export function CertifiedRunPanel({
   useEffect(() => {
     if (tabRun.error) setMessage(tabRun.error);
   }, [setMessage, tabRun.error]);
+
+  useEffect(() => {
+    void reconcileStaleBenchmarkResultSets({
+      hasLiveTabRun: certifiedTabRunCoordinator.getSnapshot().owner !== null,
+    }).catch((error) => {
+      setMessage(error instanceof Error ? error.message : String(error));
+    });
+  }, [setMessage, tabRun.owner]);
 
   useEffect(() => {
     const enabled = getEnabledModels().map((model) => ({
@@ -751,6 +760,7 @@ export function CertifiedRunPanel({
   // JSX above is untouched by the Step 1 extraction.
   function runSelected() {
     certifiedTabRunCoordinator.tryStart("advanced", {}, async (signal) => {
+      const executionId = `benchmark-execution-${crypto.randomUUID()}`;
       if (!suiteId) return;
       if (selectedTrack === "gameiq") {
         await runGameIqMultiModelExec({
@@ -771,6 +781,7 @@ export function CertifiedRunPanel({
           setMessage,
           setGameIqModelRuns,
           onComplete,
+          executionId,
         });
         return;
       }
@@ -797,6 +808,7 @@ export function CertifiedRunPanel({
         setSummary,
         setMessage,
         onComplete,
+        executionId,
       });
     });
   }

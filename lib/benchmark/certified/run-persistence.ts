@@ -35,6 +35,7 @@ import type {
 } from "./run-context";
 import type { CertifiedBenchmarkDashboardData } from "@/lib/benchmark/scoring/types";
 import { createCertifiedBudgetController } from "./budget";
+import type { ResultSetOwnershipMap } from "./result-set-publication";
 
 const DEFAULT_STALE_CERTIFIED_RUN_MS = 24 * 60 * 60 * 1000;
 const STALE_CERTIFIED_RUN_GRACE_MS = 5 * 60 * 1000;
@@ -53,6 +54,8 @@ export interface CreateCertifiedRunContextInput {
   onAttemptOwnersChanged?: (
     attemptOwners: CertifiedAttemptOwner[]
   ) => Promise<void>;
+  resultSetOwnership?: ResultSetOwnershipMap;
+  onSubjectCompleted?: (teamCompositionId: string) => Promise<void>;
 }
 
 export function createCertifiedRunContext(
@@ -72,6 +75,31 @@ export function createCertifiedRunContext(
   const teamCompositionIds = [...input.teamCompositionIds];
   const attemptOwners = new Map<string, CertifiedAttemptOwner>();
   const registeredAttemptOwners: CertifiedAttemptOwner[] = [];
+  const resultSetIdsByAttempt = new Map<string, string>();
+  const resultSetIdForAttempt = (
+    attemptId: string,
+    teamCompositionId?: string
+  ): string | undefined =>
+    resultSetIdsByAttempt.get(attemptId) ??
+    (teamCompositionId
+      ? input.resultSetOwnership?.byTeamCompositionId[teamCompositionId]
+      : undefined) ??
+    input.resultSetOwnership?.defaultResultSetId;
+  const own = <T extends { resultSetId?: string; attemptId?: string }>(
+    record: T,
+    teamCompositionId?: string,
+    explicitAttemptId?: string
+  ): T => {
+    const resultSetId =
+      record.resultSetId ??
+      (record.attemptId || explicitAttemptId
+        ? resultSetIdForAttempt(
+            record.attemptId ?? explicitAttemptId!,
+            teamCompositionId
+          )
+        : input.resultSetOwnership?.defaultResultSetId);
+    return resultSetId ? { ...record, resultSetId } : record;
+  };
 
   return {
     runId: input.runId,
@@ -84,6 +112,8 @@ export function createCertifiedRunContext(
     teamCompositionIds,
     attemptOwners: registeredAttemptOwners,
     modelBudget: input.modelBudget ?? {},
+    resultSetIdForAttempt,
+    subjectCompleted: input.onSubjectCompleted,
     async registerTeamCompositionId(teamCompositionId) {
       if (!teamCompositionIds.includes(teamCompositionId)) {
         teamCompositionIds.push(teamCompositionId);
@@ -103,6 +133,11 @@ export function createCertifiedRunContext(
       }
       if (existing) return;
       const registered = { ...owner };
+      const resultSetId =
+        input.resultSetOwnership?.byTeamCompositionId[
+          owner.teamCompositionId
+        ] ?? input.resultSetOwnership?.defaultResultSetId;
+      if (resultSetId) resultSetIdsByAttempt.set(owner.attemptId, resultSetId);
       attemptOwners.set(owner.attemptId, registered);
       const owners = [...attemptOwners.values()];
       registeredAttemptOwners.splice(
@@ -114,33 +149,37 @@ export function createCertifiedRunContext(
     },
     async recordAttempt(attempt) {
       assertAttemptBelongsToRun(attempt, input.runId, input.track);
-      attempts.set(attempt.id, attempt);
-      await saveBenchmarkAttemptV2(attempt);
+      const record = own(attempt, attempt.teamCompositionId, attempt.id);
+      attempts.set(record.id, record);
+      await saveBenchmarkAttemptV2(record);
     },
     async recordVerifier(result) {
-      verifierResults.set(result.id, result);
-      await saveBenchmarkVerifierResult(result);
+      const record = own(result);
+      verifierResults.set(record.id, record);
+      await saveBenchmarkVerifierResult(record);
     },
     async recordArtifact(artifact) {
-      const record = { ...artifact, runId: artifact.runId ?? input.runId };
+      const record = own({ ...artifact, runId: artifact.runId ?? input.runId });
       artifacts.set(record.id, record);
       await saveBenchmarkArtifact(record);
     },
     async recordTrace(trace) {
-      const record = { ...trace, runId: trace.runId ?? input.runId };
+      const record = own({ ...trace, runId: trace.runId ?? input.runId });
       traces.set(record.id, record);
       await saveBenchmarkTrace(record);
     },
     async recordEvent(event) {
-      events.set(event.id, event);
-      await saveBenchmarkRunEvent(event);
+      const record = own(event);
+      events.set(record.id, record);
+      await saveBenchmarkRunEvent(record);
     },
     async recordToolCall(trace) {
-      toolCalls.set(trace.id, trace);
-      await saveBenchmarkToolCallTrace(trace);
+      const record = own(trace);
+      toolCalls.set(record.id, record);
+      await saveBenchmarkToolCallTrace(record);
     },
     async recordFailure(failure) {
-      const record = { ...failure, runId: failure.runId ?? input.runId };
+      const record = own({ ...failure, runId: failure.runId ?? input.runId });
       failures.set(record.id, record);
       await saveBenchmarkFailure(record);
     },

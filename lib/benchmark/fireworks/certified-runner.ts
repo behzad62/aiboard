@@ -4,6 +4,7 @@ import {
   type CertifiedModelStream,
 } from "@/lib/benchmark/certified/model-call";
 import { CertifiedBudgetExceededError } from "@/lib/benchmark/certified/budget";
+import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import type {
   CertifiedRunContext,
   PersistentCertifiedRunContext,
@@ -126,6 +127,8 @@ export async function runCertifiedFireworksTeamIq(
     throwIfCertifiedRunAborted(input.signal);
     const attempt = await runFireworksAttempt(input, team);
     attempts.push(attempt);
+    await persistReturnedAttempts(input.context, [attempt]);
+    await input.context.subjectCompleted?.(team.id);
     // Once the certified budget is exhausted every further model call fails
     // the same way; stop cleanly instead of grinding the remaining teams
     // through zero-cost fallback loops. Attempts already completed are kept.

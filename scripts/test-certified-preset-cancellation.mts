@@ -335,9 +335,11 @@ const gameIqBoundaryFailures: Array<{ name: string; error: string }> = [];
 for (const boundary of [
   {
     write: 3,
-    finalWrites: 3,
+    // Pending result-set creation is now the paid-work admission boundary;
+    // cancellation terminalizes that durable manifest before returning.
+    finalWrites: 4,
     name: "team",
-    expected: { teams: 1, certifications: 1, cases: 1, runs: 0 },
+    expected: { teams: 0, certifications: 1, cases: 1, runs: 0 },
   },
   {
     write: 1,
@@ -353,11 +355,11 @@ for (const boundary of [
   },
   {
     write: 4,
-    // A durable run boundary writes its run blob and then the main store. Both
-    // writes belong to the already-entered boundary and may settle after abort.
-    finalWrites: 5,
+    // The fourth write is the pending result-set's main-store flush. The
+    // certified run is not admitted after cancellation wins this boundary.
+    finalWrites: 4,
     name: "run",
-    expected: { teams: 1, certifications: 1, cases: 1, runs: 1 },
+    expected: { teams: 0, certifications: 1, cases: 1, runs: 0 },
   },
 ] as const) {
   configureStore();

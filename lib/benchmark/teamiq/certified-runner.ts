@@ -112,6 +112,7 @@ export async function runCertifiedTeamIq(
     );
     attempts.push(attempt);
     await persistReturnedAttempts(input.context, [attempt]);
+    await input.context.subjectCompleted?.(team.id);
   }
 
   const links = linkTeamLiftBaselines({

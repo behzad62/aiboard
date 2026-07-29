@@ -41,6 +41,11 @@ export interface CertifiedRunContext {
   teamCompositionIds: string[];
   attemptOwners: CertifiedAttemptOwner[];
   modelBudget: CertifiedRunBudget;
+  resultSetIdForAttempt(
+    attemptId: string,
+    teamCompositionId?: string
+  ): string | undefined;
+  subjectCompleted?(teamCompositionId: string): Promise<void>;
   registerTeamCompositionId?(teamCompositionId: string): Promise<void>;
   registerAttemptOwner(owner: CertifiedAttemptOwner): Promise<void>;
   recordAttempt(attempt: BenchmarkAttemptV2): Promise<void>;

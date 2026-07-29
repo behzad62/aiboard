@@ -2,6 +2,7 @@ import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context"
 import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call";
 import type { BenchmarkAttemptV2, BenchmarkTeamComposition } from "@/lib/benchmark/types";
 import type { SelectedModel } from "@/lib/providers/base";
+import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import {
   runWorkBenchBuild,
   type RunBuildDiscussionFn,
@@ -85,7 +86,9 @@ export async function runCertifiedWorkBench(
         await input.context.recordArtifact(artifact);
       }
       attempts.push(result.attempt);
+      await persistReturnedAttempts(input.context, [result.attempt]);
     }
+    await input.context.subjectCompleted?.(teamCompositionId);
   }
   return attempts;
 }

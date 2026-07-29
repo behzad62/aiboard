@@ -13,6 +13,7 @@ import {
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
   saveHarnessCertificationResult,
+  listBenchmarkResultSets,
 } from "@/lib/benchmark/store";
 import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget";
 import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
@@ -86,8 +87,17 @@ import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner
 import type { SelectedModel } from "@/lib/providers/base";
 import {
   normalizeBenchmarkEffortForModel,
+  normalizeBenchmarkReasoningEffort,
   type BenchmarkModelEffortMap,
 } from "@/lib/benchmark/model-effort";
+import { benchmarkResultConfigurationKey } from "./result-set-identity";
+import {
+  cancelBenchmarkResultSet,
+  createPendingBenchmarkResultSet,
+  failBenchmarkResultSet,
+  publishBenchmarkResultSetIfComplete,
+  type ResultSetOwnershipMap,
+} from "./result-set-publication";
 
 export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 export const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
@@ -190,6 +200,9 @@ export interface RunSelectedContext extends CertifiedRunActions {
   effectiveHarnessProfile: HarnessProfile;
   certification: HarnessCertificationResult;
   effortByModelId: BenchmarkModelEffortMap;
+  executionId?: string;
+  runId?: string;
+  resultSetOwnership?: ResultSetOwnershipMap;
 }
 
 export async function runSelected(ctx: RunSelectedContext): Promise<void> {
@@ -209,6 +222,9 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     effectiveHarnessProfile,
     certification,
     effortByModelId,
+    executionId,
+    runId: plannedRunId,
+    resultSetOwnership: plannedOwnership,
     signal,
     runAbortRef,
     setRunning,
@@ -240,6 +256,23 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   const selectedWorkBenchPack =
     selectedTrack === "workbench" ? getWorkBenchCasePack(suiteId) : null;
   if (selectedTrack === "workbench" && !selectedWorkBenchPack) return;
+  if (selectedTrack === "workbench") {
+    const health = await checkBenchRunnerForLeg(
+      {
+        url: workBenchRunnerUrl,
+        token: workBenchRunnerToken,
+      },
+      signal
+    );
+    if (!health.ok) {
+      setMessage(
+        health.error
+          ? `Bench runner offline — WorkBench skipped (${health.error}).`
+          : "Bench runner offline — WorkBench skipped."
+      );
+      return;
+    }
+  }
   const { controller: abortController, unlink } = linkRunController(signal);
   runAbortRef.current = abortController;
   setRunning(true);
@@ -248,7 +281,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   setMessage(null);
   try {
     throwIfCertifiedRunAborted(abortController.signal);
-    const teams =
+    const initialTeams =
       selectedTrack === "teamiq"
         ? teamIqCompositionsForRun({
             models,
@@ -278,6 +311,13 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
                   ),
                 }),
           ];
+    const teams =
+      selectedTrack === "teamiq"
+        ? expandTeamIqTeamsBeforeExecution(
+            initialTeams,
+            isFireworksSuite(suiteId) ? includeSoloBaselines : true
+          )
+        : initialTeams;
     const primaryTeam = teams[0]!;
     for (const team of teams) {
       throwIfCertifiedRunAborted(abortController.signal);
@@ -288,7 +328,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     await saveHarnessCertificationResult(certification);
     throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("running");
-    const runId = `ui-${selectedTrack}-${Date.now()}`;
+    const runId = plannedRunId ?? `ui-${selectedTrack}-${Date.now()}`;
     const caseRecords =
       selectedTrack === "workbench"
         ? selectedWorkBenchPack
@@ -302,6 +342,27 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
       await saveBenchmarkCaseV2(caseRecord);
       throwIfCertifiedRunAborted(abortController.signal);
     }
+    const publication =
+      plannedOwnership
+        ? {
+            ownership: plannedOwnership,
+            resultSetIds: uniqueResultSetIds(plannedOwnership),
+          }
+        : await planResultSetsForRun({
+            executionId:
+              executionId ??
+              `execution-${selectedTrack}-${Date.now()}-${Math.random()
+                .toString(16)
+                .slice(2, 10)}`,
+            runId,
+            suiteId:
+              selectedTrack === "workbench"
+                ? suiteId
+                : `suite-${selectedTrack}`,
+            track: selectedTrack,
+            teams,
+            cases: caseRecords,
+          });
     throwIfCertifiedRunAborted(abortController.signal);
     const result = await runCertifiedBenchmark({
       runId,
@@ -319,6 +380,12 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
       }),
       certification,
       signal: abortController.signal,
+      resultSetOwnership: publication.ownership,
+      onSubjectCompleted: async (teamCompositionId) => {
+        const resultSetId =
+          publication.ownership.byTeamCompositionId[teamCompositionId];
+        if (resultSetId) await publishBenchmarkResultSetIfComplete(resultSetId);
+      },
       runner: async (context, options) => {
         if (selectedTrack === "toolreliability") {
           return runCertifiedToolReliability({
@@ -344,11 +411,11 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             teamCompositionIds: [primaryTeam.id],
             teamCompositions: [primaryTeam],
             signal: options?.signal,
-          runBuild: (buildInput) =>
-            runNativeWorkBenchBuild({
-              ...buildInput,
-              context,
-              models: workBenchSelectedModels,
+            runBuild: (buildInput) =>
+              runNativeWorkBenchBuild({
+                ...buildInput,
+                context,
+                models: workBenchSelectedModels,
                 teamComposition: primaryTeam,
               }),
           });
@@ -357,13 +424,12 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
           context,
           teamCompositions: teams,
           task: teamIqTaskForSuite(suiteId, fireworksPlayerCount),
-          includeSoloBaselines: isFireworksSuite(suiteId)
-            ? includeSoloBaselines
-            : true,
+          includeSoloBaselines: false,
           signal: options?.signal,
         });
       },
     });
+    await terminalizeRunPublication(publication.resultSetIds, result, abortController.signal);
     throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("persisting");
     setSummary(result);
@@ -398,6 +464,10 @@ export interface RunGameIqMultiModelContext extends CertifiedRunActions {
   certification: HarnessCertificationResult;
   setGameIqModelRuns: Dispatch<SetStateAction<GameIqModelRunState[]>>;
   effortByModelId: BenchmarkModelEffortMap;
+  executionId?: string;
+  runIdsByModelId?: Record<string, string>;
+  resultSetIdsByModelId?: Record<string, string>;
+  allowIncompletePublication?: boolean;
 }
 
 export async function runGameIqMultiModel(
@@ -418,6 +488,10 @@ export async function runGameIqMultiModel(
     effortByModelId,
     signal,
     onComplete,
+    executionId,
+    runIdsByModelId,
+    resultSetIdsByModelId,
+    allowIncompletePublication,
   } = ctx;
   const selectedModels = gameIqModelIds
     .map((id) => models.find((candidate) => candidate.modelId === id))
@@ -459,6 +533,37 @@ export async function runGameIqMultiModel(
   const caseRecords = gameIqPackIds.map((packId) =>
     caseForSelection("gameiq", packId, fireworksPlayerCount)
   );
+  const batchStamp = Date.now();
+  const execution =
+    executionId ??
+    `execution-gameiq-${batchStamp}-${Math.random().toString(16).slice(2, 10)}`;
+  const teamsByModelId = new Map(
+    selectedModels.map((model) => [
+      model.modelId,
+      deriveSoloTeamComposition({
+        modelId: model.modelId,
+        providerId: model.providerId,
+        displayName: model.displayName,
+        reasoningEffort: normalizeBenchmarkEffortForModel(
+          model,
+          effortByModelId[model.modelId]
+        ),
+      }),
+    ])
+  );
+  const plannedRunIds = Object.fromEntries(
+    selectedModels.map((model, index) => [
+      model.modelId,
+      runIdsByModelId?.[model.modelId] ??
+        `ui-gameiq-${batchStamp}-${slugForRunId(
+          model.providerId
+        )}-${slugForRunId(model.modelId)}-${index}`,
+    ])
+  );
+  const publicationByModelId = new Map<
+    string,
+    { ownership: ResultSetOwnershipMap; resultSetIds: string[] }
+  >();
 
   try {
     throwIfCertifiedRunAborted(abortController.signal);
@@ -469,9 +574,31 @@ export async function runGameIqMultiModel(
       await saveBenchmarkCaseV2(caseRecord);
       throwIfCertifiedRunAborted(abortController.signal);
     }
+    for (const model of selectedModels) {
+      const team = teamsByModelId.get(model.modelId)!;
+      const existingResultSetId = resultSetIdsByModelId?.[model.modelId];
+      publicationByModelId.set(
+        model.modelId,
+        existingResultSetId
+          ? {
+              ownership: {
+                defaultResultSetId: existingResultSetId,
+                byTeamCompositionId: { [team.id]: existingResultSetId },
+              },
+              resultSetIds: [existingResultSetId],
+            }
+          : await planResultSetsForRun({
+              executionId: execution,
+              runId: plannedRunIds[model.modelId]!,
+              suiteId: "suite-gameiq",
+              track: "gameiq",
+              teams: [team],
+              cases: caseRecords,
+            })
+      );
+    }
     setRunPhase("running");
 
-    const batchStamp = Date.now();
     const runOneModel = async (
       model: SelectedModel,
       index: number
@@ -480,18 +607,9 @@ export async function runGameIqMultiModel(
       updateGameIqModelRun(model.modelId, { status: "running" });
       // Unique per model even if two runs start in the same millisecond: the
       // batch index disambiguates the shared timestamp.
-      const runId = `ui-gameiq-${batchStamp}-${slugForRunId(
-        model.providerId
-      )}-${slugForRunId(model.modelId)}-${index}`;
-      const team = deriveSoloTeamComposition({
-        modelId: model.modelId,
-        providerId: model.providerId,
-        displayName: model.displayName,
-        reasoningEffort: normalizeBenchmarkEffortForModel(
-          model,
-          effortByModelId[model.modelId]
-        ),
-      });
+      const runId = plannedRunIds[model.modelId]!;
+      const team = teamsByModelId.get(model.modelId)!;
+      const publication = publicationByModelId.get(model.modelId)!;
       throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkTeamComposition(team);
       throwIfCertifiedRunAborted(abortController.signal);
@@ -510,6 +628,7 @@ export async function runGameIqMultiModel(
         }),
         certification,
         signal: abortController.signal,
+        resultSetOwnership: publication.ownership,
         runner: async (context, options) => {
           // Run each selected pack as its own attempt so the bundle produces
           // one scored attempt per pack (distinct caseId + attempt id). The
@@ -558,6 +677,12 @@ export async function runGameIqMultiModel(
           return [];
         },
       });
+      await terminalizeRunPublication(
+        publication.resultSetIds,
+        result,
+        abortController.signal,
+        allowIncompletePublication
+      );
       throwIfCertifiedRunAborted(abortController.signal);
       // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
       // the provider/budget error into the summary status; treat that as a
@@ -645,6 +770,24 @@ export async function runGameIqMultiModel(
           updateGameIqModelRun(model.modelId, cancelledState);
           return cancelledState;
         } catch (error) {
+          const publication = publicationByModelId.get(model.modelId);
+          if (publication) {
+            for (const resultSetId of publication.resultSetIds) {
+              if (abortController.signal.aborted) {
+                await cancelBenchmarkResultSet(
+                  resultSetId,
+                  abortReasonMessage(abortController.signal)
+                );
+              } else {
+                await failBenchmarkResultSet(resultSetId, {
+                  kind: "infrastructure",
+                  code: "unpublished_infrastructure_failure",
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+          }
           const state: GameIqModelRunState = {
             modelId: model.modelId,
             displayName: model.displayName,
@@ -860,6 +1003,166 @@ export function caseForSelection(
       referenceSolutionPrivate: true,
     },
   };
+}
+
+function expandTeamIqTeamsBeforeExecution(
+  teams: BenchmarkTeamComposition[],
+  includeSoloBaselines: boolean
+): BenchmarkTeamComposition[] {
+  if (!includeSoloBaselines) return teams;
+  const solos = new Map<string, BenchmarkTeamComposition>();
+  for (const team of teams) {
+    for (const role of team.roles) {
+      const key = [
+        role.providerId,
+        role.modelId,
+        normalizeBenchmarkReasoningEffort(role.reasoningEffort),
+      ].join("\u0000");
+      if (solos.has(key)) continue;
+      solos.set(
+        key,
+        deriveSoloTeamComposition({
+          modelId: role.modelId,
+          providerId: role.providerId,
+          displayName: role.displayName,
+          reasoningEffort: role.reasoningEffort,
+          temperature: role.temperature,
+          maxTokens: role.maxTokens,
+        })
+      );
+    }
+  }
+  const soloIds = new Set([...solos.values()].map((team) => team.id));
+  return [...solos.values(), ...teams.filter((team) => !soloIds.has(team.id))];
+}
+
+async function planResultSetsForRun(input: {
+  executionId: string;
+  runId: string;
+  suiteId: string;
+  track: RunnableTrack;
+  teams: BenchmarkTeamComposition[];
+  cases: BenchmarkCaseV2[];
+}): Promise<{
+  ownership: ResultSetOwnershipMap;
+  resultSetIds: string[];
+}> {
+  const byTeamCompositionId: Record<string, string> = {};
+  const resultSetIds: string[] = [];
+  for (const team of input.teams) {
+    const id = [
+      "result",
+      slugForRunId(input.executionId),
+      slugForRunId(team.id),
+    ].join("-");
+    const configuration = {
+      subjectKind:
+        team.strategy === "solo" || team.roles.length === 1
+          ? ("model" as const)
+          : ("team" as const),
+      displayName: team.name,
+      ...(team.roles.length === 1
+        ? {
+            providerId: team.roles[0]!.providerId,
+            modelId: team.roles[0]!.modelId,
+            reasoningEffort: team.roles[0]!.reasoningEffort,
+          }
+        : {}),
+      strategy: team.strategy,
+      roles: team.roles.map((role) => ({
+        role: role.role,
+        slot: role.slot,
+        providerId: role.providerId,
+        modelId: role.modelId,
+        reasoningEffort: role.reasoningEffort ?? "default",
+        maxTokens: role.maxTokens ?? null,
+      })),
+      tracks: [
+        {
+          track: input.track,
+          suiteId: input.suiteId,
+          caseManifest: input.cases.map((item) => ({
+            caseId: item.id,
+            caseVersion: item.caseVersion,
+            scoringVersion: item.scoring.scoringVersion,
+          })),
+          maxTokens: null,
+        },
+      ],
+    };
+    await createPendingBenchmarkResultSet({
+      id,
+      schemaVersion: 1,
+      executionId: input.executionId,
+      anchorRunId: input.runId,
+      runIds: [input.runId],
+      configurationKey: benchmarkResultConfigurationKey(configuration),
+      configuration,
+      expectedAttempts: input.cases.map((item) => ({
+        runId: input.runId,
+        track: input.track,
+        suiteId: input.suiteId,
+        caseId: item.id,
+        caseVersion: item.caseVersion,
+        scoringVersion: item.scoring.scoringVersion,
+        teamCompositionId: team.id,
+      })),
+    });
+    byTeamCompositionId[team.id] = id;
+    resultSetIds.push(id);
+  }
+  return {
+    ownership: {
+      ...(resultSetIds.length === 1
+        ? { defaultResultSetId: resultSetIds[0] }
+        : {}),
+      byTeamCompositionId,
+    },
+    resultSetIds,
+  };
+}
+
+function uniqueResultSetIds(ownership: ResultSetOwnershipMap): string[] {
+  return Array.from(
+    new Set([
+      ...(ownership.defaultResultSetId
+        ? [ownership.defaultResultSetId]
+        : []),
+      ...Object.values(ownership.byTeamCompositionId),
+    ])
+  );
+}
+
+async function terminalizeRunPublication(
+  resultSetIds: string[],
+  result: CertifiedRunSummary,
+  signal: AbortSignal,
+  allowIncomplete = false
+): Promise<void> {
+  for (const resultSetId of resultSetIds) {
+    if (signal.aborted) {
+      await cancelBenchmarkResultSet(resultSetId, abortReasonMessage(signal));
+      continue;
+    }
+    if (result.status !== "completed") {
+      await failBenchmarkResultSet(resultSetId, {
+        kind: "infrastructure",
+        code: "unpublished_infrastructure_failure",
+        message: result.error ?? "Certified benchmark output was not publishable.",
+      });
+      continue;
+    }
+    try {
+      await publishBenchmarkResultSetIfComplete(resultSetId);
+    } catch (error) {
+      if (allowIncomplete) continue;
+      await failBenchmarkResultSet(resultSetId, {
+        kind: "infrastructure",
+        code: "incomplete_benchmark_output",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 function certifiedRunBudgetForCases(
@@ -1125,11 +1428,147 @@ export interface RunPresetContext {
   onComplete: () => Promise<void>;
 }
 
+interface ModelIqPublicationPlan {
+  executionId: string;
+  gameRunIdsByModelId: Record<string, string>;
+  toolRunIdsByModelId: Record<string, string>;
+  resultSetIdsByModelId: Record<string, string>;
+}
+
+async function planModelIqPresetPublication(
+  preset: BenchmarkPreset,
+  ctx: RunPresetContext
+): Promise<ModelIqPublicationPlan | undefined> {
+  const gameLeg = preset.legs.find(
+    (leg) => leg.mode === "solo" && leg.track === "gameiq"
+  );
+  const toolLeg = preset.legs.find(
+    (leg) => leg.mode === "solo" && leg.track === "toolreliability"
+  );
+  if (!gameLeg || !toolLeg) return undefined;
+  const models = ctx.soloModelIds
+    .map((id) => ctx.models.find((candidate) => candidate.modelId === id))
+    .filter((model): model is SelectedModel => Boolean(model));
+  if (models.length === 0) return undefined;
+
+  const executionId = `execution-modeliq-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2, 10)}`;
+  const gameCases = gameIqBundlePackIds(gameLeg.suiteId).map((packId) =>
+    caseForSelection("gameiq", packId, ctx.fireworksPlayerCount)
+  );
+  const toolCase = caseForSelection(
+    "toolreliability",
+    toolLeg.suiteId,
+    ctx.fireworksPlayerCount
+  );
+  for (const item of [...gameCases, toolCase]) {
+    await saveBenchmarkCaseV2(item);
+  }
+  const gameRunIdsByModelId: Record<string, string> = {};
+  const toolRunIdsByModelId: Record<string, string> = {};
+  const resultSetIdsByModelId: Record<string, string> = {};
+  for (const [index, model] of models.entries()) {
+    const team = deriveSoloTeamComposition({
+      modelId: model.modelId,
+      providerId: model.providerId,
+      displayName: model.displayName,
+      reasoningEffort: normalizeBenchmarkEffortForModel(
+        model,
+        ctx.effortByModelId[model.modelId]
+      ),
+    });
+    await saveBenchmarkTeamComposition(team);
+    const gameRunId = `ui-gameiq-${slugForRunId(executionId)}-${index}`;
+    const toolRunId = `ui-toolreliability-${slugForRunId(executionId)}-${index}`;
+    const resultSetId = `result-${slugForRunId(executionId)}-${slugForRunId(
+      model.modelId
+    )}-${index}`;
+    const tracks = [
+      {
+        track: "gameiq" as const,
+        suiteId: "suite-gameiq",
+        caseManifest: gameCases.map((item) => ({
+          caseId: item.id,
+          caseVersion: item.caseVersion,
+          scoringVersion: item.scoring.scoringVersion,
+        })),
+        maxTokens: null,
+      },
+      {
+        track: "toolreliability" as const,
+        suiteId: "suite-toolreliability",
+        caseManifest: [{
+          caseId: toolCase.id,
+          caseVersion: toolCase.caseVersion,
+          scoringVersion: toolCase.scoring.scoringVersion,
+        }],
+        maxTokens: null,
+      },
+    ];
+    const configuration = {
+      subjectKind: "model" as const,
+      displayName: model.displayName,
+      providerId: model.providerId,
+      modelId: model.modelId,
+      reasoningEffort: team.roles[0]?.reasoningEffort ?? "default",
+      roles: team.roles.map((role) => ({
+        role: role.role,
+        slot: role.slot,
+        providerId: role.providerId,
+        modelId: role.modelId,
+        reasoningEffort: role.reasoningEffort ?? "default",
+        maxTokens: role.maxTokens ?? null,
+      })),
+      tracks,
+    };
+    await createPendingBenchmarkResultSet({
+      id: resultSetId,
+      schemaVersion: 1,
+      executionId,
+      anchorRunId: gameRunId,
+      runIds: [gameRunId, toolRunId],
+      configurationKey: benchmarkResultConfigurationKey(configuration),
+      configuration,
+      expectedAttempts: [
+        ...gameCases.map((item) => ({
+          runId: gameRunId,
+          track: "gameiq" as const,
+          suiteId: "suite-gameiq",
+          caseId: item.id,
+          caseVersion: item.caseVersion,
+          scoringVersion: item.scoring.scoringVersion,
+          teamCompositionId: team.id,
+        })),
+        {
+          runId: toolRunId,
+          track: "toolreliability" as const,
+          suiteId: "suite-toolreliability",
+          caseId: toolCase.id,
+          caseVersion: toolCase.caseVersion,
+          scoringVersion: toolCase.scoring.scoringVersion,
+          teamCompositionId: team.id,
+        },
+      ],
+    });
+    gameRunIdsByModelId[model.modelId] = gameRunId;
+    toolRunIdsByModelId[model.modelId] = toolRunId;
+    resultSetIdsByModelId[model.modelId] = resultSetId;
+  }
+  return {
+    executionId,
+    gameRunIdsByModelId,
+    toolRunIdsByModelId,
+    resultSetIdsByModelId,
+  };
+}
+
 export async function runPreset(
   preset: BenchmarkPreset,
   ctx: RunPresetContext,
   onProgress: (event: PresetProgressEvent) => void
 ): Promise<void> {
+  const modelIqPublication = await planModelIqPresetPublication(preset, ctx);
   for (let legIndex = 0; legIndex < preset.legs.length; legIndex++) {
     const leg = preset.legs[legIndex]!;
     if (ctx.signal.aborted) {
@@ -1166,7 +1605,13 @@ export async function runPreset(
     try {
       const result =
         leg.mode === "solo"
-          ? await runSoloLeg(leg, legIndex, ctx, onProgress)
+          ? await runSoloLeg(
+              leg,
+              legIndex,
+              ctx,
+              onProgress,
+              modelIqPublication
+            )
           : await runTeamLeg(leg, legIndex, ctx, onProgress);
       onProgress({ type: "leg", legIndex, leg, status: result.status, detail: result.detail });
     } catch (error) {
@@ -1179,6 +1624,31 @@ export async function runPreset(
           ? "Cancelled."
           : error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+  if (modelIqPublication) {
+    const planned = await listBenchmarkResultSets();
+    for (const resultSetId of Object.values(
+      modelIqPublication.resultSetIdsByModelId
+    )) {
+      if (
+        planned.find((item) => item.id === resultSetId)?.status !== "pending"
+      ) {
+        continue;
+      }
+      if (ctx.signal.aborted) {
+        await cancelBenchmarkResultSet(
+          resultSetId,
+          abortReasonMessage(ctx.signal)
+        );
+      } else {
+        await failBenchmarkResultSet(resultSetId, {
+          kind: "infrastructure",
+          code: "unpublished_infrastructure_failure",
+          message:
+            "Preset exited before every expected benchmark attempt was publishable.",
+        });
+      }
     }
   }
   await ctx.onComplete();
@@ -1213,7 +1683,8 @@ async function runSoloLeg(
   leg: BenchmarkPresetLeg,
   legIndex: number,
   ctx: RunPresetContext,
-  onProgress: (event: PresetProgressEvent) => void
+  onProgress: (event: PresetProgressEvent) => void,
+  publication?: ModelIqPublicationPlan
 ): Promise<PresetLegResult> {
   const selectedModels = ctx.soloModelIds
     .map((id) => ctx.models.find((candidate) => candidate.modelId === id))
@@ -1260,6 +1731,10 @@ async function runSoloLeg(
       setMessage: () => {},
       setGameIqModelRuns,
       onComplete: async () => {},
+      executionId: publication?.executionId,
+      runIdsByModelId: publication?.gameRunIdsByModelId,
+      resultSetIdsByModelId: publication?.resultSetIdsByModelId,
+      allowIncompletePublication: Boolean(publication),
     });
     return { status: legStatusFromModelRuns(latestRuns) };
   }
@@ -1277,6 +1752,29 @@ async function runSoloLeg(
       cursor++;
       if (ctx.signal.aborted) return;
       const model = selectedModels[index]!;
+      const plannedResultSetId = publication?.resultSetIdsByModelId[model.modelId];
+      if (plannedResultSetId) {
+        const planned = (await listBenchmarkResultSets()).find(
+          (item) => item.id === plannedResultSetId
+        );
+        if (planned && planned.status !== "pending") {
+          modelStatuses[index] =
+            planned.status === "cancelled" ? "cancelled" : "failed";
+          onProgress({
+            type: "model",
+            legIndex,
+            leg,
+            modelId: model.modelId,
+            displayName: model.displayName,
+            status: modelStatuses[index]!,
+            detail:
+              planned.status === "cancelled"
+                ? "Cancelled."
+                : "Skipped after unpublished infrastructure failure.",
+          });
+          continue;
+        }
+      }
       onProgress({
         type: "model",
         legIndex,
@@ -1318,6 +1816,24 @@ async function runSoloLeg(
             if (message) outcome.error = message;
           },
           onComplete: async () => {},
+          executionId: publication?.executionId,
+          runId: publication?.toolRunIdsByModelId[model.modelId],
+          resultSetOwnership: plannedResultSetId
+            ? {
+                defaultResultSetId: plannedResultSetId,
+                byTeamCompositionId: {
+                  [deriveSoloTeamComposition({
+                    modelId: model.modelId,
+                    providerId: model.providerId,
+                    displayName: model.displayName,
+                    reasoningEffort: normalizeBenchmarkEffortForModel(
+                      model,
+                      ctx.effortByModelId[model.modelId]
+                    ),
+                  }).id]: plannedResultSetId,
+                },
+              }
+            : undefined,
         });
       } catch (error) {
         outcome.error = error instanceof Error ? error.message : String(error);
