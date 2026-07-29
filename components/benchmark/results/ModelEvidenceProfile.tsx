@@ -11,6 +11,7 @@ import {
 } from "@/components/benchmark/format";
 import { wilsonInterval, type DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
 import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import { VariantRosterBadges } from "./VariantRosterBadges";
 
 export function ModelEvidenceProfile({
@@ -50,7 +51,7 @@ export function ModelEvidenceProfile({
             Evidence profile
           </p>
           <CardTitle id={titleId} className="mt-1 min-w-0 break-words text-xl">
-            {row.label}
+            {sanitizeBenchmarkDisplayText(row.label)}
           </CardTitle>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {row.isTeam && <Badge variant="secondary">Team</Badge>}

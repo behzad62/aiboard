@@ -59,7 +59,12 @@ export function BenchmarkLab() {
     onRefresh: refresh,
     setMessage,
     promotableResultSetIds: promotableLatestResultSetIds(
-      resultSetAuditRows.flatMap((row) => (row.resultSet ? [row.resultSet] : []))
+      resultSetAuditRows.flatMap((row) => (row.resultSet ? [row.resultSet] : [])),
+      new Set(
+        resultSetAuditRows
+          .filter((row) => row.statusLabel === "Published")
+          .map((row) => row.id)
+      )
     ),
   });
 

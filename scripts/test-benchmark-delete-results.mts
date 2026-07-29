@@ -468,13 +468,26 @@ check(
 );
 check(
   "promotion copy is eligible only when a completed predecessor exists",
-  promotableLatestResultSetIds([olderSnapshot, latestSnapshot]).has(
+  promotableLatestResultSetIds(
+    [olderSnapshot, latestSnapshot],
+    new Set([olderSnapshot.id, latestSnapshot.id])
+  ).has(
     latestSnapshot.id
   )
 );
 check(
   "sole latest snapshot does not claim predecessor promotion",
-  !promotableLatestResultSetIds([latestSnapshot]).has(latestSnapshot.id)
+  !promotableLatestResultSetIds(
+    [latestSnapshot],
+    new Set([latestSnapshot.id])
+  ).has(latestSnapshot.id)
+);
+check(
+  "validation-rejected completed predecessor does not claim promotion",
+  !promotableLatestResultSetIds(
+    [olderSnapshot, latestSnapshot],
+    new Set([latestSnapshot.id])
+  ).has(latestSnapshot.id)
 );
 
 if (failures > 0) {

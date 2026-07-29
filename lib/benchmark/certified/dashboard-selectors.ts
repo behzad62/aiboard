@@ -311,6 +311,7 @@ export function readLeaderboard(
       return meta
         ? {
             ...row,
+            label: meta.label,
             latestAttemptId: meta.latestAttemptId,
             latestAttemptStatus: meta.latestAttemptStatus,
             latestAttemptTrack: meta.latestAttemptTrack,

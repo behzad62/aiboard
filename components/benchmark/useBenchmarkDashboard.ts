@@ -40,7 +40,10 @@ import { reconcileStaleCertifiedRuns } from "@/lib/benchmark/certified/run-persi
 import { reconcileStaleBenchmarkResultSets } from "@/lib/benchmark/certified/result-set-publication";
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
-import { benchmarkConfigurationDisplay } from "@/lib/benchmark/configuration-display";
+import {
+  benchmarkConfigurationDisplay,
+  sanitizeBenchmarkDisplayText,
+} from "@/lib/benchmark/configuration-display";
 import type { CertifiedFailureDetail } from "@/lib/benchmark/certified/dashboard-selectors";
 import {
   buildBenchmarkResultSetAuditRows,
@@ -216,6 +219,7 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     setResultSetAuditRows(
       buildBenchmarkResultSetAuditRows(resultSets, benchmarkAttemptsV2, {
         traces: benchmarkTraces,
+        failures: benchmarkFailures,
         publishedResultSetIds: new Set([
           ...certifiedDashboardData.leaderboard.flatMap((row) =>
             row.resultSetId ? [row.resultSetId] : []
@@ -345,8 +349,16 @@ export function withCertifiedDeleteMetadata(
     const resultSet = row.resultSetId
       ? resultSetById.get(row.resultSetId)
       : undefined;
+    const configurationDisplay = resultSet
+      ? benchmarkConfigurationDisplay(resultSet)
+      : undefined;
     return {
       ...row,
+      label:
+        configurationDisplay?.subject ??
+        sanitizeBenchmarkDisplayText(
+          (row as { label?: string }).label ?? "Unnamed configuration"
+        ),
       latestAttemptId: latest?.id,
       latestAttemptStatus: latest?.status,
       latestAttemptTrack: latest?.track,
@@ -366,7 +378,9 @@ export function withCertifiedDeleteMetadata(
       ),
       reasoningEffortDetails: (team?.roles ?? []).map((role) => ({
         role: role.role,
-        displayName: role.displayName ?? role.modelId,
+        displayName: sanitizeBenchmarkDisplayText(
+          role.displayName ?? role.modelId
+        ),
         effort: normalizeBenchmarkReasoningEffort(role.reasoningEffort),
       })),
       latestCompletedAt:
@@ -374,9 +388,7 @@ export function withCertifiedDeleteMetadata(
       failureDetails,
       failedAttemptCount: countFailedAttempts(teamAttempts),
       failedAttemptCountByTrack,
-      configurationDetails: resultSet
-        ? benchmarkConfigurationDisplay(resultSet).concise
-        : undefined,
+      configurationDetails: configurationDisplay?.concise,
     };
   };
 

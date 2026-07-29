@@ -7,8 +7,10 @@ import {
   benchmarkConfigurationDisplay,
   sanitizeBenchmarkDisplayText,
 } from "@/lib/benchmark/configuration-display";
+import { classifyBenchmarkFailure } from "@/lib/benchmark/failures";
 import type {
   BenchmarkAttemptV2,
+  BenchmarkFailure,
   BenchmarkModelCallTrace,
   BenchmarkResultSet,
 } from "@/lib/benchmark/types";
@@ -43,6 +45,7 @@ export function buildBenchmarkResultSetAuditRows(
   attempts: readonly BenchmarkAttemptV2[],
   options: {
     traces?: readonly BenchmarkModelCallTrace[];
+    failures?: readonly BenchmarkFailure[];
     publishedResultSetIds?: ReadonlySet<string>;
   } = {}
 ): BenchmarkResultSetAuditRow[] {
@@ -64,18 +67,28 @@ export function buildBenchmarkResultSetAuditRows(
     owned.push(trace);
     tracesByResultSet.set(trace.resultSetId, owned);
   }
+  const failuresByResultSet = new Map<string, BenchmarkFailure[]>();
+  for (const failure of options.failures ?? []) {
+    if (!failure.resultSetId) continue;
+    const owned = failuresByResultSet.get(failure.resultSetId) ?? [];
+    owned.push(failure);
+    failuresByResultSet.set(failure.resultSetId, owned);
+  }
   const rows = resultSets.map((resultSet): BenchmarkResultSetAuditRow => {
     const owned = attemptsByResultSet.get(resultSet.id) ?? [];
+    const ownedTraces = tracesByResultSet.get(resultSet.id) ?? [];
     const display = benchmarkConfigurationDisplay(resultSet);
-    const usage = auditUsage(
-      owned,
-      tracesByResultSet.get(resultSet.id) ?? [],
-      resultSet
-    );
+    const usage = auditUsage(owned, ownedTraces, resultSet);
     return {
       id: resultSet.id,
       resultSet,
-      statusLabel: auditStatus(resultSet, options.publishedResultSetIds),
+      statusLabel: auditStatus(
+        resultSet,
+        options.publishedResultSetIds,
+        owned,
+        ownedTraces,
+        failuresByResultSet.get(resultSet.id) ?? []
+      ),
       subject: display.subject,
       configuration: display.identity,
       tracks: display.tracks,
@@ -142,11 +155,18 @@ export function latestCompletedResultSetIds(
 }
 
 export function promotableLatestResultSetIds(
-  resultSets: readonly BenchmarkResultSet[]
+  resultSets: readonly BenchmarkResultSet[],
+  publishableResultSetIds: ReadonlySet<string>
 ): ReadonlySet<string> {
   const completedByConfiguration = new Map<string, BenchmarkResultSet[]>();
   for (const resultSet of resultSets) {
-    if (resultSet.status !== "completed" || !resultSet.completedAt) continue;
+    if (
+      resultSet.status !== "completed" ||
+      !resultSet.completedAt ||
+      !publishableResultSetIds.has(resultSet.id)
+    ) {
+      continue;
+    }
     const group = completedByConfiguration.get(resultSet.configurationKey) ?? [];
     group.push(resultSet);
     completedByConfiguration.set(resultSet.configurationKey, group);
@@ -255,7 +275,10 @@ function AuditMetric({ label, value }: { label: string; value: string }) {
 
 function auditStatus(
   resultSet: BenchmarkResultSet,
-  publishedResultSetIds: ReadonlySet<string> | undefined
+  publishedResultSetIds: ReadonlySet<string> | undefined,
+  attempts: readonly BenchmarkAttemptV2[],
+  traces: readonly BenchmarkModelCallTrace[],
+  failures: readonly BenchmarkFailure[]
 ): BenchmarkResultSetAuditStatus {
   if (resultSet.status === "completed") {
     return publishedResultSetIds?.has(resultSet.id) === true
@@ -275,9 +298,18 @@ function auditStatus(
   ) {
     return "Interrupted";
   }
+  const ownedProviderFailure =
+    attempts.some((attempt) => attempt.status === "provider_unavailable") ||
+    traces.some((trace) =>
+      trace.retryHistory.some((attempt) => attempt.status === "provider_error")
+    ) ||
+    failures.some(
+      (failure) => classifyBenchmarkFailure(failure).group === "provider"
+    );
   return kind === "provider" ||
     code === "provider_unavailable" ||
-    code.startsWith("provider_")
+    code.startsWith("provider_") ||
+    ownedProviderFailure
     ? "Provider failed"
     : "Unpublished";
 }

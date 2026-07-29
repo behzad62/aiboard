@@ -17,6 +17,7 @@ import {
 } from "@/lib/benchmark/certified/dashboard-selectors";
 import { wilsonInterval, type DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
 import { VariantRosterBadges } from "./VariantRosterBadges";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import {
   RESULT_HISTORY_PAGE_SIZE,
   ResultHistoryRows,
@@ -169,7 +170,9 @@ export function DecisionLeaderboard({
                       >
                         <td className="px-5 py-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-semibold">{row.label}</span>
+                            <span className="font-semibold">
+                              {sanitizeBenchmarkDisplayText(row.label)}
+                            </span>
                             {row.isTeam && <Badge variant="secondary">Team</Badge>}
                             {row.preliminary && (
                               <Badge
@@ -327,7 +330,9 @@ export function DecisionLeaderboard({
                   <li className={`border-t px-4 py-4 ${selected ? "bg-sky-500/[0.06]" : ""}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <h3 className="break-words text-base font-semibold">{row.label}</h3>
+                        <h3 className="break-words text-base font-semibold">
+                          {sanitizeBenchmarkDisplayText(row.label)}
+                        </h3>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <Badge>{row.isTeam ? "Team" : "Solo"}</Badge>
                           {row.preliminary && (

@@ -29,6 +29,7 @@ import { promotableLatestResultSetIds } from "@/components/benchmark/BenchmarkRe
 import type { BenchmarkResultSet } from "@/lib/benchmark/types";
 import {
   normalizeTrack,
+  readCertifiedResultHistory,
   readCertifiedSummary,
   readLeaderboard,
   readModelIntelligence,
@@ -103,10 +104,19 @@ export function CertifiedBenchmarkOverview({
   const shouldRenderLeaderboardSection = hasTrackData;
   const resultSets = readResultSets(certified);
   const resultSetById = new Map(resultSets.map((resultSet) => [resultSet.id, resultSet]));
+  const publishableResultSetIds = new Set(
+    readCertifiedResultHistory(certified).flatMap((series) => [
+      series.latestResultSetId,
+      ...series.older.map((row) => row.resultSetId),
+    ])
+  );
   const deletion = useBenchmarkResultSetDeletion({
     onRefresh: onRefresh ?? (async () => undefined),
     setMessage: setMessage ?? (() => undefined),
-    promotableResultSetIds: promotableLatestResultSetIds(resultSets),
+    promotableResultSetIds: promotableLatestResultSetIds(
+      resultSets,
+      publishableResultSetIds
+    ),
   });
   const deleteResultSet = (resultSetId: string, label: string) => {
     const resultSet = resultSetById.get(resultSetId);

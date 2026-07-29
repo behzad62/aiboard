@@ -61,9 +61,19 @@ function row(id: string, completedAt: string, score: number): DecisionRow {
 
 const latest = {
   ...row("set-latest", "2026-07-29T11:00:00.000Z", 0.77),
+  label:
+    "Authorization: Bearer latest-secret-token C:\\Users\\someone\\latest-model",
   overallDelta: 0.07,
   passRateDelta: -0.03,
   historyCount: 7,
+  reasoningEffortDetails: [
+    {
+      role: "architect",
+      displayName:
+        "Authorization: Bearer roster-secret-token C:\\Users\\someone\\architect",
+      effort: "high" as const,
+    },
+  ],
 };
 const older = Array.from({ length: 7 }, (_, index) =>
   row(
@@ -72,6 +82,8 @@ const older = Array.from({ length: 7 }, (_, index) =>
     0.7 - index / 100
   )
 );
+older[0]!.label =
+  "Authorization: Bearer history-secret-token C:\\Users\\someone\\older-model";
 
 assert.deepEqual(
   visibleHistoryRows(older, 5).map((item) => item.resultSetId),
@@ -149,6 +161,14 @@ assert.ok(latestMarkup.includes("max 4,096 tokens"));
 assert.ok(latestMarkup.includes("suite-v2"));
 assert.ok(latestMarkup.includes("case-a@case-v3"));
 assert.ok(latestMarkup.includes("score-v5"));
+for (const secret of [
+  "latest-secret-token",
+  "roster-secret-token",
+  "C:\\Users\\someone\\latest-model",
+  "C:\\Users\\someone\\architect",
+]) {
+  assert.ok(!latestMarkup.includes(secret), `latest output leaked ${secret}`);
+}
 assert.ok(latestMarkup.includes('aria-expanded="false"'));
 assert.ok(
   latestMarkup.includes(
@@ -172,6 +192,12 @@ assert.ok(!expandedDesktop.includes("<li"));
 assert.ok(expandedDesktop.includes("Show more"));
 
 const allDesktop = render("desktop", true, 10);
+for (const secret of [
+  "history-secret-token",
+  "C:\\Users\\someone\\older-model",
+]) {
+  assert.ok(!allDesktop.includes(secret), `history output leaked ${secret}`);
+}
 assert.deepEqual(
   older.map((item) => allDesktop.indexOf(item.resultSetId)),
   older

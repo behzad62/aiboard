@@ -5,6 +5,7 @@ import { Eye, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatNormalizedScore } from "@/components/benchmark/format";
 import type { DecisionRow } from "@/lib/benchmark/certified/decision-dashboard";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import { ModelEvidenceProfile } from "./ModelEvidenceProfile";
 
 export const RESULT_HISTORY_PAGE_SIZE = 5;
@@ -83,7 +84,9 @@ export function ResultHistoryRows({
                     aria-hidden="true"
                     className="absolute left-[17px] top-5 h-2 w-2 rounded-full border border-sky-500/70 bg-background"
                   />
-                  <div className="font-medium text-foreground">{row.label}</div>
+                  <div className="font-medium text-foreground">
+                    {sanitizeBenchmarkDisplayText(row.label)}
+                  </div>
                   <div className="mt-0.5 text-xs">
                     {formatCompletion(row.completedAt)}
                   </div>
@@ -170,7 +173,9 @@ export function ResultHistoryRows({
                 aria-hidden="true"
                 className="absolute left-[13px] top-6 h-2 w-2 rounded-full border border-sky-500/70 bg-background"
               />
-              <div className="break-words font-medium">{row.label}</div>
+              <div className="break-words font-medium">
+                {sanitizeBenchmarkDisplayText(row.label)}
+              </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
                 {formatCompletion(row.completedAt)}
               </div>

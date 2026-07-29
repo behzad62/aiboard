@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
 import type { BenchmarkVariantRosterDetail } from "@/lib/benchmark/model-effort";
+import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 
 export function VariantRosterBadges({
   details,
@@ -18,7 +19,10 @@ export function VariantRosterBadges({
         >
           <span className="truncate">
             {detail.role}:{" "}
-            {benchmarkVariantLabel(detail.displayName, detail.effort)}
+            {benchmarkVariantLabel(
+              sanitizeBenchmarkDisplayText(detail.displayName),
+              detail.effort
+            )}
           </span>
         </Badge>
       ))}
@@ -33,7 +37,7 @@ export function variantRosterText(
     .map(
       (detail) =>
         `${detail.role}: ${benchmarkVariantLabel(
-          detail.displayName,
+          sanitizeBenchmarkDisplayText(detail.displayName),
           detail.effort
         )}`
     )

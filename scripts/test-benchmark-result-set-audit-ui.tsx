@@ -8,6 +8,7 @@ import {
 } from "../components/benchmark/BenchmarkResultSetAudit";
 import type {
   BenchmarkAttemptV2,
+  BenchmarkFailure,
   BenchmarkModelCallTrace,
   BenchmarkResultSet,
 } from "../lib/benchmark/types";
@@ -87,8 +88,8 @@ const sets = [
   resultSet("completed", "completed"),
   resultSet("unpublished-completed", "completed"),
   resultSet("provider", "failed", {
-    kind: "provider",
-    code: "provider_unavailable",
+    kind: "infrastructure",
+    code: "unpublished_infrastructure_failure",
     message: "Provider unavailable. Authorization: Bearer secret-token-value",
   }),
   resultSet("infrastructure", "failed", {
@@ -105,6 +106,8 @@ const sets = [
   resultSet("deleting", "deleting"),
 ];
 const attempts = [...sets.map((set) => attempt(set.id)), attempt("legacy")];
+attempts.find((item) => item.resultSetId === "provider")!.status =
+  "provider_unavailable";
 attempts[attempts.length - 1]!.resultSetId = undefined;
 const infrastructureSet = sets.find((set) => set.id === "infrastructure")!;
 infrastructureSet.configuration = {
@@ -133,8 +136,8 @@ infrastructureSet.configuration = {
 };
 
 const traceOnlySet = resultSet("trace-only", "failed", {
-  kind: "provider",
-  code: "provider_unavailable",
+  kind: "infrastructure",
+  code: "unpublished_infrastructure_failure",
   message: "Provider unavailable.",
 });
 traceOnlySet.configuration.displayName =
@@ -174,11 +177,25 @@ const traceOnlyTrace: BenchmarkModelCallTrace = {
     },
   ],
 };
+const providerFailure: BenchmarkFailure = {
+  id: "failure-provider",
+  resultSetId: "provider",
+  runId: "run-provider",
+  attemptId: "attempt-provider",
+  caseId: "case",
+  domain: "model-call",
+  source: "provider",
+  code: "provider_unavailable",
+  severity: "error",
+  message: "Provider unavailable.",
+  createdAt: "2026-07-29T09:00:00.000Z",
+};
 const rows = buildBenchmarkResultSetAuditRows(
   [...sets, traceOnlySet],
   attempts,
   {
     traces: [traceOnlyTrace],
+    failures: [providerFailure],
     publishedResultSetIds: new Set(["completed"]),
   }
 );
