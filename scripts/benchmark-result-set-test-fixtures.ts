@@ -1,4 +1,8 @@
 import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
+import {
+  buildModelIntelligenceRows,
+  type ModelIntelligenceInput,
+} from "../lib/benchmark/metrics";
 import { aggregateCertifiedRunScores } from "../lib/benchmark/scoring/aggregate";
 import type {
   CertifiedAggregateInput,
@@ -14,6 +18,10 @@ import type {
   BenchmarkVerifierResult,
 } from "../lib/benchmark/types";
 import { canonicalTeamCompositionKey } from "../lib/benchmark/teamiq/compositions";
+import {
+  buildTeamIqComboMatrixRows,
+  type TeamIqComboMatrixInput,
+} from "../lib/benchmark/teamiq/combo-matrix";
 import { normalizeBenchmarkReasoningEffort } from "../lib/benchmark/model-effort";
 
 const SCOREABLE = new Set<BenchmarkAttemptV2["status"]>([
@@ -45,6 +53,52 @@ export function aggregateCompletedResultSetFixtures(
     ...input,
     attempts,
     resultSetIds: new Set(attempts.map((attempt) => attempt.resultSetId!)),
+  });
+}
+
+export function buildScopedModelIntelligenceRows(
+  input: Omit<ModelIntelligenceInput, "resultSetIds">
+) {
+  const attempts = scopeFixtureAttempts(
+    input.attempts,
+    input.teamCompositions ?? []
+  );
+  return buildModelIntelligenceRows({
+    ...input,
+    attempts,
+    resultSetIds: new Set(attempts.map((attempt) => attempt.resultSetId!)),
+  });
+}
+
+export function buildScopedTeamIqComboMatrixRows(
+  input: Omit<TeamIqComboMatrixInput, "resultSetIds">
+) {
+  const attempts = scopeFixtureAttempts(
+    input.attempts,
+    input.teamCompositions
+  );
+  return buildTeamIqComboMatrixRows({
+    ...input,
+    attempts,
+    resultSetIds: new Set(attempts.map((attempt) => attempt.resultSetId!)),
+  });
+}
+
+function scopeFixtureAttempts(
+  attempts: BenchmarkAttemptV2[],
+  teams: BenchmarkTeamComposition[]
+): BenchmarkAttemptV2[] {
+  const teamById = new Map(teams.map((team) => [team.id, team]));
+  return attempts.map((attempt) => {
+    if (attempt.resultSetId) return attempt;
+    const team = teamById.get(attempt.teamCompositionId);
+    const identity = team
+      ? canonicalTeamCompositionKey(team)
+      : attempt.teamCompositionId;
+    return {
+      ...attempt,
+      resultSetId: `test-snapshot:${identity}`,
+    };
   });
 }
 

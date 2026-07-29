@@ -8,7 +8,7 @@ import {
   rankByCostPerPass,
 } from "../lib/benchmark/scoring/aggregate";
 import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
-import { buildModelIntelligenceRows } from "../lib/benchmark/metrics";
+import { buildScopedModelIntelligenceRows } from "./benchmark-result-set-test-fixtures";
 import type {
   SelectedModel,
   StreamChunk,
@@ -437,7 +437,7 @@ function attempt(
   // Model A: gameiq track avg quality 0.9 (2 attempts), teamiq track avg 0.5 (1
   // attempt). Simple mean of per-track averages = (0.9 + 0.5)/2 = 0.7 — NOT the
   // attempt-weighted 0.767, proving normalization.
-  const rows = buildModelIntelligenceRows({
+  const rows = buildScopedModelIntelligenceRows({
     attempts: [
       attempt("ig1", teamA.id, { track: "gameiq", verifiedQuality: 0.9 }),
       attempt("ig2", teamA.id, { track: "gameiq", verifiedQuality: 0.9 }),
@@ -476,7 +476,7 @@ function attempt(
 
 {
   const teamA = soloTeam("solo-a", "prov:a");
-  const rows = buildModelIntelligenceRows({
+  const rows = buildScopedModelIntelligenceRows({
     attempts: [attempt("p1", teamA.id, { track: "gameiq", verifiedQuality: 0.9 })],
     cases: [],
     teamCompositions: [teamA],
@@ -521,7 +521,7 @@ function attempt(
     track: "gameiq",
     tags: ["source:tq-case"],
   };
-  const rows = buildModelIntelligenceRows({
+  const rows = buildScopedModelIntelligenceRows({
     attempts: [
       attempt("tq1", teamA.id, {
         track: "teamiq",

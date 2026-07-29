@@ -28,11 +28,13 @@ export type TeamIqRecommendationLabel =
   | "insufficient_data";
 
 export interface TeamIqComboMatrixInput {
+  resultSetIds: ReadonlySet<string>;
   attempts: BenchmarkAttemptV2[];
   teamCompositions: BenchmarkTeamComposition[];
   track?: BenchmarkAttemptV2["track"];
   includeSolos?: boolean;
   executionIdByResultSetId?: ReadonlyMap<string, string>;
+  configurationKeyByResultSetId?: ReadonlyMap<string, string>;
   comparisonKeysByResultSetId?: ReadonlyMap<
     string,
     ReadonlyMap<string, string>
@@ -67,6 +69,9 @@ export interface TeamIqComboMatrixRow {
 }
 
 interface MutableComboRow {
+  resultSetId: string;
+  executionId?: string;
+  configurationKey?: string;
   teamCompositionId: string;
   teamName: string;
   comboHash: string;
@@ -96,9 +101,14 @@ const TEAM_LIFT_LABEL_SEVERITY: Record<TeamLiftLabel, number> = {
   strong_positive: 1,
 };
 
+/**
+ * Build exact snapshot-scoped combo rows. Every attempt must belong to the
+ * declared result-set scope, and resultSetId is part of every grouping key.
+ */
 export function buildTeamIqComboMatrixRows(
   input: TeamIqComboMatrixInput
 ): TeamIqComboMatrixRow[] {
+  requireExactResultSetScope(input.attempts, input.resultSetIds);
   const teamsById = new Map(
     input.teamCompositions.map((team) => [team.id, team])
   );
@@ -133,7 +143,15 @@ export function buildTeamIqComboMatrixRows(
     if (!input.includeSolos && isSolo) continue;
     if (modelIds.length === 0) continue;
 
-    const group = groupFor(groups, attempt, team, modelIds, isSolo);
+    const group = groupFor(
+      groups,
+      attempt,
+      team,
+      modelIds,
+      isSolo,
+      input.executionIdByResultSetId,
+      input.configurationKeyByResultSetId
+    );
     group.attempts += 1;
     group.verifiedQualitySum += finiteNumber(attempt.verifiedQuality);
     group.jobSuccessScoreSum += scoreForAttempt(attempt);
@@ -221,13 +239,19 @@ function groupFor(
   attempt: BenchmarkAttemptV2,
   team: BenchmarkTeamComposition | undefined,
   modelIds: string[],
-  isSolo: boolean
+  isSolo: boolean,
+  executionIdByResultSetId: ReadonlyMap<string, string> | undefined,
+  configurationKeyByResultSetId: ReadonlyMap<string, string> | undefined
 ): MutableComboRow {
-  const key = `${attempt.teamCompositionId}\u0000${attempt.track}`;
+  const resultSetId = attempt.resultSetId!;
+  const key = `${resultSetId}\u0000${attempt.teamCompositionId}\u0000${attempt.track}`;
   const existing = groups.get(key);
   if (existing) return existing;
 
   const created: MutableComboRow = {
+    resultSetId,
+    executionId: executionIdByResultSetId?.get(resultSetId),
+    configurationKey: configurationKeyByResultSetId?.get(resultSetId),
     teamCompositionId: attempt.teamCompositionId,
     teamName: team?.name ?? modelIds.join(" + "),
     comboHash: team?.comboHash ?? attempt.teamCompositionId,
@@ -260,7 +284,10 @@ function groupFor(
 
 function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
   const row: TeamIqComboMatrixRow = {
-    id: `${group.comboHash}:${group.track}`,
+    id: `${group.resultSetId}:${group.comboHash}:${group.track}`,
+    resultSetId: group.resultSetId,
+    executionId: group.executionId,
+    configurationKey: group.configurationKey,
     teamCompositionId: group.teamCompositionId,
     teamName: group.teamName,
     comboHash: group.comboHash,
@@ -297,6 +324,36 @@ function finalizeGroup(group: MutableComboRow): TeamIqComboMatrixRow {
     recommendationLabel: group.isSolo ? "solo_baseline" : "insufficient_data",
   };
   return row;
+}
+
+function requireExactResultSetScope(
+  attempts: readonly BenchmarkAttemptV2[],
+  resultSetIds: ReadonlySet<string>
+): void {
+  if (!resultSetIds || resultSetIds.size === 0) {
+    throw new Error(
+      "TeamIQ combo aggregation requires explicit result-set snapshot scope."
+    );
+  }
+  if (
+    attempts.some(
+      (attempt) =>
+        !attempt.resultSetId || !resultSetIds.has(attempt.resultSetId)
+    )
+  ) {
+    throw new Error(
+      "TeamIQ combo attempts must belong to the explicit result-set scope."
+    );
+  }
+  const observed = new Set(attempts.map((attempt) => attempt.resultSetId!));
+  if (
+    observed.size !== resultSetIds.size ||
+    [...resultSetIds].some((resultSetId) => !observed.has(resultSetId))
+  ) {
+    throw new Error(
+      "TeamIQ combo result-set scope does not match its attempts."
+    );
+  }
 }
 
 function applyParetoRecommendations(rows: TeamIqComboMatrixRow[]): void {

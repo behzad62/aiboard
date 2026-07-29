@@ -16,12 +16,14 @@ import {
 } from "../lib/benchmark/certified/team-lift";
 import { formatLift } from "../components/benchmark/teamiq/ComboMatrix";
 import {
-  buildTeamIqComboMatrixRows,
   deriveSoloTeamComposition,
   deriveTeamComposition,
   type TeamIqComboMatrixRow,
 } from "../lib/benchmark/teamiq";
-import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
+import {
+  aggregateCompletedResultSetFixtures,
+  buildScopedTeamIqComboMatrixRows,
+} from "./benchmark-result-set-test-fixtures";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import type {
@@ -456,7 +458,7 @@ function workBenchAttempt(
   };
 }
 
-const workBenchComboRows = buildTeamIqComboMatrixRows({
+const workBenchComboRows = buildScopedTeamIqComboMatrixRows({
   attempts: [
     workBenchAttempt("solo-gpt-wb", soloGptWb.id, 70, 1, 100_000),
     workBenchAttempt("solo-claude-wb", soloClaudeWb.id, 55, 0.9, 90_000),
@@ -495,7 +497,7 @@ const crossExecutionMap = new Map([
   ["solo-claude-set", "solo-execution"],
   ["team-set", "team-execution"],
 ]);
-const crossExecutionRows = buildTeamIqComboMatrixRows({
+const crossExecutionRows = buildScopedTeamIqComboMatrixRows({
   attempts: crossExecutionAttempts,
   teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
   track: "workbench",
@@ -507,7 +509,7 @@ check(
     ?.teamLift === null,
   crossExecutionRows
 );
-const siblingExecutionRows = buildTeamIqComboMatrixRows({
+const siblingExecutionRows = buildScopedTeamIqComboMatrixRows({
   attempts: crossExecutionAttempts,
   teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
   track: "workbench",
@@ -523,7 +525,7 @@ check(
     ?.teamLift === 20,
   siblingExecutionRows
 );
-const mismatchedPackRows = buildTeamIqComboMatrixRows({
+const mismatchedPackRows = buildScopedTeamIqComboMatrixRows({
   attempts: crossExecutionAttempts,
   teamCompositions: [soloGptWb, soloClaudeWb, workBenchTeam],
   track: "workbench",
@@ -625,7 +627,7 @@ const tokenBoundTeam = deriveTeamComposition({
     },
   ],
 });
-const tokenBoundRows = buildTeamIqComboMatrixRows({
+const tokenBoundRows = buildScopedTeamIqComboMatrixRows({
   attempts: [
     {
       ...workBenchAttempt("solo-gpt-200-attempt", soloGpt200.id, 70, 1, 1),
@@ -802,7 +804,7 @@ const effortAttempts = [
   teamIqAttempt("effort-high", highEffortSolo.id, 60, 1, 1_000),
   teamIqAttempt("effort-team", highEffortTeam.id, 80, 1, 1_000),
 ];
-const effortComboRows = buildTeamIqComboMatrixRows({
+const effortComboRows = buildScopedTeamIqComboMatrixRows({
   attempts: effortAttempts,
   teamCompositions: [lowEffortSolo, highEffortSolo, highEffortTeam],
   track: "teamiq",
@@ -812,7 +814,7 @@ check(
   effortComboRows[0]?.teamLift === 20,
   effortComboRows
 );
-const missingEffortComboRows = buildTeamIqComboMatrixRows({
+const missingEffortComboRows = buildScopedTeamIqComboMatrixRows({
   attempts: [effortAttempts[0], effortAttempts[2]],
   teamCompositions: [lowEffortSolo, highEffortTeam],
   track: "teamiq",

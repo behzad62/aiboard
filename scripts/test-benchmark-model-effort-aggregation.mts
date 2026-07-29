@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
   buildCertifiedBenchmarkDashboardData,
-  buildModelIntelligenceRows,
 } from "../lib/benchmark/metrics";
-import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
+import {
+  aggregateCompletedResultSetFixtures,
+  buildScopedModelIntelligenceRows,
+} from "./benchmark-result-set-test-fixtures";
 import { benchmarkResultConfigurationKey } from "../lib/benchmark/certified/result-set-identity";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import {
@@ -208,7 +210,7 @@ assert.equal(
   null
 );
 
-const intelligenceRows = buildModelIntelligenceRows({
+const intelligenceRows = buildScopedModelIntelligenceRows({
   attempts,
   teamCompositions: [low, high, legacy, explicitDefault],
 });

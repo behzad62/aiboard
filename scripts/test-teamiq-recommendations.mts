@@ -1,10 +1,10 @@
 /* TeamIQ recommendation UI data checks (run: npx tsx scripts/test-teamiq-recommendations.mts) */
 import {
-  buildTeamIqComboMatrixRows,
   buildTeamIqRecommendationCards,
   deriveSoloTeamComposition,
   deriveTeamComposition,
 } from "../lib/benchmark/teamiq";
+import { buildScopedTeamIqComboMatrixRows } from "./benchmark-result-set-test-fixtures";
 import type { TeamIqComboMatrixRow } from "../lib/benchmark/teamiq/combo-matrix";
 import { buildCertifiedBenchmarkDashboardData } from "../lib/benchmark/metrics";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
@@ -93,7 +93,7 @@ const attempts = [
   attempt("watch-team-3", watchTeam.id, 65, 0.65, 2, 60_000),
 ];
 
-const rows = buildTeamIqComboMatrixRows({
+const rows = buildScopedTeamIqComboMatrixRows({
   attempts,
   teamCompositions,
   track: "teamiq",
@@ -335,7 +335,7 @@ function attempt(
 }
 
 function strongRowForBoundary(
-  rows: ReturnType<typeof buildTeamIqComboMatrixRows>
+  rows: ReturnType<typeof buildScopedTeamIqComboMatrixRows>
 ) {
   return rows.find((row) => row.teamCompositionId === strongTeam.id) ?? null;
 }

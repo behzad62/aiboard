@@ -1280,6 +1280,9 @@ export interface ModelIntelligenceRow {
 }
 
 export interface ModelIntelligenceInput {
+  resultSetIds: ReadonlySet<string>;
+  executionIdByResultSetId?: ReadonlyMap<string, string>;
+  configurationKeyByResultSetId?: ReadonlyMap<string, string>;
   attempts: BenchmarkAttemptV2[];
   cases?: BenchmarkCaseV2[];
   teamCompositions?: BenchmarkTeamComposition[];
@@ -1289,16 +1292,20 @@ export interface ModelIntelligenceInput {
 const MODEL_INTELLIGENCE_MIN_CONFIDENT_ATTEMPTS = 3;
 
 /**
- * Build the "most intelligent model" leaderboard (product goal 1): group SOLO
- * scored certified attempts by model across every track, applying cross-track
- * de-duplication so a decision reached via two tracks counts once. Each model's
- * combined score normalizes per track (simple mean of per-track average verified
- * quality) so a single high-volume track can't dominate. Rows are sorted by
- * combined score descending, with preliminary (<3 attempts) rows demoted.
+ * Build snapshot-scoped SOLO intelligence rows. Attempts must carry an exact
+ * declared result-set scope; grouping includes resultSetId so separate
+ * executions/configurations can never be lifetime-averaged. Within one
+ * snapshot, shared cross-track decisions are deduplicated and track averages
+ * receive equal weight.
  */
 export function buildModelIntelligenceRows(
   input: ModelIntelligenceInput
 ): ModelIntelligenceRow[] {
+  requireExactResultSetScope(
+    input.attempts,
+    input.resultSetIds,
+    "Model intelligence"
+  );
   const teams = input.teamCompositions ?? [];
   const cases = input.cases ?? [];
   const verifierResults = input.verifierResults ?? [];
@@ -1323,6 +1330,9 @@ export function buildModelIntelligenceRows(
     verifiedQualitySum: number;
   }
   interface ModelAcc {
+    resultSetId: string;
+    executionId?: string;
+    configurationKey?: string;
     modelId: string;
     reasoningEffort: string;
     variantKey: string;
@@ -1342,13 +1352,19 @@ export function buildModelIntelligenceRows(
       role.reasoningEffort
     );
     const variantKey = benchmarkVariantKey(modelId, reasoningEffort);
+    const resultSetId = attempt.resultSetId!;
+    const snapshotVariantKey = `${resultSetId}\u0000${variantKey}`;
     const track = (attempt.track ??
       caseById.get(attempt.caseId)?.track ??
       "workbench") as BenchmarkTrack;
 
     const model =
-      models.get(variantKey) ??
+      models.get(snapshotVariantKey) ??
       ({
+        resultSetId,
+        executionId: input.executionIdByResultSetId?.get(resultSetId),
+        configurationKey:
+          input.configurationKeyByResultSetId?.get(resultSetId),
         modelId,
         reasoningEffort,
         variantKey,
@@ -1372,7 +1388,7 @@ export function buildModelIntelligenceRows(
     trackAcc.verifiedQualitySum += finiteMetric(attempt.verifiedQuality) ?? 0;
 
     model.tracks.set(track, trackAcc);
-    models.set(variantKey, model);
+    models.set(snapshotVariantKey, model);
   }
 
   const rows: ModelIntelligenceRow[] = Array.from(models.values()).map(
@@ -1401,6 +1417,9 @@ export function buildModelIntelligenceRows(
             )
           : 0;
       return {
+        resultSetId: model.resultSetId,
+        executionId: model.executionId,
+        configurationKey: model.configurationKey,
         modelId: model.modelId,
         reasoningEffort: model.reasoningEffort,
         variantKey: model.variantKey,
@@ -1429,17 +1448,21 @@ export function buildModelIntelligenceRows(
 }
 
 /**
- * Track-true headline numbers for a single track. Returns the same shape as the
- * certified dashboard summary but scoped to one track, so a per-track tab can
- * show pass rate / quality / cost / duration computed only from that track's
- * scored attempts (no cross-track merging — a per-track view must stay pure).
+ * Track-true headline numbers for exactly one result set and one track.
+ * Evidence from other result sets is ignored and unscoped evidence is rejected.
  */
 export function buildCertifiedTrackSummary(input: {
+  resultSetId: string;
+  executionId?: string;
+  configurationKey?: string;
   track: BenchmarkTrack;
   caseV2: BenchmarkCaseV2[];
   attemptsV2: BenchmarkAttemptV2[];
   verifierResults: BenchmarkVerifierResult[];
 }): {
+  resultSetId: string;
+  executionId?: string;
+  configurationKey?: string;
   track: BenchmarkTrack;
   scoredAttempts: number;
   verifiedPassRate: number | null;
@@ -1448,6 +1471,14 @@ export function buildCertifiedTrackSummary(input: {
   averageCostUsd: number | null;
   averageDurationMs: number | null;
 } {
+  if (!input.resultSetId) {
+    throw new Error("Certified track summary requires a resultSetId.");
+  }
+  if (input.attemptsV2.some((attempt) => !attempt.resultSetId)) {
+    throw new Error(
+      "Certified track summary cannot consume attempts without resultSetId."
+    );
+  }
   const caseById = new Map(input.caseV2.map((item) => [item.id, item]));
   const verifierByAttemptId = new Map(
     input.verifierResults.map((result) => [result.attemptId, result])
@@ -1457,10 +1488,15 @@ export function buildCertifiedTrackSummary(input: {
 
   const scored = input.attemptsV2.filter(
     (attempt) =>
-      isScoredCertifiedAttempt(attempt) && trackOf(attempt) === input.track
+      attempt.resultSetId === input.resultSetId &&
+      isScoredCertifiedAttempt(attempt) &&
+      trackOf(attempt) === input.track
   );
 
   return {
+    resultSetId: input.resultSetId,
+    executionId: input.executionId,
+    configurationKey: input.configurationKey,
     track: input.track,
     scoredAttempts: scored.length,
     verifiedPassRate: rate(
@@ -1482,4 +1518,31 @@ export function buildCertifiedTrackSummary(input: {
       scored.map((attempt) => finiteMetric(attempt.durationMs))
     ),
   };
+}
+
+function requireExactResultSetScope(
+  attempts: readonly BenchmarkAttemptV2[],
+  resultSetIds: ReadonlySet<string>,
+  label: string
+): void {
+  if (!resultSetIds || resultSetIds.size === 0) {
+    throw new Error(`${label} requires explicit result-set snapshot scope.`);
+  }
+  if (
+    attempts.some(
+      (attempt) =>
+        !attempt.resultSetId || !resultSetIds.has(attempt.resultSetId)
+    )
+  ) {
+    throw new Error(
+      `${label} attempts must belong to the explicit result-set scope.`
+    );
+  }
+  const observed = new Set(attempts.map((attempt) => attempt.resultSetId!));
+  if (
+    observed.size !== resultSetIds.size ||
+    [...resultSetIds].some((resultSetId) => !observed.has(resultSetId))
+  ) {
+    throw new Error(`${label} result-set scope does not match its attempts.`);
+  }
 }

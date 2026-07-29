@@ -1,9 +1,9 @@
 /* TeamIQ combo matrix checks (run: npx tsx scripts/test-teamiq-combos.mts) */
 import {
-  buildTeamIqComboMatrixRows,
   deriveSoloTeamComposition,
   deriveTeamComposition,
 } from "../lib/benchmark/teamiq";
+import { buildScopedTeamIqComboMatrixRows } from "./benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
   BenchmarkTeamCompositionRole,
@@ -130,7 +130,7 @@ const mixedCostTeam = deriveTeamComposition({
   ],
 });
 
-const rows = buildTeamIqComboMatrixRows({
+const rows = buildScopedTeamIqComboMatrixRows({
   attempts: [
     attempt("solo-gpt", soloGpt.id, "case-1", 74, 0.74, 0.8, 60_000, "raw-single-model"),
     attempt("solo-gemini", soloGemini.id, "case-1", 60, 0.6, 0.4, 40_000, "raw-single-model"),
@@ -244,7 +244,7 @@ const highEffortTeam = deriveTeamComposition({
     { ...geminiRole, reasoningEffort: "high" },
   ],
 });
-const effortRows = buildTeamIqComboMatrixRows({
+const effortRows = buildScopedTeamIqComboMatrixRows({
   attempts: [
     attempt("low-effort-team", lowEffortTeam.id, "effort-case", 70, 0.7, 1, 1_000, "aiboard-build-multi-worker"),
     attempt("high-effort-team", highEffortTeam.id, "effort-case", 80, 0.8, 1, 1_000, "aiboard-build-multi-worker"),
@@ -286,12 +286,12 @@ const tieAttemptsNegativeFirst = tiedLabelAttempts(tieBreakTeam.id, [
   "negative",
   "positive",
 ]);
-const positiveFirstTie = buildTeamIqComboMatrixRows({
+const positiveFirstTie = buildScopedTeamIqComboMatrixRows({
   attempts: tieAttemptsPositiveFirst,
   teamCompositions: [soloGpt, soloGemini, tieBreakTeam],
   track: "teamiq",
 }).find((row) => row.teamCompositionId === tieBreakTeam.id);
-const negativeFirstTie = buildTeamIqComboMatrixRows({
+const negativeFirstTie = buildScopedTeamIqComboMatrixRows({
   attempts: tieAttemptsNegativeFirst,
   teamCompositions: [soloGpt, soloGemini, tieBreakTeam],
   track: "teamiq",
