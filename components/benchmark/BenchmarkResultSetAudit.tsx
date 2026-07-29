@@ -301,7 +301,7 @@ function auditStatus(
   const ownedProviderFailure =
     attempts.some((attempt) => attempt.status === "provider_unavailable") ||
     (traces.length > 0
-      ? latestTraceStatus(traces) === "provider_error"
+      ? latestTraceGroupIsProviderTerminal(traces)
       : failures.some(
           (failure) => classifyBenchmarkFailure(failure).group === "provider"
         ));
@@ -313,16 +313,21 @@ function auditStatus(
     : "Unpublished";
 }
 
-function latestTraceStatus(
+function latestTraceGroupIsProviderTerminal(
   traces: readonly BenchmarkModelCallTrace[]
-): BenchmarkModelCallTrace["retryHistory"][number]["status"] | undefined {
-  const latest = [...traces].sort(
-    (left, right) =>
-      traceTerminalTime(right) - traceTerminalTime(left) ||
-      Date.parse(right.startedAt) - Date.parse(left.startedAt) ||
-      right.id.localeCompare(left.id)
-  )[0];
-  return latest?.retryHistory.at(-1)?.status;
+): boolean {
+  const latestTerminalTime = traces.reduce(
+    (latest, trace) => Math.max(latest, traceTerminalTime(trace)),
+    Number.NEGATIVE_INFINITY
+  );
+  if (!Number.isFinite(latestTerminalTime)) return false;
+  const latestStatuses = traces
+    .filter((trace) => traceTerminalTime(trace) === latestTerminalTime)
+    .map((trace) => trace.retryHistory.at(-1)?.status);
+  return (
+    latestStatuses.length > 0 &&
+    latestStatuses.every((status) => status === "provider_error")
+  );
 }
 
 function traceTerminalTime(trace: BenchmarkModelCallTrace): number {

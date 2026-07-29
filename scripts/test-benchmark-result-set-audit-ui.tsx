@@ -265,6 +265,101 @@ assert.equal(
   rows.find((row) => row.id === "recovered-trace")!.statusLabel,
   "Unpublished"
 );
+
+function auditStatusForTraces(
+  traces: readonly BenchmarkModelCallTrace[]
+): string {
+  const traceStatusSet = resultSet("trace-status", "failed", {
+    kind: "infrastructure",
+    code: "persistence_failed",
+    message: "Could not persist the result set.",
+  });
+  return buildBenchmarkResultSetAuditRows(
+    [traceStatusSet],
+    [],
+    {
+      traces: traces.map((trace) => ({
+        ...trace,
+        resultSetId: traceStatusSet.id,
+        runId: traceStatusSet.anchorRunId,
+      })),
+    }
+  )[0]!.statusLabel;
+}
+
+function terminalTrace(
+  id: string,
+  status: BenchmarkModelCallTrace["retryHistory"][number]["status"],
+  completedAt: string,
+  startedAt = "2026-07-29T08:30:00.000Z"
+): BenchmarkModelCallTrace {
+  return {
+    ...traceOnlyTrace,
+    id,
+    startedAt,
+    completedAt,
+    retryHistory: [
+      {
+        attempt: 1,
+        status,
+        message: `${status} terminal evidence.`,
+      },
+    ],
+  };
+}
+
+const tiedAt = "2026-07-29T08:31:00.000Z";
+assert.equal(
+  auditStatusForTraces([
+    terminalTrace("a-parsed", "parsed", tiedAt),
+    terminalTrace("z-provider", "provider_error", tiedAt),
+  ]),
+  "Unpublished",
+  "a parsed trace tied with provider evidence must suppress Provider failed"
+);
+assert.equal(
+  auditStatusForTraces([
+    terminalTrace("a-provider", "provider_error", tiedAt),
+    terminalTrace("z-parsed", "parsed", tiedAt),
+  ].reverse()),
+  "Unpublished",
+  "tie classification must not depend on trace IDs or input order"
+);
+assert.equal(
+  auditStatusForTraces([
+    terminalTrace("provider", "provider_error", tiedAt),
+    {
+      ...terminalTrace("unknown", "parsed", tiedAt),
+      retryHistory: [],
+    },
+  ]),
+  "Unpublished",
+  "unknown final evidence in the latest timestamp group must fail safe"
+);
+assert.equal(
+  auditStatusForTraces([
+    terminalTrace("a-provider", "provider_error", tiedAt),
+    terminalTrace("z-provider", "provider_error", tiedAt),
+  ]),
+  "Provider failed",
+  "a latest timestamp group containing only provider errors is provider-terminal"
+);
+assert.equal(
+  auditStatusForTraces([
+    terminalTrace("older-provider", "provider_error", tiedAt),
+    terminalTrace("later-parsed", "parsed", "2026-07-29T08:32:00.000Z"),
+  ]),
+  "Unpublished",
+  "a distinctly later parsed trace remains non-provider-terminal"
+);
+assert.equal(
+  auditStatusForTraces([
+    terminalTrace("older-parsed", "parsed", tiedAt),
+    terminalTrace("later-provider", "provider_error", "2026-07-29T08:32:00.000Z"),
+  ]),
+  "Provider failed",
+  "a distinctly later provider error remains provider-terminal"
+);
 assert.match(
   rows.find((row) => row.id === "infrastructure")!.configuration,
   /architect: account\/architect-model.*high reasoning.*12,288 tokens.*worker: local\/worker-model.*4,096 tokens/
