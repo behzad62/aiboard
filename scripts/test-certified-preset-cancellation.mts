@@ -13,10 +13,16 @@ import { runHarnessCertification } from "../lib/benchmark/certified/certificatio
 import {
   __resetBenchmarkStoreForTests,
   __setAdapterForTests,
+  listBenchmarkArtifacts,
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
+  listBenchmarkFailures,
+  listBenchmarkRunEvents,
   listBenchmarkRuns,
   listBenchmarkTeamCompositions,
+  listBenchmarkToolCallTraces,
+  listBenchmarkTraces,
+  listBenchmarkVerifierResults,
   listHarnessCertificationResults,
 } from "../lib/benchmark/store";
 import type { StorageAdapter } from "../lib/client/storage-adapter";
@@ -321,6 +327,162 @@ for (const boundary of [
     `PASS cancellation at deferred ${boundary.name} persistence admits no later boundary`
   );
 }
+
+// Removing the GameIQ post-persistence/next-admission abort gates makes these
+// fail by entering the next durable boundary or provider path after the parent
+// cancellation has already won.
+const gameIqBoundaryFailures: Array<{ name: string; error: string }> = [];
+for (const boundary of [
+  {
+    write: 3,
+    finalWrites: 3,
+    name: "team",
+    expected: { teams: 1, certifications: 1, cases: 1, runs: 0 },
+  },
+  {
+    write: 1,
+    finalWrites: 1,
+    name: "certification",
+    expected: { teams: 0, certifications: 1, cases: 0, runs: 0 },
+  },
+  {
+    write: 2,
+    finalWrites: 2,
+    name: "case",
+    expected: { teams: 0, certifications: 1, cases: 1, runs: 0 },
+  },
+  {
+    write: 4,
+    // A durable run boundary writes its run blob and then the main store. Both
+    // writes belong to the already-entered boundary and may settle after abort.
+    finalWrites: 5,
+    name: "run",
+    expected: { teams: 1, certifications: 1, cases: 1, runs: 1 },
+  },
+] as const) {
+  configureStore();
+  const model = selectedModel(`gameiq-deferred-${boundary.name}`);
+  const parent = new AbortController();
+  const cancellation = new Error(
+    `cancel GameIQ during deferred ${boundary.name} persistence`
+  );
+  const persistence = deferredWriteAdapter(boundary.write);
+  __setAdapterForTests(persistence.adapter);
+  const runAbortRef: { current: AbortController | null } = { current: null };
+  let providerCalls = 0;
+  let message: string | null = null;
+  let summaryStatus: string | null = null;
+  let onCompleteCalls = 0;
+  let visibleRuns: GameIqModelRunState[] = [];
+  let modelAdmittedAfterCancellation = false;
+  let exactChildReason = false;
+  const originalStreamChat = openaiProvider.streamChat;
+  openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
+    providerCalls++;
+    yield { type: "token", content: "{}" };
+  };
+  try {
+    const pending = runGameIqMultiModel({
+      models: [model],
+      gameIqModelIds: [model.modelId],
+      suiteId: "gameiq-v0.2-connect-four",
+      fireworksPlayerCount: 2,
+      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      effortByModelId: {},
+      signal: parent.signal,
+      runAbortRef,
+      setRunning: () => {},
+      setRunPhase: () => {},
+      setSummary: (next) => {
+        summaryStatus = next?.status ?? null;
+      },
+      setMessage: (next) => {
+        message = next;
+      },
+      setGameIqModelRuns: (updater) => {
+        const previous = visibleRuns;
+        const next =
+          typeof updater === "function" ? updater(previous) : updater;
+        if (
+          parent.signal.aborted &&
+          next.some(
+            (run) =>
+              run.status === "running" &&
+              previous.find((candidate) => candidate.modelId === run.modelId)
+                ?.status !== "running"
+          )
+        ) {
+          modelAdmittedAfterCancellation = true;
+        }
+        visibleRuns = next;
+      },
+      onComplete: async () => {
+        onCompleteCalls++;
+      },
+    });
+    await persistence.entered;
+    const activeController = runAbortRef.current;
+    assert.ok(activeController);
+    parent.abort(cancellation);
+    exactChildReason = activeController.signal.reason === cancellation;
+    persistence.release();
+    await pending;
+  } finally {
+    persistence.release();
+    __setAdapterForTests(null);
+    openaiProvider.streamChat = originalStreamChat;
+  }
+
+  const persisted = {
+    teams: (await listBenchmarkTeamCompositions()).length,
+    certifications: (await listHarnessCertificationResults()).length,
+    cases: (await listBenchmarkCaseV2()).length,
+    runs: (await listBenchmarkRuns()).length,
+  };
+  const descendantEvidence = {
+    attempts: (await listBenchmarkAttemptsV2()).length,
+    traces: (await listBenchmarkTraces()).length,
+    events: (await listBenchmarkRunEvents()).length,
+    toolCalls: (await listBenchmarkToolCallTraces()).length,
+    verifiers: (await listBenchmarkVerifierResults()).length,
+    artifacts: (await listBenchmarkArtifacts()).length,
+    failures: (await listBenchmarkFailures()).length,
+  };
+  try {
+    assert.deepEqual(persisted, boundary.expected);
+    assert.deepEqual(descendantEvidence, {
+      attempts: 0,
+      traces: 0,
+      events: 0,
+      toolCalls: 0,
+      verifiers: 0,
+      artifacts: 0,
+      failures: 0,
+    });
+    assert.equal(persistence.writes(), boundary.finalWrites);
+    assert.equal(providerCalls, 0);
+    assert.equal(modelAdmittedAfterCancellation, false);
+    assert.equal(exactChildReason, true);
+    assert.equal(summaryStatus, null);
+    assert.equal(onCompleteCalls, 0);
+    assert.equal(message, cancellation.message);
+    assert.equal(visibleRuns.length, 1);
+    assert.equal(visibleRuns[0]?.status, "cancelled");
+    assert.equal(visibleRuns[0]?.error, cancellation.message);
+    assert.equal(visibleRuns[0]?.packsScored, undefined);
+    assert.doesNotMatch(message ?? "", /completed|success/i);
+    console.log(
+      `PASS GameIQ cancellation at deferred ${boundary.name} persistence admits no later boundary`
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    gameIqBoundaryFailures.push({ name: boundary.name, error: detail });
+    console.error(
+      `FAIL GameIQ cancellation at deferred ${boundary.name} persistence admits no later boundary -> ${detail}`
+    );
+  }
+}
+assert.deepEqual(gameIqBoundaryFailures, []);
 
 // Removing parent-to-child signal linking makes this fail: only the child
 // currently stored in the shared ref aborts and the queued fifth model starts.

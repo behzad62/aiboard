@@ -6,6 +6,7 @@ import {
   callCertifiedModel,
   CertifiedProviderError,
 } from "../lib/benchmark/certified/model-call";
+import { CertifiedBudgetExceededError } from "../lib/benchmark/certified/budget";
 import { classifyProviderFailure } from "../lib/benchmark/certified/classify-provider-failure";
 import { createCertifiedTabRunCoordinator } from "../lib/benchmark/certified/run-session";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
@@ -455,6 +456,147 @@ async function waitFor(check2: () => boolean): Promise<void> {
       coordinator.tryStart("preset", { presetId: "model-iq" }, async () => undefined) === true,
     coordinator.getSnapshot()
   );
+}
+
+// Removing the post-timeout `await teardown` makes both variants fail: the
+// coordinator publishes idle and admits a replacement while the same physical
+// iterator's return() is still pending.
+for (const variant of ["parent cancellation", "budget cancellation"] as const) {
+  let calls = 0;
+  let surfacedError: unknown;
+  let providerSignal!: AbortSignal;
+  let notifyNextStarted!: () => void;
+  let notifyReturnStarted!: () => void;
+  let resolveReturn!: () => void;
+  const nextStarted = new Promise<void>((resolve) => {
+    notifyNextStarted = resolve;
+  });
+  const returnStarted = new Promise<void>((resolve) => {
+    notifyReturnStarted = resolve;
+  });
+  const returnGate = new Promise<IteratorResult<StreamChunk>>((resolve) => {
+    resolveReturn = () => resolve({ done: true, value: undefined });
+  });
+  const coordinator = createCertifiedTabRunCoordinator();
+  const context = makeTestContext();
+  const parentReason = new Error(
+    "cancel coordinator while physical iterator teardown is pending"
+  );
+  if (variant === "budget cancellation") {
+    context.modelBudget.maxUsd = 0;
+  }
+
+  assert.equal(
+    coordinator.tryStart("advanced", {}, async (signal) => {
+      try {
+        await callCertifiedModel({
+          model,
+          system: "s",
+          user: "u",
+          maxTokens: 128,
+          temperature: 0,
+          context,
+          caseId: context.caseIds[0],
+          attemptId: `attempt-pending-teardown-${variant.replaceAll(" ", "-")}`,
+          participantId: "p",
+          signal,
+          pricing:
+            variant === "budget cancellation"
+              ? { inputUsdPer1M: 0, outputUsdPer1M: 1_000_000 }
+              : null,
+          streamChat: ({ params }): AsyncIterable<StreamChunk> => {
+            calls++;
+            assert.ok(params.signal);
+            providerSignal = params.signal;
+            let emittedBudgetToken = false;
+            return {
+              [Symbol.asyncIterator](): AsyncIterator<StreamChunk> {
+                return {
+                  next: () => {
+                    notifyNextStarted();
+                    if (
+                      variant === "budget cancellation" &&
+                      !emittedBudgetToken
+                    ) {
+                      emittedBudgetToken = true;
+                      return Promise.resolve({
+                        done: false,
+                        value: { type: "token", content: "budget" },
+                      });
+                    }
+                    return new Promise<IteratorResult<StreamChunk>>(() => {});
+                  },
+                  return: () => {
+                    notifyReturnStarted();
+                    return returnGate;
+                  },
+                };
+              },
+            };
+          },
+          retryDelaysMs: [0],
+        });
+      } catch (error) {
+        surfacedError = error;
+        throw error;
+      }
+    }),
+    true
+  );
+
+  await nextStarted;
+  if (variant === "parent cancellation") {
+    assert.equal(coordinator.cancel(parentReason), true);
+  }
+  await returnStarted;
+  const winningReason = providerSignal.reason;
+  assert.equal(providerSignal.aborted, true);
+  if (variant === "parent cancellation") {
+    assert.equal(winningReason, parentReason);
+  } else {
+    assert.ok(winningReason instanceof CertifiedBudgetExceededError);
+    assert.match(winningReason.message, /projected USD .* exceeded maxUsd 0/i);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 5_100));
+  const replacementWhilePending = coordinator.tryStart(
+    "preset",
+    { presetId: "model-iq" },
+    async () => undefined
+  );
+  check(
+    `${variant} retains coordinator ownership beyond the teardown limit`,
+    coordinator.getSnapshot().owner === "advanced" &&
+      replacementWhilePending === false &&
+      calls === 1,
+    {
+      calls,
+      replacementWhilePending,
+      snapshot: coordinator.getSnapshot(),
+    }
+  );
+
+  resolveReturn();
+  await waitFor(() => coordinator.getSnapshot().owner === null);
+  const replacementAfterRelease = coordinator.tryStart(
+    "preset",
+    { presetId: "model-iq" },
+    async () => undefined
+  );
+  check(
+    `${variant} releases only after teardown and preserves the exact winning reason`,
+    surfacedError === winningReason &&
+      calls === 1 &&
+      replacementAfterRelease === true,
+    {
+      calls,
+      exactReason: surfacedError === winningReason,
+      replacementAfterRelease,
+      error:
+        surfacedError instanceof Error ? surfacedError.message : String(surfacedError),
+    }
+  );
+  await waitFor(() => coordinator.getSnapshot().owner === null);
 }
 
 {
