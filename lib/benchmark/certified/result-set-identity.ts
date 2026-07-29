@@ -1,7 +1,10 @@
 import { normalizeBenchmarkReasoningEffort } from "@/lib/benchmark/model-effort";
 import type { BenchmarkResultConfiguration } from "@/lib/benchmark/types";
 
-type CanonicalResultConfiguration = Omit<BenchmarkResultConfiguration, "displayName"> & {
+type CanonicalResultConfiguration = Omit<
+  BenchmarkResultConfiguration,
+  "displayName" | "providerId" | "modelId" | "reasoningEffort" | "strategy"
+> & {
   providerId: string | null;
   modelId: string | null;
   reasoningEffort: string;
