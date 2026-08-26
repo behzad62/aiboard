@@ -509,6 +509,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       changedPaths: [...changeSet.changedPaths],
       diffArtifactHash: changeSet.diffArtifactHash,
       evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
+      ...(changeSet.acceptanceCriteria
+        ? { acceptanceCriteria: changeSet.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+        : {}),
+      ...(changeSet.acceptanceCriteriaVersion !== undefined
+        ? { acceptanceCriteriaVersion: changeSet.acceptanceCriteriaVersion }
+        : {}),
+      ...(changeSet.criterionEvidenceLinks
+        ? {
+            criterionEvidenceLinks: changeSet.criterionEvidenceLinks.map((link) => ({
+              ...link,
+              artifactHashes: [...link.artifactHashes],
+            })),
+          }
+        : {}),
     };
   }
 }

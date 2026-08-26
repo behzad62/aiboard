@@ -12,6 +12,7 @@ import type {
 } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
+import type { EvidenceStore } from "./evidence-store.js";
 import {
   TaskScheduler,
   type TaskSchedulerOptions,
@@ -76,6 +77,7 @@ export interface BuildRuntimeOptions {
   clock?: () => string;
   renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
   providerRetryDeadlineMs?: () => number | undefined;
+  evidenceStore?: EvidenceStore;
 }
 
 export interface BuildStepResult {
@@ -96,6 +98,7 @@ export class BuildRuntime {
   private readonly clock: () => string;
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
+  private readonly evidenceStore?: EvidenceStore;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -111,6 +114,7 @@ export class BuildRuntime {
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.renewBudgetWindow = options.renewBudgetWindow;
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
+    this.evidenceStore = options.evidenceStore;
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -468,6 +472,7 @@ export class BuildRuntime {
         this.runPolicy === "plan_only" &&
         reason.type === "completion_decision_required" &&
         projection.planRevision > 0,
+      ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {
       tools.register(tool);
     }

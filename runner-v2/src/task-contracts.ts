@@ -1,4 +1,7 @@
-import type { AcceptanceCriterion } from "./acceptance-contracts.js";
+import type {
+  AcceptanceCriterion,
+  CriterionEvidenceLink,
+} from "./acceptance-contracts.js";
 
 export type TaskStatus =
   | "planned"
@@ -25,6 +28,8 @@ export interface BuildTask {
   acceptanceCriteria?: AcceptanceCriterion[];
   /** Monotonically versions the criterion set across plan revisions. */
   acceptanceCriteriaVersion?: number;
+  /** Immutable evidence mapping captured when the current attempt is submitted. */
+  criterionEvidenceLinks?: CriterionEvidenceLink[];
   attempt: number;
   /** Architect-granted mechanical ceiling after revising an exhausted failure. */
   attemptLimit?: number;

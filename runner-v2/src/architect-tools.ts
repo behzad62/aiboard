@@ -18,8 +18,11 @@ import type {
 } from "./task-contracts.js";
 import {
   validateAcceptanceCriteria,
+  validateCriterionReviewVerdicts,
   type AcceptanceCriterion,
+  type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
+import type { EvidenceStore } from "./evidence-store.js";
 import { validateTaskGraph } from "./task-graph.js";
 
 export interface ArchitectToolsOptions {
@@ -27,6 +30,7 @@ export interface ArchitectToolsOptions {
   clock?: () => string;
   runPolicy?: NativeBuildRunPolicy;
   planOnlyCompletionAvailable?: boolean;
+  evidenceStore?: EvidenceStore;
 }
 
 interface PlanTaskInput {
@@ -62,6 +66,7 @@ interface ReviewTaskInput {
   decision: "approved" | "rejected";
   summary: string;
   evidenceArtifactHashes: string[];
+  criterionVerdicts?: CriterionReviewVerdict[];
   planReconciliation?: PlanReconciliation;
 }
 
@@ -85,7 +90,7 @@ export function createArchitectTools(
   return [
     ...core,
     reconcilePlanTool(options.store, clock),
-    reviewTaskTool(options.store, clock),
+    reviewTaskTool(options.store, clock, options.evidenceStore),
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
@@ -269,7 +274,8 @@ function answerGuidanceTool(
 
 function reviewTaskTool(
   store: SchedulerStore,
-  clock: () => string
+  clock: () => string,
+  evidenceStore?: EvidenceStore
 ): NativeTool<ReviewTaskInput> {
   return lifecycleTool({
     name: "review_task",
@@ -282,6 +288,11 @@ function reviewTaskTool(
         type: "array",
         items: { type: "string", pattern: "^[a-f0-9]{64}$" },
       },
+      criterionVerdicts: {
+        type: "array",
+        minItems: 1,
+        items: criterionReviewVerdictSchema(),
+      },
       planReconciliation: planReconciliationSchema(),
     }, ["taskId", "decision", "summary", "evidenceArtifactHashes"]),
     validate: validateReview,
@@ -291,6 +302,60 @@ function reviewTaskTool(
       const task = rebuildSchedulerProjection(
         store.readRun(context.runId)
       ).tasks[input.taskId];
+      if (!task) return errorOutput("unknown_task", `Unknown task ${input.taskId}.`);
+      if (task.acceptanceCriteria) {
+        if (!input.criterionVerdicts) {
+          return errorOutput(
+            "criterion_review_required",
+            `Task ${input.taskId} review requires one verdict per acceptance criterion.`
+          );
+        }
+        if (!task.criterionEvidenceLinks) {
+          return errorOutput(
+            "criterion_evidence_required",
+            `Task ${input.taskId} has no submitted criterion evidence mappings.`
+          );
+        }
+        if (!evidenceStore) {
+          return errorOutput(
+            "evidence_store_required",
+            "Criterion review requires the durable evidence store."
+          );
+        }
+        const validation = validateCriterionReviewVerdicts(
+          task.acceptanceCriteria,
+          input.criterionVerdicts,
+          task.criterionEvidenceLinks,
+          {
+            evidenceRecords: evidenceStore.list({
+              runId: context.runId,
+              taskId: task.id,
+              limit: 1_000,
+            }),
+            runId: context.runId,
+            taskId: task.id,
+            attempt: task.attempt,
+          }
+        );
+        if (!validation.valid) {
+          return errorOutput(
+            "invalid_criterion_review",
+            `Task review has invalid criterion verdicts: ${validation.issues.join(" ")}`
+          );
+        }
+        if (input.decision === "approved" && validation.unsatisfiedCriterionIds.length > 0) {
+          return errorOutput(
+            "unsatisfied_criterion",
+            `Task ${input.taskId} cannot be approved with unsatisfied criteria: ${validation.unsatisfiedCriterionIds.join(", ")}.`
+          );
+        }
+        if (input.decision === "rejected" && validation.unsatisfiedCriterionIds.length === 0) {
+          return errorOutput(
+            "rejection_requires_unsatisfied_criterion",
+            `Rejected task ${input.taskId} must identify an unsatisfied criterion.`
+          );
+        }
+      }
       return appendEvent(store, {
         runId: context.runId,
         type: "review.decided",
@@ -304,6 +369,17 @@ function reviewTaskTool(
           decision: input.decision,
           summary: input.summary,
           evidenceArtifactHashes: input.evidenceArtifactHashes,
+          ...(input.criterionVerdicts
+            ? {
+                criterionVerdicts: input.criterionVerdicts.map((verdict) => ({
+                  ...verdict,
+                  evidenceIds: [...verdict.evidenceIds],
+                  ...(verdict.artifactHashes
+                    ? { artifactHashes: [...verdict.artifactHashes] }
+                    : {}),
+                })),
+              }
+            : {}),
           ...(input.planReconciliation
             ? { planReconciliation: input.planReconciliation }
             : {}),
@@ -459,6 +535,10 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
     if (!nonEmpty(value.taskId) || (value.decision !== "approved" && value.decision !== "rejected") || !nonEmpty(value.summary)) return null;
     const hashes = stringList(value.evidenceArtifactHashes);
     if (!hashes || hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) return null;
+    const criterionVerdicts = value.criterionVerdicts === undefined
+      ? undefined
+      : parseCriterionReviewVerdicts(value.criterionVerdicts);
+    if (criterionVerdicts === null) return null;
     const planReconciliation = value.planReconciliation === undefined
       ? undefined
       : parsePlanReconciliation(value.planReconciliation);
@@ -468,6 +548,7 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       decision: value.decision,
       summary: value.summary,
       evidenceArtifactHashes: hashes,
+      ...(criterionVerdicts !== undefined ? { criterionVerdicts } : {}),
       ...(planReconciliation ? { planReconciliation } : {}),
     };
   }, "taskId, decision, summary, and valid evidenceArtifactHashes are required");
@@ -607,6 +688,51 @@ function criterionSchema(): Record<string, unknown> {
     id: { type: "string", minLength: 1 },
     text: { type: "string", minLength: 1 },
   }, ["id", "text"]);
+}
+
+function criterionReviewVerdictSchema(): Record<string, unknown> {
+  return objectSchema({
+    criterionId: { type: "string", minLength: 1 },
+    verdict: { type: "string", enum: ["satisfied", "unsatisfied"] },
+    rationale: { type: "string", minLength: 1 },
+    evidenceIds: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string", minLength: 1 },
+    },
+    artifactHashes: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    },
+  }, ["criterionId", "verdict", "rationale", "evidenceIds"]);
+}
+
+function parseCriterionReviewVerdicts(value: unknown): CriterionReviewVerdict[] | null {
+  if (!Array.isArray(value)) return null;
+  const verdicts: CriterionReviewVerdict[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate) || !nonEmpty(candidate.criterionId)) return null;
+    if (candidate.verdict !== "satisfied" && candidate.verdict !== "unsatisfied") return null;
+    if (!nonEmpty(candidate.rationale)) return null;
+    const evidenceIds = stringList(candidate.evidenceIds);
+    if (!evidenceIds || evidenceIds.length === 0) return null;
+    const artifactHashes = candidate.artifactHashes === undefined
+      ? undefined
+      : stringList(candidate.artifactHashes);
+    if (
+      candidate.artifactHashes !== undefined &&
+      (!artifactHashes || artifactHashes.length === 0 || artifactHashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash)))
+    ) return null;
+    verdicts.push({
+      criterionId: candidate.criterionId,
+      verdict: candidate.verdict,
+      rationale: candidate.rationale,
+      evidenceIds,
+      ...(artifactHashes ? { artifactHashes } : {}),
+    });
+  }
+  return verdicts;
 }
 
 function parseAcceptanceCriteria(value: unknown): AcceptanceCriterion[] | null {

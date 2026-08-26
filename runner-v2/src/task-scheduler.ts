@@ -5,6 +5,7 @@ import type {
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
+import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
 
 export interface WorkerAssignment {
   runId: string;
@@ -17,7 +18,11 @@ export interface WorkerAssignment {
 }
 
 export type WorkerOutcome =
-  | { type: "submitted"; changeSetId: string }
+  | {
+      type: "submitted";
+      changeSetId: string;
+      criterionEvidenceLinks?: CriterionEvidenceLink[];
+    }
   | {
       type: "guidance";
       requestId: string;
@@ -218,6 +223,14 @@ export class TaskScheduler {
     if (outcome.type === "submitted") {
       this.transition(taskId, "submitted", attempt, {
         changeSetId: outcome.changeSetId,
+        ...(outcome.criterionEvidenceLinks
+          ? {
+              criterionEvidenceLinks: outcome.criterionEvidenceLinks.map((link) => ({
+                ...link,
+                artifactHashes: [...link.artifactHashes],
+              })),
+            }
+          : {}),
       });
       return;
     }

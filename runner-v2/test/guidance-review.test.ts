@@ -15,6 +15,7 @@ import { runAgentLoop } from "../src/agent-loop.js";
 import { createArchitectTools } from "../src/architect-tools.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 import {
   createSubmitTaskTool,
@@ -420,6 +421,127 @@ test("only Architect tools can approve, request integration, and complete", asyn
     assert.equal(projection(store).status, "completed");
     assert.equal(projection(store).projectHandoff?.status, "selected");
     assert.equal(projection(store).projectHandoff?.choice, "keep_integration_branch");
+  });
+});
+
+test("review_task requires complete criterion verdicts and evaluates rejected criteria", async () => {
+  await withStore(async (store) => {
+    const evidenceStore = new SqliteEvidenceStore(":memory:");
+    try {
+      const artifactHash = "a".repeat(64);
+      const evidence = evidenceStore.record({
+        runId: "run_1",
+        taskId: "task_a",
+        actor: { role: "worker", id: "worker_1" },
+        fact: {
+          kind: "browser_screenshot",
+          label: "criterion screenshot",
+          capturedAt: now(),
+          screenshotArtifactHash: artifactHash,
+          mediaType: "image/png",
+          byteLength: 10,
+        },
+        createdAt: now(),
+        idempotencyKey: "criterion-evidence",
+        attempt: 1,
+      });
+      store.append({
+        runId: "run_1",
+        type: "plan.created",
+        occurredAt: now(),
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "plan:1",
+        payload: {
+          revision: 1,
+          tasks: [{
+            id: "task_a",
+            objective: "Implement the requested behavior",
+            dependencies: [],
+            status: "planned",
+            requiredCapabilities: ["code"],
+            acceptanceCriteria: [
+              { id: "behavior", text: "The behavior is implemented." },
+              { id: "verification", text: "The focused check passes." },
+            ],
+            acceptanceCriteriaVersion: 1,
+            attempt: 0,
+          }],
+        },
+      });
+      transition(store, "assigned", { attempt: 1, assignedWorkerId: "worker_1" });
+      transition(store, "running", {});
+      transition(store, "submitted", {
+        changeSetId: "changeset_1",
+        criterionEvidenceLinks: [
+          {
+            criterionId: "behavior",
+            evidenceId: evidence.id,
+            artifactHashes: [artifactHash],
+            taskId: "task_a",
+            attempt: 1,
+          },
+          {
+            criterionId: "verification",
+            evidenceId: evidence.id,
+            artifactHashes: [artifactHash],
+            taskId: "task_a",
+            attempt: 1,
+          },
+        ],
+      });
+      const registry = new ToolRegistry();
+      for (const tool of createArchitectTools({ store, clock: now, evidenceStore })) {
+        registry.register(tool);
+      }
+      const omitted = await invoke(registry, architectContext(), "review_task", {
+        taskId: "task_a",
+        decision: "approved",
+        summary: "The review is incomplete.",
+        evidenceArtifactHashes: [artifactHash],
+        criterionVerdicts: [{
+          criterionId: "behavior",
+          verdict: "satisfied",
+          rationale: "The evidence supports the behavior.",
+          evidenceIds: [evidence.id],
+          artifactHashes: [artifactHash],
+        }],
+      });
+      assert.equal(omitted.isError, true);
+      assert.match(omitted.error?.message ?? "", /criterion|verdict/i);
+
+      const rejected = await invoke(registry, architectContext(), "review_task", {
+        taskId: "task_a",
+        decision: "rejected",
+        summary: "The behavior criterion remains unsatisfied.",
+        evidenceArtifactHashes: [artifactHash],
+        criterionVerdicts: [
+          {
+            criterionId: "behavior",
+            verdict: "unsatisfied",
+            rationale: "The observed behavior does not meet the requirement.",
+            evidenceIds: [evidence.id],
+            artifactHashes: [artifactHash],
+          },
+          {
+            criterionId: "verification",
+            verdict: "satisfied",
+            rationale: "The focused check produced durable evidence.",
+            evidenceIds: [evidence.id],
+            artifactHashes: [artifactHash],
+          },
+        ],
+      });
+      assert.equal(rejected.isError, false);
+      const review = projection(store).reviews.task_a;
+      assert.equal(review.status, "rejected");
+      assert.equal(review.criterionVerdicts?.length, 2);
+      assert.deepEqual(
+        review.criterionVerdicts?.map((verdict) => verdict.criterionId),
+        ["behavior", "verification"]
+      );
+    } finally {
+      evidenceStore.close();
+    }
   });
 });
 

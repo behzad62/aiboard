@@ -5,6 +5,12 @@ import type {
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
+import {
+  validateCriterionEvidenceLinks,
+  validateCriterionReviewVerdicts,
+  type CriterionEvidenceLink,
+  type CriterionReviewVerdict,
+} from "./acceptance-contracts.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -73,6 +79,8 @@ export interface ReviewProjection {
   status: "requested" | "approved" | "rejected";
   summary?: string;
   evidenceArtifactHashes: string[];
+  criterionEvidenceLinks?: CriterionEvidenceLink[];
+  criterionVerdicts?: CriterionReviewVerdict[];
 }
 
 export interface ProviderHealthProjection {
@@ -294,6 +302,7 @@ export function reduceSchedulerEvent(
             attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
             assignedWorkerId: undefined,
             changeSetId: undefined,
+            criterionEvidenceLinks: undefined,
             failureReason: undefined,
           }
         : {
@@ -333,10 +342,25 @@ export function reduceSchedulerEvent(
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
       assertTransitionAuthority(status, event.actor.role);
+      const transitionPatch =
+        (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      if (status === "submitted" && task.acceptanceCriteria) {
+        const links = transitionPatch.criterionEvidenceLinks;
+        const validation = validateCriterionEvidenceLinks(
+          task.acceptanceCriteria,
+          links ?? [],
+          { taskId: task.id, attempt: task.attempt }
+        );
+        if (!validation.valid) {
+          throw new Error(
+            `Task submission has invalid criterion evidence: ${validation.issues.join(" ")}`
+          );
+        }
+      }
       next.tasks[taskId] = applyTaskTransition(
         task,
         status,
-        (event.payload.patch as Partial<BuildTask> | undefined) ?? {}
+        transitionPatch
       );
       if (status === "integrated") {
         const integrationRevision = next.tasks[taskId].integrationRevision;
@@ -444,11 +468,34 @@ export function reduceSchedulerEvent(
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
+      const requestedLinks = event.payload.criterionEvidenceLinks;
+      if (task.acceptanceCriteria) {
+        const validation = validateCriterionEvidenceLinks(
+          task.acceptanceCriteria,
+          Array.isArray(requestedLinks)
+            ? requestedLinks as CriterionEvidenceLink[]
+            : [],
+          { taskId: task.id, attempt: task.attempt }
+        );
+        if (!validation.valid) {
+          throw new Error(
+            `Review request has invalid criterion evidence: ${validation.issues.join(" ")}`
+          );
+        }
+      }
       next.tasks[taskId] = applyTaskTransition(task, "architect_review");
       next.reviews[taskId] = {
         taskId,
         status: "requested",
         evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
+        ...(Array.isArray(requestedLinks)
+          ? {
+              criterionEvidenceLinks: (requestedLinks as CriterionEvidenceLink[]).map((link) => ({
+                ...link,
+                artifactHashes: [...link.artifactHashes],
+              })),
+            }
+          : {}),
       };
       break;
     }
@@ -466,12 +513,57 @@ export function reduceSchedulerEvent(
       if (decision !== "approved" && decision !== "rejected") {
         throw new Error(`Review decision ${decision} is invalid.`);
       }
+      let criterionVerdicts: CriterionReviewVerdict[] | undefined;
+      if (task.acceptanceCriteria) {
+        const links = task.criterionEvidenceLinks;
+        if (!links) {
+          throw new Error(`Task ${taskId} has no submitted criterion evidence mappings.`);
+        }
+        if (!Array.isArray(event.payload.criterionVerdicts)) {
+          throw new Error(`Task ${taskId} review requires criterion verdicts.`);
+        }
+        const submittedVerdicts = event.payload.criterionVerdicts as CriterionReviewVerdict[];
+        const validation = validateCriterionReviewVerdicts(
+          task.acceptanceCriteria,
+          submittedVerdicts,
+          links
+        );
+        if (!validation.valid) {
+          throw new Error(
+            `Task review has invalid criterion verdicts: ${validation.issues.join(" ")}`
+          );
+        }
+        if (decision === "approved" && validation.unsatisfiedCriterionIds.length > 0) {
+          throw new Error(
+            `Task ${taskId} cannot be approved with unsatisfied criteria: ${validation.unsatisfiedCriterionIds.join(", ")}.`
+          );
+        }
+        if (decision === "rejected" && validation.unsatisfiedCriterionIds.length === 0) {
+          throw new Error(`Rejected task ${taskId} must identify an unsatisfied criterion.`);
+        }
+        criterionVerdicts = submittedVerdicts.map((verdict) => ({
+          ...verdict,
+          evidenceIds: [...verdict.evidenceIds],
+          ...(verdict.artifactHashes
+            ? { artifactHashes: [...verdict.artifactHashes] }
+            : {}),
+        }));
+      }
       next.tasks[taskId] = applyTaskTransition(task, decision);
       next.reviews[taskId] = {
         taskId,
         status: decision,
         summary: requiredString(event.payload, "summary"),
         evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
+        ...(task.criterionEvidenceLinks
+          ? {
+              criterionEvidenceLinks: task.criterionEvidenceLinks.map((link) => ({
+                ...link,
+                artifactHashes: [...link.artifactHashes],
+              })),
+            }
+          : {}),
+        ...(criterionVerdicts ? { criterionVerdicts } : {}),
       };
       if (event.payload.planReconciliation !== undefined) {
         applyPlanReconciliation(
@@ -840,6 +932,7 @@ function applyPlanReconciliation(
           attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
           assignedWorkerId: undefined,
           changeSetId: undefined,
+          criterionEvidenceLinks: undefined,
           failureReason: undefined,
         }
       : {
@@ -936,6 +1029,14 @@ function cloneBuildTask(task: BuildTask): BuildTask {
     requiredCapabilities: [...task.requiredCapabilities],
     ...(task.acceptanceCriteria
       ? { acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+    ...(task.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: task.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
       : {}),
   };
 }

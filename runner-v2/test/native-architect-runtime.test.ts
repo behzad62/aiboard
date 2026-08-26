@@ -6,6 +6,7 @@ import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ProviderTransportError } from "../src/account-runner-model.js";
+import { buildArchitectContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createBrowserTools, type BrowserBackend } from "../src/browser-tools.js";
 import { BuildRuntime } from "../src/build-runtime.js";
@@ -58,6 +59,50 @@ test("Architect model calls carry direct durable role attribution", () => {
       sessionId: "architect:run_1",
     }
   );
+});
+
+test("Architect review context carries the submitted criterion evidence mapping", () => {
+  const context = buildArchitectContext({
+    limits: { maxBytes: 64 * 1024, maxEstimatedTokens: 16 * 1024 },
+    objective: "Build the requested feature.",
+    reason: { type: "review_required", taskId: "task_a", changeSetId: "changeset_1" },
+    projection: {
+      runId: "run_1",
+      status: "running",
+      planRevision: 1,
+      tasks: {},
+      guidance: {},
+      reviews: {},
+      runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+      lastSequence: 1,
+    },
+    reviewSubmission: {
+      taskId: "task_a",
+      attempt: 1,
+      changeSetId: "changeset_1",
+      baselineRevision: "a".repeat(40),
+      taskRevision: "b".repeat(40),
+      changedPaths: ["value.txt"],
+      diffArtifactHash: "c".repeat(64),
+      evidenceArtifactHashes: ["d".repeat(64)],
+      acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+      acceptanceCriteriaVersion: 1,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_1",
+        artifactHashes: ["d".repeat(64)],
+        taskId: "task_a",
+        attempt: 1,
+      }],
+    },
+    instructions: [],
+    skills: [],
+    memories: [],
+    evidence: [],
+    recentHistory: [],
+  });
+  assert.match(context.text, /criterionEvidenceLinks/);
+  assert.match(context.text, /evidence_1/);
 });
 
 test("Architect skill routing prioritizes the task named by the current action", () => {

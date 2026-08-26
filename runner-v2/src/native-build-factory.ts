@@ -293,6 +293,7 @@ export class NativeBuildFactory {
           Date.now()
         );
       },
+      evidenceStore,
     });
     let closed = false;
     return {

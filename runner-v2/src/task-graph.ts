@@ -118,11 +118,30 @@ export function applyTaskTransition(
   if (Object.hasOwn(patch, "acceptanceCriteria")) {
     throw new Error("Acceptance criteria cannot mutate through a task transition.");
   }
+  if (Object.hasOwn(patch, "criterionEvidenceLinks") && status !== "submitted") {
+    throw new Error("Criterion evidence links may only be recorded when submitting a task.");
+  }
   return {
     ...task,
     ...patch,
     ...(task.acceptanceCriteria
       ? { acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+    ...(task.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: task.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+    ...(patch.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: patch.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
       : {}),
     status,
   };

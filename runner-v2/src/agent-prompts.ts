@@ -9,6 +9,10 @@ import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
 import type { SkillDocument } from "./skill-catalog.js";
 import type { BuildTask } from "./task-contracts.js";
+import type {
+  AcceptanceCriterion,
+  CriterionEvidenceLink,
+} from "./acceptance-contracts.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -126,6 +130,9 @@ export interface ArchitectReviewSubmission {
   changedPaths: string[];
   diffArtifactHash: string;
   evidenceArtifactHashes: string[];
+  acceptanceCriteria?: AcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  criterionEvidenceLinks?: CriterionEvidenceLink[];
 }
 
 export function buildArchitectContext(

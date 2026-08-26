@@ -205,6 +205,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
               "Batch independent read-only tool calls in one turn when that reduces model round trips.",
               "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
               "Before every submit_task, record task-relevant durable evidence. Use run_evidence_command for command facts; browser snapshot, screenshot, and events tools record browser facts automatically. The Architect decides whether the evidence is sufficient.",
+              ...(assignment.task.acceptanceCriteria
+                ? [
+                    `Submit one criterionEvidenceLinks entry for every acceptance criterion (${assignment.task.acceptanceCriteria.map((criterion) => criterion.id).join(", ")}). Cite the durable evidence ID and only its recorded artifact hashes; the runner binds the mapping to this task attempt.`,
+                  ]
+                : []),
               "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
             ].join("\n"),
           },
@@ -255,7 +260,18 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);
-        return { type: "submitted", changeSetId: result.loop.changeSetId };
+        return {
+          type: "submitted",
+          changeSetId: result.loop.changeSetId,
+          ...(result.changeSet?.criterionEvidenceLinks
+            ? {
+                criterionEvidenceLinks: result.changeSet.criterionEvidenceLinks.map((link) => ({
+                  ...link,
+                  artifactHashes: [...link.artifactHashes],
+                })),
+              }
+            : {}),
+        };
       }
       if (result.loop.status === "waiting_for_architect") {
         const projection = rebuildSchedulerProjection(
