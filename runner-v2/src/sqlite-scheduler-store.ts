@@ -13,7 +13,9 @@ import type {
 import {
   rebuildSchedulerProjection,
   reduceSchedulerEvent,
+  validateSchedulerEvidenceEvent,
 } from "./scheduler-store.js";
+import type { EvidenceStore } from "./evidence-store.js";
 
 interface EventRow {
   event_id: string;
@@ -26,10 +28,16 @@ interface EventRow {
   payload_json: string;
 }
 
+export interface SqliteSchedulerStoreOptions {
+  evidenceStore?: EvidenceStore;
+}
+
 export class SqliteSchedulerStore implements SchedulerStore {
   private readonly database: DatabaseSync;
+  private readonly evidenceStore?: EvidenceStore;
 
-  constructor(databasePath: string) {
+  constructor(databasePath: string, options: SqliteSchedulerStoreOptions = {}) {
+    this.evidenceStore = options.evidenceStore;
     mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
     this.database.exec(`
@@ -93,6 +101,9 @@ export class SqliteSchedulerStore implements SchedulerStore {
         priorEvents.length > 0
           ? rebuildSchedulerProjection(priorEvents)
           : undefined;
+      if (this.evidenceStore) {
+        validateSchedulerEvidenceEvent(priorProjection, event, this.evidenceStore);
+      }
       reduceSchedulerEvent(priorProjection, event);
       this.database
         .prepare(

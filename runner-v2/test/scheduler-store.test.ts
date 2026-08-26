@@ -9,6 +9,7 @@ import {
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
 } from "../src/scheduler-store.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { readyTaskIds } from "../src/task-graph.js";
 import type { BuildTask } from "../src/task-contracts.js";
@@ -317,6 +318,59 @@ test("completed legacy scheduler runs remain replayable and inspectable", () => 
     assert.equal(projection.tasks.task_done.objective, "Objective task_done");
   } finally {
     store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable submission rejects fabricated evidence IDs and hashes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-evidence-boundary-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  try {
+    store.append(event("run_evidence_boundary", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_evidence",
+        objective: "Bind evidence",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+        acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to this worker." }],
+        acceptanceCriteriaVersion: 1,
+      }],
+    }));
+    store.append(event("run_evidence_boundary", "task.transitioned", "assign:1", {
+      taskId: "task_evidence",
+      status: "assigned",
+      patch: { attempt: 1, assignedWorkerId: "worker_task_evidence_1" },
+    }));
+    store.append(event("run_evidence_boundary", "task.transitioned", "running:1", {
+      taskId: "task_evidence",
+      status: "running",
+      patch: {},
+    }));
+    assert.throws(
+      () => store.append(event("run_evidence_boundary", "task.transitioned", "submit:1", {
+        taskId: "task_evidence",
+        status: "submitted",
+        patch: {
+          changeSetId: "changeset_fabricated",
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: "evidence_does_not_exist",
+            artifactHashes: ["f".repeat(64)],
+            taskId: "task_evidence",
+            attempt: 1,
+          }],
+        },
+      })),
+      /evidence.*(missing|not found|unknown)|artifact/i,
+    );
+    assert.equal(rebuildSchedulerProjection(store.readRun("run_evidence_boundary")).tasks.task_evidence.status, "running");
+  } finally {
+    store.close();
+    evidenceStore.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

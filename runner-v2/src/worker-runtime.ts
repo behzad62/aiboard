@@ -233,6 +233,7 @@ export async function runWorkerTask(
     runId: options.runId,
     parentSessionId: options.sessionId,
     taskId: options.taskId,
+    ...(attempt !== undefined ? { attempt } : {}),
     parentActorId: options.actorId,
     permissionProfile: options.permissionProfile,
     workspacePath: options.workspace.path,
@@ -272,11 +273,19 @@ export async function runWorkerTask(
         "Task submission is blocked until the Architect upgrades the acceptance contract."
       );
     }
-    const evidenceRecords = options.evidenceStore?.list({
-      runId: options.runId,
-      taskId: options.taskId,
-      limit: 1_000,
-    }) ?? [];
+    const evidenceRecords = options.evidenceStore
+      ? acceptanceCriteria
+        ? options.evidenceStore.getByIds({
+            runId: options.runId,
+            taskId: options.taskId,
+            ids: [...new Set((criterionEvidenceLinks ?? []).map((link) => link.evidenceId))],
+          })
+        : options.evidenceStore.list({
+            runId: options.runId,
+            taskId: options.taskId,
+            limit: 1_000,
+          })
+      : [];
     const evidenceHashes = evidenceArtifactHashes(
       evidenceRecords,
       options.actorId,
@@ -321,6 +330,7 @@ export async function runWorkerTask(
             evidenceRecords,
             taskId: options.taskId,
             attempt,
+            assignedWorkerId: options.actorId,
           }
         : { evidenceArtifactHashes: evidenceHashes }),
       externalEffects: externalEffectReferences(

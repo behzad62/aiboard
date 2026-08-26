@@ -196,6 +196,43 @@ test("benchmark evidence policy rejects commands outside the exact allowlist", a
   }
 });
 
+test("exact evidence lookup resolves records beyond the oldest 1000 and omits missing IDs", () => {
+  const store = new SqliteEvidenceStore(":memory:");
+  const artifactHash = "a".repeat(64);
+  try {
+    const records = [];
+    for (let index = 0; index < 1_001; index += 1) {
+      records.push(store.record({
+        runId: "run_exact_lookup",
+        taskId: "task_exact_lookup",
+        actor: { role: "worker", id: "worker_exact_lookup" },
+        fact: {
+          kind: "browser_screenshot",
+          label: `evidence-${index}`,
+          capturedAt: "2026-08-26T00:00:00.000Z",
+          screenshotArtifactHash: artifactHash,
+          mediaType: "image/png",
+          byteLength: 1,
+        },
+        createdAt: "2026-08-26T00:00:00.000Z",
+        idempotencyKey: `evidence-${index}`,
+        attempt: 1,
+      }));
+    }
+    const tail = records[1_000];
+    assert.deepEqual(
+      store.getByIds({
+        runId: "run_exact_lookup",
+        taskId: "task_exact_lookup",
+        ids: [tail.id, "evidence_missing", tail.id],
+      }).map((record) => record.id),
+      [tail.id, tail.id],
+    );
+  } finally {
+    store.close();
+  }
+});
+
 function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
   const registry = new ToolRegistry();
   for (const tool of createEvidenceTools({

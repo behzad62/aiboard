@@ -50,6 +50,7 @@ export interface SubagentToolsOptions {
   runId: string;
   parentSessionId: string;
   taskId: string;
+  attempt?: number;
   parentActorId: string;
   permissionProfile: PermissionProfile;
   workspacePath: string;
@@ -196,6 +197,7 @@ function spawnSubagentTool(
           artifacts: options.artifacts,
           ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
           taskId: options.taskId,
+          ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
           clock,
           ...(options.allowedCommands
             ? { allowedCommands: options.allowedCommands }
@@ -217,6 +219,7 @@ function spawnSubagentTool(
           store: options.evidenceStore,
           artifacts: options.artifacts,
           taskId: options.taskId,
+          ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
           clock,
           ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
         })) broker.register(tool);

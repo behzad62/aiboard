@@ -172,18 +172,98 @@ test("criterion mappings reject evidence from another task or stale attempt", as
   }
 });
 
+test("criterion mappings bind evidence to the assigned worker or an attributed descendant", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-change-set-actor-ownership-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_actor_ownership",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_actor_ownership",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_actor");
+    writeFileSync(join(workspace.path, "value.txt"), "two\n");
+    const commit = await workspaces.commitTask("task_actor", "Inspect actor ownership");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    const evidenceArtifact = await artifacts.put(Buffer.from("evidence"), "text/plain");
+    const criteria: AcceptanceCriterion[] = [{ id: "behavior", text: "Behavior is verified." }];
+    const link: CriterionEvidenceLink = {
+      criterionId: "behavior",
+      evidenceId: "evidence_actor",
+      artifactHashes: [evidenceArtifact.hash],
+      taskId: "task_actor",
+      attempt: 1,
+    };
+
+    await assert.rejects(
+      () => createChangeSet({
+        workspacePath: workspace.path,
+        taskCommit: commit,
+        artifacts,
+        acceptanceCriteria: criteria,
+        criterionEvidenceLinks: [link],
+        evidenceRecords: [evidenceRecord(
+          "run_actor_ownership",
+          "evidence_actor",
+          "task_actor",
+          1,
+          evidenceArtifact.hash,
+          { role: "architect", id: "architect_1" },
+        )],
+        taskId: "task_actor",
+        attempt: 1,
+        assignedWorkerId: "worker_task_actor_1",
+      }),
+      /outside the assigned worker|another actor|actor/i,
+    );
+
+    const descendant = await createChangeSet({
+      workspacePath: workspace.path,
+      taskCommit: commit,
+      artifacts,
+      acceptanceCriteria: criteria,
+      criterionEvidenceLinks: [link],
+      evidenceRecords: [evidenceRecord(
+        "run_actor_ownership",
+        "evidence_actor",
+        "task_actor",
+        1,
+        evidenceArtifact.hash,
+        { role: "subagent", id: "worker_task_actor_1:call_1" },
+      )],
+      taskId: "task_actor",
+      attempt: 1,
+      assignedWorkerId: "worker_task_actor_1",
+    });
+    assert.equal(descendant.criterionEvidenceLinks?.[0].evidenceId, "evidence_actor");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function evidenceRecord(
   runId: string,
   id: string,
   taskId: string,
   attempt: number,
-  artifactHash: string
+  artifactHash: string,
+  actor: EvidenceRecord["actor"] = { role: "worker", id: "worker_1" },
 ): EvidenceRecord {
   return {
     id,
     runId,
     taskId,
-    actor: { role: "worker", id: "worker_1" },
+    actor,
     status: "observed",
     fact: {
       kind: "browser_screenshot",

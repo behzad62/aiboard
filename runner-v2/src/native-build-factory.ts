@@ -125,7 +125,10 @@ export class NativeBuildFactory {
     const modelCostBases = new Map<string, ModelCostBasisSnapshot>(
       selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
-    const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
+      evidenceStore,
+    });
     const schedulerEvents = schedulerStore.readRun(spec.runId);
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
@@ -136,7 +139,6 @@ export class NativeBuildFactory {
       }
     );
     const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
-    const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
       limitsFor: (scopeId) => {
         if (scopeId !== spec.runId) throw new Error(`Unknown budget scope ${scopeId}.`);

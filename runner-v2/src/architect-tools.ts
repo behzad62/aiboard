@@ -387,19 +387,23 @@ function reviewTaskTool(
             "Criterion review requires the durable evidence store."
           );
         }
+        const evidenceRecords = evidenceStore.getByIds({
+          runId: context.runId,
+          taskId: task.id,
+          ids: [...new Set(task.criterionEvidenceLinks.flatMap((link) => [link.evidenceId]))],
+        });
         const validation = validateCriterionReviewVerdicts(
           task.acceptanceCriteria,
           input.criterionVerdicts,
           task.criterionEvidenceLinks,
           {
-            evidenceRecords: evidenceStore.list({
-              runId: context.runId,
-              taskId: task.id,
-              limit: 1_000,
-            }),
+            evidenceRecords,
             runId: context.runId,
             taskId: task.id,
             attempt: task.attempt,
+            ...(task.assignedWorkerId
+              ? { assignedWorkerId: task.assignedWorkerId }
+              : {}),
           }
         );
         if (!validation.valid) {

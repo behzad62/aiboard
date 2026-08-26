@@ -45,6 +45,8 @@ export interface CriterionEvidenceValidationOptions {
   attempt?: number;
   actorId?: string;
   actorRole?: EvidenceRecord["actor"]["role"];
+  /** The accountable worker; subagent IDs must be a colon-delimited descendant. */
+  assignedWorkerId?: string;
 }
 
 export type CriterionReviewValidationOptions = CriterionEvidenceValidationOptions;
@@ -198,6 +200,11 @@ export function validateCriterionEvidenceLinks(
           `Evidence record ${link.evidenceId} for criterion ${criterionId} does not match the mapping task.`
         );
       }
+      if (options.taskId !== undefined && link.taskId !== options.taskId) {
+        issues.push(
+          `Evidence mapping for criterion ${criterionId} is not bound to task ${options.taskId}.`
+        );
+      }
       if (options.actorId !== undefined && record.actor.id !== options.actorId) {
         issues.push(
           `Evidence record ${link.evidenceId} for criterion ${criterionId} belongs to another actor.`
@@ -206,6 +213,14 @@ export function validateCriterionEvidenceLinks(
       if (options.actorRole !== undefined && record.actor.role !== options.actorRole) {
         issues.push(
           `Evidence record ${link.evidenceId} for criterion ${criterionId} has an invalid actor role.`
+        );
+      }
+      if (
+        options.assignedWorkerId !== undefined &&
+        !isAssignedWorkerEvidence(record, options.assignedWorkerId)
+      ) {
+        issues.push(
+          `Evidence record ${link.evidenceId} for criterion ${criterionId} belongs outside the assigned worker ${options.assignedWorkerId}.`
         );
       }
       const recordAttempt = (record as EvidenceRecord & { attempt?: number }).attempt;
@@ -217,6 +232,11 @@ export function validateCriterionEvidenceLinks(
       if (link.attempt !== undefined && recordAttempt !== link.attempt) {
         issues.push(
           `Evidence record ${link.evidenceId} for criterion ${criterionId} does not match the mapping attempt.`
+        );
+      }
+      if (options.attempt !== undefined && link.attempt !== options.attempt) {
+        issues.push(
+          `Evidence mapping for criterion ${criterionId} is not bound to attempt ${options.attempt}.`
         );
       }
       const availableArtifacts = new Set(evidenceFactArtifactHashes(record.fact));
@@ -235,6 +255,17 @@ export function validateCriterionEvidenceLinks(
     unknownCriterionIds: unique(unknownCriterionIds),
     duplicateCriterionIds: unique(duplicateCriterionIds),
   });
+}
+
+function isAssignedWorkerEvidence(
+  record: EvidenceRecord,
+  assignedWorkerId: string
+): boolean {
+  if (record.actor.role === "worker") return record.actor.id === assignedWorkerId;
+  return (
+    record.actor.role === "subagent" &&
+    record.actor.id.startsWith(`${assignedWorkerId}:`)
+  );
 }
 
 export function assertCriterionEvidenceCoverage(

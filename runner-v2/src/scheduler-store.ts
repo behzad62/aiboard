@@ -13,6 +13,7 @@ import {
   type CriterionEvidenceLink,
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
+import type { EvidenceStore } from "./evidence-store.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -186,6 +187,191 @@ export function rebuildSchedulerProjection(
   let projection: SchedulerProjection | undefined;
   for (const event of events) projection = reduceSchedulerEvent(projection, event);
   return projection!;
+}
+
+/**
+ * Validate evidence against the authoritative immutable evidence store before
+ * a scheduler event is appended. The reducer remains pure; this check is the
+ * durable boundary that prevents references to records that do not exist.
+ */
+export function validateSchedulerEvidenceEvent(
+  projection: SchedulerProjection | undefined,
+  event: SchedulerEvent,
+  evidenceStore: EvidenceStore
+): void {
+  if (!projection) return;
+  if (event.type === "task.transitioned" && event.payload.status === "submitted") {
+    const taskId = requiredString(event.payload, "taskId");
+    const task = projection.tasks[taskId];
+    if (task?.acceptanceCriteria) {
+      const links = boundCriterionEvidenceLinks(task, event.payload.patch);
+      const records = getEvidenceRecords(evidenceStore, event.runId, task.id, links);
+      assertDurableEvidence(
+        task.acceptanceCriteria,
+        links,
+        records,
+        {
+          runId: event.runId,
+          taskId: task.id,
+          attempt: task.attempt,
+          ...(task.assignedWorkerId
+            ? { assignedWorkerId: task.assignedWorkerId }
+            : {}),
+        },
+        "Task submission",
+      );
+    }
+    return;
+  }
+  if (event.type === "review.requested") {
+    const taskId = requiredString(event.payload, "taskId");
+    const task = projection.tasks[taskId];
+    if (task?.acceptanceCriteria) {
+      const links = boundCriterionEvidenceLinks(task, event.payload.criterionEvidenceLinks);
+      const records = getEvidenceRecords(evidenceStore, event.runId, task.id, links);
+      assertDurableEvidence(
+        task.acceptanceCriteria,
+        links,
+        records,
+        {
+          runId: event.runId,
+          taskId: task.id,
+          attempt: task.attempt,
+          ...(task.assignedWorkerId
+            ? { assignedWorkerId: task.assignedWorkerId }
+            : {}),
+        },
+        "Review request",
+      );
+      assertReviewArtifactHashes(
+        event.payload.evidenceArtifactHashes,
+        records,
+        "Review request",
+      );
+    }
+    return;
+  }
+  if (event.type !== "review.decided") return;
+  const taskId = requiredString(event.payload, "taskId");
+  const task = projection.tasks[taskId];
+  if (!task?.acceptanceCriteria || !task.criterionEvidenceLinks) return;
+  const records = getEvidenceRecords(
+    evidenceStore,
+    event.runId,
+    task.id,
+    task.criterionEvidenceLinks,
+  );
+  const options = {
+    runId: event.runId,
+    taskId: task.id,
+    attempt: task.attempt,
+    ...(task.assignedWorkerId
+      ? { assignedWorkerId: task.assignedWorkerId }
+      : {}),
+  };
+  assertDurableEvidence(
+    task.acceptanceCriteria,
+    task.criterionEvidenceLinks,
+    records,
+    options,
+    "Review decision",
+  );
+  const verdicts = Array.isArray(event.payload.criterionVerdicts)
+    ? event.payload.criterionVerdicts as CriterionReviewVerdict[]
+    : [];
+  const verdictValidation = validateCriterionReviewVerdicts(
+    task.acceptanceCriteria,
+    verdicts,
+    task.criterionEvidenceLinks,
+    { evidenceRecords: records, ...options },
+  );
+  if (!verdictValidation.valid) {
+    throw new Error(
+      `Review decision has invalid durable evidence: ${verdictValidation.issues.join(" ")}`
+    );
+  }
+  assertReviewArtifactHashes(
+    event.payload.evidenceArtifactHashes,
+    records,
+    "Review decision",
+  );
+}
+
+function assertDurableEvidence(
+  criteria: readonly AcceptanceCriterion[],
+  links: readonly CriterionEvidenceLink[],
+  records: readonly import("./evidence-store.js").EvidenceRecord[],
+  options: Parameters<typeof validateCriterionEvidenceLinks>[2],
+  label: string,
+): void {
+  const validation = validateCriterionEvidenceLinks(criteria, links, {
+    evidenceRecords: records,
+    ...options,
+  });
+  if (!validation.valid) {
+    throw new Error(`${label} has invalid durable evidence: ${validation.issues.join(" ")}`);
+  }
+}
+
+function assertReviewArtifactHashes(
+  value: unknown,
+  records: readonly import("./evidence-store.js").EvidenceRecord[],
+  label: string,
+): void {
+  if (!Array.isArray(value)) return;
+  const available = new Set(records.flatMap((record) => {
+    switch (record.fact.kind) {
+      case "command":
+        return [record.fact.stdoutArtifactHash, record.fact.stderrArtifactHash];
+      case "browser_snapshot":
+        return [record.fact.htmlArtifactHash];
+      case "browser_screenshot":
+        return [record.fact.screenshotArtifactHash];
+      case "browser_events":
+        return [record.fact.eventsArtifactHash];
+    }
+  }));
+  const invalid = value.filter(
+    (hash): hash is string => typeof hash !== "string" || !available.has(hash)
+  );
+  if (invalid.length > 0) {
+    throw new Error(`${label} cites artifact hashes outside its durable evidence.`);
+  }
+}
+
+function getEvidenceRecords(
+  evidenceStore: EvidenceStore,
+  runId: string,
+  taskId: string,
+  links: readonly CriterionEvidenceLink[],
+) {
+  const ids = links
+    .map((link) => link.evidenceId)
+    .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+  return evidenceStore.getByIds({ runId, taskId, ids: [...new Set(ids)] });
+}
+
+function boundCriterionEvidenceLinks(
+  task: BuildTask,
+  payload: unknown,
+): CriterionEvidenceLink[] {
+  const patch = isRecord(payload) ? payload : undefined;
+  const raw = Array.isArray(patch?.criterionEvidenceLinks)
+    ? patch.criterionEvidenceLinks
+    : Array.isArray(payload)
+      ? payload
+      : [];
+  return raw.map((candidate) => {
+    if (!isRecord(candidate)) return candidate as unknown as CriterionEvidenceLink;
+    return {
+      ...candidate,
+      taskId: candidate.taskId ?? task.id,
+      attempt: candidate.attempt ?? task.attempt,
+      ...(Array.isArray(candidate.artifactHashes)
+        ? { artifactHashes: [...candidate.artifactHashes] }
+        : {}),
+    } as unknown as CriterionEvidenceLink;
+  });
 }
 
 export function acceptanceContractAuditProjection(
@@ -460,8 +646,12 @@ export function reduceSchedulerEvent(
       }
       const transitionPatch =
         (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      const submittedEvidenceLinks =
+        status === "submitted" && task.acceptanceCriteria
+          ? boundCriterionEvidenceLinks(task, transitionPatch)
+          : undefined;
       if (status === "submitted" && task.acceptanceCriteria) {
-        const links = transitionPatch.criterionEvidenceLinks;
+        const links = submittedEvidenceLinks;
         const validation = validateCriterionEvidenceLinks(
           task.acceptanceCriteria,
           links ?? [],
@@ -476,7 +666,9 @@ export function reduceSchedulerEvent(
       next.tasks[taskId] = applyTaskTransition(
         task,
         status,
-        transitionPatch
+        submittedEvidenceLinks
+          ? { ...transitionPatch, criterionEvidenceLinks: submittedEvidenceLinks }
+          : transitionPatch,
       );
       if (status === "integrated") {
         const integrationRevision = next.tasks[taskId].integrationRevision;
@@ -592,12 +784,13 @@ export function reduceSchedulerEvent(
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const requestedLinks = event.payload.criterionEvidenceLinks;
+      const boundRequestedLinks = task.acceptanceCriteria
+        ? boundCriterionEvidenceLinks(task, requestedLinks)
+        : undefined;
       if (task.acceptanceCriteria) {
         const validation = validateCriterionEvidenceLinks(
           task.acceptanceCriteria,
-          Array.isArray(requestedLinks)
-            ? requestedLinks as CriterionEvidenceLink[]
-            : [],
+          boundRequestedLinks ?? [],
           { taskId: task.id, attempt: task.attempt }
         );
         if (!validation.valid) {
@@ -611,9 +804,9 @@ export function reduceSchedulerEvent(
         taskId,
         status: "requested",
         evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
-        ...(Array.isArray(requestedLinks)
+        ...(boundRequestedLinks
           ? {
-              criterionEvidenceLinks: (requestedLinks as CriterionEvidenceLink[]).map((link) => ({
+              criterionEvidenceLinks: boundRequestedLinks.map((link) => ({
                 ...link,
                 artifactHashes: [...link.artifactHashes],
               })),
@@ -1364,6 +1557,10 @@ function requiredNumber(payload: Record<string, unknown>, key: string): number {
   const value = payload[key];
   if (!Number.isSafeInteger(value)) throw new Error(`Missing ${key}.`);
   return value as number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requiredRunPolicy(

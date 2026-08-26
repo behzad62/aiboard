@@ -110,8 +110,16 @@ export interface ListEvidenceInput {
   limit?: number;
 }
 
+export interface GetEvidenceByIdsInput {
+  runId: string;
+  ids: readonly string[];
+  taskId?: string;
+}
+
 export interface EvidenceStore {
   record(input: RecordEvidenceInput): EvidenceRecord;
   list(input: ListEvidenceInput): EvidenceRecord[];
+  /** Resolve only the requested immutable IDs; missing IDs are omitted. */
+  getByIds(input: GetEvidenceByIdsInput): EvidenceRecord[];
   close(): void;
 }

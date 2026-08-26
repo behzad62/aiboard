@@ -9,6 +9,7 @@ import {
   type EvidenceFact,
   type EvidenceRecord,
   type EvidenceStore,
+  type GetEvidenceByIdsInput,
   type ListEvidenceInput,
   type RecordEvidenceInput,
 } from "./evidence-store.js";
@@ -138,6 +139,40 @@ export class SqliteEvidenceStore implements EvidenceStore {
           )
           .all(input.runId, limit);
     return (rows as unknown as EvidenceRow[]).map(decode);
+  }
+
+  getByIds(input: GetEvidenceByIdsInput): EvidenceRecord[] {
+    if (!input.runId || !Array.isArray(input.ids)) {
+      throw new Error("Evidence run and IDs are required.");
+    }
+    if (input.ids.some((id) => typeof id !== "string" || !id.trim())) {
+      throw new Error("Evidence IDs must be non-empty strings.");
+    }
+    if (input.ids.length === 0) return [];
+    const byId = new Map<string, EvidenceRecord>();
+    const uniqueIds = [...new Set(input.ids)];
+    for (let offset = 0; offset < uniqueIds.length; offset += 500) {
+      const batch = uniqueIds.slice(offset, offset + 500);
+      const placeholders = batch.map(() => "?").join(", ");
+      const taskClause = input.taskId === undefined ? "" : " AND task_id = ?";
+      const parameters = input.taskId === undefined
+        ? [input.runId, ...batch]
+        : [input.runId, input.taskId, ...batch];
+      const rows = this.database
+        .prepare(
+          `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
+                  created_at, idempotency_key, attempt
+           FROM evidence_records
+           WHERE run_id = ?${taskClause} AND evidence_id IN (${placeholders})
+           ORDER BY sequence`
+        )
+        .all(...parameters) as unknown as EvidenceRow[];
+      for (const row of rows) byId.set(row.evidence_id, decode(row));
+    }
+    return input.ids.flatMap((id) => {
+      const record = byId.get(id);
+      return record ? [cloneRecord(record)] : [];
+    });
   }
 
   close(): void {

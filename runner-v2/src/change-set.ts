@@ -48,6 +48,10 @@ export interface CreateChangeSetOptions {
   evidenceRecords?: readonly EvidenceRecord[];
   taskId?: string;
   attempt?: number;
+  /** Accountable worker whose evidence may support this submission. */
+  assignedWorkerId?: string;
+  /** Compatibility alias for callers that identify the submitting worker. */
+  actorId?: string;
   externalEffects?: ExternalEffectReference[];
   guidanceIds?: string[];
   memoryIds?: string[];
@@ -80,6 +84,9 @@ export async function createChangeSet(
       runId: commit.runId,
       taskId,
       attempt: options.attempt,
+      ...(options.assignedWorkerId ?? options.actorId
+        ? { assignedWorkerId: options.assignedWorkerId ?? options.actorId }
+        : {}),
     });
   }
   const evidence = hasCriteria
