@@ -15,6 +15,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   acceptFinalVerificationProfile,
   emptyFinalVerificationProfile,
+  profileForRequiredCategories,
 } from "./support/final-verification-profile.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
@@ -370,7 +371,9 @@ function appendBase(
       targetRevision: REVISION_ONE,
       planVersion: 1,
       plan,
-      executionProfile: emptyFinalVerificationProfile(REVISION_ONE),
+      executionProfile: options.nonGreenCategory
+        ? profileForRequiredCategories(REVISION_ONE, [options.nonGreenCategory])
+        : emptyFinalVerificationProfile(REVISION_ONE),
     },
   });
   for (const [index, check] of plan.checks.entries()) {
@@ -420,6 +423,7 @@ function appendBase(
           attempt: 1,
           targetRevision: REVISION_ONE,
           plan,
+          executionProfile: emptyFinalVerificationProfile(REVISION_ONE),
           checks: plan.checks.map((check) => ({
             ...check,
             green: true,

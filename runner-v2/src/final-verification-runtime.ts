@@ -27,6 +27,11 @@ import type {
   VerificationWorkspace,
   VerificationWorkspaceManager,
 } from "./verification-workspace.js";
+import {
+  assertFinalVerificationExecutionProfile,
+  cloneFinalVerificationExecutionProfile,
+  type FinalVerificationExecutionProfile,
+} from "./final-verification-profile.js";
 
 export type { FinalVerificationPlan } from "./final-verification-contracts.js";
 
@@ -153,6 +158,7 @@ export interface FinalVerificationRuntimeOptions {
 
 export interface FinalVerificationRunInput {
   plan: unknown;
+  executionProfile: FinalVerificationExecutionProfile;
   commands?: Partial<Record<FinalVerificationCategory, readonly FinalVerificationCommand[]>>;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
@@ -173,11 +179,13 @@ export interface FinalVerificationCommandFact extends CommandEvidenceFact {
   endpoint?: string;
   readinessSatisfied?: boolean;
   cleanupRequested?: boolean;
+  cleanupSucceeded?: boolean;
 }
 
 export interface FinalVerificationBrowserSnapshotFact extends BrowserSnapshotEvidenceFact {
   category: "browser";
   sessionId: string;
+  requestedUrl: string;
   startedAt: string;
   finishedAt: string;
   targetRevision: string;
@@ -189,6 +197,7 @@ export interface FinalVerificationBrowserScreenshotFact extends BrowserScreensho
   category: "browser";
   sessionId: string;
   url: string;
+  requestedUrl: string;
   startedAt: string;
   finishedAt: string;
   targetRevision: string;
@@ -200,6 +209,7 @@ export interface FinalVerificationBrowserEventsFact extends BrowserEventsEvidenc
   category: "browser";
   sessionId: string;
   url: string;
+  requestedUrl: string;
   startedAt: string;
   finishedAt: string;
   targetRevision: string;
@@ -243,6 +253,7 @@ export interface FinalVerificationRun {
   attempt?: number;
   /** The normalized P2.1 plan used to produce this immutable generation. */
   plan: FinalVerificationPlan;
+  executionProfile: FinalVerificationExecutionProfile;
   targetRevision: string;
   workspacePath: string;
   startedAt: string;
@@ -377,9 +388,9 @@ export class FinalVerificationRuntime {
 
   async run(input: FinalVerificationRunInput): Promise<FinalVerificationRun> {
     const plan = planFinalVerification(input.plan);
-    validateCommandMap(input.commands);
     const workspace = await this.workspaceManager.create();
     await this.assertCurrentRevision(workspace);
+    const execution = authoritativeExecutionInput(input, workspace.targetRevision);
 
     const runOrdinal = ++this.runOrdinal;
     const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
@@ -389,9 +400,11 @@ export class FinalVerificationRuntime {
       checks.push(
         await this.runCheck({
           check,
-          commands: input.commands?.[check.category],
-          runtimeSmoke: input.runtimeSmoke,
-          browser: input.browser,
+          commands: check.category === "build" || check.category === "tests"
+            ? execution.commands[check.category]
+            : undefined,
+          runtimeSmoke: execution.runtimeSmoke,
+          browser: execution.browser,
           workspace,
           generationId,
           runOrdinal,
@@ -406,6 +419,7 @@ export class FinalVerificationRuntime {
       taskId: this.taskId,
       ...(this.attempt !== undefined ? { attempt: this.attempt } : {}),
       plan: freezePlan(plan),
+      executionProfile: cloneFinalVerificationExecutionProfile(input.executionProfile),
       targetRevision: workspace.targetRevision,
       workspacePath: workspace.path,
       startedAt,
@@ -426,19 +440,21 @@ export class FinalVerificationRuntime {
     category: FinalVerificationCategory,
   ): Promise<FinalVerificationCategoryRun> {
     const plan = planFinalVerification(input.plan);
-    validateCommandMap(input.commands);
     const check = plan.checks.find((entry) => entry.category === category);
     if (!check) throw new Error(`Final verification category ${category} is not planned.`);
     const workspace = await this.createOrResumeCategoryWorkspace();
     await this.assertCurrentRevision(workspace);
+    const execution = authoritativeExecutionInput(input, workspace.targetRevision);
     const runOrdinal = ++this.runOrdinal;
     const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
     const startedAt = this.clock();
     const result = await this.runCheck({
       check,
-      commands: input.commands?.[category],
-      runtimeSmoke: input.runtimeSmoke,
-      browser: input.browser,
+      commands: category === "build" || category === "tests"
+        ? execution.commands[category]
+        : undefined,
+      runtimeSmoke: execution.runtimeSmoke,
+      browser: execution.browser,
       workspace,
       generationId,
       runOrdinal,
@@ -665,6 +681,7 @@ export class FinalVerificationRuntime {
     const startState = await repositoryState(input.workspace.path);
     let observation: FinalVerificationManagedProcessObservation | undefined;
     let readinessSatisfied = false;
+    let cleanupSucceeded = false;
     let timedOut = false;
     let cancelled = false;
     let startError: Error | undefined;
@@ -699,6 +716,7 @@ export class FinalVerificationRuntime {
       if (observation) {
         try {
           observation = (await this.managedProcess.stop(observation.processId)) ?? observation;
+          cleanupSucceeded = true;
         } catch (error) {
           input.base.issues.push(`runtime_smoke process cleanup failed: ${asError(error).message}.`);
         }
@@ -707,6 +725,7 @@ export class FinalVerificationRuntime {
         try {
           await smoke.releasePort(smoke.endpoint);
         } catch (error) {
+          cleanupSucceeded = false;
           input.base.issues.push(`runtime_smoke port cleanup failed: ${asError(error).message}.`);
         }
       }
@@ -749,6 +768,7 @@ export class FinalVerificationRuntime {
       ...(smoke.endpoint ? { endpoint: smoke.endpoint } : {}),
       readinessSatisfied,
       cleanupRequested: observation !== undefined,
+      cleanupSucceeded,
     };
     input.base.facts.push(fact);
 
@@ -1023,6 +1043,7 @@ export class FinalVerificationRuntime {
         category: "browser",
         label: browserInput.label,
         url: observedUrl,
+        requestedUrl: browserInput.url,
         title: observedTitle,
         capturedAt: finishedAt,
         htmlArtifactHash: snapshotArtifact.hash,
@@ -1047,6 +1068,7 @@ export class FinalVerificationRuntime {
         byteLength: screenshot.byteLength,
         sessionId,
         url: observedUrl,
+        requestedUrl: browserInput.url,
         startedAt,
         finishedAt,
         targetRevision: input.workspace.targetRevision,
@@ -1070,6 +1092,7 @@ export class FinalVerificationRuntime {
         networkFailureCount: failedNetworkEvents.length,
         sessionId,
         url: observedUrl,
+        requestedUrl: browserInput.url,
         startedAt,
         finishedAt,
         targetRevision: input.workspace.targetRevision,
@@ -1217,6 +1240,79 @@ export class FinalVerificationRuntime {
     });
     return record.id;
   }
+}
+
+function authoritativeExecutionInput(
+  input: FinalVerificationRunInput,
+  targetRevision: string,
+): {
+  commands: FinalVerificationExecutionProfile["commands"];
+  runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
+  browser?: FinalVerificationBrowserInput;
+} {
+  assertFinalVerificationExecutionProfile(input.executionProfile, targetRevision);
+  validateCommandMap(input.commands);
+  if (input.commands !== undefined) {
+    for (const category of ["build", "tests"] as const) {
+      if (!sameCommands(input.commands[category], input.executionProfile.commands[category])) {
+        throw new Error(`Final verification ${category} runtime commands conflict with the execution profile.`);
+      }
+    }
+  }
+  if (input.runtimeSmoke && !sameSmokeBinding(input.runtimeSmoke, input.executionProfile.runtimeSmoke)) {
+    throw new Error("Final verification runtime_smoke input conflicts with the execution profile.");
+  }
+  if (input.browser && !sameBrowserBinding(input.browser, input.executionProfile.browser)) {
+    throw new Error("Final verification browser input conflicts with the execution profile.");
+  }
+  return {
+    commands: cloneFinalVerificationExecutionProfile(input.executionProfile).commands,
+    ...(input.runtimeSmoke
+      ? { runtimeSmoke: input.runtimeSmoke }
+      : input.executionProfile.runtimeSmoke
+        ? { runtimeSmoke: input.executionProfile.runtimeSmoke }
+        : {}),
+    ...(input.browser
+      ? { browser: input.browser }
+      : input.executionProfile.browser
+        ? { browser: input.executionProfile.browser }
+        : {}),
+  };
+}
+
+function sameCommands(
+  left: readonly FinalVerificationCommand[] | undefined,
+  right: readonly FinalVerificationCommand[] | undefined,
+): boolean {
+  if (!left || !right) return left === right || (!left?.length && !right?.length);
+  return left.length === right.length && left.every((command, index) => {
+    const expected = right[index]!;
+    return command.label === expected.label && command.executable === expected.executable &&
+      command.timeoutMs === expected.timeoutMs && sameStringArray(command.args, expected.args);
+  });
+}
+
+function sameSmokeBinding(
+  left: FinalVerificationRuntimeSmokeInput,
+  right: FinalVerificationRuntimeSmokeInput | undefined,
+): boolean {
+  return Boolean(right) && left.label === right!.label && left.executable === right!.executable &&
+    left.endpoint === right!.endpoint && left.timeoutMs === right!.timeoutMs &&
+    sameStringArray(left.args, right!.args);
+}
+
+function sameBrowserBinding(
+  left: FinalVerificationBrowserInput,
+  right: FinalVerificationBrowserInput | undefined,
+): boolean {
+  return Boolean(right) && left.label === right!.label && left.url === right!.url &&
+    left.width === right!.width && left.height === right!.height && left.timeoutMs === right!.timeoutMs &&
+    ((!left.server && !right!.server) ||
+      Boolean(left.server && right!.server && sameSmokeBinding(left.server, right!.server)));
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function validateCommandMap(

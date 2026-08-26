@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -49,7 +50,136 @@ test("scheduler rejects a forged green required check with no evidence", async (
     const event = checkEvent(await commandFact(fixture.artifacts), "unused");
     event.payload.result.evidenceIds = [];
     event.payload.result.facts = [];
-    assert.throws(() => fixture.store.append(event), /required.*evidence|missing evidence/i);
+    assert.throws(
+      () => fixture.store.append(event),
+      /required.*evidence|missing evidence|requires exactly.*command facts/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("scheduler rejects a self-consistent alternate command chain", async () => {
+  const fixture = await createFixture();
+  try {
+    const fact = { ...(await commandFact(fixture.artifacts)), args: ["-e", "process.exit(99)"] };
+    const record = fixture.evidence.record({
+      runId: RUN_ID,
+      taskId: TASK_ID,
+      actor: { role: "architect", id: "forged-runtime" },
+      fact,
+      createdAt: "2026-08-26T00:00:04.000Z",
+      idempotencyKey: `${GENERATION_ID}:1:build:0`,
+      attempt: 1,
+    });
+    assert.throws(
+      () => fixture.store.append(checkEvent(fact, record.id)),
+      /exact runner-inspected command|execution profile|conflicts/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("scheduler rejects a self-consistent nonzero-but-green chain", async () => {
+  const fixture = await createFixture();
+  try {
+    const fact = { ...(await commandFact(fixture.artifacts)), exitCode: 7 };
+    const record = fixture.evidence.record({
+      runId: RUN_ID,
+      taskId: TASK_ID,
+      actor: { role: "architect", id: "forged-runtime" },
+      fact,
+      createdAt: "2026-08-26T00:00:04.000Z",
+      idempotencyKey: `${GENERATION_ID}:1:build:0`,
+      attempt: 1,
+    });
+    assert.throws(
+      () => fixture.store.append(checkEvent(fact, record.id)),
+      /non-green process semantics|exit/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("scheduler append requires explicit successful runtime cleanup", async () => {
+  for (const cleanupSucceeded of [undefined, false] as const) {
+    const fixture = await createFixture({ requiredCategory: "runtime_smoke" });
+    try {
+      const fact = await runtimeSmokeFact(fixture.artifacts, cleanupSucceeded);
+      const record = fixture.evidence.record({
+        runId: RUN_ID,
+        taskId: TASK_ID,
+        actor: { role: "architect", id: "forged-runtime" },
+        fact,
+        createdAt: "2026-08-26T00:00:04.000Z",
+        idempotencyKey: `${GENERATION_ID}:1:runtime_smoke:0`,
+        attempt: 1,
+      });
+      assert.throws(
+        () => fixture.store.append(checkEvent(fact, record.id)),
+        /cleanup.*success|cleanupSucceeded|runtime_smoke/i,
+      );
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
+test("scheduler replay revalidates explicit runtime cleanup success", async () => {
+  const fixture = await createFixture({ requiredCategory: "runtime_smoke" });
+  try {
+    const fact = await runtimeSmokeFact(fixture.artifacts, true);
+    const record = fixture.evidence.record({
+      runId: RUN_ID,
+      taskId: TASK_ID,
+      actor: { role: "architect", id: "runtime" },
+      fact,
+      createdAt: "2026-08-26T00:00:04.000Z",
+      idempotencyKey: `${GENERATION_ID}:1:runtime_smoke:0`,
+      attempt: 1,
+    });
+    fixture.store.append(checkEvent(fact, record.id));
+    fixture.closeStore();
+    fixture.closeEvidence();
+
+    const raw = new DatabaseSync(fixture.database);
+    const row = raw.prepare(
+      "SELECT payload_json FROM scheduler_events WHERE event_type = 'final_verification.check_completed'",
+    ).get() as { payload_json: string };
+    const payload = JSON.parse(row.payload_json) as {
+      result: { facts: Array<Record<string, unknown>> };
+    };
+    payload.result.facts[0]!.cleanupSucceeded = false;
+    raw.prepare(
+      "UPDATE scheduler_events SET payload_json = ? WHERE event_type = 'final_verification.check_completed'",
+    ).run(JSON.stringify(payload));
+    raw.close();
+
+    const rawEvidence = new DatabaseSync(join(fixture.root, "evidence.sqlite"));
+    const evidenceRow = rawEvidence.prepare(
+      "SELECT fact_json FROM evidence_records WHERE idempotency_key = ?",
+    ).get(`${GENERATION_ID}:1:runtime_smoke:0`) as { fact_json: string };
+    const evidenceFact = JSON.parse(evidenceRow.fact_json) as Record<string, unknown>;
+    evidenceFact.cleanupSucceeded = false;
+    rawEvidence.prepare(
+      "UPDATE evidence_records SET fact_json = ? WHERE idempotency_key = ?",
+    ).run(JSON.stringify(evidenceFact), `${GENERATION_ID}:1:runtime_smoke:0`);
+    rawEvidence.close();
+
+    const restartedEvidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+    const restarted = new SqliteSchedulerStore(fixture.database, {
+      evidenceStore: restartedEvidence,
+      artifacts: fixture.artifacts,
+      validateExecutionProfile: acceptFinalVerificationProfile,
+    });
+    try {
+      assert.throws(() => restarted.readRun(RUN_ID), /cleanup.*success|cleanupSucceeded|runtime_smoke/i);
+    } finally {
+      restarted.close();
+      restartedEvidence.close();
+    }
   } finally {
     fixture.close();
   }
@@ -158,6 +288,7 @@ test("a forged end-to-end event chain cannot claim cleanup without an authentic 
 
 async function createFixture(options: {
   allNotApplicable?: boolean;
+  requiredCategory?: "build" | "runtime_smoke";
   validateCleanupReceipt?: () => void;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 verification integrity "));
@@ -207,12 +338,16 @@ async function createFixture(options: {
       generationId: GENERATION_ID,
       targetRevision: REVISION,
       planVersion: 1,
-      executionProfile: emptyFinalVerificationProfile(REVISION),
+      executionProfile: options.allNotApplicable
+        ? emptyFinalVerificationProfile(REVISION)
+        : options.requiredCategory === "runtime_smoke"
+          ? runtimeExecutionProfile()
+          : buildExecutionProfile(),
       plan: {
         checks: [
           ...["build", "tests", "runtime_smoke", "browser"].map((category) => ({
             category,
-            ...(category !== "build" || options.allNotApplicable
+            ...(category !== (options.requiredCategory ?? "build") || options.allNotApplicable
               ? {
                   status: "not_applicable",
                   rationale: `No ${category} surface.`,
@@ -224,16 +359,48 @@ async function createFixture(options: {
       },
     },
   });
+  let storeClosed = false;
+  let evidenceClosed = false;
   return {
     root,
+    database,
     artifacts,
     evidence,
     store,
+    closeStore() {
+      if (!storeClosed) {
+        store.close();
+        storeClosed = true;
+      }
+    },
+    closeEvidence() {
+      if (!evidenceClosed) {
+        evidence.close();
+        evidenceClosed = true;
+      }
+    },
     close() {
-      store.close();
-      evidence.close();
+      if (!storeClosed) store.close();
+      if (!evidenceClosed) evidence.close();
       rmSync(root, { recursive: true, force: true });
     },
+  };
+}
+
+async function runtimeSmokeFact(
+  artifacts: ArtifactStore,
+  cleanupSucceeded: boolean | undefined,
+): Promise<FinalVerificationCommandFact> {
+  const base = await commandFact(artifacts);
+  return {
+    ...base,
+    category: "runtime_smoke",
+    label: "runtime_smoke",
+    args: [],
+    endpoint: "http://127.0.0.1:4173/",
+    readinessSatisfied: true,
+    cleanupRequested: true,
+    ...(cleanupSucceeded === undefined ? {} : { cleanupSucceeded }),
   };
 }
 
@@ -248,7 +415,7 @@ async function commandFact(artifacts: ArtifactStore): Promise<FinalVerificationC
     executable: process.execPath,
     command: process.execPath,
     args: ["-e", "process.exit(0)"],
-    cwd: process.cwd(),
+    cwd: "C:/verification",
     startedAt: "2026-08-26T00:00:03.000Z",
     finishedAt: "2026-08-26T00:00:04.000Z",
     exitCode: 0,
@@ -265,13 +432,46 @@ async function commandFact(artifacts: ArtifactStore): Promise<FinalVerificationC
   };
 }
 
+function buildExecutionProfile() {
+  return {
+    version: 1 as const,
+    targetRevision: REVISION,
+    inspectedPaths: ["package.json"],
+    detectedSignals: [{ category: "build" as const, source: "fixture", detail: "build" }],
+    commands: {
+      build: [{
+        label: "build",
+        executable: process.execPath,
+        args: ["-e", "process.exit(0)"],
+      }],
+    },
+  };
+}
+
+function runtimeExecutionProfile() {
+  return {
+    version: 1 as const,
+    targetRevision: REVISION,
+    inspectedPaths: ["package.json"],
+    detectedSignals: [{ category: "runtime_smoke" as const, source: "fixture", detail: "runtime" }],
+    commands: {},
+    runtimeSmoke: {
+      label: "runtime_smoke",
+      executable: process.execPath,
+      args: [],
+      endpoint: "http://127.0.0.1:4173/",
+      readiness: { expectedStatus: 200 },
+    },
+  };
+}
+
 function checkEvent(fact: FinalVerificationCommandFact, evidenceId: string) {
   return {
     runId: RUN_ID,
     type: "final_verification.check_completed" as const,
     occurredAt: "2026-08-26T00:00:04.000Z",
     actor: { role: "runner" as const, id: "runtime" },
-    idempotencyKey: `${GENERATION_ID}:check:build`,
+    idempotencyKey: `${GENERATION_ID}:check:${fact.category}`,
     payload: {
       taskId: TASK_ID,
       generationId: GENERATION_ID,
@@ -281,7 +481,7 @@ function checkEvent(fact: FinalVerificationCommandFact, evidenceId: string) {
       startedAt: "2026-08-26T00:00:03.000Z",
       finishedAt: "2026-08-26T00:00:04.000Z",
       result: {
-        category: "build",
+        category: fact.category,
         status: "required",
         green: true,
         evidenceIds: [evidenceId],

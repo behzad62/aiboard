@@ -43,16 +43,18 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
   });
   try {
     const endpoint = `http://127.0.0.1:${port}/health`;
+    const smoke = smokeInput(port, {
+      endpoint,
+      readiness: {
+        timeoutMs: 5_000,
+        pollIntervalMs: 25,
+        healthCheck: async ({ endpoint: healthEndpoint }) => await healthy(healthEndpoint),
+      },
+    });
     const run = await runtime.run({
       plan: smokePlan(),
-      runtimeSmoke: smokeInput(port, {
-        endpoint,
-        readiness: {
-          timeoutMs: 5_000,
-          pollIntervalMs: 25,
-          healthCheck: async ({ endpoint: healthEndpoint }) => await healthy(healthEndpoint),
-        },
-      }),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
+      runtimeSmoke: smoke,
     });
     const check = runtimeCheck(run);
     const fact = check.facts[0] as typeof check.facts[number] & {
@@ -62,6 +64,7 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
       targetRevision: string;
       cwd: string;
       stdoutArtifactHash: string;
+      cleanupSucceeded: boolean;
     };
     assert.equal(run.green, true);
     assert.equal(check.green, true);
@@ -71,6 +74,7 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
     assert.equal(fact.endpoint, endpoint);
     assert.equal(fact.targetRevision, fixture.integration.revision);
     assert.equal(fact.cwd, run.workspacePath);
+    assert.equal(fact.cleanupSucceeded, true);
     assert.match((await artifacts.get(fact.stdoutArtifactHash)).toString(), /server ready/);
     assert.equal(managed.listRun(fixture.runId)[0]?.status, "stopped");
     await assertPortReusable(port);
@@ -102,11 +106,13 @@ test("runtime smoke timeout is non-green and cleans up the owned process", async
     managedProcessService: managed,
   });
   try {
+    const smoke = smokeInput(0, {
+      readiness: { timeoutMs: 150, pollIntervalMs: 25, healthCheck: async () => false },
+    });
     const run = await runtime.run({
       plan: smokePlan(),
-      runtimeSmoke: smokeInput(0, {
-        readiness: { timeoutMs: 150, pollIntervalMs: 25, healthCheck: async () => false },
-      }),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
+      runtimeSmoke: smoke,
     });
     const check = runtimeCheck(run);
     const fact = check.facts[0] as typeof check.facts[number] & { timedOut: boolean; cancelled: boolean };
@@ -143,12 +149,14 @@ test("runtime smoke marks an unhealthy process exit non-green and still stops it
     managedProcessService: managed,
   });
   try {
+    const smoke = smokeInput(0, {
+      args: ["-e", "process.stderr.write('unhealthy'); process.exit(7)"],
+      readiness: { timeoutMs: 2_000, pollIntervalMs: 25, healthCheck: async () => false },
+    });
     const run = await runtime.run({
       plan: smokePlan(),
-      runtimeSmoke: smokeInput(0, {
-        args: ["-e", "process.stderr.write('unhealthy'); process.exit(7)"],
-        readiness: { timeoutMs: 2_000, pollIntervalMs: 25, healthCheck: async () => false },
-      }),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
+      runtimeSmoke: smoke,
     });
     const check = runtimeCheck(run);
     const fact = check.facts[0] as typeof check.facts[number] & { exitCode: number | null; timedOut: boolean };
@@ -188,13 +196,15 @@ test("runtime smoke cancellation stops the process tree and releases the port", 
   });
   try {
     const controller = new AbortController();
+    const smoke = smokeInput(port, {
+      endpoint: `http://127.0.0.1:${port}/health`,
+      readiness: { timeoutMs: 5_000, pollIntervalMs: 25, healthCheck: async () => false },
+    });
     const promise = runtime.run({
       plan: smokePlan(),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
       signal: controller.signal,
-      runtimeSmoke: smokeInput(port, {
-        endpoint: `http://127.0.0.1:${port}/health`,
-        readiness: { timeoutMs: 5_000, pollIntervalMs: 25, healthCheck: async () => false },
-      }),
+      runtimeSmoke: smoke,
     });
     await waitFor(() => managed.listRun(fixture.runId).length === 1, 5_000);
     controller.abort();
@@ -255,6 +265,28 @@ function smokeInput(port: number, overrides: Partial<FinalVerificationRuntimeSmo
     },
     ...overrides,
   } satisfies FinalVerificationRuntimeSmokeInput;
+}
+
+function smokeProfile(targetRevision: string, smoke: FinalVerificationRuntimeSmokeInput) {
+  return {
+    version: 1 as const,
+    targetRevision,
+    inspectedPaths: ["package.json"],
+    detectedSignals: [{ category: "runtime_smoke" as const, source: "fixture", detail: "runtime" }],
+    commands: {},
+    runtimeSmoke: {
+      label: smoke.label,
+      executable: smoke.executable,
+      args: [...smoke.args],
+      ...(smoke.endpoint ? { endpoint: smoke.endpoint } : {}),
+      ...(smoke.timeoutMs ? { timeoutMs: smoke.timeoutMs } : {}),
+      readiness: {
+        ...(smoke.readiness.timeoutMs ? { timeoutMs: smoke.readiness.timeoutMs } : {}),
+        ...(smoke.readiness.pollIntervalMs ? { pollIntervalMs: smoke.readiness.pollIntervalMs } : {}),
+        ...(smoke.readiness.expectedStatus ? { expectedStatus: smoke.readiness.expectedStatus } : {}),
+      },
+    },
+  };
 }
 
 function runtimeCheck(run: Awaited<ReturnType<FinalVerificationRuntime["run"]>>) {

@@ -20,14 +20,16 @@ import {
   type FinalVerificationStatus,
 } from "./final-verification-contracts.js";
 import type {
-  FinalVerificationBrowserEventsFact,
-  FinalVerificationBrowserScreenshotFact,
-  FinalVerificationBrowserSnapshotFact,
-  FinalVerificationCommandFact,
   FinalVerificationFact,
   FinalVerificationRevisionSource,
   FinalVerificationRun,
 } from "./final-verification-runtime.js";
+import {
+  assertFinalVerificationExecutionProfile,
+  cloneFinalVerificationExecutionProfile,
+  type FinalVerificationExecutionProfile,
+} from "./final-verification-profile.js";
+import { assertFinalVerificationCheckSemantics } from "./final-verification-semantics.js";
 
 export interface FinalVerificationSubmissionInput {
   plan: unknown;
@@ -76,6 +78,7 @@ export interface FinalVerificationSubmission {
   attempt: number;
   targetRevision: string;
   plan: FinalVerificationPlan;
+  executionProfile: FinalVerificationExecutionProfile;
   checks: readonly FinalVerificationSubmissionCheck[];
   evidenceIds: readonly string[];
   submittedAt: string;
@@ -118,6 +121,12 @@ export async function submitFinalVerification(
   }
   const recordsById = new Map(records.map((record) => [record.id, record]));
   for (const check of checks) {
+    assertFinalVerificationCheckSemantics({
+      check,
+      profile: run.executionProfile,
+      targetRevision: run.targetRevision,
+      workspacePath: run.workspacePath,
+    });
     await validateCheckEvidence(check, run, recordsById, options.artifacts);
   }
 
@@ -143,6 +152,7 @@ export async function submitFinalVerification(
     attempt: run.attempt,
     targetRevision: run.targetRevision,
     plan,
+    executionProfile: cloneFinalVerificationExecutionProfile(run.executionProfile),
     checks: checks.map((check) => ({
       category: check.category,
       status: check.status,
@@ -189,11 +199,12 @@ export function finalVerificationSubmissionSchema(): Record<string, unknown> {
           taskId: { type: "string", minLength: 1 },
           attempt: { type: "integer", minimum: 1 },
           plan: { type: "object", required: ["checks"] },
+          executionProfile: { type: "object" },
           targetRevision: { type: "string", pattern: "^[a-f0-9]{40,64}$" },
           checks: { type: "array", minItems: FINAL_VERIFICATION_CATEGORIES.length },
           green: { type: "boolean" },
         },
-        required: ["generationId", "runId", "taskId", "attempt", "plan", "targetRevision", "checks", "green"],
+        required: ["generationId", "runId", "taskId", "attempt", "plan", "executionProfile", "targetRevision", "checks", "green"],
         additionalProperties: true,
       },
     },
@@ -259,6 +270,7 @@ function validateRun(value: unknown): ValidatedFinalVerificationRun {
   if (!run.plan || typeof run.plan !== "object") {
     throw new Error("Final verification submission requires the exact generation plan.");
   }
+  assertFinalVerificationExecutionProfile(run.executionProfile, run.targetRevision as string);
   if (!isRevision(run.targetRevision)) throw new Error("Final verification targetRevision is invalid.");
   const attempt = run.attempt;
   if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1) {
@@ -377,7 +389,6 @@ async function validateCheckEvidence(
     if (stableJson(record.fact) !== stableJson(fact)) {
       throw new Error(`Final verification evidence ${evidenceId} does not match the cited authoritative fact.`);
     }
-    validateFact(fact, check.category, run.targetRevision);
     if (fact.kind.startsWith("browser_")) browserKinds.add(fact.kind);
     const artifactHashes = evidenceFactArtifactHashes(fact);
     if (artifactHashes.length > 0 && !artifacts) {
@@ -390,78 +401,6 @@ async function validateCheckEvidence(
     if (browserKinds.size !== requiredKinds.size || [...requiredKinds].some((kind) => !browserKinds.has(kind))) {
       throw new Error("Required browser verification is missing snapshot, screenshot, or event evidence.");
     }
-  }
-}
-
-function validateFact(
-  fact: FinalVerificationFact,
-  category: FinalVerificationCategory,
-  targetRevision: string,
-): void {
-  const value = asRecord(fact);
-  if (!value) throw new Error(`Final verification ${category} evidence fact is invalid.`);
-  const factCategory = value.category;
-  if (factCategory !== category) throw new Error(`Final verification evidence fact category does not match ${category}.`);
-  if (category === "build" || category === "tests" || category === "runtime_smoke") {
-    if (fact.kind !== "command") throw new Error(`Final verification ${category} requires command evidence.`);
-    const command = fact as FinalVerificationCommandFact;
-    if (command.repositoryRevision !== targetRevision || command.targetRevision !== targetRevision) {
-      throw new Error(`Final verification ${category} evidence targets a stale revision.`);
-    }
-    if (command.startState.revision !== targetRevision || command.endState.revision !== targetRevision) {
-      throw new Error(`Final verification ${category} evidence crossed a revision boundary.`);
-    }
-    if (command.timedOut || command.cancelled || command.outputTruncated) {
-      throw new Error(`Final verification ${category} evidence contains timeout, cancellation, or truncation.`);
-    }
-    if (category === "runtime_smoke") {
-      if (command.exitCode !== null && command.exitCode !== 0) {
-        throw new Error("Final verification runtime_smoke evidence exited non-zero.");
-      }
-      if (command.readinessSatisfied !== true) {
-        throw new Error("Final verification runtime_smoke evidence lacks readiness proof.");
-      }
-    } else if (command.exitCode !== 0 || command.signal !== null) {
-      throw new Error(`Final verification ${category} evidence did not exit cleanly.`);
-    }
-    if (!command.stdoutArtifactHash || !command.stderrArtifactHash) {
-      throw new Error(`Final verification ${category} is missing command output artifacts.`);
-    }
-    return;
-  }
-  if (fact.kind === "browser_snapshot") {
-    const snapshot = fact as FinalVerificationBrowserSnapshotFact;
-    validateBrowserState(snapshot, targetRevision);
-    if (!snapshot.url || !snapshot.htmlArtifactHash || snapshot.truncated || snapshot.htmlBytes < 1) {
-      throw new Error("Final verification browser snapshot evidence is missing or truncated.");
-    }
-    return;
-  }
-  if (fact.kind === "browser_screenshot") {
-    const screenshot = fact as FinalVerificationBrowserScreenshotFact;
-    validateBrowserState(screenshot, targetRevision);
-    if (!screenshot.url || !screenshot.screenshotArtifactHash || screenshot.mediaType !== "image/png" || screenshot.byteLength < 1) {
-      throw new Error("Final verification browser screenshot evidence is missing.");
-    }
-    return;
-  }
-  if (fact.kind !== "browser_events") throw new Error("Final verification browser evidence has an unsupported kind.");
-  const events = fact as FinalVerificationBrowserEventsFact;
-  validateBrowserState(events, targetRevision);
-  if (!events.url || !events.eventsArtifactHash || events.timedOut || events.cancelled || events.policyViolations.length > 0) {
-    throw new Error("Final verification browser events contain missing evidence or policy violations.");
-  }
-  if (events.consoleErrors.length !== events.consoleErrorCount || events.failedNetworkEvents.length !== events.networkFailureCount) {
-    throw new Error("Final verification browser event counts do not match captured failures.");
-  }
-}
-
-function validateBrowserState(
-  fact: FinalVerificationBrowserSnapshotFact | FinalVerificationBrowserScreenshotFact | FinalVerificationBrowserEventsFact,
-  targetRevision: string,
-): void {
-  if (fact.category !== "browser" || fact.targetRevision !== targetRevision || fact.startState.revision !== targetRevision || fact.endState.revision !== targetRevision) {
-    throw new Error("Final verification browser evidence targets a stale or changed revision.");
   }
 }
 

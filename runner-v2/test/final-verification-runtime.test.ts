@@ -18,6 +18,7 @@ import { IntegrationManager } from "../src/integration-manager.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import {
   FinalVerificationRuntime,
+  type FinalVerificationCommand,
   type FinalVerificationPlan,
 } from "../src/final-verification-runtime.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
@@ -42,25 +43,27 @@ test("runs build and test commands in the pinned workspace and records immutable
   });
   try {
     const projectBefore = await projectState(fixture.project);
+    const commands = {
+      build: [{
+        label: "build command",
+        executable: process.execPath,
+        args: [
+          "-e",
+          "const fs=require('node:fs'); fs.writeFileSync('generated-by-build.txt', 'temporary\\n'); process.stdout.write(process.argv[1]); process.stderr.write(process.argv[2]);",
+          "stdout ; & spaces",
+          "stderr ; & spaces",
+        ],
+      }],
+      tests: [{
+        label: "test command",
+        executable: process.execPath,
+        args: ["-e", "process.stdout.write('tests passed')"],
+      }],
+    };
     const run = await runtime.run({
       plan: buildTestPlan(),
-      commands: {
-        build: [{
-          label: "build command",
-          executable: process.execPath,
-          args: [
-            "-e",
-            "const fs=require('node:fs'); fs.writeFileSync('generated-by-build.txt', 'temporary\\n'); process.stdout.write(process.argv[1]); process.stderr.write(process.argv[2]);",
-            "stdout ; & spaces",
-            "stderr ; & spaces",
-          ],
-        }],
-        tests: [{
-          label: "test command",
-          executable: process.execPath,
-          args: ["-e", "process.stdout.write('tests passed')"],
-        }],
-      },
+      executionProfile: commandProfile(fixture.integration.revision, commands),
+      commands,
     });
 
     assert.equal(run.green, true);
@@ -141,15 +144,15 @@ test("executes one scheduler-selected category with the durable generation ident
     currentIntegrationRevision: () => fixture.integration.revision,
   });
   try {
+    const commands = { tests: [{
+      label: "selected test command",
+      executable: process.execPath,
+      args: ["-e", "process.stdout.write('selected tests passed')"],
+    }] };
     const category = await runtime.runCategory({
       plan: buildTestPlan(),
-      commands: {
-        tests: [{
-          label: "selected test command",
-          executable: process.execPath,
-          args: ["-e", "process.stdout.write('selected tests passed')"],
-        }],
-      },
+      executionProfile: commandProfile(fixture.integration.revision, commands),
+      commands,
     }, "tests");
     assert.equal(category.generationId, "durable-generation");
     assert.equal(category.check.category, "tests");
@@ -183,15 +186,15 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
     integrationRevision: () => fixture.integration.revision,
   });
   try {
+    const failingCommands = { build: [{
+      label: "failing build",
+      executable: process.execPath,
+      args: ["-e", "process.stderr.write('failed'); process.exit(7)"],
+    }] };
     const failed = await runtime.run({
       plan: buildOnlyPlan(),
-      commands: {
-        build: [{
-          label: "failing build",
-          executable: process.execPath,
-          args: ["-e", "process.stderr.write('failed'); process.exit(7)"],
-        }],
-      },
+      executionProfile: commandProfile(fixture.integration.revision, failingCommands),
+      commands: failingCommands,
     });
     const failedFact = commandFacts(failed.checks[0])[0];
     assert.equal(failed.green, false);
@@ -201,16 +204,16 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
     assert.equal(failedFact.cancelled, false);
     assert.match(failed.checks[0].issues.join(" "), /non-zero|nonzero|exit/i);
 
+    const timedCommands = { build: [{
+      label: "timed build",
+      executable: process.execPath,
+      args: ["-e", "setTimeout(() => {}, 5000)"],
+      timeoutMs: 100,
+    }] };
     const timedOut = await runtime.run({
       plan: buildOnlyPlan(),
-      commands: {
-        build: [{
-          label: "timed build",
-          executable: process.execPath,
-          args: ["-e", "setTimeout(() => {}, 5000)"],
-          timeoutMs: 100,
-        }],
-      },
+      executionProfile: commandProfile(fixture.integration.revision, timedCommands),
+      commands: timedCommands,
     });
     const timedFact = commandFacts(timedOut.checks[0])[0];
     assert.equal(timedOut.green, false);
@@ -218,16 +221,16 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
     assert.equal(timedFact.cancelled, false);
 
     const controller = new AbortController();
+    const cancelledCommands = { build: [{
+      label: "cancelled build",
+      executable: process.execPath,
+      args: ["-e", "setTimeout(() => {}, 5000)"],
+    }] };
     const cancelledPromise = runtime.run({
       plan: buildOnlyPlan(),
+      executionProfile: commandProfile(fixture.integration.revision, cancelledCommands),
       signal: controller.signal,
-      commands: {
-        build: [{
-          label: "cancelled build",
-          executable: process.execPath,
-          args: ["-e", "setTimeout(() => {}, 5000)"],
-        }],
-      },
+      commands: cancelledCommands,
     });
     setTimeout(() => controller.abort(), 100).unref();
     const cancelled = await cancelledPromise;
@@ -271,16 +274,16 @@ test("cancellation terminates descendant processes and leaves no late process ou
       "fs.writeFileSync(process.argv[2], String(child.pid));",
       "setTimeout(() => {}, 10000);",
     ].join(" ");
+    const commands = { build: [{
+      label: "tree build",
+      executable: process.execPath,
+      args: ["-e", launcherScript, marker, childPid],
+    }] };
     const promise = runtime.run({
       plan: buildOnlyPlan(),
+      executionProfile: commandProfile(fixture.integration.revision, commands),
       signal: controller.signal,
-      commands: {
-        build: [{
-          label: "tree build",
-          executable: process.execPath,
-          args: ["-e", launcherScript, marker, childPid],
-        }],
-      },
+      commands,
     });
     await waitFor(() => existsSync(join(workspace.path, childPid)), 5_000);
     controller.abort();
@@ -331,7 +334,11 @@ test("rejects a workspace that is stale relative to the current integration revi
       },
     });
     await assert.rejects(
-      () => runtime.run({ plan: buildOnlyPlan(), commands: { build: [] } }),
+      () => runtime.run({
+        plan: buildOnlyPlan(),
+        executionProfile: commandProfile(fixture.integration.revision, {}),
+        commands: { build: [] },
+      }),
       /stale|integration revision|target revision/i,
     );
   } finally {
@@ -348,6 +355,24 @@ function buildTestPlan(): FinalVerificationPlan {
       notApplicable("runtime_smoke", "No runtime command is present.", "package.json"),
       notApplicable("browser", "No browser surface is present.", "package.json"),
     ],
+  };
+}
+
+function commandProfile(
+  targetRevision: string,
+  commands: { build?: readonly FinalVerificationCommand[]; tests?: readonly FinalVerificationCommand[] },
+) {
+  return {
+    version: 1 as const,
+    targetRevision,
+    inspectedPaths: ["package.json"],
+    detectedSignals: (["build", "tests"] as const)
+      .filter((category) => Boolean(commands[category]?.length))
+      .map((category) => ({ category, source: "fixture", detail: category })),
+    commands: {
+      ...(commands.build?.length ? { build: commands.build.map((command) => ({ ...command, args: [...command.args] })) } : {}),
+      ...(commands.tests?.length ? { tests: commands.tests.map((command) => ({ ...command, args: [...command.args] })) } : {}),
+    },
   };
 }
 

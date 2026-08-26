@@ -196,6 +196,14 @@ test("submission rejects non-green required results and missing browser/runtime 
       () => submit_final_verification({ plan: fixture.plan, run: missingRuntime }, options(fixture)),
       /runtime_smoke|evidence/i,
     );
+
+    const wrongRequestedUrl = cloneRun(fixture.run);
+    const snapshot = wrongRequestedUrl.checks.find((check) => check.category === "browser")!.facts[0] as FinalVerificationBrowserSnapshotFact;
+    snapshot.requestedUrl = "http://127.0.0.1:4173/forged";
+    await assert.rejects(
+      () => submit_final_verification({ plan: fixture.plan, run: wrongRequestedUrl }, options(fixture)),
+      /requested URL|runner-inspected/i,
+    );
   } finally {
     fixture.evidence.close();
     rmSync(fixture.root, { recursive: true, force: true });
@@ -228,6 +236,10 @@ test("submission preserves validated not-applicable rationale and inspection", a
     build.evidenceIds = [];
     build.facts = [];
     build.issues = [];
+    run.executionProfile.detectedSignals = run.executionProfile.detectedSignals.filter(
+      (signal) => signal.category !== "build",
+    );
+    delete run.executionProfile.commands.build;
     const submission = await submit_final_verification({ plan, run }, options(fixture));
     const submittedBuild = submission.checks.find((check) => check.category === "build");
     assert.ok(submittedBuild);
@@ -291,13 +303,19 @@ async function createFixture(): Promise<Fixture> {
     targetRevision: TARGET_REVISION,
     startState: state,
     endState: state,
-    ...(category === "runtime_smoke" ? { endpoint: "http://127.0.0.1:4173/health", readinessSatisfied: true, cleanupRequested: true } : {}),
+    ...(category === "runtime_smoke" ? {
+      endpoint: "http://127.0.0.1:4173/health",
+      readinessSatisfied: true,
+      cleanupRequested: true,
+      cleanupSucceeded: true,
+    } : {}),
   });
   const snapshot: FinalVerificationBrowserSnapshotFact = {
     kind: "browser_snapshot",
     category: "browser",
     label: "browser acceptance",
     url: "http://127.0.0.1:4173/health?space=hello%20world",
+    requestedUrl: "http://127.0.0.1:4173/health?space=hello%20world",
     title: "Fixture",
     capturedAt: "2026-08-26T00:00:01.000Z",
     htmlArtifactHash: html,
@@ -320,6 +338,7 @@ async function createFixture(): Promise<Fixture> {
     byteLength: 3,
     sessionId: "submission-run:final-verification",
     url: snapshot.url,
+    requestedUrl: snapshot.requestedUrl,
     startedAt: snapshot.startedAt,
     finishedAt: snapshot.finishedAt,
     targetRevision: TARGET_REVISION,
@@ -338,6 +357,7 @@ async function createFixture(): Promise<Fixture> {
     networkFailureCount: 0,
     sessionId: "submission-run:final-verification",
     url: snapshot.url,
+    requestedUrl: snapshot.requestedUrl,
     startedAt: snapshot.startedAt,
     finishedAt: snapshot.finishedAt,
     targetRevision: TARGET_REVISION,
@@ -397,6 +417,29 @@ async function createFixture(): Promise<Fixture> {
       taskId: "final-verification",
       attempt: 1,
       plan,
+      executionProfile: {
+        version: 1,
+        targetRevision: TARGET_REVISION,
+        inspectedPaths: ["package.json"],
+        detectedSignals: [
+          { category: "build", source: "fixture", detail: "build" },
+          { category: "tests", source: "fixture", detail: "tests" },
+          { category: "runtime_smoke", source: "fixture", detail: "runtime" },
+          { category: "browser", source: "fixture", detail: "browser" },
+        ],
+        commands: {
+          build: [{ label: "build", executable: "node", args: ["-e", "process.stdout.write('ok')"] }],
+          tests: [{ label: "tests", executable: "node", args: ["-e", "process.stdout.write('ok')"] }],
+        },
+        runtimeSmoke: {
+          label: "runtime",
+          executable: "node",
+          args: ["-e", "process.stdout.write('ok')"],
+          endpoint: "http://127.0.0.1:4173/health",
+          readiness: { expectedStatus: 200 },
+        },
+        browser: { label: "browser acceptance", url: snapshot.requestedUrl, policy: {} },
+      },
       targetRevision: TARGET_REVISION,
       workspacePath,
       startedAt: "2026-08-26T00:00:00.000Z",

@@ -36,6 +36,10 @@ import {
   cloneFinalVerificationExecutionProfile,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
+import {
+  assertFinalVerificationCheckSemantics,
+  assertFinalVerificationFactSchema,
+} from "./final-verification-semantics.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -807,6 +811,21 @@ function validateFinalVerificationEvidenceSet(input: {
   if (new Set(evidenceIds).size !== evidenceIds.length) {
     throw new Error(`Final verification ${category} evidence IDs must be unique.`);
   }
+  const current = input.projection.finalVerification?.current;
+  if (!current || current.generationId !== input.generationId || current.targetRevision !== input.targetRevision) {
+    throw new Error("Final verification evidence is not bound to the current execution profile.");
+  }
+  const completedWorkspace = current.completedChecks?.find(
+    (completed) => completed.category === category,
+  )?.workspacePath;
+  assertFinalVerificationCheckSemantics({
+    check: input.check,
+    profile: current.executionProfile,
+    targetRevision: input.targetRevision,
+    workspacePath: input.event.type === "final_verification.check_completed"
+      ? requiredString(input.event.payload, "workspacePath")
+      : completedWorkspace ?? "",
+  });
   const records = input.evidenceStore.getByIds({
     runId: input.event.runId,
     taskId: input.taskId,
@@ -847,89 +866,6 @@ export function finalVerificationEventArtifactHashes(event: SchedulerEvent): str
       return evidenceFactArtifactHashes(fact as FinalVerificationFact);
     });
   });
-}
-
-function assertFinalVerificationFactSchema(
-  fact: unknown,
-  category: string,
-  targetRevision: string,
-): asserts fact is FinalVerificationFact {
-  if (!isRecord(fact) || fact.category !== category || typeof fact.kind !== "string") {
-    throw new Error(`Final verification ${category} fact schema is invalid.`);
-  }
-  for (const key of ["label", "startedAt", "finishedAt"] as const) {
-    requiredString(fact, key);
-  }
-  if (fact.targetRevision !== targetRevision) {
-    throw new Error(`Final verification ${category} fact targets a stale revision.`);
-  }
-  assertRevisionState(fact.startState, targetRevision, "startState");
-  assertRevisionState(fact.endState, targetRevision, "endState");
-  if (fact.kind === "command") {
-    for (const key of ["command", "executable", "cwd", "stdoutArtifactHash", "stderrArtifactHash"] as const) {
-      requiredString(fact, key);
-    }
-    if (!Array.isArray(fact.args) || fact.args.some((value) => typeof value !== "string")) {
-      throw new Error(`Final verification ${category} command args are invalid.`);
-    }
-    if (fact.exitCode !== null && !Number.isSafeInteger(fact.exitCode)) {
-      throw new Error(`Final verification ${category} exit code is invalid.`);
-    }
-    if (fact.signal !== null && typeof fact.signal !== "string") {
-      throw new Error(`Final verification ${category} signal is invalid.`);
-    }
-    for (const key of ["timedOut", "cancelled", "outputTruncated"] as const) {
-      if (typeof fact[key] !== "boolean") throw new Error(`Final verification ${category} ${key} is invalid.`);
-    }
-    if (fact.repositoryRevision !== targetRevision) {
-      throw new Error(`Final verification ${category} repository revision is invalid.`);
-    }
-    if (category === "runtime_smoke" && (
-      typeof fact.readinessSatisfied !== "boolean" ||
-      typeof fact.cleanupRequested !== "boolean"
-    )) {
-      throw new Error("Final verification runtime_smoke readiness facts are invalid.");
-    }
-    return;
-  }
-  if (category !== "browser") throw new Error(`Final verification ${category} fact kind is invalid.`);
-  requiredString(fact, "url");
-  requiredString(fact, "capturedAt");
-  requiredString(fact, "sessionId");
-  if (fact.kind === "browser_snapshot") {
-    if (typeof fact.title !== "string") throw new Error("Final verification browser title is invalid.");
-    requiredString(fact, "htmlArtifactHash");
-    if (!Number.isSafeInteger(fact.htmlBytes) || (fact.htmlBytes as number) < 0 || typeof fact.truncated !== "boolean") {
-      throw new Error("Final verification browser snapshot fact is invalid.");
-    }
-    return;
-  }
-  if (fact.kind === "browser_screenshot") {
-    requiredString(fact, "screenshotArtifactHash");
-    if (fact.mediaType !== "image/png" || !Number.isSafeInteger(fact.byteLength) || (fact.byteLength as number) < 0) {
-      throw new Error("Final verification browser screenshot fact is invalid.");
-    }
-    return;
-  }
-  if (fact.kind !== "browser_events") throw new Error("Final verification browser fact kind is invalid.");
-  requiredString(fact, "eventsArtifactHash");
-  for (const key of ["consoleEventCount", "consoleErrorCount", "networkEventCount", "networkFailureCount"] as const) {
-    if (!Number.isSafeInteger(fact[key]) || (fact[key] as number) < 0) {
-      throw new Error(`Final verification browser ${key} is invalid.`);
-    }
-  }
-  for (const key of ["consoleErrors", "pageErrors", "failedNetworkEvents", "policyViolations"] as const) {
-    if (!Array.isArray(fact[key])) throw new Error(`Final verification browser ${key} is invalid.`);
-  }
-  if (typeof fact.timedOut !== "boolean" || typeof fact.cancelled !== "boolean") {
-    throw new Error("Final verification browser termination facts are invalid.");
-  }
-}
-
-function assertRevisionState(value: unknown, revision: string, label: string): void {
-  if (!isRecord(value) || value.revision !== revision || typeof value.status !== "string") {
-    throw new Error(`Final verification fact ${label} is invalid.`);
-  }
 }
 
 function assertDurableEvidence(
@@ -2067,6 +2003,12 @@ function recordFinalVerificationCheck(
       `Final verification category ${completed.category} does not match the current plan.`,
     );
   }
+  assertFinalVerificationCheckSemantics({
+    check: completed,
+    profile: current.executionProfile,
+    targetRevision: current.targetRevision,
+    workspacePath: completed.workspacePath,
+  });
   const existing = current.completedChecks?.find(
     (check) => check.category === completed.category,
   );
@@ -2628,6 +2570,7 @@ function assertFinalVerificationSubmissionResult(
     result.targetRevision !== current.targetRevision ||
     result.attempt !== reference.attempt ||
     result.runId === undefined ||
+    !sameValue(result.executionProfile, current.executionProfile) ||
     !Array.isArray(result.checks) ||
     result.checks.length !== current.plan.checks.length
   ) {
@@ -2642,6 +2585,12 @@ function assertFinalVerificationSubmissionResult(
     if (!durable || !durable.green || durable.issues.length > 0) {
       throw new Error(`Final verification submission check ${check.category} is not durably green.`);
     }
+    assertFinalVerificationCheckSemantics({
+      check,
+      profile: current.executionProfile,
+      targetRevision: current.targetRevision,
+      workspacePath: durable.workspacePath,
+    });
     if (!sameValue(projectFinalVerificationSubmissionCheck(durable), check)) {
       throw new Error(`Final verification submission check ${check.category} conflicts with durable execution.`);
     }

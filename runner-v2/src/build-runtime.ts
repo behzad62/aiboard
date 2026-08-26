@@ -808,6 +808,7 @@ export class BuildRuntime {
       taskId: generation.taskId,
       attempt: 1,
       plan: generation.plan,
+      executionProfile: generation.executionProfile,
       targetRevision: generation.targetRevision,
       workspacePath: completed[0]!.workspacePath,
       startedAt: completed[0]!.startedAt,

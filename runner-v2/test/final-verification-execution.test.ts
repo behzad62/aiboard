@@ -21,6 +21,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   acceptFinalVerificationProfile,
   emptyFinalVerificationProfile,
+  profileForRequiredCategories,
 } from "./support/final-verification-profile.js";
 
 const RUN_ID = "run-final-verification-execution";
@@ -622,7 +623,9 @@ function createFixture(requiredCategories: readonly FinalVerificationCategory[] 
       targetRevision: REVISION_ONE,
       planVersion: 1,
       plan: finalVerificationPlan(requiredCategories),
-      executionProfile: emptyFinalVerificationProfile(REVISION_ONE),
+      executionProfile: requiredCategories.length > 0
+        ? profileForRequiredCategories(REVISION_ONE, requiredCategories)
+        : emptyFinalVerificationProfile(REVISION_ONE),
     },
   });
   return {

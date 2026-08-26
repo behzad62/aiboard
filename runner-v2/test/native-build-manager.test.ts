@@ -1842,6 +1842,7 @@ function requestedHandoffProjection(
             attempt: 1,
             targetRevision: revision,
             plan,
+            executionProfile: emptyFinalVerificationProfile(revision),
             checks: submissionChecks,
             evidenceIds: [],
             submittedAt: "2026-07-14T00:00:02.000Z",

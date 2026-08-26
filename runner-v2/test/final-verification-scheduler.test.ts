@@ -317,6 +317,7 @@ function appendValidatedSubmission(fixture: Fixture, submissionId: string, key: 
     submissionResult: {
       kind: "final_verification_submission", generationId: GENERATION_ONE, runId: fixture.runId,
       taskId: fixture.taskId, attempt: 1, targetRevision: REVISION_ONE, plan: PLAN,
+      executionProfile: emptyFinalVerificationProfile(REVISION_ONE),
       checks: PLAN.checks.map((check) => ({ ...check, green: true, evidenceIds: [], facts: [] })),
       evidenceIds: [], submittedAt: "2026-08-26T00:00:03.000Z", green: true,
     },

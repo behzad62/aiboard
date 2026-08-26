@@ -322,6 +322,7 @@ export class NativeBuildFactory {
         const result = await verification.runCategory(
           {
             plan: input.plan,
+            executionProfile: input.executionProfile,
             ...(input.executionProfile?.commands
               ? { commands: input.executionProfile.commands }
               : {}),

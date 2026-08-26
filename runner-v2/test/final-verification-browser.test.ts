@@ -30,7 +30,12 @@ test("browser verification records complete URL, DOM, screenshot, and event fact
   const runtime = createRuntime(fixture, artifacts, evidence, browser);
   try {
     const url = "http://127.0.0.1:4173/fixture?space=hello%20world";
-    const run = await runtime.run({ plan: browserPlan(), browser: browserInput(url) });
+    const browserInputValue = browserInput(url);
+    const run = await runtime.run({
+      plan: browserPlan(),
+      executionProfile: browserProfile(fixture.integration.revision, browserInputValue),
+      browser: browserInputValue,
+    });
     const check = browserCheck(run);
     const snapshot = factByKind(check, "browser_snapshot");
     const screenshot = factByKind(check, "browser_screenshot");
@@ -60,15 +65,45 @@ test("browser verification rejects missing screenshot evidence", async () => {
   const browser = new FixtureBrowserSession({ missingScreenshot: true });
   const runtime = createRuntime(fixture, artifacts, evidence, browser);
   try {
+    const browserInputValue = browserInput("http://127.0.0.1:4173/missing-screenshot");
     const run = await runtime.run({
       plan: browserPlan(),
-      browser: browserInput("http://127.0.0.1:4173/missing-screenshot"),
+      executionProfile: browserProfile(fixture.integration.revision, browserInputValue),
+      browser: browserInputValue,
     });
     const check = browserCheck(run);
     assert.equal(run.green, false);
     assert.equal(check.green, false);
     assert.match(check.issues.join(" "), /missing.*screenshot/i);
     assert.equal(browser.closeCalls, 1);
+  } finally {
+    evidence.close();
+    await runtimeWorkspace(fixture).cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("browser verification preserves the requested URL across a normal redirect", async () => {
+  const fixture = await createFixture("redirect");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const observedUrl = "http://127.0.0.1:4173/signed-in";
+  const requestedUrl = "http://127.0.0.1:4173/";
+  const browser = new FixtureBrowserSession({ observedUrl });
+  const runtime = createRuntime(fixture, artifacts, evidence, browser);
+  try {
+    const browserInputValue = browserInput(requestedUrl);
+    const run = await runtime.run({
+      plan: browserPlan(),
+      executionProfile: browserProfile(fixture.integration.revision, browserInputValue),
+      browser: browserInputValue,
+    });
+    const check = browserCheck(run);
+    assert.equal(check.green, true);
+    for (const fact of check.facts) {
+      assert.equal((fact as { requestedUrl?: string }).requestedUrl, requestedUrl);
+      assert.equal((fact as { url?: string }).url, observedUrl);
+    }
   } finally {
     evidence.close();
     await runtimeWorkspace(fixture).cleanup().catch(() => undefined);
@@ -98,9 +133,11 @@ test("browser verification rejects unallowed console and failed-network events",
   });
   const runtime = createRuntime(fixture, artifacts, evidence, browser);
   try {
+    const browserInputValue = browserInput("http://127.0.0.1:4173/policy");
     const run = await runtime.run({
       plan: browserPlan(),
-      browser: browserInput("http://127.0.0.1:4173/policy"),
+      executionProfile: browserProfile(fixture.integration.revision, browserInputValue),
+      browser: browserInputValue,
     });
     const check = browserCheck(run);
     assert.equal(run.green, false);
@@ -130,10 +167,15 @@ test("browser verification closes once after thrown or cancelled navigation", as
     const runtime = createRuntime(fixture, artifacts, evidence, browser);
     const controller = new AbortController();
     try {
+      const browserInputValue = browserInput(
+        `http://127.0.0.1:4173/${scenario}`,
+        { timeoutMs: 100 },
+      );
       const promise = runtime.run({
         plan: browserPlan(),
+        executionProfile: browserProfile(fixture.integration.revision, browserInputValue),
         signal: scenario === "cancelled" ? controller.signal : undefined,
-        browser: browserInput(`http://127.0.0.1:4173/${scenario}`, { timeoutMs: 100 }),
+        browser: browserInputValue,
       });
       if (scenario === "cancelled") {
         await waitFor(() => browser.openCalls === 1, 5_000);
@@ -187,6 +229,17 @@ function browserInput(url: string, overrides: Partial<FinalVerificationBrowserIn
     },
     ...overrides,
   } satisfies FinalVerificationBrowserInput;
+}
+
+function browserProfile(targetRevision: string, browser: FinalVerificationBrowserInput) {
+  return {
+    version: 1 as const,
+    targetRevision,
+    inspectedPaths: ["index.html"],
+    detectedSignals: [{ category: "browser" as const, source: "fixture", detail: "browser" }],
+    commands: {},
+    browser,
+  };
 }
 
 function createRuntime(
@@ -252,6 +305,7 @@ interface FixtureBrowserOptions {
   missingScreenshot?: boolean;
   failOpen?: boolean;
   hangOpen?: boolean;
+  observedUrl?: string;
   events?: { console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] };
 }
 
@@ -268,12 +322,12 @@ class FixtureBrowserSession implements FinalVerificationBrowserSession {
     this.openCalls += 1;
     if (this.options.failOpen) throw new Error("browser navigation failed");
     if (this.options.hangOpen) await new Promise<void>(() => undefined);
-    return { url: input.url, title: "Fixture browser" };
+    return { url: this.options.observedUrl ?? input.url, title: "Fixture browser" };
   }
 
   async snapshot() {
     return {
-      url: "http://127.0.0.1:4173/fixture?space=hello%20world",
+      url: this.options.observedUrl ?? "http://127.0.0.1:4173/fixture?space=hello%20world",
       title: "Fixture browser",
       text: "Fixture browser",
       html: "<html><body>Fixture browser</body></html>",

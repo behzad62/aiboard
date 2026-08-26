@@ -476,6 +476,7 @@ function validProjection(): SchedulerProjection {
           attempt: 1,
           targetRevision: REVISION,
           plan,
+          executionProfile: emptyFinalVerificationProfile(REVISION),
           checks: submissionChecks,
           evidenceIds: [],
           submittedAt: "2026-08-26T00:00:02.000Z",
