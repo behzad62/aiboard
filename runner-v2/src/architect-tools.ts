@@ -40,6 +40,7 @@ export interface ArchitectToolsOptions {
   planOnlyCompletionAvailable?: boolean;
   finalVerificationPlanAvailable?: boolean;
   finalVerificationReviewAvailable?: boolean;
+  finalVerificationRepairPlanAvailable?: boolean;
   evidenceStore?: EvidenceStore;
 }
 
@@ -107,6 +108,23 @@ interface ReviewFinalVerificationInput {
   summary: string;
   categoryReviews: FinalVerificationCategoryReviewInput[];
 }
+interface VerificationRepairTaskInput {
+  id: string;
+  objective: string;
+  categories: FinalVerificationCategory[];
+  evidenceIds: string[];
+  dependencies: string[];
+  requiredCapabilities: string[];
+  acceptanceCriteria: AcceptanceCriterion[];
+}
+interface PlanVerificationRepairsInput {
+  finalVerificationTaskId: string;
+  generationId: string;
+  submissionId: string;
+  reviewId: string;
+  targetRevision: string;
+  tasks: VerificationRepairTaskInput[];
+}
 
 export function createArchitectTools(
   options: ArchitectToolsOptions
@@ -128,18 +146,200 @@ export function createArchitectTools(
         options.evidenceStore,
       )]
     : planning;
+  const repairPlanning = options.finalVerificationRepairPlanAvailable
+    ? [...verification, planVerificationRepairsTool(options.store, clock)]
+    : verification;
   if (options.runPolicy === "plan_only") {
     return options.planOnlyCompletionAvailable
-      ? [...verification, completeRunTool(options.store, clock, "plan_only")]
-      : verification;
+      ? [...repairPlanning, completeRunTool(options.store, clock, "plan_only")]
+      : repairPlanning;
   }
   return [
-    ...verification,
+    ...repairPlanning,
     reconcilePlanTool(options.store, clock),
     reviewTaskTool(options.store, clock, options.evidenceStore),
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
+}
+
+function planVerificationRepairsTool(
+  store: SchedulerStore,
+  clock: () => string,
+): NativeTool<PlanVerificationRepairsInput> {
+  return lifecycleTool({
+    name: "plan_verification_repairs",
+    description: "Atomically create narrowly scoped worker tasks for every failed final-verification review category",
+    schema: objectSchema({
+      finalVerificationTaskId: { type: "string", minLength: 1 },
+      generationId: { type: "string", minLength: 1 },
+      submissionId: { type: "string", minLength: 1 },
+      reviewId: { type: "string", minLength: 1 },
+      targetRevision: { type: "string", minLength: 1 },
+      tasks: {
+        type: "array",
+        minItems: 1,
+        items: objectSchema({
+          id: { type: "string", minLength: 1 },
+          objective: { type: "string", minLength: 1 },
+          categories: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", enum: [...FINAL_VERIFICATION_CATEGORIES] },
+          },
+          evidenceIds: { type: "array", items: { type: "string", minLength: 1 } },
+          dependencies: { type: "array", items: { type: "string", minLength: 1 } },
+          requiredCapabilities: { type: "array", items: { type: "string", minLength: 1 } },
+          acceptanceCriteria: {
+            type: "array",
+            minItems: 1,
+            items: criterionSchema(),
+          },
+        }, [
+          "id", "objective", "categories", "evidenceIds", "dependencies",
+          "requiredCapabilities", "acceptanceCriteria",
+        ]),
+      },
+    }, [
+      "finalVerificationTaskId", "generationId", "submissionId", "reviewId",
+      "targetRevision", "tasks",
+    ]),
+    validate: validateVerificationRepairPlan,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const current = projection.finalVerification?.current;
+      if (
+        !current ||
+        current.review?.status !== "repair_required" ||
+        !current.review.decision ||
+        current.taskId !== input.finalVerificationTaskId ||
+        current.generationId !== input.generationId ||
+        current.submission?.submissionId !== input.submissionId ||
+        current.review.reviewId !== input.reviewId ||
+        current.targetRevision !== input.targetRevision ||
+        projection.integrationRevision !== input.targetRevision
+      ) {
+        return errorOutput(
+          "stale_verification_repair_plan",
+          "Verification repairs must reference the current repair-required generation, review, submission, and revision.",
+        );
+      }
+      if (current.repairTaskIds) {
+        if (repairPlanMatches(projection.tasks, current.repairTaskIds, input.tasks)) {
+          return {
+            content: [{ type: "json", value: { repairTaskIds: current.repairTaskIds } }],
+            isError: false,
+            lifecycle: {
+              type: "architect_action",
+              action: "verification_repairs_planned",
+              referenceId: current.generationId,
+            },
+          };
+        }
+        return errorOutput(
+          "conflicting_verification_repair_plan",
+          "Verification repairs already have a conflicting durable plan.",
+        );
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "final_verification.repairs_planned",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `final-verification-repairs:${current.generationId}`,
+        payload: {
+          finalVerificationTaskId: input.finalVerificationTaskId,
+          taskId: input.finalVerificationTaskId,
+          generationId: input.generationId,
+          submissionId: input.submissionId,
+          reviewId: input.reviewId,
+          targetRevision: input.targetRevision,
+          revision: projection.planRevision + 1,
+          tasks: input.tasks.map((task) => ({
+            ...task,
+            categories: [...task.categories],
+            evidenceIds: [...task.evidenceIds],
+            dependencies: [...task.dependencies],
+            requiredCapabilities: [...task.requiredCapabilities],
+            acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+          })),
+        },
+      }, {
+        type: "architect_action",
+        action: "verification_repairs_planned",
+        referenceId: current.generationId,
+      });
+    },
+  });
+}
+
+function validateVerificationRepairPlan(
+  input: unknown,
+): ValidationResult<PlanVerificationRepairsInput> {
+  return validateObject(input, (value) => {
+    if (
+      !nonEmpty(value.finalVerificationTaskId) ||
+      !nonEmpty(value.generationId) ||
+      !nonEmpty(value.submissionId) ||
+      !nonEmpty(value.reviewId) ||
+      !nonEmpty(value.targetRevision) ||
+      !Array.isArray(value.tasks) || value.tasks.length === 0
+    ) return null;
+    const tasks: VerificationRepairTaskInput[] = [];
+    for (const candidate of value.tasks) {
+      if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
+      const categories = stringList(candidate.categories) as FinalVerificationCategory[] | null;
+      const evidenceIds = stringList(candidate.evidenceIds);
+      const dependencies = stringList(candidate.dependencies);
+      const requiredCapabilities = stringList(candidate.requiredCapabilities);
+      const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+      if (
+        !categories || categories.length === 0 ||
+        categories.some((category) => !FINAL_VERIFICATION_CATEGORIES.includes(category)) ||
+        new Set(categories).size !== categories.length ||
+        !evidenceIds || new Set(evidenceIds).size !== evidenceIds.length ||
+        !dependencies || !requiredCapabilities || !acceptanceCriteria
+      ) return null;
+      tasks.push({
+        id: candidate.id,
+        objective: candidate.objective,
+        categories: FINAL_VERIFICATION_CATEGORIES.filter((category) => categories.includes(category)),
+        evidenceIds: [...evidenceIds].sort(),
+        dependencies: [...dependencies].sort(),
+        requiredCapabilities: [...requiredCapabilities].sort(),
+        acceptanceCriteria,
+      });
+    }
+    if (new Set(tasks.map((task) => task.id)).size !== tasks.length) return null;
+    return {
+      finalVerificationTaskId: value.finalVerificationTaskId,
+      generationId: value.generationId,
+      submissionId: value.submissionId,
+      reviewId: value.reviewId,
+      targetRevision: value.targetRevision,
+      tasks: tasks.sort((left, right) => left.id.localeCompare(right.id)),
+    };
+  }, "current repair provenance and at least one valid scoped repair task are required");
+}
+
+function repairPlanMatches(
+  tasks: Record<string, BuildTask>,
+  ids: readonly string[],
+  proposed: readonly VerificationRepairTaskInput[],
+): boolean {
+  if (ids.length !== proposed.length) return false;
+  return proposed.every((candidate) => {
+    const task = tasks[candidate.id];
+    return task?.kind === "verification_repair" &&
+      task.objective === candidate.objective &&
+      JSON.stringify(task.dependencies) === JSON.stringify(candidate.dependencies) &&
+      JSON.stringify(task.requiredCapabilities) === JSON.stringify(candidate.requiredCapabilities) &&
+      JSON.stringify(task.acceptanceCriteria) === JSON.stringify(candidate.acceptanceCriteria) &&
+      JSON.stringify(task.verificationRepair?.categories) === JSON.stringify(candidate.categories) &&
+      JSON.stringify(task.verificationRepair?.evidenceIds) === JSON.stringify(candidate.evidenceIds);
+  });
 }
 
 function reviewFinalVerificationTool(

@@ -67,7 +67,8 @@ export type SchedulerEventType =
   | "final_verification.check_completed"
   | "final_verification.submitted"
   | "final_verification.review_requested"
-  | "final_verification.review_decided";
+  | "final_verification.review_decided"
+  | "final_verification.repairs_planned";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -222,6 +223,7 @@ export interface FinalVerificationGenerationProjection {
   submission?: FinalVerificationSubmissionReference;
   submissionResult?: FinalVerificationSubmission;
   review?: FinalVerificationReviewReference;
+  repairTaskIds?: string[];
 }
 
 export interface FinalVerificationCompletedCheckProjection
@@ -295,6 +297,25 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (event.type === "final_verification.repairs_planned") {
+    const current = projection.finalVerification?.current;
+    if (!current || !Array.isArray(event.payload.tasks)) {
+      throw new Error("Final verification repair plan is invalid.");
+    }
+    const evidenceIds = event.payload.tasks.flatMap((candidate) => {
+      if (!isRecord(candidate)) throw new Error("Final verification repair task is invalid.");
+      return stringArray(candidate, "evidenceIds");
+    });
+    const records = evidenceStore.getByIds({
+      runId: event.runId,
+      taskId: current.taskId,
+      ids: [...new Set(evidenceIds)],
+    });
+    if (records.length !== new Set(evidenceIds).size) {
+      throw new Error("Final verification repair plan cites missing or foreign evidence.");
+    }
+    return;
+  }
   if (
     event.type === "final_verification.review_decided" &&
     Array.isArray(event.payload.categoryReviews)
@@ -752,6 +773,13 @@ export function reduceSchedulerEvent(
       recordFinalVerificationReviewDecision(next, event.payload);
       break;
     }
+    case "final_verification.repairs_planned": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may plan final verification repairs.");
+      }
+      createFinalVerificationRepairTasks(next, event.payload);
+      break;
+    }
     case "task.revised": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
@@ -770,6 +798,12 @@ export function reduceSchedulerEvent(
         throw new Error(`Task ${taskId} must be planned, failed, or rejected before revision.`);
       }
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      if (
+        task.kind === "verification_repair" &&
+        (Object.hasOwn(patch, "verificationRepair") || Object.hasOwn(patch, "kind"))
+      ) {
+        throw new Error("Verification repair provenance and kind are immutable.");
+      }
       const grantsFreshAttempt =
         task.status === "failed" ||
         task.status === "rejected" ||
@@ -1579,6 +1613,108 @@ function recordFinalVerificationReviewDecision(
   if (decisionProjection) current.review.decision = decisionProjection;
 }
 
+function createFinalVerificationRepairTasks(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = requireCurrentFinalVerification(projection, {
+    ...payload,
+    taskId: payload.finalVerificationTaskId,
+  });
+  if (
+    current.review?.status !== "repair_required" ||
+    !current.review.decision ||
+    !current.submission ||
+    current.review.reviewId !== requiredString(payload, "reviewId") ||
+    current.submission.submissionId !== requiredString(payload, "submissionId")
+  ) {
+    throw new Error("Final verification repairs require the current repair-required review.");
+  }
+  const review = current.review;
+  const submission = current.submission;
+  const revision = requiredNumber(payload, "revision");
+  if (revision !== projection.planRevision + 1) {
+    throw new Error("Final verification repair plan revision is stale.");
+  }
+  if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
+    throw new Error("Final verification repairs require at least one task.");
+  }
+  const failed = new Set(review.decision!.failedCategories);
+  const assigned = new Set<FinalVerificationCategory>();
+  const tasks = payload.tasks.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Final verification repair task is invalid.");
+    const categories = stringArray(candidate, "categories") as FinalVerificationCategory[];
+    if (categories.length === 0) throw new Error("Repair task requires failed categories.");
+    for (const category of categories) {
+      if (!failed.has(category) || assigned.has(category)) {
+        throw new Error(`Repair category ${category} is unrelated or duplicated.`);
+      }
+      assigned.add(category);
+    }
+    if (!Array.isArray(candidate.acceptanceCriteria)) {
+      throw new Error("Repair task requires acceptance criteria.");
+    }
+    const acceptanceCriteria = candidate.acceptanceCriteria as AcceptanceCriterion[];
+    const criteriaValidation = validateAcceptanceCriteria(acceptanceCriteria);
+    if (!criteriaValidation.valid) {
+      throw new Error(`Repair task acceptance criteria are invalid: ${criteriaValidation.issues.join(" ")}`);
+    }
+    const evidenceIds = stringArray(candidate, "evidenceIds");
+    const expectedEvidence = [...new Set(categories.flatMap((category) =>
+      review.decision!.categoryReviews.find(
+        (review) => review.category === category,
+      )?.evidenceIds ?? []
+    ))].sort();
+    if (!sameValue([...evidenceIds].sort(), expectedEvidence)) {
+      throw new Error("Repair task cites missing or unknown final-verification evidence.");
+    }
+    return {
+      id: requiredString(candidate, "id"),
+      kind: "verification_repair" as const,
+      objective: requiredString(candidate, "objective"),
+      dependencies: stringArray(candidate, "dependencies"),
+      status: "planned" as const,
+      requiredCapabilities: stringArray(candidate, "requiredCapabilities"),
+      acceptanceCriteria: acceptanceCriteria.map((criterion) => ({ ...criterion })),
+      acceptanceCriteriaVersion: 1,
+      attempt: 0,
+      verificationRepair: {
+        sourceGenerationId: current.generationId,
+        finalVerificationTaskId: current.taskId,
+        submissionId: submission.submissionId,
+        reviewId: review.reviewId,
+        targetRevision: current.targetRevision,
+        categories: [...categories],
+        evidenceIds: [...evidenceIds],
+      },
+    } satisfies BuildTask;
+  });
+  if (assigned.size !== failed.size) {
+    throw new Error("Repair tasks must cover every failed category exactly once.");
+  }
+  if (current.repairTaskIds) {
+    const existing = current.repairTaskIds.map((id) => projection.tasks[id]);
+    if (sameValue(existing, tasks)) return;
+    throw new Error("Final verification repairs already have a conflicting plan.");
+  }
+  for (const task of tasks) {
+    if (projection.tasks[task.id]) throw new Error(`Duplicate task ${task.id}.`);
+    if (task.dependencies.includes(current.taskId)) {
+      throw new Error("Repair tasks cannot depend on the kernel verification task.");
+    }
+  }
+  const validation = validateTaskGraph(
+    [...Object.values(projection.tasks), ...tasks],
+    { requireAcceptanceCriteria: true },
+  );
+  if (!validation.valid) {
+    throw new Error(`Final verification repair plan is invalid: ${validation.issues.map((issue) => issue.message).join(" ")}`);
+  }
+  for (const task of tasks) projection.tasks[task.id] = task;
+  current.repairTaskIds = tasks.map((task) => task.id);
+  projection.planRevision = revision;
+}
+
 function parseFinalVerificationReviewDecision(
   payload: Record<string, unknown>,
   current: FinalVerificationGenerationProjection,
@@ -1913,6 +2049,9 @@ function cloneFinalVerificationGeneration(
               : {}),
           },
         }
+      : {}),
+    ...(generation.repairTaskIds
+      ? { repairTaskIds: [...generation.repairTaskIds] }
       : {}),
   };
 }

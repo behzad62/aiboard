@@ -862,3 +862,106 @@ passed (normal Git LF-to-CRLF warnings only)
 
 P2.4B2b Architect review is complete. Repair-task creation and the P2.5
 completion gate remain intentionally deferred.
+
+## P2.4B3 repair orchestration
+
+Added the typed Architect repair-planning boundary and fresh-generation
+lifecycle. A current structured `repair_required` review now causes BuildRuntime
+to invoke the Architect with `final_verification_repair_plan_required`, carrying
+the exact failed categories, review rationale through the current projection,
+category evidence IDs, generation ID, kernel task ID, submission ID, review ID,
+and target integration revision. Only that action registers
+`plan_verification_repairs`; prose and no-op returns fail the generation-specific
+postcondition and cannot clear the review.
+
+The typed action atomically creates one or more ordinary
+`verification_repair` tasks. Each task persists immutable provenance for the
+source generation, kernel task, submission, review, revision, assigned failed
+categories, and cited evidence, together with an ordinary worker role,
+dependencies, capabilities, objective, and versioned acceptance criteria. The
+tool and scheduler reducer require every failed category exactly once across the
+set, exact per-category evidence references, current singleton identity, a fresh
+plan revision, unique task IDs, and a valid task graph. Zero-task, uncovered,
+duplicate, unrelated, stale, unknown-evidence, empty-scope, invalid-criteria,
+and conflicting plans reject without partial task creation. Canonical input and
+generation-scoped idempotency deduplicate semantic replay across SQLite reopen.
+
+Repair tasks remain ordinary worker-schedulable work and follow the existing
+assignment, evidence, review, and integration lifecycle. Their provenance and
+kind cannot be rewritten through ordinary transitions or Architect revision.
+The first integrated repair advances the canonical integration revision, which
+moves the obsolete verification generation, submission, and repair-required
+review to audit history. Remaining repair work still schedules normally. The
+existing typed final-verification planner becomes available only after all
+ordinary implementation and repair tasks are terminal, and creates one fresh
+generation bound to the repaired revision. Approved verification reviews never
+enter repair planning. No completion gate or P2.6 cleanup/UI behavior was added.
+
+### P2.4B3 TDD and fault evidence
+
+The focused repair file was added before production changes and first failed
+six of seven cases at clean HEAD `2d0d45e9`:
+
+```text
+npx tsx --test runner-v2/test/final-verification-repair.test.ts
+7 tests, 1 passed, 6 failed
+no-op case: Missing expected rejection
+other cases: Tool plan_verification_repairs is not registered.
+```
+
+After the initial implementation, a provenance-mutation case was added
+red-first. It failed 0/1 with `Missing expected exception`, then passed after
+the task-transition and task-revision boundaries made repair provenance and
+kind immutable. The ordinary-worker integration fixture was tightened to drive
+a repair through assigned, running, submitted with criterion evidence, review
+requested, approved, integrating, and integrated before asserting invalidation
+and fresh planning.
+
+Two required fault-only injections were made and restored:
+
+- Removing both the generic lifecycle sequence guard and the repair-specific
+  postcondition made the prose/no-op case fail 0/1 with
+  `Missing expected rejection`.
+- Removing duplicate-category detection and the complete failed-category set
+  guard made the atomic coverage case fail 0/1 with `false !== true`.
+
+The restored focused suite passed 8/8.
+
+### P2.4B3 validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-repair.test.ts
+8/8 passed
+
+npx tsx --test runner-v2/test/final-verification-repair.test.ts runner-v2/test/final-verification-review.test.ts runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-orchestration.test.ts runner-v2/test/build-runtime.test.ts runner-v2/test/native-architect-runtime.test.ts runner-v2/test/scheduler-store.test.ts runner-v2/test/task-scheduler.test.ts runner-v2/test/task-graph.test.ts runner-v2/test/integration-manager.test.ts runner-v2/test/recovery-smoke.test.ts
+113/113 passed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+npx eslint runner-v2/src/agent-contracts.ts runner-v2/src/agent-loop.ts runner-v2/src/architect-tools.ts runner-v2/src/build-runtime.ts runner-v2/src/native-architect-runtime.ts runner-v2/src/scheduler-store.ts runner-v2/src/sqlite-scheduler-store.ts runner-v2/src/task-contracts.ts runner-v2/src/task-graph.ts runner-v2/test/final-verification-repair.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+### P2.4B3 requirement audit
+
+| P2.4B3 requirement | Evidence | Result |
+|---|---|---|
+| Repair-required review mandates typed planning | Build-runtime reason/tool boundary and prose fault proof | Complete |
+| Exact failed review context is exposed | Focused assertions plus current generation projection | Complete |
+| Atomic narrow tasks cover failures exactly once | Negative coverage cases and restored category fault proof | Complete |
+| Durable exact provenance and evidence | Task contract, reducer validation, authoritative evidence store, immutability test | Complete |
+| Repair tasks use ordinary workers | Two-worker scheduler assertion and full ordinary integration fixture | Complete |
+| Planning is exactly once across restart | SQLite reopen, reordered semantic replay, one-event assertion | Complete |
+| Repair integration invalidates obsolete verification | Real integrated transition advances revision and moves generation to history | Complete |
+| Fresh generation waits for terminal repairs | Remaining-live guard plus typed fresh plan at repaired revision | Complete |
+| Approved review creates no repair work | Focused approved-review runtime case | Complete |
+| Later lifecycle work remains out of scope | No `complete_run`, cleanup, or UI changes | Complete |
+
+## Packet status
+
+P2.4B3 repair orchestration and fresh-generation lifecycle are complete. The
+P2.5 completion gate and P2.6 cleanup/UI remain intentionally deferred.

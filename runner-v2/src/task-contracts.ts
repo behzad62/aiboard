@@ -2,7 +2,10 @@ import type {
   AcceptanceCriterion,
   CriterionEvidenceLink,
 } from "./acceptance-contracts.js";
-import type { FinalVerificationPlan } from "./final-verification-contracts.js";
+import type {
+  FinalVerificationCategory,
+  FinalVerificationPlan,
+} from "./final-verification-contracts.js";
 
 export type TaskStatus =
   | "planned"
@@ -19,7 +22,17 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
-export type BuildTaskKind = "implementation" | "final_verification";
+export type BuildTaskKind = "implementation" | "verification_repair" | "final_verification";
+
+export interface VerificationRepairProvenance {
+  sourceGenerationId: string;
+  finalVerificationTaskId: string;
+  submissionId: string;
+  reviewId: string;
+  targetRevision: string;
+  categories: FinalVerificationCategory[];
+  evidenceIds: string[];
+}
 
 export interface BuildTask {
   id: string;
@@ -54,6 +67,7 @@ export interface BuildTask {
   verificationPlan?: FinalVerificationPlan;
   verificationSubmissionId?: string;
   verificationReviewId?: string;
+  verificationRepair?: VerificationRepairProvenance;
 }
 
 export type FinalVerificationTask = Omit<

@@ -227,7 +227,8 @@ function requiresAuthoritativeEvidenceStore(
     event.type !== "task.transitioned" &&
     event.type !== "review.requested" &&
     event.type !== "review.decided" &&
-    event.type !== "final_verification.review_decided"
+    event.type !== "final_verification.review_decided" &&
+    event.type !== "final_verification.repairs_planned"
   ) {
     return false;
   }
@@ -237,6 +238,7 @@ function requiresAuthoritativeEvidenceStore(
   if (event.type === "final_verification.review_decided") {
     return Array.isArray(event.payload.categoryReviews);
   }
+  if (event.type === "final_verification.repairs_planned") return true;
   const taskId = event.payload.taskId;
   return (
     typeof taskId === "string" &&

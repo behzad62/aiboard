@@ -48,6 +48,16 @@ export type ArchitectActionReason =
       targetRevision: string;
     }
   | {
+      type: "final_verification_repair_plan_required";
+      finalVerificationTaskId: string;
+      generationId: string;
+      submissionId: string;
+      reviewId: string;
+      targetRevision: string;
+      failedCategories: string[];
+      evidenceIds: string[];
+    }
+  | {
       type: "task_failure_resolution_required";
       taskId: string;
       attempt: number;
@@ -499,7 +509,8 @@ export class BuildRuntime {
     projection = this.projection();
     const finalVerification = projection.finalVerification?.current;
     if (finalVerification) {
-      return await this.advanceFinalVerification(finalVerification);
+      const result = await this.advanceFinalVerification(finalVerification);
+      if (result) return result;
     }
     const tasks = Object.values(projection.tasks);
     const implementationTasks = tasks.filter(
@@ -552,7 +563,7 @@ export class BuildRuntime {
 
   private async advanceFinalVerification(
     generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
-  ): Promise<BuildStepResult> {
+  ): Promise<BuildStepResult | undefined> {
     if (generation.submission) {
       if (!generation.submissionResult) {
         return { status: "idle", action: "final_verification_submission_unvalidated" };
@@ -564,7 +575,36 @@ export class BuildRuntime {
         generation.review?.status === "repair_required" ||
         generation.review?.status === "rejected"
       ) {
-        return { status: "idle", action: "final_verification_repair_required" };
+        if (generation.review.status === "rejected") {
+          return { status: "idle", action: "final_verification_repair_required" };
+        }
+        if (generation.repairTaskIds?.length) return undefined;
+        const decision = generation.review.decision;
+        if (!decision) {
+          throw new Error("Final verification repair review lacks a structured decision.");
+        }
+        await this.runArchitect({
+          type: "final_verification_repair_plan_required",
+          finalVerificationTaskId: generation.taskId,
+          generationId: generation.generationId,
+          submissionId: generation.submission.submissionId,
+          reviewId: generation.review.reviewId,
+          targetRevision: generation.targetRevision,
+          failedCategories: [...decision.failedCategories],
+          evidenceIds: [...new Set(decision.categoryReviews.flatMap(
+            (review) => review.verdict === "repair_required" ? review.evidenceIds : [],
+          ))],
+        }, this.projection());
+        const repaired = this.projection().finalVerification?.current;
+        if (
+          repaired?.generationId !== generation.generationId ||
+          !repaired.repairTaskIds?.length
+        ) {
+          throw new Error(
+            "Architect returned from final_verification_repair_plan_required without a typed action.",
+          );
+        }
+        return this.afterArchitect("final_verification_repair_plan_required");
       }
       const reviewId = `final-verification-review:${generation.generationId}`;
       if (!generation.review) {
@@ -758,6 +798,8 @@ export class BuildRuntime {
         reason.type === "final_verification_plan_required",
       finalVerificationReviewAvailable:
         reason.type === "final_verification_review_required",
+      finalVerificationRepairPlanAvailable:
+        reason.type === "final_verification_repair_plan_required",
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {
       tools.register(tool);

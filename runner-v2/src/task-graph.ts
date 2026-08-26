@@ -66,6 +66,30 @@ export function validateTaskGraph(
       }
       continue;
     }
+    if (task.kind === "verification_repair") {
+      if (
+        !task.verificationRepair ||
+        !task.verificationRepair.sourceGenerationId.trim() ||
+        !task.verificationRepair.finalVerificationTaskId.trim() ||
+        !task.verificationRepair.submissionId.trim() ||
+        !task.verificationRepair.reviewId.trim() ||
+        !task.verificationRepair.targetRevision.trim() ||
+        task.verificationRepair.categories.length === 0 ||
+        new Set(task.verificationRepair.categories).size !== task.verificationRepair.categories.length
+      ) {
+        issues.push({
+          code: "invalid_final_verification_task",
+          taskId: task.id,
+          message: `Verification repair task ${task.id} has invalid provenance.`,
+        });
+      }
+    } else if (task.verificationRepair !== undefined) {
+      issues.push({
+        code: "invalid_final_verification_task",
+        taskId: task.id,
+        message: `Implementation task ${task.id} cannot carry verification repair provenance.`,
+      });
+    }
     if (
       task.generationId !== undefined ||
       task.targetRevision !== undefined ||
@@ -154,6 +178,12 @@ export function applyTaskTransition(
   status: TaskStatus,
   patch: Partial<Omit<BuildTask, "id" | "status">> = {}
 ): BuildTask {
+  if (
+    task.kind === "verification_repair" &&
+    (Object.hasOwn(patch, "verificationRepair") || Object.hasOwn(patch, "kind"))
+  ) {
+    throw new Error("Verification repair provenance and kind are immutable.");
+  }
   if (isFinalVerificationTask(task)) {
     if (status !== "cancelled") {
       throw new Error(
