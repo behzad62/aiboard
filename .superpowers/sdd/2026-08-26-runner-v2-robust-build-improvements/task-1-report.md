@@ -1110,3 +1110,46 @@ Production/test commit: `edfa3483 runner-v2: revalidate evidence on scheduler re
 R2 is complete: no R2 finding remains unconfirmed or unresolved. The tracked
 worktree was clean before this report update; `progress.md` was not edited,
 and P2 remains untouched. The report update is committed separately below.
+
+## Final P1 exit-gate packaging
+
+From HEAD `6f61ef68`, the final P1 build refreshed only
+`public/aiboard-runner-v2.zip` and `public/aiboard-workbench-runner.zip`.
+The two archives were inspected before publication: each contains the current
+SQLite scheduler replay validator, the assigned-worker evidence invariant,
+the native factory wiring, and the maintained-LTS package manifest. The
+WorkBench archive contains the same files under its nested
+`aiboard-runner-v2/` prefix. Normalized archive source bytes match the current
+working-tree source for both scheduler files.
+
+Publication and artifact checks:
+
+```text
+npm run publish-downloads
+exit 0; only the two affected Runner V2 ZIPs changed
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+PASS (publication reproducibility, ZIP contents/manifests, source parity,
+     Node LTS policy, account/benchmark exports)
+
+npx tsx scripts/test-native-build-files.mts
+PASS native Build files
+
+npx tsx scripts/test-native-build-policy.mts
+PASS native Build policy
+```
+
+A second `npm run publish-downloads` was byte-stable. SHA-256 values before
+and after the second publish were identical:
+
+```text
+public/aiboard-runner-v2.zip
+C2549D749F74425E5C29BE6FF0A4B855D4DE9860A9738377F33C34FB77313199
+
+public/aiboard-workbench-runner.zip
+31A01E09CF471963DC5773D34E03373626CC3EE0F3F082867F8D11F87209C67A
+```
+
+No account-provider or benchmark archive was modified. The affected archive
+files and this packaging entry are committed in the final P1 gate commit;
+`progress.md` remains untouched and P2 was not started.
