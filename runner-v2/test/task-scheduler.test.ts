@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   TaskScheduler,
@@ -32,7 +33,26 @@ class DeferredDriver implements WorkerRuntimeDriver {
 
 test("scheduler bounds concurrency, respects dependencies, and releases guidance slots", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-"));
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const evidence = evidenceStore.record({
+    runId: "run_1",
+    taskId: "a",
+    actor: { role: "worker", id: "worker_a_1" },
+    fact: {
+      kind: "browser_screenshot",
+      label: "Task a evidence",
+      capturedAt: "2026-07-12T00:00:00.000Z",
+      screenshotArtifactHash: "a".repeat(64),
+      mediaType: "image/png",
+      byteLength: 16,
+    },
+    createdAt: "2026-07-12T00:00:00.000Z",
+    idempotencyKey: "task-a-evidence",
+    attempt: 1,
+  });
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    evidenceStore,
+  });
   const driver = new DeferredDriver();
   try {
     store.append(planEvent("run_1", [
@@ -79,7 +99,7 @@ test("scheduler bounds concurrency, respects dependencies, and releases guidance
       changeSetId: "changeset_a",
       criterionEvidenceLinks: [{
         criterionId: "ready",
-        evidenceId: "evidence_a",
+        evidenceId: evidence.id,
         artifactHashes: ["a".repeat(64)],
       }],
     });
@@ -89,6 +109,7 @@ test("scheduler bounds concurrency, respects dependencies, and releases guidance
     assert.equal(driver.assignments.at(-1)?.task.id, "c");
   } finally {
     store.close();
+    evidenceStore.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

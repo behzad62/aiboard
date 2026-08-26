@@ -53,7 +53,7 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     const evidence = evidenceStore.record({
       runId: "run_1",
       taskId,
-      actor: { role: "worker", id: `worker_${taskId}` },
+      actor: { role: "worker", id: `worker_${taskId}_1` },
       fact: {
         kind: "browser_screenshot",
         label: `${taskId} evidence`,
@@ -72,7 +72,7 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
   const integration = new ScriptedIntegration();
   try {
     for (let restart = 0; restart < 20; restart += 1) {
-      const store = new SqliteSchedulerStore(database);
+      const store = new SqliteSchedulerStore(database, { evidenceStore });
       const runtime = new BuildRuntime({
         runId: "run_1",
         store,
@@ -93,7 +93,7 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       }
     }
 
-    const recoveredStore = new SqliteSchedulerStore(database);
+    const recoveredStore = new SqliteSchedulerStore(database, { evidenceStore });
     const recovered = new BuildRuntime({
       runId: "run_1",
       store: recoveredStore,

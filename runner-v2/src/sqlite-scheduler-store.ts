@@ -8,10 +8,10 @@ import type {
   SchedulerActor,
   SchedulerEvent,
   SchedulerEventType,
+  SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
-  rebuildSchedulerProjection,
   reduceSchedulerEvent,
   validateSchedulerEvidenceEvent,
 } from "./scheduler-store.js";
@@ -29,6 +29,11 @@ interface EventRow {
 }
 
 export interface SqliteSchedulerStoreOptions {
+  /**
+   * Required whenever a run carries acceptance-evidence events. It may be
+   * omitted only for deterministic legacy runs that contain no such events;
+   * those events fail closed if this store is absent.
+   */
   evidenceStore?: EvidenceStore;
 }
 
@@ -62,6 +67,16 @@ export class SqliteSchedulerStore implements SchedulerStore {
   append(input: NewSchedulerEvent): SchedulerEvent {
     this.database.exec("BEGIN IMMEDIATE");
     try {
+      const priorRows = this.database
+        .prepare(
+          "SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence"
+        )
+        .all(input.runId) as unknown as EventRow[];
+      const priorEvents = priorRows.map(decode);
+      const priorProjection = replaySchedulerEvents(
+        priorEvents,
+        this.evidenceStore,
+      );
       const existing = this.database
         .prepare(
           "SELECT * FROM scheduler_events WHERE run_id = ? AND idempotency_key = ?"
@@ -91,19 +106,7 @@ export class SqliteSchedulerStore implements SchedulerStore {
         eventId: `sched_${randomUUID()}`,
         sequence: row.sequence,
       };
-      const priorRows = this.database
-        .prepare(
-          "SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence"
-        )
-        .all(input.runId) as unknown as EventRow[];
-      const priorEvents = priorRows.map(decode);
-      const priorProjection =
-        priorEvents.length > 0
-          ? rebuildSchedulerProjection(priorEvents)
-          : undefined;
-      if (this.evidenceStore) {
-        validateSchedulerEvidenceEvent(priorProjection, event, this.evidenceStore);
-      }
+      validateSchedulerEvent(priorProjection, event, this.evidenceStore);
       reduceSchedulerEvent(priorProjection, event);
       this.database
         .prepare(
@@ -131,18 +134,70 @@ export class SqliteSchedulerStore implements SchedulerStore {
   }
 
   readRun(runId: string, afterSequence = 0): SchedulerEvent[] {
-    return (
+    const events = (
       this.database
         .prepare(
-          "SELECT * FROM scheduler_events WHERE run_id = ? AND sequence > ? ORDER BY sequence"
+          "SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence"
         )
-        .all(runId, afterSequence) as unknown as EventRow[]
+        .all(runId) as unknown as EventRow[]
     ).map(decode);
+    replaySchedulerEvents(events, this.evidenceStore);
+    return events.filter((event) => event.sequence > afterSequence);
   }
 
   close(): void {
     this.database.close();
   }
+}
+
+function replaySchedulerEvents(
+  events: readonly SchedulerEvent[],
+  evidenceStore?: EvidenceStore,
+): SchedulerProjection | undefined {
+  let projection: SchedulerProjection | undefined;
+  for (const event of events) {
+    validateSchedulerEvent(projection, event, evidenceStore);
+    projection = reduceSchedulerEvent(projection, event);
+  }
+  return projection;
+}
+
+function validateSchedulerEvent(
+  projection: SchedulerProjection | undefined,
+  event: SchedulerEvent,
+  evidenceStore?: EvidenceStore,
+): void {
+  if (requiresAuthoritativeEvidenceStore(projection, event) && !evidenceStore) {
+    throw new Error(
+      "An authoritative evidence store is required for acceptance evidence events.",
+    );
+  }
+  if (evidenceStore) {
+    validateSchedulerEvidenceEvent(projection, event, evidenceStore);
+  }
+}
+
+function requiresAuthoritativeEvidenceStore(
+  projection: SchedulerProjection | undefined,
+  event: SchedulerEvent,
+): boolean {
+  if (!projection) return false;
+  if (
+    event.type !== "task.transitioned" &&
+    event.type !== "review.requested" &&
+    event.type !== "review.decided"
+  ) {
+    return false;
+  }
+  if (event.type === "task.transitioned" && event.payload.status !== "submitted") {
+    return false;
+  }
+  const taskId = event.payload.taskId;
+  return (
+    typeof taskId === "string" &&
+    taskId.length > 0 &&
+    projection.tasks[taskId]?.acceptanceCriteria !== undefined
+  );
 }
 
 function decode(row: EventRow): SchedulerEvent {

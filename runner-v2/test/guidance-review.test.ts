@@ -164,7 +164,11 @@ test("plan_tasks persists a versioned criterion set and rejects incomplete crite
       occurredAt: now(),
       actor: { role: "runner", id: "scheduler" },
       idempotencyKey: "task_a:assigned",
-      payload: { taskId: "task_a", status: "assigned", patch: { attempt: 1 } },
+      payload: {
+        taskId: "task_a",
+        status: "assigned",
+        patch: { attempt: 1, assignedWorkerId: "worker_1" },
+      },
     });
     const activeRevision = await invoke(registry, architectContext(), "revise_task", {
       taskId: "task_a",
@@ -334,8 +338,7 @@ test("guidance challenges require fresh evidence and only one challenge per vers
 });
 
 test("only Architect tools can approve, request integration, and complete", async () => {
-  await withStore(async (store) => {
-    const evidenceStore = new SqliteEvidenceStore(":memory:");
+  await withStore(async (store, evidenceStore) => {
     const artifactHash = "a".repeat(64);
     const evidence = evidenceStore.record({
       runId: "run_1",
@@ -447,15 +450,12 @@ test("only Architect tools can approve, request integration, and complete", asyn
     assert.equal(projection(store).status, "completed");
     assert.equal(projection(store).projectHandoff?.status, "selected");
     assert.equal(projection(store).projectHandoff?.choice, "keep_integration_branch");
-    evidenceStore.close();
   });
 });
 
 test("review_task requires complete criterion verdicts and evaluates rejected criteria", async () => {
-  await withStore(async (store) => {
-    const evidenceStore = new SqliteEvidenceStore(":memory:");
-    try {
-      const artifactHash = "a".repeat(64);
+  await withStore(async (store, evidenceStore) => {
+    const artifactHash = "a".repeat(64);
       const evidence = evidenceStore.record({
         runId: "run_1",
         taskId: "task_a",
@@ -566,9 +566,6 @@ test("review_task requires complete criterion verdicts and evaluates rejected cr
         review.criterionVerdicts?.map((verdict) => verdict.criterionId),
         ["behavior", "verification"]
       );
-    } finally {
-      evidenceStore.close();
-    }
   });
 });
 
@@ -613,8 +610,7 @@ test("legacy active runs block Architect review until their contract is upgraded
 });
 
 test("Architect review can atomically reconcile stale successor tasks", async () => {
-  await withStore(async (store) => {
-    const evidenceStore = new SqliteEvidenceStore(":memory:");
+  await withStore(async (store, evidenceStore) => {
     const artifactHash = "c".repeat(64);
     const evidence = evidenceStore.record({
       runId: "run_1",
@@ -721,7 +717,6 @@ test("Architect review can atomically reconcile stale successor tasks", async ()
     assert.equal(projection(store).tasks.task_b.status, "cancelled");
     assert.deepEqual(projection(store).tasks.task_c.dependencies, ["task_a"]);
     assert.equal(projection(store).planRevision, 2);
-    evidenceStore.close();
   });
 });
 
@@ -793,8 +788,7 @@ test("Architect can reconcile a stale plan during failure resolution", async () 
 });
 
 test("Architect can review a retried task without colliding with the prior attempt", async () => {
-  await withStore(async (store) => {
-    const evidenceStore = new SqliteEvidenceStore(":memory:");
+  await withStore(async (store, evidenceStore) => {
     const artifactHash1 = "a".repeat(64);
     const evidence1 = evidenceStore.record({
       runId: "run_1",
@@ -897,13 +891,29 @@ test("Architect can review a retried task without colliding with the prior attem
       projection(store).reviews.task_a.summary,
       "Attempt two includes the required evidence."
     );
-    evidenceStore.close();
   });
 });
 
 test("durable reducer rejects authority bypass events", async () => {
-  await withStore(async (store) => {
-    seedSubmittedTask(store);
+  await withStore(async (store, evidenceStore) => {
+    const artifactHash = "a".repeat(64);
+    const evidence = evidenceStore.record({
+      runId: "run_1",
+      taskId: "task_a",
+      actor: { role: "worker", id: "worker_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "authority bypass evidence",
+        capturedAt: now(),
+        screenshotArtifactHash: artifactHash,
+        mediaType: "image/png",
+        byteLength: 10,
+      },
+      createdAt: now(),
+      idempotencyKey: "authority-bypass-evidence",
+      attempt: 1,
+    });
+    seedSubmittedTask(store, evidence.id, artifactHash);
     assert.throws(
       () => store.append({
         runId: "run_1",
@@ -1035,14 +1045,21 @@ function transition(
 }
 
 async function withStore(
-  run: (store: SqliteSchedulerStore) => Promise<void>
+  run: (
+    store: SqliteSchedulerStore,
+    evidenceStore: SqliteEvidenceStore,
+  ) => Promise<void>
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "aiboard-guidance-review-"));
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const evidenceStore = new SqliteEvidenceStore(":memory:");
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    evidenceStore,
+  });
   try {
-    await run(store);
+    await run(store, evidenceStore);
   } finally {
     store.close();
+    evidenceStore.close();
     rmSync(root, { recursive: true, force: true });
   }
 }
