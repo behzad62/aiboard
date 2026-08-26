@@ -41,6 +41,13 @@ export type ArchitectActionReason =
       integrationRevision: string;
     }
   | {
+      type: "final_verification_review_required";
+      taskId: string;
+      generationId: string;
+      submissionId: string;
+      targetRevision: string;
+    }
+  | {
       type: "task_failure_resolution_required";
       taskId: string;
       attempt: number;
@@ -547,7 +554,58 @@ export class BuildRuntime {
     generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
   ): Promise<BuildStepResult> {
     if (generation.submission) {
-      return { status: "idle", action: "final_verification_awaiting_review" };
+      if (!generation.submissionResult) {
+        return { status: "idle", action: "final_verification_submission_unvalidated" };
+      }
+      if (generation.review?.status === "approved") {
+        return { status: "idle", action: "final_verification_approved" };
+      }
+      if (
+        generation.review?.status === "repair_required" ||
+        generation.review?.status === "rejected"
+      ) {
+        return { status: "idle", action: "final_verification_repair_required" };
+      }
+      const reviewId = `final-verification-review:${generation.generationId}`;
+      if (!generation.review) {
+        this.store.append({
+          runId: this.runId,
+          type: "final_verification.review_requested",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `${generation.generationId}:review-request`,
+          payload: {
+            taskId: generation.taskId,
+            generationId: generation.generationId,
+            targetRevision: generation.targetRevision,
+            submissionId: generation.submission.submissionId,
+            reviewId,
+            attempt: generation.submission.attempt,
+          },
+        });
+      }
+      const current = this.projection().finalVerification?.current;
+      if (!current?.submission || current.review?.status !== "requested") {
+        throw new Error("Final verification review request was not durably recorded.");
+      }
+      await this.runArchitect({
+        type: "final_verification_review_required",
+        taskId: current.taskId,
+        generationId: current.generationId,
+        submissionId: current.submission.submissionId,
+        targetRevision: current.targetRevision,
+      }, this.projection());
+      const reviewed = this.projection().finalVerification?.current;
+      if (
+        reviewed?.generationId !== current.generationId ||
+        reviewed.review?.status === "requested" ||
+        !reviewed.review
+      ) {
+        throw new Error(
+          "Architect returned from final_verification_review_required without a typed action.",
+        );
+      }
+      return this.afterArchitect("final_verification_review_required");
     }
     if (generation.completedChecks?.some((check) => !check.green)) {
       return { status: "idle", action: "final_verification_non_green" };
@@ -698,6 +756,8 @@ export class BuildRuntime {
         projection.planRevision > 0,
       finalVerificationPlanAvailable:
         reason.type === "final_verification_plan_required",
+      finalVerificationReviewAvailable:
+        reason.type === "final_verification_review_required",
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {
       tools.register(tool);

@@ -761,3 +761,104 @@ passed (normal Git LF-to-CRLF warnings only)
 
 P2.4B2a implementation, tests, and report are complete. Architect review,
 repair-task creation, the completion gate, and P2.6 cleanup remain deferred.
+
+## P2.4B2b Architect final-verification review
+
+Added the semantic review boundary for a fully executed current verification
+generation. Build runtime now creates one runner-owned review request only
+after the validated P2.3 submission result exists, then invokes the Architect
+with `final_verification_review_required`. Only that action exposes the typed
+`review_final_verification` lifecycle tool. Generic prose, no-op returns, or an
+ordinary task-review action cannot satisfy the generation-specific postcondition.
+
+The Architect context already carries the exact current generation projection;
+focused coverage now proves that it includes generation ID, exact target
+integration revision, completed category facts, repository inspections, and
+the immutable submission result. The native Architect prompt directs semantic
+review of that exact state and its persisted evidence.
+
+`review_final_verification` requires current task/generation/submission/revision
+identity, a summary, and exactly one category verdict/rationale/evidence list
+for build, tests, runtime smoke, and browser. Mechanically required categories
+must be green and have durable evidence; explicitly N/A categories retain their
+inspection rationale. Cited evidence must exactly match its submitted category
+and resolve in the authoritative EvidenceStore. The runner validates these
+facts mechanically while the Architect remains the authority for the semantic
+`approved` or `repair_required` verdict and rationale.
+
+The structured decision is persisted in the existing P2.4A review event and
+projection, including canonical category reviews, target revision, summary,
+and exact failed categories. Semantic category reordering is idempotent across
+SQLite reopen; a conflicting decision is rejected. Integration advancement
+invalidates the generation and preserves the obsolete review only in history,
+where it cannot authorize later lifecycle work. `repair_required` records the
+next packet's exact input but creates no repair task. No `complete_run` gate was
+implemented.
+
+### P2.4B2b TDD and fault evidence
+
+The focused review file was added before production changes and first failed
+0/6 at clean HEAD `66a17437`:
+
+```text
+npx tsx --test runner-v2/test/final-verification-review.test.ts
+6 tests, 0 passed, 6 failed
+no-op case: Missing expected rejection
+other cases: Tool review_final_verification is not registered.
+```
+
+Coverage was then expanded to eight cases for explicit missing-category and
+exact Architect-context assertions. A semantic category-reordering assertion
+was also added red-first: it failed 0/1 after reopen because the reordered
+equivalent decision was treated as different, then passed after canonicalizing
+category order.
+
+Two required fault-only injections were made and restored:
+
+- Removing both the generic lifecycle sequence guard and the generation-
+  specific review postcondition made the prose/no-op case fail 0/1 with
+  `Missing expected rejection`.
+- Disabling integration invalidation plus the tool/reducer revision-currency
+  guards made the stale-review case fail 0/1 because the obsolete review was
+  accepted (`isError: false`).
+
+The restored focused suite passed 8/8.
+
+### P2.4B2b validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-review.test.ts
+8/8 passed
+
+npx tsx --test runner-v2/test/final-verification-review.test.ts runner-v2/test/final-verification-orchestration.test.ts runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-scheduler.test.ts runner-v2/test/scheduler-store.test.ts runner-v2/test/build-runtime.test.ts runner-v2/test/native-architect-runtime.test.ts runner-v2/test/agent-loop.test.ts runner-v2/test/native-build-manager.test.ts runner-v2/test/recovery.test.ts runner-v2/test/architect-tools.test.ts
+120/120 passed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+npx eslint runner-v2/src/agent-contracts.ts runner-v2/src/agent-loop.ts runner-v2/src/architect-tools.ts runner-v2/src/build-runtime.ts runner-v2/src/native-architect-runtime.ts runner-v2/src/scheduler-store.ts runner-v2/src/sqlite-scheduler-store.ts runner-v2/test/final-verification-review.test.ts runner-v2/test/final-verification-execution.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+### P2.4B2b requirement audit
+
+| P2.4B2b requirement | Evidence | Result |
+|---|---|---|
+| Exact current submission/facts in Architect context | Focused context assertions and existing protected task-graph projection | Complete |
+| Typed review tool only after complete submission | Build review reason, reason-scoped registration, unvalidated-submission stop | Complete |
+| Current singleton/revision and four-category validation | Tool/reducer identity, completeness, and stale fault proof | Complete |
+| Category semantic rationales reference durable evidence | Structured verdicts, exact per-category IDs, authoritative store validation | Complete |
+| Prose/ordinary acceptance cannot approve | Generic plus review-specific postconditions and prose fault proof | Complete |
+| Missing/unknown/non-green/conflicting decisions reject | Focused negative cases and reducer/store validation | Complete |
+| Non-approval persists exact repair requirement | Repair decision projection with failed categories; no new tasks assertion | Complete |
+| Restart/replay deduplicates one current decision | SQLite reopen, semantic reorder replay, one-event assertion | Complete |
+| Obsolete review never authorizes current state | Integration invalidation and stale authorization fault proof | Complete |
+| Later lifecycle work remains out of scope | No repair creation or completion gate changes | Complete |
+
+## Packet status
+
+P2.4B2b Architect review is complete. Repair-task creation and the P2.5
+completion gate remain intentionally deferred.

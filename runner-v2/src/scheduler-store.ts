@@ -7,6 +7,7 @@ import {
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import {
   planFinalVerification,
+  type FinalVerificationCategory,
   type FinalVerificationPlan,
 } from "./final-verification-contracts.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
@@ -190,7 +191,23 @@ export interface FinalVerificationReviewReference {
   generationId: string;
   targetRevision: string;
   attempt: number;
-  status: "requested" | "approved" | "rejected";
+  status: "requested" | "approved" | "repair_required" | "rejected";
+  decision?: FinalVerificationReviewDecisionProjection;
+}
+
+export interface FinalVerificationCategoryReviewProjection {
+  category: FinalVerificationCategory;
+  verdict: "approved" | "repair_required";
+  rationale: string;
+  evidenceIds: string[];
+}
+
+export interface FinalVerificationReviewDecisionProjection {
+  decision: "approved" | "repair_required";
+  summary: string;
+  targetRevision: string;
+  categoryReviews: FinalVerificationCategoryReviewProjection[];
+  failedCategories: FinalVerificationCategory[];
 }
 
 export interface FinalVerificationGenerationProjection {
@@ -278,6 +295,44 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (
+    event.type === "final_verification.review_decided" &&
+    Array.isArray(event.payload.categoryReviews)
+  ) {
+    const current = projection.finalVerification?.current;
+    if (!current?.submissionResult || current.submissionResult.green !== true) {
+      throw new Error("Final verification review requires a durable submission result.");
+    }
+    const evidenceIds = event.payload.categoryReviews.flatMap((candidate) => {
+      if (!isRecord(candidate)) {
+        throw new Error("Final verification category review is invalid.");
+      }
+      const category = requiredString(candidate, "category");
+      const cited = stringArray(candidate, "evidenceIds");
+      const submitted = current.submissionResult!.checks.find(
+        (check) => check.category === category,
+      );
+      if (
+        !submitted ||
+        !submitted.green ||
+        !sameValue([...submitted.evidenceIds].sort(), [...new Set(cited)].sort())
+      ) {
+        throw new Error(
+          `Final verification category ${category} review conflicts with submitted evidence.`,
+        );
+      }
+      return cited;
+    });
+    const records = evidenceStore.getByIds({
+      runId: event.runId,
+      taskId: current.taskId,
+      ids: [...new Set(evidenceIds)],
+    });
+    if (records.length !== new Set(evidenceIds).size) {
+      throw new Error("Final verification review cites missing or foreign evidence.");
+    }
+    return;
+  }
   if (event.type === "task.transitioned" && event.payload.status === "submitted") {
     const taskId = requiredString(event.payload, "taskId");
     const task = projection.tasks[taskId];
@@ -1497,7 +1552,7 @@ function recordFinalVerificationReviewDecision(
 ): void {
   const current = requireCurrentFinalVerification(projection, payload);
   const decision = requiredString(payload, "decision");
-  if (decision !== "approved" && decision !== "rejected") {
+  if (decision !== "approved" && decision !== "repair_required" && decision !== "rejected") {
     throw new Error(`Final verification review decision ${decision} is invalid.`);
   }
   const review = parseFinalVerificationReview(payload, decision);
@@ -1508,10 +1563,96 @@ function recordFinalVerificationReviewDecision(
   if (!current.review || !sameFinalVerificationReviewIdentity(current.review, review)) {
     throw new Error("Final verification review decision is stale or foreign.");
   }
+  const decisionProjection = payload.categoryReviews === undefined
+    ? undefined
+    : parseFinalVerificationReviewDecision(payload, current);
   if (current.review.status !== "requested" && current.review.status !== review.status) {
     throw new Error("Final verification review was already decided differently.");
   }
+  if (
+    current.review.status === review.status &&
+    !sameValue(current.review.decision, decisionProjection)
+  ) {
+    throw new Error("Final verification review was already decided with different semantics.");
+  }
   current.review.status = review.status;
+  if (decisionProjection) current.review.decision = decisionProjection;
+}
+
+function parseFinalVerificationReviewDecision(
+  payload: Record<string, unknown>,
+  current: FinalVerificationGenerationProjection,
+): FinalVerificationReviewDecisionProjection {
+  if (!current.submissionResult || current.submissionResult.green !== true) {
+    throw new Error("Structured final verification review requires a green submission result.");
+  }
+  const decision = requiredString(payload, "decision");
+  if (decision !== "approved" && decision !== "repair_required") {
+    throw new Error("Structured final verification review decision is invalid.");
+  }
+  const summary = requiredString(payload, "summary");
+  if (!Array.isArray(payload.categoryReviews)) {
+    throw new Error("Final verification review requires category reviews.");
+  }
+  const categoryReviews = payload.categoryReviews.map((candidate) => {
+    if (!isRecord(candidate)) {
+      throw new Error("Final verification category review is invalid.");
+    }
+    const category = requiredString(candidate, "category") as FinalVerificationCategory;
+    const verdict = requiredString(candidate, "verdict");
+    if (
+      !current.plan.checks.some((check) => check.category === category) ||
+      (verdict !== "approved" && verdict !== "repair_required")
+    ) {
+      throw new Error(`Final verification category review ${category} is invalid.`);
+    }
+    return {
+      category,
+      verdict,
+      rationale: requiredString(candidate, "rationale"),
+      evidenceIds: stringArray(candidate, "evidenceIds"),
+    } as FinalVerificationCategoryReviewProjection;
+  });
+  if (
+    categoryReviews.length !== current.plan.checks.length ||
+    new Set(categoryReviews.map((review) => review.category)).size !== current.plan.checks.length
+  ) {
+    throw new Error("Final verification review must represent every category exactly once.");
+  }
+  const failedCategories = categoryReviews
+    .filter((review) => review.verdict === "repair_required")
+    .map((review) => review.category);
+  if (
+    (decision === "approved" && failedCategories.length > 0) ||
+    (decision === "repair_required" && failedCategories.length === 0)
+  ) {
+    throw new Error("Final verification review decision conflicts with category verdicts.");
+  }
+  for (const review of categoryReviews) {
+    const submitted = current.submissionResult.checks.find(
+      (check) => check.category === review.category,
+    );
+    if (
+      !submitted ||
+      !submitted.green ||
+      (submitted.status === "required" && submitted.evidenceIds.length === 0) ||
+      !sameValue([...submitted.evidenceIds].sort(), [...new Set(review.evidenceIds)].sort())
+    ) {
+      throw new Error(
+        `Final verification category ${review.category} review conflicts with submitted evidence.`,
+      );
+    }
+  }
+  return {
+    decision,
+    summary,
+    targetRevision: current.targetRevision,
+    categoryReviews: categoryReviews.map((review) => ({
+      ...review,
+      evidenceIds: [...review.evidenceIds],
+    })),
+    failedCategories,
+  };
 }
 
 function requireCurrentFinalVerification(
@@ -1763,7 +1904,16 @@ function cloneFinalVerificationGeneration(
     ...(generation.submissionResult
       ? { submissionResult: cloneJson(generation.submissionResult) }
       : {}),
-    ...(generation.review ? { review: { ...generation.review } } : {}),
+    ...(generation.review
+      ? {
+          review: {
+            ...generation.review,
+            ...(generation.review.decision
+              ? { decision: cloneJson(generation.review.decision) }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 

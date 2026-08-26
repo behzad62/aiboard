@@ -30,6 +30,7 @@ import {
   planFinalVerification,
   validateFinalVerificationPlan,
   type FinalVerificationPlan,
+  type FinalVerificationCategory,
 } from "./final-verification-contracts.js";
 
 export interface ArchitectToolsOptions {
@@ -38,6 +39,7 @@ export interface ArchitectToolsOptions {
   runPolicy?: NativeBuildRunPolicy;
   planOnlyCompletionAvailable?: boolean;
   finalVerificationPlanAvailable?: boolean;
+  finalVerificationReviewAvailable?: boolean;
   evidenceStore?: EvidenceStore;
 }
 
@@ -89,6 +91,22 @@ interface ReviewTaskInput {
 interface TaskIdInput { taskId: string }
 interface CompleteRunInput { summary: string }
 interface PlanFinalVerificationInput { plan: FinalVerificationPlan }
+interface FinalVerificationCategoryReviewInput {
+  category: FinalVerificationCategory;
+  verdict: "approved" | "repair_required";
+  rationale: string;
+  evidenceIds: string[];
+}
+interface ReviewFinalVerificationInput {
+  taskId: string;
+  generationId: string;
+  targetRevision: string;
+  submissionId: string;
+  attempt: number;
+  decision: "approved" | "repair_required";
+  summary: string;
+  categoryReviews: FinalVerificationCategoryReviewInput[];
+}
 
 export function createArchitectTools(
   options: ArchitectToolsOptions
@@ -103,18 +121,260 @@ export function createArchitectTools(
   const planning = options.finalVerificationPlanAvailable
     ? [...core, planFinalVerificationTool(options.store, clock)]
     : core;
+  const verification = options.finalVerificationReviewAvailable
+    ? [...planning, reviewFinalVerificationTool(
+        options.store,
+        clock,
+        options.evidenceStore,
+      )]
+    : planning;
   if (options.runPolicy === "plan_only") {
     return options.planOnlyCompletionAvailable
-      ? [...planning, completeRunTool(options.store, clock, "plan_only")]
-      : planning;
+      ? [...verification, completeRunTool(options.store, clock, "plan_only")]
+      : verification;
   }
   return [
-    ...planning,
+    ...verification,
     reconcilePlanTool(options.store, clock),
     reviewTaskTool(options.store, clock, options.evidenceStore),
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
+}
+
+function reviewFinalVerificationTool(
+  store: SchedulerStore,
+  clock: () => string,
+  evidenceStore?: EvidenceStore,
+): NativeTool<ReviewFinalVerificationInput> {
+  return lifecycleTool({
+    name: "review_final_verification",
+    description: "Record the Architect's category-level semantic decision for the current verified integration revision",
+    schema: objectSchema({
+      taskId: { type: "string", minLength: 1 },
+      generationId: { type: "string", minLength: 1 },
+      targetRevision: { type: "string", minLength: 1 },
+      submissionId: { type: "string", minLength: 1 },
+      attempt: { type: "integer", minimum: 1 },
+      decision: { type: "string", enum: ["approved", "repair_required"] },
+      summary: { type: "string", minLength: 1 },
+      categoryReviews: {
+        type: "array",
+        minItems: FINAL_VERIFICATION_CATEGORIES.length,
+        maxItems: FINAL_VERIFICATION_CATEGORIES.length,
+        items: objectSchema({
+          category: { type: "string", enum: [...FINAL_VERIFICATION_CATEGORIES] },
+          verdict: { type: "string", enum: ["approved", "repair_required"] },
+          rationale: { type: "string", minLength: 1 },
+          evidenceIds: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+          },
+        }, ["category", "verdict", "rationale", "evidenceIds"]),
+      },
+    }, [
+      "taskId",
+      "generationId",
+      "targetRevision",
+      "submissionId",
+      "attempt",
+      "decision",
+      "summary",
+      "categoryReviews",
+    ]),
+    validate: validateFinalVerificationReview,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const current = projection.finalVerification?.current;
+      if (
+        !current ||
+        current.taskId !== input.taskId ||
+        current.generationId !== input.generationId ||
+        current.targetRevision !== input.targetRevision ||
+        current.targetRevision !== projection.integrationRevision
+      ) {
+        return errorOutput(
+          "stale_final_verification_review",
+          "Final verification review must reference the current generation and integration revision.",
+        );
+      }
+      if (
+        !current.submission ||
+        current.submission.submissionId !== input.submissionId ||
+        current.submission.attempt !== input.attempt ||
+        !current.submissionResult ||
+        current.submissionResult.green !== true
+      ) {
+        return errorOutput(
+          "final_verification_submission_not_green",
+          "Final verification review requires the current fully executed mechanically green submission.",
+        );
+      }
+      if (!current.review || current.review.status !== "requested") {
+        if (
+          current.review?.status === input.decision &&
+          current.review.decision &&
+          sameSemanticReview(current.review.decision, input)
+        ) {
+          return {
+            content: [{ type: "json", value: current.review }],
+            isError: false,
+            lifecycle: {
+              type: "architect_action",
+              action: "final_verification_review_decided",
+              referenceId: input.generationId,
+            },
+          };
+        }
+        return errorOutput(
+          "final_verification_review_unavailable",
+          "Final verification review is not currently requested or was already decided differently.",
+        );
+      }
+      const checks = new Map(
+        current.submissionResult.checks.map((check) => [check.category, check]),
+      );
+      for (const review of input.categoryReviews) {
+        const check = checks.get(review.category);
+        if (!check || !check.green) {
+          return errorOutput(
+            "final_verification_check_not_green",
+            `Final verification category ${review.category} is not mechanically green.`,
+          );
+        }
+        const expected = [...check.evidenceIds].sort();
+        const cited = [...new Set(review.evidenceIds)].sort();
+        if (check.status === "required" && expected.length === 0) {
+          return errorOutput(
+            "missing_final_verification_evidence",
+            `Required final verification category ${review.category} has no persisted evidence.`,
+          );
+        }
+        if (JSON.stringify(expected) !== JSON.stringify(cited)) {
+          return errorOutput(
+            "invalid_final_verification_evidence",
+            `Final verification category ${review.category} cites unknown or incomplete evidence.`,
+          );
+        }
+      }
+      const evidenceIds = input.categoryReviews.flatMap((review) => review.evidenceIds);
+      if (evidenceIds.length > 0) {
+        if (!evidenceStore) {
+          return errorOutput("evidence_store_required", "Final verification review requires the durable evidence store.");
+        }
+        const records = evidenceStore.getByIds({
+          runId: context.runId,
+          taskId: current.taskId,
+          ids: [...new Set(evidenceIds)],
+        });
+        if (records.length !== new Set(evidenceIds).size) {
+          return errorOutput(
+            "invalid_final_verification_evidence",
+            "Final verification review cites missing or foreign evidence.",
+          );
+        }
+      }
+      return appendFinalVerificationReview(store, clock, context, input);
+    },
+  });
+}
+
+function appendFinalVerificationReview(
+  store: SchedulerStore,
+  clock: () => string,
+  context: ToolExecutionContext,
+  input: ReviewFinalVerificationInput,
+): ToolExecutionOutput {
+  return appendEvent(store, {
+    runId: context.runId,
+    type: "final_verification.review_decided",
+    occurredAt: clock(),
+    actor: { role: "architect", id: context.actor.id },
+    idempotencyKey: `final-verification-review:${input.generationId}`,
+    payload: {
+      ...input,
+      reviewId: `final-verification-review:${input.generationId}`,
+      categoryReviews: input.categoryReviews.map((review) => ({
+        ...review,
+        evidenceIds: [...review.evidenceIds],
+      })),
+    },
+  }, {
+    type: "architect_action",
+    action: "final_verification_review_decided",
+    referenceId: input.generationId,
+  });
+}
+
+function validateFinalVerificationReview(
+  input: unknown,
+): ValidationResult<ReviewFinalVerificationInput> {
+  return validateObject(input, (value) => {
+    if (
+      !nonEmpty(value.taskId) ||
+      !nonEmpty(value.generationId) ||
+      !nonEmpty(value.targetRevision) ||
+      !nonEmpty(value.submissionId) ||
+      !positiveInteger(value.attempt) ||
+      (value.decision !== "approved" && value.decision !== "repair_required") ||
+      !nonEmpty(value.summary) ||
+      !Array.isArray(value.categoryReviews)
+    ) return null;
+    const categoryReviews: FinalVerificationCategoryReviewInput[] = [];
+    for (const candidate of value.categoryReviews) {
+      if (!isRecord(candidate)) return null;
+      if (!FINAL_VERIFICATION_CATEGORIES.includes(candidate.category as FinalVerificationCategory)) return null;
+      if (candidate.verdict !== "approved" && candidate.verdict !== "repair_required") return null;
+      if (!nonEmpty(candidate.rationale)) return null;
+      const evidenceIds = stringList(candidate.evidenceIds);
+      if (!evidenceIds || new Set(evidenceIds).size !== evidenceIds.length) return null;
+      categoryReviews.push({
+        category: candidate.category as FinalVerificationCategory,
+        verdict: candidate.verdict,
+        rationale: candidate.rationale,
+        evidenceIds,
+      });
+    }
+    if (
+      categoryReviews.length !== FINAL_VERIFICATION_CATEGORIES.length ||
+      new Set(categoryReviews.map((review) => review.category)).size !== FINAL_VERIFICATION_CATEGORIES.length
+    ) return null;
+    const reviewsByCategory = new Map(
+      categoryReviews.map((review) => [review.category, review]),
+    );
+    const canonicalCategoryReviews = FINAL_VERIFICATION_CATEGORIES.map(
+      (category) => reviewsByCategory.get(category)!,
+    );
+    const repairCount = canonicalCategoryReviews.filter(
+      (review) => review.verdict === "repair_required",
+    ).length;
+    if (
+      (value.decision === "approved" && repairCount > 0) ||
+      (value.decision === "repair_required" && repairCount === 0)
+    ) return null;
+    return {
+      taskId: value.taskId,
+      generationId: value.generationId,
+      targetRevision: value.targetRevision,
+      submissionId: value.submissionId,
+      attempt: value.attempt,
+      decision: value.decision,
+      summary: value.summary,
+      categoryReviews: canonicalCategoryReviews,
+    };
+  }, "current final verification identity, decision, summary, and exactly one valid review per category are required");
+}
+
+function sameSemanticReview(
+  decision: import("./scheduler-store.js").FinalVerificationReviewDecisionProjection,
+  input: ReviewFinalVerificationInput,
+): boolean {
+  return decision.decision === input.decision &&
+    decision.summary === input.summary &&
+    decision.targetRevision === input.targetRevision &&
+    JSON.stringify(decision.categoryReviews) === JSON.stringify(input.categoryReviews);
 }
 
 function planFinalVerificationTool(

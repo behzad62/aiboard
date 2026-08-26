@@ -155,6 +155,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
           "When a legacy in-flight run requires an acceptance-contract upgrade, record criteria for every non-cancelled task with upgrade_acceptance_contract before reviewing or completing work.",
           "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
+          "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category. Require repair when the evidence does not support approval.",
         ].join("\n"),
       },
     ];

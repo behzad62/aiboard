@@ -226,12 +226,16 @@ function requiresAuthoritativeEvidenceStore(
   if (
     event.type !== "task.transitioned" &&
     event.type !== "review.requested" &&
-    event.type !== "review.decided"
+    event.type !== "review.decided" &&
+    event.type !== "final_verification.review_decided"
   ) {
     return false;
   }
   if (event.type === "task.transitioned" && event.payload.status !== "submitted") {
     return false;
+  }
+  if (event.type === "final_verification.review_decided") {
+    return Array.isArray(event.payload.categoryReviews);
   }
   const taskId = event.payload.taskId;
   return (

@@ -73,9 +73,21 @@ test("restart reuses completed checks and executes only pending categories befor
       1,
     );
 
-    assert.equal((await runtime.step()).action, "final_verification_awaiting_review");
+    await assert.rejects(
+      () => runtime.step(),
+      /final_verification_review_required.*typed action/i,
+    );
+    assert.equal(
+      runtime.projection().finalVerification?.current?.review?.status,
+      "requested",
+    );
     assert.deepEqual(calls, ["build", "tests", "runtime_smoke", "browser"]);
     assert.equal(workerCalls, 0);
+    assert.equal(
+      fixture.store.readRun(RUN_ID)
+        .filter((event) => event.type === "final_verification.submitted").length,
+      1,
+    );
   } finally {
     fixture.store.close();
     fixture.evidence.close();
