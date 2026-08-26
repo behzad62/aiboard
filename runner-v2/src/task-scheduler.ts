@@ -3,7 +3,7 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
-import type { BuildTask } from "./task-contracts.js";
+import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
 
@@ -117,6 +117,7 @@ export class TaskScheduler {
 
       for (const task of Object.values(projection.tasks)) {
         if (this.active.size >= this.maxConcurrency) break;
+        if (isFinalVerificationTask(task)) continue;
         if (
           (task.status === "assigned" || task.status === "running") &&
           !this.active.has(task.id)

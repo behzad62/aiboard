@@ -96,6 +96,24 @@ export class SqliteSchedulerStore implements SchedulerStore {
         this.database.exec("COMMIT");
         return event;
       }
+      if (
+        input.type === "final_verification.generation_created" &&
+        priorProjection?.finalVerification?.current
+      ) {
+        const current = priorProjection.finalVerification.current;
+        if (sameGenerationPayload(input.payload, current)) {
+          const generationEvent = priorEvents.find(
+            (candidate) =>
+              candidate.type === "final_verification.generation_created" &&
+              sameGenerationPayload(candidate.payload, current) &&
+              JSON.stringify(candidate.actor) === JSON.stringify(input.actor),
+          );
+          if (generationEvent) {
+            this.database.exec("COMMIT");
+            return generationEvent;
+          }
+        }
+      }
       const row = this.database
         .prepare(
           "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM scheduler_events WHERE run_id = ?"
@@ -148,6 +166,29 @@ export class SqliteSchedulerStore implements SchedulerStore {
   close(): void {
     this.database.close();
   }
+}
+
+function sameGenerationPayload(
+  payload: Record<string, unknown>,
+  current: NonNullable<NonNullable<SchedulerProjection["finalVerification"]>["current"]>,
+): boolean {
+  return payload.taskId === current.taskId &&
+    payload.generationId === current.generationId &&
+    payload.targetRevision === current.targetRevision &&
+    payload.planVersion === current.planVersion &&
+    canonicalJson(payload.plan) === canonicalJson(current.plan);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
 }
 
 function replaySchedulerEvents(

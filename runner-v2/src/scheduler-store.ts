@@ -1,9 +1,14 @@
-import type {
-  BuildTask,
-  PlanReconciliation,
-  PlanTaskUpdate,
+import {
+  isFinalVerificationTask,
+  type BuildTask,
+  type PlanReconciliation,
+  type PlanTaskUpdate,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
+import {
+  planFinalVerification,
+  type FinalVerificationPlan,
+} from "./final-verification-contracts.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import {
   validateCriterionEvidenceLinks,
@@ -50,7 +55,12 @@ export type SchedulerEventType =
   | "architect.handoff_required"
   | "architect.handoff_selected"
   | "acceptance_contract.upgrade_required"
-  | "acceptance_contract.upgraded";
+  | "acceptance_contract.upgraded"
+  | "integration.revision_advanced"
+  | "final_verification.generation_created"
+  | "final_verification.submitted"
+  | "final_verification.review_requested"
+  | "final_verification.review_decided";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -161,6 +171,39 @@ export interface ProjectHandoffProjection {
   projectRevision?: string;
 }
 
+export interface FinalVerificationSubmissionReference {
+  submissionId: string;
+  generationId: string;
+  targetRevision: string;
+  attempt: number;
+}
+
+export interface FinalVerificationReviewReference {
+  reviewId: string;
+  submissionId: string;
+  generationId: string;
+  targetRevision: string;
+  attempt: number;
+  status: "requested" | "approved" | "rejected";
+}
+
+export interface FinalVerificationGenerationProjection {
+  taskId: string;
+  generationId: string;
+  targetRevision: string;
+  planVersion: number;
+  plan: FinalVerificationPlan;
+  state: "current" | "invalidated";
+  invalidatedByRevision?: string;
+  submission?: FinalVerificationSubmissionReference;
+  review?: FinalVerificationReviewReference;
+}
+
+export interface FinalVerificationProjection {
+  current?: FinalVerificationGenerationProjection;
+  history: FinalVerificationGenerationProjection[];
+}
+
 export interface SchedulerProjection {
   runId: string;
   runPolicy?: NativeBuildRunPolicy;
@@ -188,6 +231,7 @@ export interface SchedulerProjection {
   reviewHistory?: Record<string, ReviewProjection[]>;
   runtime: RuntimeProjection;
   integrationRevision?: string;
+  finalVerification?: FinalVerificationProjection;
   projectHandoff?: ProjectHandoffProjection;
   lastSequence: number;
 }
@@ -494,6 +538,9 @@ export function reduceSchedulerEvent(
     reviews: { ...current.reviews },
     submissionHistory: cloneSubmissionHistory(current.submissionHistory),
     reviewHistory: cloneReviewHistory(current.reviewHistory),
+    ...(current.finalVerification
+      ? { finalVerification: cloneFinalVerificationProjection(current.finalVerification) }
+      : {}),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -588,6 +635,45 @@ export function reduceSchedulerEvent(
       applyPlanReconciliation(next, parsePlanReconciliation(event.payload));
       break;
     }
+    case "integration.revision_advanced": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may advance the integration revision.");
+      }
+      advanceIntegrationRevision(
+        next,
+        requiredString(event.payload, "integrationRevision"),
+        event.payload.previousIntegrationRevision,
+      );
+      break;
+    }
+    case "final_verification.generation_created": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may create a final verification generation.");
+      }
+      createFinalVerificationGeneration(next, event.payload);
+      break;
+    }
+    case "final_verification.submitted": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may submit final verification.");
+      }
+      recordFinalVerificationSubmission(next, event.payload);
+      break;
+    }
+    case "final_verification.review_requested": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may request final verification review.");
+      }
+      recordFinalVerificationReviewRequest(next, event.payload);
+      break;
+    }
+    case "final_verification.review_decided": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may decide final verification review.");
+      }
+      recordFinalVerificationReviewDecision(next, event.payload);
+      break;
+    }
     case "task.revised": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
@@ -595,6 +681,9 @@ export function reduceSchedulerEvent(
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
+      if (isFinalVerificationTask(task)) {
+        throw new Error("Kernel-owned final verification task metadata is immutable.");
+      }
       if (
         task.status !== "planned" &&
         task.status !== "failed" &&
@@ -732,7 +821,9 @@ export function reduceSchedulerEvent(
       }
       if (status === "integrated") {
         const integrationRevision = next.tasks[taskId].integrationRevision;
-        if (integrationRevision) next.integrationRevision = integrationRevision;
+        if (integrationRevision) {
+          advanceIntegrationRevision(next, integrationRevision);
+        }
       }
       break;
     }
@@ -1193,6 +1284,346 @@ export function reduceSchedulerEvent(
   return next;
 }
 
+function advanceIntegrationRevision(
+  projection: SchedulerProjection,
+  integrationRevision: string,
+  previousIntegrationRevision?: unknown,
+): void {
+  if (!integrationRevision.trim()) {
+    throw new Error("Integration revision must be non-empty.");
+  }
+  if (
+    previousIntegrationRevision !== undefined &&
+    (typeof previousIntegrationRevision !== "string" ||
+      !previousIntegrationRevision.trim())
+  ) {
+    throw new Error("Previous integration revision is invalid.");
+  }
+  if (
+    typeof previousIntegrationRevision === "string" &&
+    projection.integrationRevision !== previousIntegrationRevision
+  ) {
+    throw new Error(
+      `Integration revision advanced from ${projection.integrationRevision ?? "none"}, not ${previousIntegrationRevision}.`,
+    );
+  }
+  if (projection.integrationRevision === integrationRevision) return;
+
+  const current = projection.finalVerification?.current;
+  if (current) {
+    projection.finalVerification = {
+      history: [
+        ...(projection.finalVerification?.history ?? []),
+        {
+          ...cloneFinalVerificationGeneration(current),
+          state: "invalidated",
+          invalidatedByRevision: integrationRevision,
+        },
+      ],
+    };
+  }
+  projection.integrationRevision = integrationRevision;
+}
+
+function createFinalVerificationGeneration(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const generation = parseFinalVerificationGeneration(payload);
+  if (!projection.integrationRevision) {
+    throw new Error("Final verification requires a canonical integration revision.");
+  }
+  if (generation.targetRevision !== projection.integrationRevision) {
+    throw new Error(
+      `Final verification generation targets stale integration revision ${generation.targetRevision}.`,
+    );
+  }
+  const existing = projection.finalVerification?.current;
+  if (existing) {
+    if (sameFinalVerificationGeneration(existing, generation)) return;
+    throw new Error("A conflicting current final verification generation already exists.");
+  }
+  if (
+    projection.finalVerification?.history.some(
+      (entry) => entry.generationId === generation.generationId,
+    )
+  ) {
+    throw new Error("An invalidated final verification generation cannot be reactivated.");
+  }
+  if (projection.tasks[generation.taskId]) {
+    throw new Error(`Final verification task ${generation.taskId} already exists.`);
+  }
+
+  const task: BuildTask = {
+    id: generation.taskId,
+    kind: "final_verification",
+    objective: "Verify the canonical integrated revision.",
+    dependencies: [],
+    status: "planned",
+    requiredCapabilities: ["verification"],
+    attempt: 0,
+    generationId: generation.generationId,
+    targetRevision: generation.targetRevision,
+    planVersion: generation.planVersion,
+    verificationPlan: planFinalVerification(generation.plan),
+  };
+  const validation = validateTaskGraph([...Object.values(projection.tasks), task]);
+  if (!validation.valid) {
+    throw new Error(
+      `Final verification task has mechanical issues: ${validation.issues
+        .map((issue) => issue.code)
+        .join(", ")}.`,
+    );
+  }
+  projection.tasks[task.id] = cloneBuildTask(task);
+  projection.finalVerification = {
+    current: {
+      taskId: generation.taskId,
+      generationId: generation.generationId,
+      targetRevision: generation.targetRevision,
+      planVersion: generation.planVersion,
+      plan: planFinalVerification(generation.plan),
+      state: "current",
+    },
+    history: [...(projection.finalVerification?.history ?? [])].map(
+      cloneFinalVerificationGeneration,
+    ),
+  };
+}
+
+function recordFinalVerificationSubmission(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  const submission = parseFinalVerificationSubmission(payload);
+  assertFinalVerificationBinding(current, submission);
+  if (current.submission) {
+    if (sameValue(current.submission, submission)) return;
+    throw new Error("Final verification submission conflicts with the current generation.");
+  }
+  current.submission = { ...submission };
+  projection.tasks[current.taskId] = {
+    ...projection.tasks[current.taskId],
+    verificationSubmissionId: submission.submissionId,
+  };
+}
+
+function recordFinalVerificationReviewRequest(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  const review = parseFinalVerificationReview(payload, "requested");
+  assertFinalVerificationBinding(current, review);
+  if (!current.submission || current.submission.submissionId !== review.submissionId) {
+    throw new Error("Final verification review must reference the current submission.");
+  }
+  if (current.review) {
+    if (sameFinalVerificationReviewIdentity(current.review, review)) return;
+    throw new Error("Final verification review conflicts with the current generation.");
+  }
+  current.review = { ...review };
+  projection.tasks[current.taskId] = {
+    ...projection.tasks[current.taskId],
+    verificationReviewId: review.reviewId,
+  };
+}
+
+function recordFinalVerificationReviewDecision(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  const decision = requiredString(payload, "decision");
+  if (decision !== "approved" && decision !== "rejected") {
+    throw new Error(`Final verification review decision ${decision} is invalid.`);
+  }
+  const review = parseFinalVerificationReview(payload, decision);
+  assertFinalVerificationBinding(current, review);
+  if (!current.submission || current.submission.submissionId !== review.submissionId) {
+    throw new Error("Final verification review must reference the current submission.");
+  }
+  if (!current.review || !sameFinalVerificationReviewIdentity(current.review, review)) {
+    throw new Error("Final verification review decision is stale or foreign.");
+  }
+  if (current.review.status !== "requested" && current.review.status !== review.status) {
+    throw new Error("Final verification review was already decided differently.");
+  }
+  current.review.status = review.status;
+}
+
+function requireCurrentFinalVerification(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): FinalVerificationGenerationProjection {
+  const current = projection.finalVerification?.current;
+  if (!current) {
+    throw new Error("Final verification event does not reference a current generation.");
+  }
+  if (current.targetRevision !== projection.integrationRevision) {
+    throw new Error("Final verification generation is stale for the integration revision.");
+  }
+  const taskId = requiredString(payload, "taskId");
+  const generationId = requiredString(payload, "generationId");
+  const targetRevision = requiredString(payload, "targetRevision");
+  if (
+    current.taskId !== taskId ||
+    current.generationId !== generationId ||
+    current.targetRevision !== targetRevision
+  ) {
+    throw new Error("Final verification event is stale or foreign to the current generation.");
+  }
+  const task = projection.tasks[current.taskId];
+  if (
+    !task ||
+    task.kind !== "final_verification" ||
+    task.generationId !== current.generationId ||
+    task.targetRevision !== current.targetRevision
+  ) {
+    throw new Error("Final verification task binding is invalid.");
+  }
+  return current;
+}
+
+function assertFinalVerificationBinding(
+  current: FinalVerificationGenerationProjection,
+  value: {
+    generationId: string;
+    targetRevision: string;
+    attempt: number;
+  },
+): void {
+  if (
+    current.generationId !== value.generationId ||
+    current.targetRevision !== value.targetRevision
+  ) {
+    throw new Error("Final verification evidence is stale or foreign to the current generation.");
+  }
+  if (value.attempt < 1) {
+    throw new Error("Final verification evidence attempt must be positive.");
+  }
+}
+
+function parseFinalVerificationGeneration(payload: Record<string, unknown>): {
+  taskId: string;
+  generationId: string;
+  targetRevision: string;
+  planVersion: number;
+  plan: FinalVerificationPlan;
+} {
+  const planVersion = requiredNumber(payload, "planVersion");
+  if (planVersion < 1) throw new Error("Final verification planVersion must be positive.");
+  return {
+    taskId: requiredString(payload, "taskId"),
+    generationId: requiredString(payload, "generationId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    planVersion,
+    plan: planFinalVerification(payload.plan),
+  };
+}
+
+function parseFinalVerificationSubmission(
+  payload: Record<string, unknown>,
+): FinalVerificationSubmissionReference {
+  return {
+    submissionId: requiredString(payload, "submissionId"),
+    generationId: requiredString(payload, "generationId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    attempt: requiredPositiveNumber(payload, "attempt"),
+  };
+}
+
+function parseFinalVerificationReview(
+  payload: Record<string, unknown>,
+  status: FinalVerificationReviewReference["status"],
+): FinalVerificationReviewReference {
+  return {
+    reviewId: requiredString(payload, "reviewId"),
+    submissionId: requiredString(payload, "submissionId"),
+    generationId: requiredString(payload, "generationId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    attempt: requiredPositiveNumber(payload, "attempt"),
+    status,
+  };
+}
+
+function sameFinalVerificationGeneration(
+  left: FinalVerificationGenerationProjection,
+  right: {
+    taskId: string;
+    generationId: string;
+    targetRevision: string;
+    planVersion: number;
+    plan: FinalVerificationPlan;
+  },
+): boolean {
+  return left.taskId === right.taskId &&
+    left.generationId === right.generationId &&
+    left.targetRevision === right.targetRevision &&
+    left.planVersion === right.planVersion &&
+    sameValue(left.plan, right.plan);
+}
+
+function sameFinalVerificationReviewIdentity(
+  left: FinalVerificationReviewReference,
+  right: FinalVerificationReviewReference,
+): boolean {
+  return left.reviewId === right.reviewId &&
+    left.submissionId === right.submissionId &&
+    left.generationId === right.generationId &&
+    left.targetRevision === right.targetRevision &&
+    left.attempt === right.attempt;
+}
+
+function cloneFinalVerificationProjection(
+  projection: FinalVerificationProjection,
+): FinalVerificationProjection {
+  return {
+    ...(projection.current
+      ? { current: cloneFinalVerificationGeneration(projection.current) }
+      : {}),
+    history: projection.history.map(cloneFinalVerificationGeneration),
+  };
+}
+
+function cloneFinalVerificationGeneration(
+  generation: FinalVerificationGenerationProjection,
+): FinalVerificationGenerationProjection {
+  return {
+    ...generation,
+    plan: planFinalVerification(generation.plan),
+    ...(generation.submission
+      ? { submission: { ...generation.submission } }
+      : {}),
+    ...(generation.review ? { review: { ...generation.review } } : {}),
+  };
+}
+
+function requiredPositiveNumber(
+  payload: Record<string, unknown>,
+  key: string,
+): number {
+  const value = requiredNumber(payload, key);
+  if (value < 1) throw new Error(`${key} must be positive.`);
+  return value;
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function parsePlanReconciliation(value: unknown): PlanReconciliation {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Missing plan reconciliation.");
@@ -1297,6 +1728,9 @@ function applyPlanReconciliation(
   for (const update of reconciliation.taskUpdates) {
     const task = candidateTasks[update.taskId];
     if (!task) throw new Error(`Unknown task ${update.taskId}.`);
+    if (isFinalVerificationTask(task)) {
+      throw new Error("Kernel-owned final verification task cannot be reconciled.");
+    }
     if (
       task.status !== "planned" &&
       task.status !== "failed" &&
@@ -1440,7 +1874,7 @@ function applyAcceptanceContractUpgrade(
     );
   }
   const activeTasks = Object.values(projection.tasks).filter(
-    (task) => task.status !== "cancelled"
+    (task) => task.status !== "cancelled" && !isFinalVerificationTask(task)
   );
   const expectedTaskIds = activeTasks.map((task) => task.id).sort();
   const seenTaskIds = new Set<string>();
@@ -1518,7 +1952,9 @@ function applyAcceptanceContractUpgrade(
     })
   );
   for (const task of Object.values(projection.tasks)) {
-    if (task.status === "cancelled") candidateTasks[task.id] = cloneBuildTask(task);
+    if (task.status === "cancelled" || isFinalVerificationTask(task)) {
+      candidateTasks[task.id] = cloneBuildTask(task);
+    }
   }
   const validation = validateTaskGraph(Object.values(candidateTasks), {
     requireAcceptanceCriteria: true,
@@ -1539,7 +1975,12 @@ function missingAcceptanceCriteriaTaskIds(
   tasks: Record<string, BuildTask>
 ): string[] {
   return Object.values(tasks)
-    .filter((task) => task.status !== "cancelled" && task.acceptanceCriteria === undefined)
+    .filter(
+      (task) =>
+        !isFinalVerificationTask(task) &&
+        task.status !== "cancelled" &&
+        task.acceptanceCriteria === undefined,
+    )
     .map((task) => task.id)
     .sort();
 }
@@ -1723,6 +2164,10 @@ function cloneBuildTask(task: BuildTask): BuildTask {
           })),
         }
       : {}),
+    ...(task.verificationPlan
+      ? { verificationPlan: planFinalVerification(task.verificationPlan) }
+      : {}),
+    ...(task.conflictPaths ? { conflictPaths: [...task.conflictPaths] } : {}),
   };
 }
 

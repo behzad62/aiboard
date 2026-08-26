@@ -4,7 +4,9 @@ import type {
   TaskGraphValidation,
   TaskStatus,
 } from "./task-contracts.js";
+import { isFinalVerificationTask } from "./task-contracts.js";
 import { validateAcceptanceCriteria } from "./acceptance-contracts.js";
+import { planFinalVerification } from "./final-verification-contracts.js";
 
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   planned: ["assigned", "cancelled"],
@@ -40,10 +42,50 @@ export function validateTaskGraph(
   }
 
   const ids = new Set(tasks.map((task) => task.id));
+  for (const task of tasks) {
+    if (isFinalVerificationTask(task)) {
+      try {
+        if (!task.generationId.trim() || !task.targetRevision.trim()) {
+          throw new Error("generation and target revision are required");
+        }
+        if (!Number.isSafeInteger(task.planVersion) || task.planVersion < 1) {
+          throw new Error("plan version must be a positive integer");
+        }
+        if (Object.hasOwn(task, "changeSetId") && task.changeSetId !== undefined) {
+          throw new Error("final verification tasks cannot carry a ChangeSet");
+        }
+        planFinalVerification(task.verificationPlan);
+      } catch (error) {
+        issues.push({
+          code: "invalid_final_verification_task",
+          taskId: task.id,
+          message: `Final verification task ${task.id} is invalid: ${
+            error instanceof Error ? error.message : String(error)
+          }.`,
+        });
+      }
+      continue;
+    }
+    if (
+      task.generationId !== undefined ||
+      task.targetRevision !== undefined ||
+      task.planVersion !== undefined ||
+      task.verificationPlan !== undefined ||
+      task.verificationSubmissionId !== undefined ||
+      task.verificationReviewId !== undefined
+    ) {
+      issues.push({
+        code: "invalid_final_verification_task",
+        taskId: task.id,
+        message: `Implementation task ${task.id} cannot carry final verification metadata.`,
+      });
+    }
+  }
   const strictCriteria = options.requireAcceptanceCriteria === true ||
     tasks.some((task) => task.acceptanceCriteria !== undefined);
   if (strictCriteria) {
     for (const task of tasks) {
+      if (isFinalVerificationTask(task)) continue;
       if (task.status === "cancelled") continue;
       if (!task.acceptanceCriteria) {
         issues.push({
@@ -98,6 +140,7 @@ export function readyTaskIds(tasks: readonly BuildTask[]): string[] {
   return tasks
     .filter(
       (task) =>
+        !isFinalVerificationTask(task) &&
         task.status === "planned" &&
         task.dependencies.every(
           (dependency) => byId.get(dependency)?.status === "integrated"
@@ -111,6 +154,27 @@ export function applyTaskTransition(
   status: TaskStatus,
   patch: Partial<Omit<BuildTask, "id" | "status">> = {}
 ): BuildTask {
+  if (isFinalVerificationTask(task)) {
+    if (status !== "cancelled") {
+      throw new Error(
+        `Kernel-owned final verification task ${task.id} cannot be scheduled as a worker task.`
+      );
+    }
+    if (Object.hasOwn(patch, "changeSetId") && patch.changeSetId !== undefined) {
+      throw new Error("Final verification tasks cannot produce a ChangeSet.");
+    }
+    for (const field of [
+      "kind",
+      "generationId",
+      "targetRevision",
+      "planVersion",
+      "verificationPlan",
+    ] as const) {
+      if (Object.hasOwn(patch, field)) {
+        throw new Error(`Final verification task ${field} is immutable.`);
+      }
+    }
+  }
   if (!TRANSITIONS[task.status].includes(status)) {
     throw new Error(
       `Task ${task.id} cannot transition from ${task.status} to ${status}.`

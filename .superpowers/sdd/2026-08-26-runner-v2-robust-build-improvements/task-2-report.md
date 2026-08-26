@@ -10,8 +10,9 @@
 - P2.3A implementation revision: `b82a1a3a`
 - P2.3B1a implementation revision: `8867112a`
 - P2.3B1b implementation revision: `61ce8e6b`
-- P2.3B2 implementation revision: this packet commit (reported at handoff)
-- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, P2.3B1b, and P2.3B2 only. P2.4+ scheduler/completion/recovery packets were not started.
+- P2.3B2 implementation revision: `c2056116`
+- P2.4A implementation revision: this packet commit (reported at handoff)
+- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, P2.3B1b, P2.3B2, and P2.4A only. P2.4B/P2.5/P2.6 remain locked.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -460,4 +461,92 @@ started in this packet.
 ## Packet status
 
 P2.3A, P2.3B1a, P2.3B1b, and P2.3B2 are complete in the implementation commits
-recorded above. P2.4+ remain intentionally deferred.
+recorded above. P2.4A is complete in the implementation commit reported below;
+P2.4B/P2.5/P2.6 remain intentionally deferred.
+
+## P2.4A durable verification-generation scheduler contracts
+
+Extended the append-only scheduler projection with a kernel-owned
+`final_verification` task kind and explicit generation, target-revision, plan
+version, submission, and review references. A generation is accepted only for
+the current canonical integration revision and is represented once as the
+current generation. Repeating the same generation is idempotent, while a
+conflicting current generation, stale target, invalidated generation, or
+foreign submission/review reference is rejected. Advancing the integration
+revision moves the current generation, including its durable submission and
+review references, into immutable invalidated history and clears the current
+slot. Replay and SQLite reopen preserve the same projection. Final-verification
+tasks are excluded from ordinary worker readiness/dispatch, cannot be revised
+as implementation work, and cannot carry a ChangeSet. No automatic execution,
+repair-task creation, or completion gate was added.
+
+### P2.4A TDD and prove-red evidence
+
+The focused scheduler test was added before the scheduler event/reducer
+implementation and first ran red against the P2.3B2 head:
+
+```text
+npx tsx --test runner-v2/test/final-verification-scheduler.test.ts
+4 tests, 0 passed, 4 failed
+AssertionError: final task absent; duplicate generation was not idempotent;
+current final-verification projection and integration revision were absent
+```
+
+After the scheduler projection, SQLite idempotency, task-graph, and dispatch
+guards were implemented, the same focused suite passed 4/4. Three independent
+fault-only injections were then performed and restored:
+
+- Removing the current-generation singleton guard (and its duplicate-task
+  fallback) made the conflicting-generation assertion red: 0 passed, 1
+  failed with `Final verification task has mechanical issues: duplicate_task_id`.
+- Removing target/history reactivation guards made the stale replay assertion
+  red: 0 passed, 1 failed because the stale generation reached duplicate-task
+  validation instead of being rejected as stale/history-bound.
+- Removing integration invalidation made the revision-advance assertion red:
+  0 passed, 1 failed because the old current generation remained current rather
+  than moving to history.
+
+Only the injected guards were restored after each proof; the final focused
+suite returned to 4/4 green.
+
+### P2.4A validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-scheduler.test.ts
+4/4 passed
+
+npx tsx --test runner-v2/test/final-verification-scheduler.test.ts runner-v2/test/scheduler-store.test.ts runner-v2/test/task-scheduler.test.ts
+29/29 passed
+
+npx tsx --test runner-v2/test/*.test.ts
+426/426 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/scheduler-store.ts runner-v2/src/sqlite-scheduler-store.ts runner-v2/src/task-contracts.ts runner-v2/src/task-graph.ts runner-v2/src/task-scheduler.ts runner-v2/test/final-verification-scheduler.test.ts
+passed
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+### P2.4A requirement audit
+
+| P2.4A requirement | Evidence | Result |
+|---|---|---|
+| Distinct kernel-owned final-verification task kind | `BuildTask.kind`, `FinalVerificationTask`, graph validation, and focused task projection test | Complete |
+| Immutable generation identity, target revision, and plan version | Generation reducer, final-task revision/reconciliation rejection, and exact projection assertions | Complete |
+| Exactly one current generation per integration revision | Current-slot reducer guard, SQLite semantic idempotency, and conflict test | Complete |
+| Submission/review bind to current generation | Durable reference types and stale/foreign binding assertions | Complete |
+| Integration revision invalidates current verification and preserves history | Revision event reducer, history shape assertion, and invalidation fault proof | Complete |
+| Stale events cannot reactivate prior generation | Target/history guards and stale replay assertion/fault proof | Complete |
+| Replay/restart determinism | SQLite close/reopen deep-equality assertion | Complete |
+| No ordinary scheduling or ChangeSet masquerade | `readyTaskIds`, `TaskScheduler`, transition/graph guards, and no-driver-call test | Complete |
+| P2.4B/P2.5 work remains out of scope | No auto-run, repair, or completion changes in diff | Complete |
+
+## Packet status
+
+P2.4A implementation/test commit is recorded in the execution metadata above
+after the final clean-state verification. P2.4B, P2.5, and P2.6 remain
+intentionally deferred for the controller.

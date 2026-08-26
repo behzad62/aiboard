@@ -2,6 +2,7 @@ import type {
   AcceptanceCriterion,
   CriterionEvidenceLink,
 } from "./acceptance-contracts.js";
+import type { FinalVerificationPlan } from "./final-verification-contracts.js";
 
 export type TaskStatus =
   | "planned"
@@ -18,8 +19,12 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
+export type BuildTaskKind = "implementation" | "final_verification";
+
 export interface BuildTask {
   id: string;
+  /** Legacy implementation tasks omit this field; final verification is explicit. */
+  kind?: BuildTaskKind;
   objective: string;
   dependencies: string[];
   status: TaskStatus;
@@ -42,6 +47,29 @@ export interface BuildTask {
   failureReason?: string;
   integrationRevision?: string;
   conflictPaths?: string[];
+  /** Immutable identity and plan metadata for a kernel-owned final-verification task. */
+  generationId?: string;
+  targetRevision?: string;
+  planVersion?: number;
+  verificationPlan?: FinalVerificationPlan;
+  verificationSubmissionId?: string;
+  verificationReviewId?: string;
+}
+
+export type FinalVerificationTask = Omit<
+  BuildTask,
+  "kind" | "generationId" | "targetRevision" | "planVersion" | "verificationPlan" | "changeSetId"
+> & {
+  kind: "final_verification";
+  generationId: string;
+  targetRevision: string;
+  planVersion: number;
+  verificationPlan: FinalVerificationPlan;
+  changeSetId?: never;
+};
+
+export function isFinalVerificationTask(task: BuildTask): task is FinalVerificationTask {
+  return task.kind === "final_verification";
 }
 
 export interface TaskGraph {
@@ -68,6 +96,7 @@ export type TaskGraphIssueCode =
   | "duplicate_task_id"
   | "missing_dependency"
   | "dependency_cycle"
+  | "invalid_final_verification_task"
   | "missing_acceptance_criteria"
   | "invalid_acceptance_criterion"
   | "duplicate_acceptance_criterion_id";
