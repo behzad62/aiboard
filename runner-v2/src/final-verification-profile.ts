@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { createServer } from "node:net";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { FinalVerificationDetectedSignal } from "./final-verification-contracts.js";
 import type {
@@ -11,6 +12,18 @@ import type {
 } from "./final-verification-runtime.js";
 import { runGit, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
+import {
+  FinalVerificationPortAuthority,
+  type FinalVerificationPortLease,
+} from "./final-verification-port-authority.js";
+
+export type FinalVerificationPackageManager = "npm" | "pnpm" | "yarn";
+
+export interface FinalVerificationDependencyProvisioning {
+  manager: FinalVerificationPackageManager;
+  lockfile: string;
+  command: FinalVerificationCommand;
+}
 
 export interface FinalVerificationExecutionProfile {
   version: 1;
@@ -21,6 +34,8 @@ export interface FinalVerificationExecutionProfile {
     build?: FinalVerificationCommand[];
     tests?: FinalVerificationCommand[];
   };
+  provisioning?: FinalVerificationDependencyProvisioning;
+  portLease?: FinalVerificationPortLease;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
 }
@@ -38,7 +53,11 @@ interface FinalVerificationProfileArchive {
 export class FinalVerificationProfileAuthority {
   private readonly stateDirectory: string;
 
-  constructor(private readonly options: { stateDirectory: string; runId: string }) {
+  constructor(private readonly options: {
+    stateDirectory: string;
+    runId: string;
+    portAuthority?: FinalVerificationPortAuthority;
+  }) {
     this.stateDirectory = resolve(options.stateDirectory);
     if (!options.runId.trim()) throw new Error("Final verification profile authority requires a runId.");
   }
@@ -48,7 +67,32 @@ export class FinalVerificationProfileAuthority {
     targetRevision: string;
     execute?: GitRunner;
   }): Promise<FinalVerificationExecutionProfile> {
-    return await this.persistInspected(await inspectFinalVerificationExecutionProfile(input));
+    let newlyCreatedLease: FinalVerificationPortLease | undefined;
+    try {
+      const inspected = await inspectFinalVerificationExecutionProfile({
+        ...input,
+        ...(this.options.portAuthority ? {
+          reservePort: async () => {
+            const reservation = await this.options.portAuthority!.reserveDetailed(
+              this.options.runId,
+              input.targetRevision,
+            );
+            if (reservation.created) newlyCreatedLease = reservation.lease;
+            return reservation.lease;
+          },
+        } : {}),
+      });
+      return await this.persistInspected(inspected);
+    } catch (error) {
+      if (newlyCreatedLease && this.options.portAuthority) {
+        await this.options.portAuthority.release(
+          newlyCreatedLease,
+          this.options.runId,
+          input.targetRevision,
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   private async persistInspected(
@@ -87,6 +131,18 @@ export class FinalVerificationProfileAuthority {
   validate(profile: unknown, targetRevision: string): void {
     assertFinalVerificationExecutionProfile(profile, targetRevision);
     const durable = cloneFinalVerificationExecutionProfile(profile);
+    if (this.options.portAuthority) {
+      if ((durable.runtimeSmoke || durable.browser?.server) && !durable.portLease) {
+        throw new Error("Runner-owned final verification port lease is required for a local application server.");
+      }
+      if (durable.portLease) {
+        this.options.portAuthority.validateDurable(
+          durable.portLease,
+          this.options.runId,
+          targetRevision,
+        );
+      }
+    }
     const digest = finalVerificationProfileDigest(this.options.runId, durable);
     const path = this.archivePath(digest);
     let archive: unknown;
@@ -136,6 +192,7 @@ export async function inspectFinalVerificationExecutionProfile(options: {
   repositoryRoot: string;
   targetRevision: string;
   execute?: GitRunner;
+  reservePort?: () => Promise<FinalVerificationPortLease>;
 }): Promise<FinalVerificationExecutionProfile> {
   const repositoryRoot = resolve(options.repositoryRoot);
   const execute = options.execute ?? runGit;
@@ -167,20 +224,27 @@ export async function inspectFinalVerificationExecutionProfile(options: {
   const dependencies = {
     ...recordOfStrings(manifest?.dependencies),
     ...recordOfStrings(manifest?.devDependencies),
+    ...recordOfStrings(manifest?.optionalDependencies),
   };
-  const npm = npmInvocation();
+  const packageExecution = packageExecutionProfile(repositoryRoot, manifest, dependencies);
+  const packageManager = packageExecution.invocation;
   const detectedSignals: FinalVerificationDetectedSignal[] = [];
   const commands: FinalVerificationExecutionProfile["commands"] = {};
   if (scripts.build) {
     detectedSignals.push({ category: "build", source: "package.json#scripts.build", detail: scripts.build });
-    commands.build = [{ label: "package build", executable: npm.executable, args: [...npm.args, "run", "build"] }];
+    commands.build = [{ label: "package build", executable: packageManager.executable, args: [...packageManager.args, "run", "build"] }];
   }
   if (scripts.test) {
     detectedSignals.push({ category: "tests", source: "package.json#scripts.test", detail: scripts.test });
-    commands.tests = [{ label: "package tests", executable: npm.executable, args: [...npm.args, "run", "test"] }];
+    commands.tests = [{ label: "package tests", executable: packageManager.executable, args: [...packageManager.args, "run", "test"] }];
   }
 
-  const server = serverProfile(scripts, dependencies, npm);
+  const serverPortLease = serverSignal(scripts, dependencies)
+    ? await (options.reservePort?.() ?? reserveUnownedPort(options.targetRevision))
+    : undefined;
+  const server = serverPortLease
+    ? serverProfile(scripts, dependencies, packageManager, serverPortLease.port)
+    : undefined;
   if (server) {
     detectedSignals.push({ category: "runtime_smoke", source: `package.json#scripts.${server.script}`, detail: scripts[server.script]! });
     detectedSignals.push({ category: "browser", source: "package.json and browser application signals", detail: `Serve the integrated UI with ${server.script}.` });
@@ -188,9 +252,13 @@ export async function inspectFinalVerificationExecutionProfile(options: {
   const profile: FinalVerificationExecutionProfile = {
     version: 1,
     targetRevision: options.targetRevision,
-    inspectedPaths: manifest ? ["package.json"] : [],
+    inspectedPaths: manifest
+      ? ["package.json", ...(packageExecution.lockfile ? [packageExecution.lockfile] : [])]
+      : [],
     detectedSignals,
     commands,
+    ...(packageExecution.provisioning ? { provisioning: packageExecution.provisioning } : {}),
+    ...(serverPortLease ? { portLease: serverPortLease } : {}),
     ...(server ? {
       runtimeSmoke: server.smoke,
       browser: {
@@ -222,6 +290,13 @@ export function cloneFinalVerificationExecutionProfile(
       ...(profile.commands.build ? { build: profile.commands.build.map(cloneCommand) } : {}),
       ...(profile.commands.tests ? { tests: profile.commands.tests.map(cloneCommand) } : {}),
     },
+    ...(profile.provisioning ? {
+      provisioning: {
+        ...profile.provisioning,
+        command: cloneCommand(profile.provisioning.command),
+      },
+    } : {}),
+    ...(profile.portLease ? { portLease: { ...profile.portLease } } : {}),
     ...(profile.runtimeSmoke ? { runtimeSmoke: cloneSmoke(profile.runtimeSmoke) } : {}),
     ...(profile.browser ? { browser: cloneBrowser(profile.browser) } : {}),
   };
@@ -241,6 +316,12 @@ export function assertFinalVerificationExecutionProfile(
     if (category !== "build" && category !== "tests") throw new Error(`Unsupported final verification execution command category ${category}.`);
     if (!Array.isArray(commands) || commands.length === 0 || commands.some((command) => !validCommand(command))) throw new Error(`Final verification execution commands for ${category} are invalid.`);
   }
+  if (profile.provisioning !== undefined && !validProvisioning(profile.provisioning)) {
+    throw new Error("Final verification dependency provisioning profile is invalid.");
+  }
+  if (profile.portLease !== undefined && !validPortLease(profile.portLease, targetRevision)) {
+    throw new Error("Final verification port lease profile is invalid.");
+  }
   if (profile.runtimeSmoke !== undefined && !validSmoke(profile.runtimeSmoke)) throw new Error("Final verification runtime smoke profile is invalid.");
   if (profile.browser !== undefined && !validBrowser(profile.browser)) throw new Error("Final verification browser profile is invalid.");
   const detected = new Set(profile.detectedSignals.map((signal) => signal.category));
@@ -248,32 +329,163 @@ export function assertFinalVerificationExecutionProfile(
   if (detected.has("tests") !== Boolean(profile.commands.tests?.length)) throw new Error("Test signal and exact commands disagree.");
   if (detected.has("runtime_smoke") !== Boolean(profile.runtimeSmoke)) throw new Error("Runtime signal and exact smoke spec disagree.");
   if (detected.has("browser") !== Boolean(profile.browser)) throw new Error("Browser signal and exact browser spec disagree.");
+  if (profile.portLease) {
+    const smokeUrl = profile.runtimeSmoke?.endpoint ? new URL(profile.runtimeSmoke.endpoint) : undefined;
+    const browserUrl = profile.browser?.server ? new URL(profile.browser.url) : undefined;
+    if ((smokeUrl && (smokeUrl.hostname !== "127.0.0.1" || Number(smokeUrl.port) !== profile.portLease.port)) ||
+      (browserUrl && (browserUrl.hostname !== "127.0.0.1" || Number(browserUrl.port) !== profile.portLease.port))) {
+      throw new Error("Runtime/browser endpoints disagree with the owned port lease.");
+    }
+    if ((profile.runtimeSmoke && !profile.runtimeSmoke.args.includes(String(profile.portLease.port))) ||
+      (profile.browser?.server && !profile.browser.server.args.includes(String(profile.portLease.port)))) {
+      throw new Error("Runtime/browser argv disagree with the owned port lease.");
+    }
+  }
 }
 
 function npmInvocation(): { executable: string; args: string[] } {
   const npmCli = process.env.npm_execpath?.trim();
   if (npmCli && /(?:npm|npx)-cli\.js$/i.test(npmCli)) {
+    if (!existsSync(resolve(npmCli))) throw new Error("Declared npm package manager is unavailable to Runner V2.");
     return { executable: process.execPath, args: [resolve(npmCli)] };
   }
+  const bundled = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  if (!existsSync(bundled)) throw new Error("Declared npm package manager is unavailable to Runner V2.");
   return {
     executable: process.execPath,
-    args: [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")],
+    args: [bundled],
+  };
+}
+
+function packageManagerInvocation(manager: FinalVerificationPackageManager): {
+  executable: string;
+  args: string[];
+} {
+  if (manager === "npm") return npmInvocation();
+  const activeCli = process.env.npm_execpath?.trim();
+  if (activeCli) {
+    const activeName = basename(activeCli).toLowerCase();
+    if (activeName === manager || activeName === `${manager}.js` || activeName === `${manager}.cjs`) {
+      if (!existsSync(resolve(activeCli))) {
+        throw new Error(`Declared ${manager} package manager is unavailable to Runner V2.`);
+      }
+      return { executable: process.execPath, args: [resolve(activeCli)] };
+    }
+  }
+  const corepackCli = join(dirname(process.execPath), "node_modules", "corepack", "dist", `${manager}.js`);
+  if (!existsSync(corepackCli)) {
+    throw new Error(`Declared ${manager} package manager is unavailable to Runner V2.`);
+  }
+  return { executable: process.execPath, args: [corepackCli] };
+}
+
+function packageExecutionProfile(
+  repositoryRoot: string,
+  manifest: Record<string, unknown> | undefined,
+  dependencies: Record<string, string>,
+): {
+  invocation: { executable: string; args: string[] };
+  lockfile?: string;
+  provisioning?: FinalVerificationDependencyProvisioning;
+} {
+  const declared = declaredPackageManager(manifest?.packageManager);
+  const locks = [
+    ["npm-shrinkwrap.json", "npm"],
+    ["package-lock.json", "npm"],
+    ["pnpm-lock.yaml", "pnpm"],
+    ["yarn.lock", "yarn"],
+  ] as const;
+  const present = locks.filter(([name]) => existsSync(join(repositoryRoot, name)));
+  const managers = new Set(present.map(([, manager]) => manager));
+  if (managers.size > 1) {
+    throw new Error("Final verification found conflicting package-manager lockfiles.");
+  }
+  const lockedManager = present[0]?.[1];
+  if (declared && lockedManager && declared.name !== lockedManager) {
+    throw new Error("packageManager and lockfile disagree; final verification refuses to guess.");
+  }
+  const manager = declared?.name ?? lockedManager ?? "npm";
+  const invocation = packageManagerInvocation(manager);
+  if (Object.keys(dependencies).length === 0 && present.length === 0) return { invocation };
+  const lockfile = preferredLockfile(present, manager);
+  if (!lockfile) {
+    throw new Error("Dependency provisioning requires one matching lockfile at the exact integration revision.");
+  }
+  const installArgs = manager === "npm"
+    ? ["ci", "--no-audit", "--no-fund"]
+    : manager === "pnpm"
+      ? ["install", "--frozen-lockfile"]
+      : declared && declared.major >= 2
+        ? ["install", "--immutable"]
+        : ["install", "--frozen-lockfile"];
+  return {
+    invocation,
+    lockfile,
+    provisioning: {
+      manager,
+      lockfile,
+      command: {
+        label: `${manager} dependency provisioning`,
+        executable: invocation.executable,
+        args: [...invocation.args, ...installArgs],
+        timeoutMs: 600_000,
+      },
+    },
+  };
+}
+
+function declaredPackageManager(value: unknown): {
+  name: FinalVerificationPackageManager;
+  major: number;
+} | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("packageManager must be a supported name and version.");
+  const match = /^(npm|pnpm|yarn)@(\d+)(?:\.|$)/.exec(value.trim());
+  if (!match) throw new Error(`Unsupported or malformed packageManager ${JSON.stringify(value)}.`);
+  return { name: match[1] as FinalVerificationPackageManager, major: Number(match[2]) };
+}
+
+function preferredLockfile(
+  present: readonly (readonly [string, FinalVerificationPackageManager])[],
+  manager: FinalVerificationPackageManager,
+): string | undefined {
+  const names = present.filter(([, candidate]) => candidate === manager).map(([name]) => name);
+  if (manager === "npm" && names.includes("npm-shrinkwrap.json")) return "npm-shrinkwrap.json";
+  return names[0];
+}
+
+async function reserveUnownedPort(targetRevision: string): Promise<FinalVerificationPortLease> {
+  const server = createServer();
+  await new Promise<void>((resolveListen, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, resolveListen);
+  });
+  const address = server.address();
+  await new Promise<void>((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  if (!address || typeof address === "string") throw new Error("Could not allocate a final verification port.");
+  return {
+    version: 1,
+    runId: `standalone-${createHash("sha256").update(targetRevision).digest("hex").slice(0, 16)}`,
+    targetRevision,
+    port: address.port,
+    leaseId: randomUUID(),
   };
 }
 
 function serverProfile(
   scripts: Record<string, string>,
   dependencies: Record<string, string>,
-  npm: { executable: string; args: string[] },
+  packageManager: { executable: string; args: string[] },
+  port: number,
 ): { script: string; smoke: FinalVerificationRuntimeSmokeInput } | undefined {
-  const endpoint = "http://127.0.0.1:4173/";
+  const endpoint = `http://127.0.0.1:${port}/`;
   if (scripts.preview && dependencies.vite) {
     return {
       script: "preview",
       smoke: {
         label: "package preview",
-        executable: npm.executable,
-        args: [...npm.args, "run", "preview", "--", "--host", "127.0.0.1", "--port", "4173"],
+        executable: packageManager.executable,
+        args: [...packageManager.args, "run", "preview", "--", "--host", "127.0.0.1", "--port", String(port)],
         endpoint,
         timeoutMs: 120_000,
         readiness: { timeoutMs: 120_000, pollIntervalMs: 100, expectedStatus: 200 },
@@ -285,8 +497,8 @@ function serverProfile(
       script: "start",
       smoke: {
         label: "package start",
-        executable: npm.executable,
-        args: [...npm.args, "run", "start", "--", "--hostname", "127.0.0.1", "--port", "4173"],
+        executable: packageManager.executable,
+        args: [...packageManager.args, "run", "start", "--", "--hostname", "127.0.0.1", "--port", String(port)],
         endpoint,
         timeoutMs: 120_000,
         readiness: { timeoutMs: 120_000, pollIntervalMs: 100, expectedStatus: 200 },
@@ -294,6 +506,10 @@ function serverProfile(
     };
   }
   return undefined;
+}
+
+function serverSignal(scripts: Record<string, string>, dependencies: Record<string, string>): boolean {
+  return Boolean((scripts.preview && dependencies.vite) || (scripts.start && dependencies.next));
 }
 
 function recordOfStrings(value: unknown): Record<string, string> {
@@ -334,6 +550,21 @@ function validBrowser(value: unknown): value is FinalVerificationBrowserInput {
   catch { return false; }
   return Boolean(browser.policy && typeof browser.policy === "object" && !Array.isArray(browser.policy)) &&
     (browser.server === undefined || validSmoke(browser.server));
+}
+function validProvisioning(value: unknown): value is FinalVerificationDependencyProvisioning {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const provisioning = value as Record<string, unknown>;
+  return (provisioning.manager === "npm" || provisioning.manager === "pnpm" || provisioning.manager === "yarn") &&
+    typeof provisioning.lockfile === "string" && Boolean(provisioning.lockfile.trim()) &&
+    validCommand(provisioning.command);
+}
+function validPortLease(value: unknown, targetRevision: string): value is FinalVerificationPortLease {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const lease = value as Record<string, unknown>;
+  return lease.version === 1 && typeof lease.runId === "string" && Boolean(lease.runId.trim()) &&
+    lease.targetRevision === targetRevision && Number.isSafeInteger(lease.port) &&
+    (lease.port as number) >= 1_024 && (lease.port as number) <= 65_535 &&
+    typeof lease.leaseId === "string" && Boolean(lease.leaseId.trim());
 }
 function cloneCommand(command: FinalVerificationCommand): FinalVerificationCommand { return { ...command, args: [...command.args] }; }
 function cloneSmoke(smoke: FinalVerificationRuntimeSmokeInput): FinalVerificationRuntimeSmokeInput {

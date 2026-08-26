@@ -30,6 +30,7 @@ import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime } from "./final-verification-runtime.js";
 import { FinalVerificationProfileAuthority } from "./final-verification-profile.js";
+import { FinalVerificationPortAuthority } from "./final-verification-port-authority.js";
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
@@ -142,9 +143,11 @@ export class NativeBuildFactory {
       selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
     const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    const finalVerificationPorts = new FinalVerificationPortAuthority(this.options.stateDirectory);
     const finalVerificationProfiles = new FinalVerificationProfileAuthority({
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
+      portAuthority: finalVerificationPorts,
     });
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
       evidenceStore,
@@ -318,6 +321,11 @@ export class NativeBuildFactory {
           currentIntegrationRevision: () => integrationManager.revision,
           managedProcessService: this.managedProcesses,
           browserBackend: this.browserBackend,
+          validatePortLease: async (lease) => await finalVerificationPorts.validate(
+            lease,
+            spec.runId,
+            input.targetRevision,
+          ),
         });
         const result = await verification.runCategory(
           {
@@ -353,13 +361,32 @@ export class NativeBuildFactory {
       integrationDriver,
       finalVerificationDriver,
       finalVerificationCleanupDriver: {
-        cleanup: async (input) => await finalVerificationCleanup.cleanup(input),
+        cleanup: async (input) => {
+          const current = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId))
+            .finalVerification?.current;
+          const lease = current?.generationId === input.generationId &&
+            current.targetRevision === input.targetRevision
+            ? current.executionProfile.portLease
+            : undefined;
+          try {
+            return await finalVerificationCleanup.cleanup(input);
+          } finally {
+            if (lease) {
+              await finalVerificationPorts.release(lease, spec.runId, input.targetRevision);
+            }
+          }
+        },
       },
       finalVerificationProfileFor: async (targetRevision) =>
         await finalVerificationProfiles.inspectAndPersist({
           repositoryRoot: integrationManager.path,
           targetRevision,
         }),
+      discardFinalVerificationProfile: async (profile) => {
+        if (profile.portLease) {
+          await finalVerificationPorts.release(profile.portLease, spec.runId, profile.targetRevision);
+        }
+      },
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {

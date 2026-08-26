@@ -161,6 +161,7 @@ export interface BuildRuntimeOptions {
   finalVerificationDriver?: FinalVerificationCheckDriver;
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
+  discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
 }
 
 export interface BuildStepResult {
@@ -186,6 +187,7 @@ export class BuildRuntime {
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
+  private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -206,6 +208,7 @@ export class BuildRuntime {
     this.finalVerificationDriver = options.finalVerificationDriver;
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
+    this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -979,6 +982,9 @@ export class BuildRuntime {
         reason.type === "final_verification_repair_plan_required",
       ...(this.finalVerificationProfileFor
         ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
+        : {}),
+      ...(this.discardFinalVerificationProfile
+        ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
         : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {

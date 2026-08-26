@@ -30,8 +30,10 @@ import type {
 import {
   assertFinalVerificationExecutionProfile,
   cloneFinalVerificationExecutionProfile,
+  type FinalVerificationDependencyProvisioning,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
+import type { FinalVerificationPortLease } from "./final-verification-port-authority.js";
 
 export type { FinalVerificationPlan } from "./final-verification-contracts.js";
 
@@ -154,6 +156,7 @@ export interface FinalVerificationRuntimeOptions {
   maxOutputBytes?: number;
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
+  validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
 }
 
 export interface FinalVerificationRunInput {
@@ -324,6 +327,7 @@ export class FinalVerificationRuntime {
   private readonly defaultTimeoutMs: number;
   private readonly maximumTimeoutMs: number;
   private readonly maximumDomBytes: number;
+  private readonly validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
   private runOrdinal = 0;
 
   constructor(options: FinalVerificationRuntimeOptions) {
@@ -375,6 +379,7 @@ export class FinalVerificationRuntime {
       options.maximumDomBytes ?? 8 * 1024 * 1024,
       "maximumDomBytes",
     );
+    this.validatePortLease = options.validatePortLease;
     if (this.defaultTimeoutMs > this.maximumTimeoutMs) {
       throw new Error("defaultTimeoutMs cannot exceed maximumTimeoutMs.");
     }
@@ -391,6 +396,9 @@ export class FinalVerificationRuntime {
     const workspace = await this.workspaceManager.create();
     await this.assertCurrentRevision(workspace);
     const execution = authoritativeExecutionInput(input, workspace.targetRevision);
+    if (input.executionProfile.portLease && this.validatePortLease) {
+      await this.validatePortLease(input.executionProfile.portLease);
+    }
 
     const runOrdinal = ++this.runOrdinal;
     const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
@@ -405,6 +413,7 @@ export class FinalVerificationRuntime {
             : undefined,
           runtimeSmoke: execution.runtimeSmoke,
           browser: execution.browser,
+          provisioning: execution.provisioning,
           workspace,
           generationId,
           runOrdinal,
@@ -445,6 +454,9 @@ export class FinalVerificationRuntime {
     const workspace = await this.createOrResumeCategoryWorkspace();
     await this.assertCurrentRevision(workspace);
     const execution = authoritativeExecutionInput(input, workspace.targetRevision);
+    if (input.executionProfile.portLease && this.validatePortLease) {
+      await this.validatePortLease(input.executionProfile.portLease);
+    }
     const runOrdinal = ++this.runOrdinal;
     const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
     const startedAt = this.clock();
@@ -455,6 +467,7 @@ export class FinalVerificationRuntime {
         : undefined,
       runtimeSmoke: execution.runtimeSmoke,
       browser: execution.browser,
+      provisioning: execution.provisioning,
       workspace,
       generationId,
       runOrdinal,
@@ -504,6 +517,7 @@ export class FinalVerificationRuntime {
     commands: readonly FinalVerificationCommand[] | undefined;
     runtimeSmoke: FinalVerificationRuntimeSmokeInput | undefined;
     browser: FinalVerificationBrowserInput | undefined;
+    provisioning: FinalVerificationDependencyProvisioning | undefined;
     workspace: VerificationWorkspace;
     generationId: string;
     runOrdinal: number;
@@ -527,6 +541,17 @@ export class FinalVerificationRuntime {
         return { ...base, green: false };
       }
       return { ...base, green: true };
+    }
+    if (input.provisioning) {
+      const issue = await this.provisionDependencies(
+        input.provisioning,
+        input.workspace,
+        input.signal,
+      );
+      if (issue) {
+        base.issues.push(issue);
+        return { ...base, green: false };
+      }
     }
     if (check.category === "runtime_smoke") {
       return await this.runRuntimeSmokeCheck({
@@ -656,6 +681,37 @@ export class FinalVerificationRuntime {
       ...base,
       green: base.issues.length === 0 && base.evidenceIds.length === base.facts.length,
     };
+  }
+
+  private async provisionDependencies(
+    provisioning: FinalVerificationDependencyProvisioning,
+    workspace: VerificationWorkspace,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const command = provisioning.command;
+    validateCommand(command, "build", 0, 600_000);
+    const startState = await repositoryState(workspace.path);
+    const execution = await executeCommand(
+      command,
+      workspace.path,
+      signal,
+      this.maxOutputBytes,
+      this.defaultTimeoutMs,
+      600_000,
+    );
+    const endState = await repositoryState(workspace.path);
+    if (startState.revision !== workspace.targetRevision || endState.revision !== workspace.targetRevision) {
+      return "Dependency provisioning crossed the exact integration revision boundary.";
+    }
+    if (execution.startError) return `Dependency provisioning could not start: ${execution.startError.message}.`;
+    if (execution.cancelled) return "Dependency provisioning was cancelled.";
+    if (execution.timedOut) return "Dependency provisioning timed out.";
+    if (execution.outputTruncated) return "Dependency provisioning exceeded the output limit.";
+    if (execution.signal) return `Dependency provisioning ended by ${execution.signal}.`;
+    if (execution.exitCode !== 0) {
+      return `Dependency provisioning exited with non-zero code ${String(execution.exitCode)}.`;
+    }
+    return undefined;
   }
 
   private async runRuntimeSmokeCheck(input: {
@@ -1247,6 +1303,7 @@ function authoritativeExecutionInput(
   targetRevision: string,
 ): {
   commands: FinalVerificationExecutionProfile["commands"];
+  provisioning?: FinalVerificationDependencyProvisioning;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
 } {
@@ -1267,6 +1324,9 @@ function authoritativeExecutionInput(
   }
   return {
     commands: cloneFinalVerificationExecutionProfile(input.executionProfile).commands,
+    ...(input.executionProfile.provisioning
+      ? { provisioning: cloneFinalVerificationExecutionProfile(input.executionProfile).provisioning }
+      : {}),
     ...(input.runtimeSmoke
       ? { runtimeSmoke: input.runtimeSmoke }
       : input.executionProfile.runtimeSmoke

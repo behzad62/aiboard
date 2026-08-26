@@ -249,12 +249,21 @@ export class VerificationWorkspaceManager {
         requireCleanWorkspace: false,
         requireCanonicalState: false,
       });
-      await this.git(this.repositoryRoot, [
-        "worktree",
-        "remove",
-        "--force",
-        this.workspacePath,
-      ]);
+      try {
+        await this.git(this.repositoryRoot, [
+          "worktree",
+          "remove",
+          "--force",
+          this.workspacePath,
+        ]);
+      } catch (error) {
+        if (!(error instanceof Error) || !/failed to delete.*directory not empty/i.test(error.message)) {
+          throw error;
+        }
+        // npm/pnpm/yarn may leave Windows junction-backed dependency trees that
+        // Git cannot remove after it has detached the verified owned worktree.
+        await rm(this.workspacePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
       if (await pathExists(this.workspacePath)) {
         throw new Error("Verification workspace was not removed.");
       }

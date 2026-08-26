@@ -123,6 +123,63 @@ test("runs build and test commands in the pinned workspace and records immutable
   }
 });
 
+test("provisions dependencies in the disposable workspace before project commands", async () => {
+  const fixture = await createFixture("dependency-provisioning");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+  });
+  const build = {
+    label: "build requiring installed package",
+    executable: process.execPath,
+    args: ["-e", "process.stdout.write(require('local-package'))"],
+  };
+  const provisioning = {
+    manager: "npm" as const,
+    lockfile: "package-lock.json",
+    command: {
+      label: "install dependencies",
+      executable: process.execPath,
+      args: [
+        "-e",
+        "const fs=require('node:fs');fs.mkdirSync('node_modules/local-package',{recursive:true});" +
+          "fs.writeFileSync('node_modules/local-package/package.json',JSON.stringify({main:'index.js'}));" +
+          "fs.writeFileSync('node_modules/local-package/index.js','module.exports=\"installed\"');",
+      ],
+    },
+  };
+  try {
+    const run = await runtime.run({
+      plan: buildOnlyPlan(),
+      executionProfile: {
+        ...commandProfile(fixture.integration.revision, { build: [build] }),
+        provisioning,
+      },
+      commands: { build: [build] },
+    });
+    assert.equal(run.green, true, run.checks[0]?.issues.join("\n"));
+    assert.match(
+      (await artifacts.get(commandFacts(run.checks[0]!).at(0)!.stdoutArtifactHash)).toString(),
+      /installed/,
+    );
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
 test("executes one scheduler-selected category with the durable generation identity", async () => {
   const fixture = await createFixture("single-category");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));

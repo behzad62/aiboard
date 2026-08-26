@@ -48,6 +48,7 @@ export interface ArchitectToolsOptions {
   finalVerificationRepairPlanAvailable?: boolean;
   evidenceStore?: EvidenceStore;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
+  discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
 }
 
 interface PlanTaskInput {
@@ -144,7 +145,12 @@ export function createArchitectTools(
     upgradeAcceptanceContractTool(options.store, clock),
   ];
   const planning = options.finalVerificationPlanAvailable
-    ? [...core, planFinalVerificationTool(options.store, clock, options.finalVerificationProfileFor)]
+    ? [...core, planFinalVerificationTool(
+        options.store,
+        clock,
+        options.finalVerificationProfileFor,
+        options.discardFinalVerificationProfile,
+      )]
     : core;
   const verification = options.finalVerificationReviewAvailable
     ? [...planning, reviewFinalVerificationTool(
@@ -626,6 +632,7 @@ function planFinalVerificationTool(
   store: SchedulerStore,
   clock: () => string,
   profileFor?: ArchitectToolsOptions["finalVerificationProfileFor"],
+  discardProfile?: ArchitectToolsOptions["discardFinalVerificationProfile"],
 ): NativeTool<PlanFinalVerificationInput> {
   return lifecycleTool({
     name: "plan_final_verification",
@@ -680,6 +687,15 @@ function planFinalVerificationTool(
         detectedSignals: executionProfile.detectedSignals,
       });
       if (!authoritativeValidation.valid) {
+        if (discardProfile) {
+          try { await discardProfile(executionProfile); }
+          catch (error) {
+            return errorOutput(
+              "final_verification_profile_cleanup_failed",
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
         return errorOutput(
           "final_verification_plan_conflicts_with_repository",
           authoritativeValidation.issues.join(" "),
@@ -687,25 +703,40 @@ function planFinalVerificationTool(
       }
       const revisionKey = shortHash(projection.integrationRevision);
       const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
-      return appendEvent(store, {
-        runId: context.runId,
-        type: "final_verification.generation_created",
-        occurredAt: clock(),
-        actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `final-verification-plan:${projection.integrationRevision}`,
-        payload: {
-          taskId: `final-verification-${revisionKey}`,
-          generationId: `final-verification-generation-${revisionKey}`,
-          targetRevision: projection.integrationRevision,
-          planVersion,
-          plan: input.plan,
-          executionProfile,
-        },
-      }, {
-        type: "architect_action",
-        action: "final_verification_planned",
-        referenceId: projection.integrationRevision,
-      });
+      try {
+        const output = appendEvent(store, {
+          runId: context.runId,
+          type: "final_verification.generation_created",
+          occurredAt: clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `final-verification-plan:${projection.integrationRevision}`,
+          payload: {
+            taskId: `final-verification-${revisionKey}`,
+            generationId: `final-verification-generation-${revisionKey}`,
+            targetRevision: projection.integrationRevision,
+            planVersion,
+            plan: input.plan,
+            executionProfile,
+          },
+        }, {
+          type: "architect_action",
+          action: "final_verification_planned",
+          referenceId: projection.integrationRevision,
+        });
+        if (output.isError && discardProfile) {
+          try { await discardProfile(executionProfile); }
+          catch (error) {
+            return errorOutput(
+              "final_verification_profile_cleanup_failed",
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+        return output;
+      } catch (error) {
+        if (discardProfile) await discardProfile(executionProfile);
+        throw error;
+      }
     },
   });
 }
