@@ -91,7 +91,7 @@ or:
 | P4 | Independent high-risk verifier | P1 High | HVI-4 | P1–P3 | P5 |
 | P5 | Protected plugin seams and generic LSP | P1 High | HVI-5 | P1–P4 | P6 |
 | P6 | Controlled Runner V2 versus DeepSeek Harness benchmark | P0 Release gate | HVI-6 | P1–P5 | P7 |
-| P7 | Real-world Build-mode qualification | P0 Final gate | P6 and OD-1 | RW-1 | Release decision |
+| P7 | Real-world Build-mode qualification | P0 Final gate | RW-1 | P6 and OD-1 | Release decision |
 
 The chain is intentionally serial. Later features consume the durable state and invalidation rules established by earlier phases.
 

@@ -1153,3 +1153,33 @@ public/aiboard-workbench-runner.zip
 No account-provider or benchmark archive was modified. The affected archive
 files and this packaging entry are committed in the final P1 gate commit;
 `progress.md` remains untouched and P2 was not started.
+
+## Controller-owned P1 final exit gate
+
+The controller reran current evidence after both independent review cycles
+passed and after the final published archives were committed.
+
+- `npm run test:runner-v2`: 394/394 Runner tests passed, followed by every
+  chained client, policy, cutover, pause-gate, usage, live-state, transcript,
+  file, stats, and observability check.
+- `npm run typecheck:runner-v2` and `npm run lint`: passed.
+- `npm run build`: passed twice at the final source state; all 20 static pages
+  generated. The second run left the reproducible published archives clean.
+- Node 22.13.0: unflagged `node:sqlite` read/write smoke passed; the Node policy,
+  scheduler, control-server, and task-scheduler matrix passed 35/35; Runner
+  typecheck passed. Local Node 24 checks passed through the full suite/build.
+- Final P1 adversarial matrix: 60/60 covering criteria, evidence ownership,
+  Architect verdicts, legacy gating, replay/restart, raw SQLite/WAL migration,
+  retry history, recovery, and worker submission.
+- Client/audit/UI parity: Runner client, Build task board, observability panel,
+  and native cutover checks passed.
+- Publication: Runner V2 and WorkBench archives were reproducible, byte-stable,
+  and source-identical to all current Runner files; maintained-LTS policy and
+  manifests passed their deploy audit.
+- `git diff --check` passed and the tracked worktree was clean.
+
+The final adversarial requirement audit found no prose, artifact-only,
+foreign-actor, stale-attempt, legacy-gate, or persisted-replay bypass. ENV-1
+and HVI-2.1 through HVI-2.4 each have direct current evidence.
+
+**PHASE VERIFIED 100% COMPLETE — NEXT PHASE MAY BEGIN**
