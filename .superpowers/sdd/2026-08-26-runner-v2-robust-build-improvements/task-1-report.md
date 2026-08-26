@@ -451,3 +451,93 @@ Production/test packet commit: `3240ba11 runner-v2: gate legacy completion after
 
 The follow-up documentation commit records this report section, the final
 report hash, and clean tracked state.
+
+## Review fix round 1 — R6 subpacket A raw scheduler WAL compatibility
+
+This bounded subpacket addresses only the scheduler half of R6. The evidence
+schema migration and injected migration rollback remain for the next R6
+subpacket. R7 and P2 were not touched.
+
+### Reproduction before edits
+
+The existing legacy scheduler test built its database through
+`SqliteSchedulerStore`, so it did not prove compatibility with a database
+created before P1. A new test now generates the fixture with raw
+`DatabaseSync` SQL: it creates the pre-P1 `scheduler_events` table and index,
+inserts fixed legacy `run.policy_configured` and `plan.created` rows directly,
+and keeps `PRAGMA journal_mode = WAL` with `wal_autocheckpoint = 0` while the
+current store opens the same path. The test asserts the real `scheduler.sqlite-wal`
+sidecar exists before current-store open, after the gate append, and while the
+store is closed for each reopen.
+
+The fixture test was run immediately against HEAD `13ab6305` before any
+production change:
+
+```text
+npx tsx --test --test-name-pattern "raw pre-P1 scheduler WAL" runner-v2/test/scheduler-store.test.ts
+1/1 passed
+```
+
+This verifies that the existing scheduler schema and reducer already accept
+the raw pre-P1 shape; no scheduler production migration fix was technically
+required. The proof gap was test coverage, not a reproduced scheduler defect.
+
+### Repair and compatibility proof
+
+- The new raw fixture preserves exact event sequence, event IDs, and event
+  types (`run.policy_configured` sequence 1 and legacy `plan.created` sequence
+  2) through current-store open.
+- The active legacy projection enters
+  `acceptance_contract_upgrade_required`; appending the gate gives sequence 3.
+- A second gate with a distinct idempotency key is rejected by the durable
+  reducer, and the persisted event count remains exactly one gate.
+- The current store closes and reopens twice while the raw connection keeps the
+  WAL sidecar alive. Each reopen returns byte-for-byte equivalent decoded event
+  objects and exactly one gate.
+- No historical scheduler event is rewritten and no opaque binary fixture was
+  added.
+
+### Post-repair checks
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+15/15 passed
+
+npx tsx --test --test-name-pattern "legacy" runner-v2/test/build-runtime.test.ts
+2/2 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/scheduler-store.ts runner-v2/test/scheduler-store.test.ts
+passed
+
+git diff --check
+passed (only normal CRLF normalization warnings from Git)
+```
+
+### Required fault-only red proof
+
+The relevant duplicate-gate reducer guard was temporarily changed from
+`if (next.acceptanceUpgradeRequiredEventRecorded)` to an impossible condition
+(`&& false`) and only that injected fault was run against the raw fixture:
+
+```text
+npx tsx --test --test-name-pattern "raw pre-P1 scheduler WAL" runner-v2/test/scheduler-store.test.ts
+1 test, 0 passed, 1 failed
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+  at runner-v2/test/scheduler-store.test.ts:275:12
+```
+
+Restoring only the guard returned the fixture to 1/1, and the full scheduler
+suite to 15/15. The repair cycle remained below the governed reclassification
+and five-cycle thresholds.
+
+### Packet status
+
+Production/test packet commit: `d1a79bd3 runner-v2: prove raw scheduler WAL recovery`.
+
+The next bounded R6 subpacket must add the raw legacy evidence schema without
+`attempt`, prove its migration and idempotent reopen, and exercise migration
+rollback/recovery under an injected failure. The report and tracked worktree
+were clean after this packet.
