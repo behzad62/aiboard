@@ -723,3 +723,113 @@ Production/test commit: `fc091650 runner-v2: make evidence migration atomic`.
 
 R6 is complete. The tracked worktree was clean after this packet, with no R7
 or P2 work started.
+
+## Review fix round 1 — R7 RunnerSetup Node policy rendering
+
+This bounded packet addresses only R7. No P2 work was started, and the final
+whole-P1 exit suite remains intentionally deferred for controller packaging.
+
+### Reproduction before repair
+
+`RunnerSetup` placed the Node policy expression in JSX as
+`${NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}`. JSX therefore rendered the dollar
+sign literally before evaluating the expression. A focused static assertion was
+added to the existing native Build cutover check, scoped to the exact `LTS
+release (...)` text so the legitimate template-literal error message elsewhere
+in the component remains allowed.
+
+The pre-repair check went red with the expected assertion:
+
+```text
+npx tsx scripts/test-native-build-cutover.mts
+AssertionError [ERR_ASSERTION]: Runner setup must render the Node policy expression without a stray dollar sign
+  at ...\\scripts\\test-native-build-cutover.mts:22:8
+```
+
+### Repair
+
+The JSX text now uses `{NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}` without the
+literal `$`. The static guard rejects the exact faulty form
+`LTS release (${NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}` while preserving the
+valid template-literal interpolation used by the runtime connection error.
+No Node policy logic, supported-version rule, or runtime behavior changed.
+
+### Post-repair checks
+
+The exact R7 check and affected UI/policy/static checks all passed:
+
+```text
+npx tsx scripts/test-native-build-cutover.mts
+PASS native Build cutover
+
+npx tsx scripts/test-native-build-policy.mts
+PASS native Build policy
+
+npx tsx scripts/test-native-build-policy-ui.tsx
+PASS native Build policy UI
+
+npx tsx scripts/test-build-task-board-ui.tsx
+PASS build task board UI
+
+npx tsx scripts/test-runner-v2-client.mts
+PASS runner-v2 client
+
+npx tsx scripts/test-runner-v2-observability.mts
+PASS Runner V2 observability panel
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint components/RunnerSetup.tsx scripts/test-native-build-cutover.mts
+passed
+
+git diff --check
+passed (only normal CRLF normalization warnings from Git)
+```
+
+### Required fault-only red proof
+
+Only the repaired JSX marker was reintroduced temporarily, changing
+`{NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}` back to
+`${NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}`. The same static check went red:
+
+```text
+npx tsx scripts/test-native-build-cutover.mts
+exit_code=1
+AssertionError [ERR_ASSERTION]: Runner setup must render the Node policy expression without a stray dollar sign
+  at ...\\scripts\\test-native-build-cutover.mts:22:8
+```
+
+Restoring only the JSX marker returned the check to:
+
+```text
+npx tsx scripts/test-native-build-cutover.mts
+PASS native Build cutover
+```
+
+The R7 repair cycle remained below governed reclassification and five-cycle
+thresholds. No test or control was weakened.
+
+### Round-1 findings coverage summary (R1–R7)
+
+All seven review findings were technically confirmed and repaired in bounded
+packets; no finding remains unconfirmed or unresolved. The final whole-P1 exit
+suite is a controller-owned gate and was not rerun in this R7-only packet.
+
+| Finding | Confirmed repair and evidence |
+| --- | --- |
+| R1 | Live change-set evidence now requires the assigned worker or a proper descendant; adversarial ownership tests reject foreign actors. |
+| R2 | The authoritative scheduler append boundary validates exact evidence existence and ownership before durable append; fabricated IDs/hashes are rejected. |
+| R3 | Retry projections are attempt/criterion-version scoped: a rejected attempt clears only current submissions/reviews, while immutable prior history survives replay, close/reopen, and client mapping. |
+| R4 | After `acceptance_contract_upgrade_required`, raw `run.completed` and handoff selection are rejected until upgrade succeeds; pre-gate historical completion replay remains readable. |
+| R5 | Exact batched evidence lookup is uncapped and ID-based, including missing, duplicate, mismatched, and records beyond the prior 1,000-row limit. |
+| R6 | Raw pre-P1 SQLite scheduler/evidence fixtures exercise real WAL sidecars, legacy schema migration/defaults, event ordering, idempotent reopen, and transactional migration rollback/recovery. |
+| R7 | `RunnerSetup` no longer renders a stray `$` before the Node policy description, and the cutover static check guards the exact JSX form. |
+
+### Packet status
+
+Production/test commit: `4828d4b6 runner-v2: remove setup policy marker`.
+
+This R7 report entry is included in the subsequent documentation commit. The
+tracked worktree is clean after that commit, with only ignored SDD artifacts
+outside tracked-state checks as permitted. P2 remains untouched.
