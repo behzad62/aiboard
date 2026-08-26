@@ -9,8 +9,9 @@
 - P2.2 implementation revision: `97f52add`
 - P2.3A implementation revision: `b82a1a3a`
 - P2.3B1a implementation revision: `8867112a`
-- P2.3B1b implementation revision: this packet commit (reported at handoff)
-- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, and P2.3B1b only. P2.3B2 submit-tool and later packets were not started.
+- P2.3B1b implementation revision: `61ce8e6b`
+- P2.3B2 implementation revision: this packet commit (reported at handoff)
+- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, P2.3B1b, and P2.3B2 only. P2.4+ scheduler/completion/recovery packets were not started.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -186,10 +187,7 @@ passed
 | Valid workspace reopens deterministically | Reopen and fresh-manager create deep-equality assertions | Complete |
 | Cleanup is scoped to owned verification state | Cleanup test preserves integration path/revision/history and canonical checkout | Complete |
 
-P2.3B runtime_smoke/browser and submit-tool work, plus P2.4+ scheduler/completion
-work, remain locked for the controller. (The B1a runtime_smoke and B1b browser
-slices below are the sole exceptions in this packet; submit-tool work remains
-deferred.)
+P2.4+ scheduler/completion/recovery work remains locked for the controller.
 
 ## P2.3B1a runtime-smoke verification
 
@@ -254,7 +252,7 @@ passed (normal Git LF-to-CRLF warning only)
 | Non-green unhealthy/timeout/cancel outcomes | Focused result assertions and readiness guard fault proof | Complete |
 | No canonical checkout mutation or ChangeSet | Shared P2.3A workspace/revision checks remain green; no ChangeSet surface added | Complete |
 
-P2.3B2 submit-tool work remains intentionally deferred.
+P2.4+ scheduler/completion/recovery work remains intentionally deferred.
 
 ## P2.3B1b browser verification
 
@@ -318,7 +316,73 @@ passed (normal Git LF-to-CRLF warning only)
 | Close owned session on every exit | Thrown/cancelled navigation test plus `finally` close fault proof | Complete |
 | No ChangeSet or semantic completion authority | Runtime only records facts/check status; no ChangeSet or completion surface added | Complete |
 
-P2.3B2 submit-tool work and P2.4+ remain intentionally deferred.
+## P2.3B2 final-verification submission
+
+Added `runner-v2/src/final-verification-submission.ts` and focused coverage in
+`runner-v2/test/final-verification-submission.test.ts`. The dedicated
+`submit_final_verification` function and lifecycle-tool surface accept only an
+exact P2.1 plan plus a P2.3 run carrying its immutable generation, task,
+attempt, and target revision. Submission revalidates all four categories,
+preserves justified `not_applicable` rationale and inspection, rereads the
+current integration revision, and resolves every cited ID from the current
+task/attempt's EvidenceStore records. It compares each supplied fact with the
+authoritative record and mechanically rejects stale/foreign/fabricated or
+artifact-only citations, non-green outcomes, timeouts, cancellations, policy
+violations, and missing command/runtime/browser evidence. The frozen output is
+an audit structure only: it creates no ChangeSet and makes no completion
+decision.
+
+### P2.3B2 TDD and prove-red evidence
+
+The focused submission tests were added before the production module and first
+ran red:
+
+```text
+npx tsx --test runner-v2/test/final-verification-submission.test.ts
+ERR_MODULE_NOT_FOUND: Cannot find module .../runner-v2/src/final-verification-submission.js
+```
+
+After implementation, the focused suite passed 6/6. Three fault-only
+injections were then performed and reverted independently:
+
+- Removing the exact run-category completeness/missing-category guards made
+  the omitted-run case red: 5 passed, 1 failed (`Missing expected rejection`).
+- Removing the current-integration revision comparison made the stale-target
+  case red: 0 passed, 1 failed (`Missing expected rejection`).
+- Removing authoritative record/fact equality made the fabricated-fact case
+  red: 0 passed, 1 failed (`Missing expected rejection`).
+
+Each guard was restored immediately; the final focused suite returned to 6/6
+green.
+
+### P2.3B2 validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-submission.test.ts
+6 tests, 6 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/final-verification-submission.ts runner-v2/src/final-verification-runtime.ts runner-v2/test/final-verification-submission.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warning only)
+```
+
+### P2.3B2 requirement audit
+
+| P2.3B2 requirement | Evidence | Result |
+|---|---|---|
+| One exact generation/task/attempt and target revision | Required run identity, attempt, plan, generation-prefixed EvidenceStore IDs, and current-revision reread | Complete |
+| Exact four-category plan/result coverage | P2.1 plan validation, run duplicate/unknown/omission guards, focused cases | Complete |
+| Required results and evidence are mechanically green/current | Fact-to-record equality, ownership/attempt/revision checks, non-green/timeout/cancel/policy/missing-evidence guards | Complete |
+| Browser/runtime/command evidence is complete | Category-specific command/readiness and browser snapshot/screenshot/events validation | Complete |
+| Justified not-applicable entries remain represented | Plan/result projection and rationale/inspection preservation test | Complete |
+| Immutable audit output with no semantic completion or ChangeSet | Deep-frozen submission type and dedicated read-only lifecycle tool | Complete |
+
+P2.4+ scheduler/completion/recovery work remains intentionally deferred.
 
 ## P2.3A command verification runtime
 
@@ -379,8 +443,8 @@ npx tsx --test runner-v2/test/final-verification-runtime.test.ts runner-v2/test/
 ```
 
 The affected process/evidence/workspace regression set passed 83/83 tests
-(including integration and workspace-manager coverage); no P2.3B2 submit-tool
-or P2.4 surface was started in this packet.
+(including integration and workspace-manager coverage); no P2.4 surface was
+started in this packet.
 
 ### P2.3A requirement audit
 
@@ -395,5 +459,5 @@ or P2.4 surface was started in this packet.
 
 ## Packet status
 
-P2.3A, P2.3B1a, and P2.3B1b are complete in the implementation commits
-recorded above. P2.3B2 submit-tool work and P2.4+ remain intentionally deferred.
+P2.3A, P2.3B1a, P2.3B1b, and P2.3B2 are complete in the implementation commits
+recorded above. P2.4+ remain intentionally deferred.

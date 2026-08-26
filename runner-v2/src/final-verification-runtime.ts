@@ -11,6 +11,7 @@ import {
   planFinalVerification,
   type FinalVerificationCategory,
   type FinalVerificationCheck,
+  type FinalVerificationPlan,
   type FinalVerificationRepositoryInspection,
   type FinalVerificationStatus,
 } from "./final-verification-contracts.js";
@@ -236,6 +237,9 @@ export interface FinalVerificationRun {
   generationId: string;
   runId: string;
   taskId: string;
+  attempt?: number;
+  /** The normalized P2.1 plan used to produce this immutable generation. */
+  plan: FinalVerificationPlan;
   targetRevision: string;
   workspacePath: string;
   startedAt: string;
@@ -376,6 +380,8 @@ export class FinalVerificationRuntime {
       generationId,
       runId: this.runId,
       taskId: this.taskId,
+      ...(this.attempt !== undefined ? { attempt: this.attempt } : {}),
+      plan: freezePlan(plan),
       targetRevision: workspace.targetRevision,
       workspacePath: workspace.path,
       startedAt,
@@ -1304,6 +1310,29 @@ function freezeCheck(check: FinalVerificationCheckResult): FinalVerificationChec
       : {}),
     issues: Object.freeze([...check.issues]),
   }) as unknown as FinalVerificationCheckResult;
+}
+
+function freezePlan(plan: FinalVerificationPlan): FinalVerificationPlan {
+  return Object.freeze({
+    checks: Object.freeze(plan.checks.map((check) => Object.freeze({
+      ...check,
+      ...(check.repositoryInspection
+        ? {
+            repositoryInspection: Object.freeze({
+              ...check.repositoryInspection,
+              paths: Object.freeze([...check.repositoryInspection.paths]),
+              ...(check.repositoryInspection.detectedSignals
+                ? {
+                    detectedSignals: Object.freeze(
+                      check.repositoryInspection.detectedSignals.map((signal) => Object.freeze({ ...signal })),
+                    ),
+                  }
+                : {}),
+            }),
+          }
+        : {}),
+    }))),
+  }) as unknown as FinalVerificationPlan;
 }
 
 function freezeFact(fact: FinalVerificationFact): FinalVerificationFact {
