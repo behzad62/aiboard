@@ -12,11 +12,11 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current reviewed implementation head before this report update: `1c878c0b`
-- Current reviewed bundle revision: `273e84bb`
+- Current reviewed implementation head before this report update: `8fbb1178`
+- Current reviewed bundle revision: `f07c2593`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
   review-repair commits through fail-closed browser-policy profile validation
-  and the key-directed container-valued structured-text redaction correction.
+  and the quote-safe recursively encoded structured-text redaction correction.
 - Historical-note convention: statements in the packet-era sections below that
   say a later packet was "locked," "deferred," or "remained with the
   controller" describe that packet's boundary at the time. They are not the
@@ -2059,5 +2059,107 @@ passed
 
 Commit `273e84bb` records the deterministic Runner V2 and WorkBench bundles
 generated from `1c878c0b`. Node policy remains maintained LTS lines 22/24 with
+the capability floor and no exact Node patch pin. This correction records
+current implementation evidence and does not declare the P2 phase outcome.
+
+## P2 recursively encoded structured-text re-review correction
+
+### Correction: quote ambiguity and JSON string encoding could still hide secrets
+
+The `1c878c0b` section correctly reports container-valued property redaction,
+but its claim that key-directed scanning covered the full diagnostic string was
+too broad. The prior scanner consumed an entire parsed non-key string and then
+continued after its closing quote. In malformed ordinary text, that same quote
+can also be the opening quote of the next sensitive key, so the candidate was
+never reconsidered. Separately, a valid JSON string literal containing encoded
+JSON was opaque: its decoded object, array, and nested string values never
+reached structural redaction.
+
+Commit `8fbb1178` replaces quote skipping with two linear quote-boundary
+automata. Each unescaped quote can close the current candidate and immediately
+become the opener for the next candidate, so unrelated or unmatched quote text
+cannot hide a later raw key or encoded literal. The property automaton remains
+key-directed and consumes a complete exact JSON value only after the decoded
+key is classified by `isSensitiveKey`.
+
+The second automaton decodes valid JSON string literals, recursively applies
+the same structural/text redactor, and re-encodes only changed values. Recursion
+remains capped at eight encoded text levels. At that cap, a separate structural
+inspection is capped at 64 decode steps: it preserves documented safe
+`secretary` and `tokenizer` content, redacts determinable nested credentials,
+and fails closed only if the inspection bound itself is exhausted. Object
+depth, item count, maximum text length, complete JSON validity, surrounding
+ordinary text, URL/bearer/assignment behavior, and idempotence remain covered.
+The quote scans are single pass, and recursive/bound inspection has explicit
+caps rather than a global attempt budget that a prefix can consume.
+
+The direct regressions cover the exact unmatched-quote reproduction; one
+encoded object string with scalar, object, array, nested, and multiple sensitive
+keys; recursive string encoding; fail-closed depth behavior; safe deep encoded
+false-positive controls; and the combined unmatched-prefix plus encoded-literal
+case. New diagnostics persistence, bounded observability loading, and the exact
+legacy receipt-first restart repair all exercise raw and encoded variants.
+
+RED, mutation, restore, and current gate evidence:
+
+```text
+pre-fix focused direct/cleanup/observability gate
+23 tests, 17 passed, 6 failed
+- unmatched quote hid a later sensitive object value
+- encoded multi-key object and nested encoded string leaked
+- diagnostics persistence, observability, and receipt-first repair leaked
+
+pre-fix selected direct guards
+4 tests, 0 passed, 4 failed
+
+combined unmatched-prefix plus encoded-literal guard against first correction
+1 test, 0 passed, 1 failed
+
+self-review safe deep-encoding guard against unconditional cap fallback
+1 test, 0 passed, 1 failed
+
+fault mutation bypassing recursive JSON string-literal redaction
+4 tests, 0 passed, 4 failed
+
+fault mutation disabling shared-quote reconsideration in the key pass
+1 test, 0 passed, 1 failed
+
+restored focused direct/cleanup/observability gate
+26 tests, 26 passed, 0 failed
+
+Node.js 22.13.0 scoped direct, persistence, observability, and recovery guards
+9 tests, 9 passed, 0 failed
+
+combined final-verification plus redaction gate
+129 tests, 129 passed, 0 failed
+
+npm run test:runner-v2
+534 tests, 534 passed, 0 failed
+all 11 chained client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed; exit 0
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+
+targeted ESLint, full lint, git diff --check, and fix-only diff inspection
+passed
+```
+
+Commit `f07c2593` records the deterministic Runner V2 and WorkBench bundles
+generated from `8fbb1178`. Node policy remains maintained LTS lines 22/24 with
 the capability floor and no exact Node patch pin. This correction records
 current implementation evidence and does not declare the P2 phase outcome.
