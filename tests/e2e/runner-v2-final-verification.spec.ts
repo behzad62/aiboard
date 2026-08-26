@@ -25,6 +25,10 @@ import {
   FinalVerificationRuntime,
   type FinalVerificationBrowserSession,
 } from "../../runner-v2/src/final-verification-runtime.js";
+import {
+  FinalVerificationProfileAuthority,
+  type FinalVerificationExecutionProfile,
+} from "../../runner-v2/src/final-verification-profile.js";
 import { captureGitBaseline } from "../../runner-v2/src/git-baseline.js";
 import { runGit } from "../../runner-v2/src/git-command.js";
 import { IntegrationManager } from "../../runner-v2/src/integration-manager.js";
@@ -64,8 +68,35 @@ test.describe("Runner V2 canonical final verification", () => {
         attempt: 1,
         currentIntegrationRevision: () => fixture.integration.revision,
       });
+      const runtimeSmoke = {
+        label: "fixture runtime health",
+        executable: process.execPath,
+        args: ["server.mjs", "0"],
+        endpoint: "http://127.0.0.1:0/health",
+        readiness: {
+          timeoutMs: 10_000,
+          healthCheck: ({ observation }: { observation: { stdout: string } }) => observation.stdout.includes("READY"),
+        },
+      };
+      const browserInput = {
+        label: "fixture browser UI",
+        url: `http://127.0.0.1:${port}/`,
+        policy: {
+          consoleErrors: "fail" as const,
+          pageErrors: "fail" as const,
+          failedNetworkEvents: "fail" as const,
+        },
+      };
       const run = await runtime.run({
         plan: requiredPlan(),
+        executionProfile: executionProfile(fixture.integration.revision, {
+          commands: {
+            build: [{ label: "fixture build", executable: process.execPath, args: ["build.mjs"] }],
+            tests: [{ label: "fixture tests", executable: process.execPath, args: ["test.mjs"] }],
+          },
+          runtimeSmoke: { ...runtimeSmoke, readiness: { timeoutMs: 10_000 } },
+          browser: browserInput,
+        }),
         commands: {
           build: [{
             label: "fixture build",
@@ -78,25 +109,8 @@ test.describe("Runner V2 canonical final verification", () => {
             args: ["test.mjs"],
           }],
         },
-        runtimeSmoke: {
-          label: "fixture runtime health",
-          executable: process.execPath,
-          args: ["server.mjs", "0"],
-          endpoint: "http://127.0.0.1:0/health",
-          readiness: {
-            timeoutMs: 10_000,
-            healthCheck: ({ observation }) => observation.stdout.includes("READY"),
-          },
-        },
-        browser: {
-          label: "fixture browser UI",
-          url: `http://127.0.0.1:${port}/`,
-          policy: {
-            consoleErrors: "fail",
-            pageErrors: "fail",
-            failedNetworkEvents: "fail",
-          },
-        },
+        runtimeSmoke,
+        browser: browserInput,
       });
 
       expect(run.green).toBe(true);
@@ -232,9 +246,11 @@ test.describe("Runner V2 canonical final verification", () => {
         taskId: "boundary-verification",
         currentIntegrationRevision: () => currentRevision,
       });
+      const testCommand = { label: "integrated tests", executable: process.execPath, args: ["test.mjs"] };
       const result = await runtime.run({
         plan: noBuild,
-        commands: { tests: [{ label: "integrated tests", executable: process.execPath, args: ["test.mjs"] }] },
+        executionProfile: executionProfile(currentRevision, { commands: { tests: [testCommand] } }),
+        commands: { tests: [testCommand] },
       });
       expect(result.green).toBe(false);
       expect(result.checks.find((check) => check.category === "tests")?.green).toBe(false);
@@ -253,7 +269,11 @@ test.describe("Runner V2 canonical final verification", () => {
         runId: `${fixture.runId}-stale`,
         currentIntegrationRevision: () => currentRevision,
       });
-      await expect(staleRuntime.run({ plan: noBuild, commands: { tests: [] } }))
+      await expect(staleRuntime.run({
+        plan: noBuild,
+        executionProfile: executionProfile(staleRevision, { commands: { tests: [testCommand] } }),
+        commands: { tests: [testCommand] },
+      }))
         .rejects.toThrow(/stale|current integration revision/i);
       await stale.cleanup().catch(() => undefined);
     } finally {
@@ -299,14 +319,26 @@ test.describe("Runner V2 canonical final verification", () => {
       na("runtime_smoke", "no long-running service required for resume fixture"),
       na("browser", "browser already covered by the real fixture test"),
     ] };
-    let store = new SqliteSchedulerStore(schedulerPath, { evidenceStore: evidence });
+    const artifacts = new ArtifactStore(join(fixture.state, "resume-artifacts"));
+    const authority = new FinalVerificationProfileAuthority({ stateDirectory: fixture.state, runId: fixture.runId });
+    const profile = await authority.inspectAndPersist({
+      repositoryRoot: fixture.integration.path,
+      targetRevision: fixture.integration.revision,
+    });
+    const storeOptions = {
+      evidenceStore: evidence,
+      artifacts,
+      validateExecutionProfile: (input: { profile: FinalVerificationExecutionProfile; targetRevision: string }) =>
+        authority.validate(input.profile, input.targetRevision),
+    };
+    let store = new SqliteSchedulerStore(schedulerPath, storeOptions);
     const calls: string[] = [];
     const driver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
         calls.push(input.category);
         const runtime = new FinalVerificationRuntime({
           workspaceManager: workspace,
-          artifacts: new ArtifactStore(join(fixture.state, "resume-artifacts")),
+          artifacts,
           evidenceStore: evidence,
           runId: fixture.runId,
           taskId: input.taskId,
@@ -316,24 +348,21 @@ test.describe("Runner V2 canonical final verification", () => {
         });
         return await runtime.runCategory({
           plan,
-          commands: {
-            build: [{ label: "resume build", executable: process.execPath, args: ["build.mjs"] }],
-            tests: [{ label: "resume tests", executable: process.execPath, args: ["test.mjs"] }],
-          },
+          executionProfile: input.executionProfile,
         }, input.category);
       },
     };
     try {
-      seedVerification(store, fixture, plan);
-      let runtime = schedulerRuntime(store, evidence, driver, fixture.runId);
+      seedVerification(store, fixture, plan, profile);
+      let runtime = schedulerRuntime(store, evidence, artifacts, driver, fixture.runId);
       expect((await runtime.step()).action).toBe("final_verification_check_completed");
       expect(calls).toEqual(["build"]);
       const evidenceAfterBuild = evidence.list({ runId: fixture.runId });
       expect(evidenceAfterBuild).toHaveLength(1);
 
       store.close();
-      store = new SqliteSchedulerStore(schedulerPath, { evidenceStore: evidence });
-      runtime = schedulerRuntime(store, evidence, driver, fixture.runId);
+      store = new SqliteSchedulerStore(schedulerPath, storeOptions);
+      runtime = schedulerRuntime(store, evidence, artifacts, driver, fixture.runId);
       expect((await runtime.step()).action).toBe("final_verification_check_completed");
       expect(calls).toEqual(["build", "tests"]);
       expect((await runtime.step()).action).toBe("final_verification_check_completed");
@@ -371,20 +400,24 @@ test.describe("Runner V2 canonical final verification", () => {
         taskId: "cancel-runtime",
         currentIntegrationRevision: () => fixture.integration.revision,
       });
+      const runtimeSmoke = {
+        label: "cancelled owned tree",
+        executable: process.execPath,
+        args: ["tree-server.mjs", String(port)],
+        endpoint: `http://127.0.0.1:${port}/health`,
+        readiness: { timeoutMs: 10_000, healthCheck: ({ observation }: { observation: { stdout: string } }) => {
+          if (observation.stdout.includes("READY")) abort.abort();
+          return false;
+        } },
+        releasePort: async () => await expectPortReusable(port),
+      };
       const result = await runtime.run({
         plan: runtimeOnlyPlan(),
+        executionProfile: executionProfile(fixture.integration.revision, {
+          runtimeSmoke: { ...runtimeSmoke, readiness: { timeoutMs: 10_000 }, releasePort: undefined },
+        }),
         signal: abort.signal,
-        runtimeSmoke: {
-          label: "cancelled owned tree",
-          executable: process.execPath,
-          args: ["tree-server.mjs", String(port)],
-          endpoint: `http://127.0.0.1:${port}/health`,
-          readiness: { timeoutMs: 10_000, healthCheck: ({ observation }) => {
-            if (observation.stdout.includes("READY")) abort.abort();
-            return false;
-          } },
-          releasePort: async () => await expectPortReusable(port),
-        },
+        runtimeSmoke,
       });
       expect(result.green).toBe(false);
       expect((result.checks.find((check) => check.category === "runtime_smoke")?.facts[0] as unknown as Record<string, unknown>).cancelled).toBe(true);
@@ -405,10 +438,12 @@ test.describe("Runner V2 canonical final verification", () => {
           taskId: "cancel-browser",
           currentIntegrationRevision: () => fixture.integration.revision,
         });
+        const browserInput = { label: "cancel browser", url: `http://127.0.0.1:${uiPort}/`, policy: {} };
         const browserResult = await browserRuntime.run({
           plan: browserOnlyPlan(),
+          executionProfile: executionProfile(fixture.integration.revision, { browser: browserInput }),
           signal: browserAbort.signal,
-          browser: { label: "cancel browser", url: `http://127.0.0.1:${uiPort}/`, policy: {} },
+          browser: browserInput,
         });
         expect(browserResult.green).toBe(false);
         expect(session.closed).toBe(true);
@@ -498,6 +533,27 @@ function na(category: "build" | "runtime_smoke" | "browser", reason: string) {
     status: "not_applicable" as const,
     rationale: reason,
     repositoryInspection: { paths: ["package.json"], summary: reason },
+  };
+}
+
+function executionProfile(
+  targetRevision: string,
+  specs: Partial<Pick<FinalVerificationExecutionProfile, "commands" | "runtimeSmoke" | "browser">>,
+): FinalVerificationExecutionProfile {
+  const commands = specs.commands ?? {};
+  return {
+    version: 1,
+    targetRevision,
+    inspectedPaths: ["package.json"],
+    detectedSignals: [
+      ...(commands.build ? [{ category: "build" as const, source: "E2E fixture build binding" }] : []),
+      ...(commands.tests ? [{ category: "tests" as const, source: "E2E fixture test binding" }] : []),
+      ...(specs.runtimeSmoke ? [{ category: "runtime_smoke" as const, source: "E2E fixture runtime binding" }] : []),
+      ...(specs.browser ? [{ category: "browser" as const, source: "E2E fixture browser binding" }] : []),
+    ],
+    commands,
+    ...(specs.runtimeSmoke ? { runtimeSmoke: specs.runtimeSmoke } : {}),
+    ...(specs.browser ? { browser: specs.browser } : {}),
   };
 }
 
@@ -616,7 +672,12 @@ function isWithin(parent: string, candidate: string): boolean {
   return relative.startsWith("\\") || relative.startsWith("/") || relative === "";
 }
 
-function seedVerification(store: SqliteSchedulerStore, fixture: Fixture, plan: FinalVerificationPlan): void {
+function seedVerification(
+  store: SqliteSchedulerStore,
+  fixture: Fixture,
+  plan: FinalVerificationPlan,
+  executionProfile: FinalVerificationExecutionProfile,
+): void {
   const append = (type: string, idempotencyKey: string, payload: Record<string, unknown>, actorRole = "runner") => store.append({
     runId: fixture.runId,
     type,
@@ -634,13 +695,14 @@ function seedVerification(store: SqliteSchedulerStore, fixture: Fixture, plan: F
   append("integration.revision_advanced", "resume-revision", { integrationRevision: fixture.integration.revision });
   append("final_verification.generation_created", "resume-generation", {
     taskId: "final-verification-resume", generationId: "generation-resume",
-    targetRevision: fixture.integration.revision, planVersion: 1, plan,
+    targetRevision: fixture.integration.revision, planVersion: 1, plan, executionProfile,
   });
 }
 
 function schedulerRuntime(
   store: SqliteSchedulerStore,
   evidence: SqliteEvidenceStore,
+  artifacts: ArtifactStore,
   driver: FinalVerificationCheckDriver,
   runId: string,
 ): BuildRuntime {
@@ -648,6 +710,7 @@ function schedulerRuntime(
     runId,
     store,
     evidenceStore: evidence,
+    artifacts,
     finalVerificationDriver: driver,
     workerDriver: { run: async () => ({ type: "failed" as const, reason: "worker must not run verification" }) },
     architectDriver: { run: async () => undefined },
