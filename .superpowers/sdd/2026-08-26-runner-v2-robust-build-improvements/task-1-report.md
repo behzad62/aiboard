@@ -298,3 +298,62 @@ f803fd7d runner-v2: refresh published acceptance bundles
 - Provider calls in this phase use scripted/local test seams; live external-provider qualification remains outside P1.
 - The local runtime proof uses Node 22.13.0 and 24.18.0. The semver contract and synthetic rejection matrix cover other maintained-line patch values, but no claim is made that every upstream patch was installed locally.
 - The baseline dependency install reported seven pre-existing npm audit findings (one moderate, six high); no Runner-specific impact was found in this phase.
+
+## Review fix round 1 — R3 retry projection packet
+
+This bounded repair addresses only R3. R4, R6, and R7 remain queued; no P2 work was started.
+
+### Reproduction before edits
+
+- Durable reducer/replay: `npx tsx --test runner-v2/test/scheduler-store.test.ts` was red at 12/13. The new retry regression stopped with the old attempt-1 `criterionEvidenceLinks` still present where the current projection was required to be `undefined`.
+- Client projection: `npx tsx scripts/test-runner-v2-client.mts` was red with the stale attempt-1 link returned for a task at attempt 2; the expected current link projection was empty.
+- The reproducer used a real WAL-backed `SqliteSchedulerStore`, persisted a submitted attempt-1 mapping and rejected Architect verdict, appended the runner retry transition to `planned`, closed/reopened the database, and replayed the events. The stale current task mapping and rejected review survived replay before this packet.
+
+### Repair
+
+- Added explicit `CriterionSubmissionProjection` and attempt/acceptance-criteria-version fields to review projections.
+- Scheduler projections now retain immutable `submissionHistory` and `reviewHistory` by task while keeping current task links and current review separate.
+- Every submission and completed Architect decision records its task attempt and criterion version in history; history arrays and nested evidence/verdict data are cloned during reducer replay and audit projection.
+- A rejected/failed task transitioning back to `planned` clears current worker/change-set/evidence fields and the current review, while preserving both histories. Fresh-attempt task revision also clears the current review.
+- Audit output exposes current empty links/verdicts/status after retry plus the versioned historical records.
+- Client mapping filters current links/reviews to the task attempt and criterion version, suppresses a review on a planned retry, and maps the same immutable histories without sharing mutable arrays.
+
+### Post-repair checks
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+```
+
+13/13 passed, including the close/reopen reducer and audit assertions.
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts runner-v2/test/guidance-review.test.ts && npx tsx scripts/test-runner-v2-client.mts
+```
+
+26/26 scheduler/guidance tests passed and the client contract script returned `PASS runner-v2 client`.
+
+```text
+npm run typecheck:runner-v2
+npx eslint runner-v2/src/scheduler-store.ts runner-v2/src/task-graph.ts lib/client/runner-v2.ts runner-v2/test/scheduler-store.test.ts scripts/test-runner-v2-client.mts
+```
+
+Both static checks passed with exit code 0.
+
+The broader `npm run test:runner-v2` exit attempt reached 383 Runner tests with 381 passing. One failure was the exact audit-shape fixture, which was repaired in this packet; the remaining repeated failure is the pre-existing Windows `EPERM` cleanup race in `build-runtime.test.ts` after its assertions complete. The affected control-server suite is green at 8/8 after the audit fixture update; the focused R3/scheduler/guidance/client checks above are green.
+
+### Required fault-only red proofs
+
+Each injection changed only the R3 guard under test, was run against the focused regression, then was restored before the next proof:
+
+1. Removed task-graph retry clearing (`startsRetry = false`). The scheduler suite went red at 12/13 with the attempt-1 current link still present; restoring the guard returned 13/13.
+2. Disabled `appendSubmissionHistory`. The scheduler suite went red at 12/13 with the expected submission history missing; restoring only the append returned 13/13.
+3. Disabled `appendReviewHistory`. The scheduler suite went red at 12/13 with the expected rejected review history missing; restoring only the append returned 13/13.
+4. Removed the client attempt/version review match guard. The client script went red at the current verdict assertion because the stale attempt-1 rejected verdict was exposed; restoring the guard returned `PASS runner-v2 client`.
+
+No test or control was weakened. No R3 failure reached governed reclassification or the five-cycle cap.
+
+### Packet status
+
+Production/test packet commit: `f9f537bd runner-v2: clear retry acceptance projections`.
+
+The follow-up documentation commit records the final report hash and clean tracked state.
