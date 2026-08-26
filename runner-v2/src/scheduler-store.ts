@@ -977,6 +977,14 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may complete a scheduler run.");
       }
+      if (
+        current.acceptanceContractStatus === "acceptance_contract_upgrade_required" &&
+        current.acceptanceUpgradeRequiredEventRecorded
+      ) {
+        throw new Error(
+          "Run completion is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+        );
+      }
       next.status = "completed";
       if (current.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
         next.acceptanceContractStatus = "legacy_completed";
@@ -1016,6 +1024,14 @@ export function reduceSchedulerEvent(
     case "project.handoff_selected": {
       if (event.actor.role !== "user" && event.actor.role !== "runner") {
         throw new Error("Final project handoff selection requires the user or runner.");
+      }
+      if (
+        current.acceptanceContractStatus === "acceptance_contract_upgrade_required" &&
+        current.acceptanceUpgradeRequiredEventRecorded
+      ) {
+        throw new Error(
+          "Final project handoff is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+        );
       }
       if (current.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");

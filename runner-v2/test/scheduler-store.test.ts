@@ -323,6 +323,141 @@ test("completed legacy scheduler runs remain replayable and inspectable", () => 
   }
 });
 
+test("gated active legacy runs reject raw completion and handoff selection until upgrade", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-legacy-gate-boundary-"));
+  const database = join(root, "scheduler.sqlite");
+  const legacyTask = task("task_gate", "planned", []);
+  const store = new SqliteSchedulerStore(database);
+  try {
+    store.append(policyEvent("run_gate_completion", "finish"));
+    store.append(event("run_gate_completion", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [legacyTask],
+    }));
+    store.append({
+      runId: "run_gate_completion",
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: [legacyTask.id] },
+    });
+    assert.throws(
+      () => store.append({
+        runId: "run_gate_completion",
+        type: "run.completed",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "run-completed-before-upgrade",
+        payload: {},
+      }),
+      /upgrade|required|legacy/i,
+    );
+    assert.equal(store.readRun("run_gate_completion").length, 3);
+    store.append({
+      runId: "run_gate_completion",
+      type: "acceptance_contract.upgraded",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: legacyTask.id,
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+        }],
+      },
+    });
+    store.append({
+      runId: "run_gate_completion",
+      type: "run.completed",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "run-completed-after-upgrade",
+      payload: {},
+    });
+    const completed = rebuildSchedulerProjection(store.readRun("run_gate_completion"));
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.acceptanceContractStatus, "current");
+
+    store.append(policyEvent("run_gate_handoff", "plan_only"));
+    store.append(event("run_gate_handoff", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [task("task_handoff_gate", "planned", [])],
+    }));
+    store.append({
+      runId: "run_gate_handoff",
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_handoff_gate"] },
+    });
+    store.append({
+      runId: "run_gate_handoff",
+      type: "project.handoff_requested",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "project-handoff-requested",
+      payload: { summary: "Legacy handoff waits for upgrade." },
+    });
+    assert.throws(
+      () => store.append({
+        runId: "run_gate_handoff",
+        type: "project.handoff_selected",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: "project-handoff-selected-before-upgrade",
+        payload: {
+          choice: "keep_integration_branch",
+          integrationRevision: "integration_revision",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        },
+      }),
+      /upgrade|required|legacy/i,
+    );
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun("run_gate_handoff")).projectHandoff?.status,
+      "requested",
+    );
+    store.append({
+      runId: "run_gate_handoff",
+      type: "acceptance_contract.upgraded",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: "task_handoff_gate",
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+        }],
+      },
+    });
+    store.append({
+      runId: "run_gate_handoff",
+      type: "project.handoff_selected",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "project-handoff-selected-after-upgrade",
+      payload: {
+        choice: "keep_integration_branch",
+        integrationRevision: "integration_revision",
+        integrationBranch: "aiboard/run/integration",
+        appliedToProject: false,
+      },
+    });
+    const handedOff = rebuildSchedulerProjection(store.readRun("run_gate_handoff"));
+    assert.equal(handedOff.status, "completed");
+    assert.equal(handedOff.acceptanceContractStatus, "current");
+    assert.equal(handedOff.projectHandoff?.status, "selected");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("durable submission rejects fabricated evidence IDs and hashes", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-evidence-boundary-"));
   const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
