@@ -74,13 +74,19 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
         },
       }],
       evidenceReferences: ["Authorization: Bearer evidence-secret"],
-      logs: ["API_KEY whitespace-secret", "Bearer standalone-secret"],
+      logs: [
+        "API_KEY whitespace-secret",
+        "Bearer standalone-secret",
+        '{"access_token":"json-log-access-secret","nested":{"clientSecret":"json-log-client-secret"}}',
+        'diagnostic fragment "refresh_token":"json-fragment-secret" tail',
+      ],
     });
     const encoded = readFileSync(path, "utf8");
     for (const secret of [
       "argv-secret", "url-secret", "object-secret", "url-password", "query-secret",
       "argv-access-secret", "argv-client-secret", "object-access-secret", "object-client-secret",
       "query-access-secret", "query-client-secret", "evidence-secret", "whitespace-secret", "standalone-secret",
+      "json-log-access-secret", "json-log-client-secret", "json-fragment-secret",
     ]) assert.doesNotMatch(encoded, new RegExp(secret));
     assert.match(encoded, /visible/);
     assert.match(encoded, /\[REDACTED\]/);
@@ -138,6 +144,10 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
         "client_secret=legacy-client-secret.txt",
         ...Array.from({ length: 205 }, (_, index) => `generated-${index}.txt`),
       ],
+      logs: [
+        '{"access_token":"legacy-json-access-secret","clientSecret":"legacy-json-client-secret"}',
+        'legacy fragment "private_key":"legacy-json-private-secret"',
+      ],
     }, null, 2)}\n`);
 
     await fixture.workspace.cleanup();
@@ -186,7 +196,10 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
     assert.deepEqual(recovered, { diagnosticsPath: archivedPath });
     assert.equal(existsSync(fixture.workspace.path), false);
     const repairedText = readFileSync(archivedPath, "utf8");
-    assert.doesNotMatch(repairedText, /legacy-access-token-secret|legacy-client-secret/);
+    assert.doesNotMatch(
+      repairedText,
+      /legacy-access-token-secret|legacy-client-secret|legacy-json-access-secret|legacy-json-client-secret|legacy-json-private-secret/,
+    );
     assert.match(repairedText, /\[REDACTED\]/);
     const repaired = JSON.parse(repairedText) as { changedPaths: string[] };
     assert.equal(repaired.changedPaths.length, 200);

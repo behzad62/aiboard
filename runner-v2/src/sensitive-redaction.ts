@@ -2,6 +2,15 @@ const REDACTED = "[REDACTED]";
 const ASSIGNMENT_CANDIDATE = /(?<![A-Za-z0-9_-])((?:--?)?[A-Za-z_][A-Za-z0-9_-]*)(\s*(?::|=)\s*|\s+)(?:Bearer\s+)?([^\s,;&]+)/g;
 const BEARER_VALUE = /\bBearer\s+[^\s,;]+/gi;
 const URL_VALUE = /https?:\/\/[^\s"'<>]+/gi;
+const QUOTED_JSON_PROPERTY = /("(?:\\.|[^"\\])*")(\s*:\s*)("(?:\\.|[^"\\])*"|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+const MAXIMUM_JSON_TEXT_DEPTH = 8;
+const MAXIMUM_JSON_CONTAINER_ATTEMPTS = 64;
+
+interface RedactionLimits {
+  maximumDepth: number;
+  maximumItems: number;
+  maximumTextLength: number;
+}
 
 export function isSensitiveKey(value: string): boolean {
   const key = value.trim().replace(/^--?/, "");
@@ -23,25 +32,52 @@ export function isSensitiveKey(value: string): boolean {
 }
 
 export function redactSensitiveText(value: string, maximumLength = Number.MAX_SAFE_INTEGER): string {
-  const redactedUrls = value.replace(URL_VALUE, redactUrl);
+  return redactSensitiveTextInternal(value, {
+    maximumDepth: 16,
+    maximumItems: 200,
+    maximumTextLength: maximumLength,
+  }, 0);
+}
+
+function redactSensitiveTextInternal(
+  value: string,
+  limits: RedactionLimits,
+  jsonTextDepth: number,
+): string {
+  const redactedJson = jsonTextDepth < MAXIMUM_JSON_TEXT_DEPTH
+    ? redactJsonContainers(value, limits, jsonTextDepth)
+    : value;
+  const redactedJsonProperties = redactQuotedJsonProperties(redactedJson);
+  const redactedUrls = redactedJsonProperties.replace(URL_VALUE, redactUrl);
   const redactedAssignments = redactAssignments(redactedUrls);
-  return redactedAssignments.replace(BEARER_VALUE, `Bearer ${REDACTED}`).slice(0, maximumLength);
+  return redactedAssignments.replace(BEARER_VALUE, `Bearer ${REDACTED}`)
+    .slice(0, limits.maximumTextLength);
 }
 
 export function redactSensitiveValue(
   value: unknown,
   options: { maximumDepth?: number; maximumItems?: number; maximumTextLength?: number } = {},
 ): unknown {
-  const maximumDepth = options.maximumDepth ?? 16;
-  const maximumItems = options.maximumItems ?? 200;
-  const maximumTextLength = options.maximumTextLength ?? Number.MAX_SAFE_INTEGER;
+  return redactSensitiveValueInternal(value, {
+    maximumDepth: options.maximumDepth ?? 16,
+    maximumItems: options.maximumItems ?? 200,
+    maximumTextLength: options.maximumTextLength ?? Number.MAX_SAFE_INTEGER,
+  }, 0);
+}
 
+function redactSensitiveValueInternal(
+  value: unknown,
+  limits: RedactionLimits,
+  jsonTextDepth: number,
+): unknown {
   const visit = (candidate: unknown, depth: number): unknown => {
-    if (depth > maximumDepth) return { truncated: true };
-    if (typeof candidate === "string") return redactSensitiveText(candidate, maximumTextLength);
+    if (depth > limits.maximumDepth) return { truncated: true };
+    if (typeof candidate === "string") {
+      return redactSensitiveTextInternal(candidate, limits, jsonTextDepth);
+    }
     if (candidate === null || typeof candidate === "boolean" || typeof candidate === "number") return candidate;
     if (Array.isArray(candidate)) {
-      const bounded = candidate.slice(0, maximumItems);
+      const bounded = candidate.slice(0, limits.maximumItems);
       return bounded.map((item, index) => {
         const previous = index > 0 ? bounded[index - 1] : undefined;
         if (typeof previous === "string" && isSensitiveKey(previous)) return REDACTED;
@@ -50,15 +86,83 @@ export function redactSensitiveValue(
     }
     if (typeof candidate === "object") {
       const output: Record<string, unknown> = {};
-      for (const [key, item] of Object.entries(candidate as Record<string, unknown>).slice(0, maximumItems)) {
+      for (const [key, item] of Object.entries(candidate as Record<string, unknown>).slice(0, limits.maximumItems)) {
         output[key] = isSensitiveKey(key) ? REDACTED : visit(item, depth + 1);
       }
       return output;
     }
-    return redactSensitiveText(String(candidate), maximumTextLength);
+    return redactSensitiveTextInternal(String(candidate), limits, jsonTextDepth);
   };
 
   return visit(value, 0);
+}
+
+function redactJsonContainers(
+  value: string,
+  limits: RedactionLimits,
+  jsonTextDepth: number,
+): string {
+  let output = "";
+  let copiedThrough = 0;
+  let attempts = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "{" && value[index] !== "[") continue;
+    attempts += 1;
+    if (attempts > MAXIMUM_JSON_CONTAINER_ATTEMPTS) break;
+    const end = jsonContainerEnd(value, index);
+    if (end === undefined) continue;
+    const source = value.slice(index, end);
+    let parsed: unknown;
+    try { parsed = JSON.parse(source) as unknown; }
+    catch { continue; }
+    if (!parsed || typeof parsed !== "object") continue;
+    const redacted = redactSensitiveValueInternal(parsed, limits, jsonTextDepth + 1);
+    output += value.slice(copiedThrough, index) + JSON.stringify(redacted);
+    copiedThrough = end;
+    index = end - 1;
+  }
+  return copiedThrough === 0 ? value : output + value.slice(copiedThrough);
+}
+
+function jsonContainerEnd(value: string, start: number): number | undefined {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{" || character === "[") {
+      stack.push(character);
+      continue;
+    }
+    if (character !== "}" && character !== "]") continue;
+    const opening = stack.pop();
+    if ((character === "}" && opening !== "{") || (character === "]" && opening !== "[")) {
+      return undefined;
+    }
+    if (stack.length === 0) return index + 1;
+  }
+  return undefined;
+}
+
+function redactQuotedJsonProperties(value: string): string {
+  return value.replace(QUOTED_JSON_PROPERTY, (match, rawKey: string, separator: string) => {
+    let key: unknown;
+    try { key = JSON.parse(rawKey) as unknown; }
+    catch { return match; }
+    return typeof key === "string" && isSensitiveKey(key)
+      ? `${rawKey}${separator}${JSON.stringify(REDACTED)}`
+      : match;
+  });
 }
 
 function redactUrl(value: string): string {
