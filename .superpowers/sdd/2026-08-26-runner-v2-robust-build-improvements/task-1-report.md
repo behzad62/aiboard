@@ -541,3 +541,94 @@ The next bounded R6 subpacket must add the raw legacy evidence schema without
 `attempt`, prove its migration and idempotent reopen, and exercise migration
 rollback/recovery under an injected failure. The report and tracked worktree
 were clean after this packet.
+
+## Review fix round 1 — R6 subpacket B raw evidence migration
+
+This bounded subpacket addresses only the raw legacy evidence-schema half of
+R6. Injected migration rollback/recovery is explicitly deferred to R6C. R7 and
+P2 were not touched.
+
+### Reproduction before edits
+
+The new regression generates a pre-P1 `evidence_records` database directly
+with `DatabaseSync` SQL. The schema intentionally omits `attempt`, inserts two
+legacy evidence rows with fixed IDs, actors, facts, hashes, and sequence order,
+and enables WAL with `wal_autocheckpoint = 0`. The raw connection remains open
+while `SqliteEvidenceStore` opens and migrates the same database, proving a
+real `evidence.sqlite-wal` sidecar is present across migration and reopen.
+
+The migration behavior was already present at HEAD `d7608bf1`, so the focused
+test was green before production edits:
+
+```text
+npx tsx --test runner-v2/test/sqlite-evidence-store.test.ts
+1/1 passed
+```
+
+No production migration defect was reproduced; the missing evidence was the
+raw pre-P1 compatibility proof. The test nevertheless has a meaningful
+fault-sensitive migration assertion.
+
+### Repair and compatibility proof
+
+- Opening the raw database adds the nullable `attempt` column while retaining
+  both legacy rows. `PRAGMA table_info` confirms the migrated column.
+- Legacy rows decode with `attempt` omitted/undefined, preserving the nullable
+  default; a new post-migration record persists and reopens with `attempt: 2`.
+- IDs, facts, artifact hashes, and sequence order remain unchanged.
+- Exact `getByIds` lookup returns requested records beyond list semantics,
+  preserves requested duplicates, and omits a missing ID.
+- The store closes and reopens twice while the raw handle retains the WAL
+  sidecar; both reopen projections match the migrated rows exactly.
+- No opaque binary fixture or production migration change was added.
+
+### Post-repair checks
+
+```text
+npx tsx --test runner-v2/test/sqlite-evidence-store.test.ts
+1/1 passed
+
+npx tsx --test runner-v2/test/evidence-tools.test.ts
+6/6 passed
+
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+15/15 passed
+
+npx tsx --test runner-v2/test/recovery-smoke.test.ts
+1/1 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/sqlite-evidence-store.ts runner-v2/test/sqlite-evidence-store.test.ts
+passed
+
+git diff --check
+passed (only normal CRLF normalization warnings from Git)
+```
+
+### Required fault-only red proof
+
+The migration branch was temporarily disabled by changing only
+`if (!columns.some((column) => column.name === "attempt"))` to an impossible
+condition. The focused raw fixture then failed at the migration assertion:
+
+```text
+npx tsx --test runner-v2/test/sqlite-evidence-store.test.ts
+1 test, 0 passed, 1 failed
+AssertionError [ERR_ASSERTION]: current store must migrate attempt
+  at runner-v2/test/sqlite-evidence-store.test.ts:28:12
+```
+
+Restoring only the migration condition returned the fixture to 1/1 and the
+affected evidence, scheduler, and recovery checks to green. The R6B repair
+cycle remained below governed reclassification and five-cycle thresholds.
+
+### Packet status
+
+Production change: none; the existing migration is proven by this packet.
+Test commit: `f2147e1a runner-v2: prove raw evidence migration`.
+
+R6C remains responsible for an injected failure after the migration step,
+transaction rollback, constructor cleanup, and subsequent recovery. The
+tracked worktree was clean after this packet.
