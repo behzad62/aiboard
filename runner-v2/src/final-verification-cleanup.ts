@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { runGit, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import type { VerificationWorkspaceManager } from "./verification-workspace.js";
+import { redactSensitiveText, redactSensitiveValue } from "./sensitive-redaction.js";
 
 const MAX_ITEMS = 200;
 const MAX_TEXT_BYTES = 32 * 1024;
@@ -48,6 +49,23 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
   async persist(input: FinalVerificationDiagnosticsInput): Promise<string> {
     assertIdentity(input.generationId, "generationId");
     assertIdentity(input.taskId, "taskId");
+    const directory = this.diagnosticsDirectory();
+    const destination = join(directory, `${safeSegment(input.generationId)}.json`);
+    const existing = await readDiagnosticsArchive(destination, {
+      runId: this.options.runId,
+      generationId: input.generationId,
+      taskId: input.taskId,
+      targetRevision: input.targetRevision,
+    });
+    if (existing) {
+      const expected = redactedDiagnosticsPayload(input);
+      if (JSON.stringify(existing.checks) !== JSON.stringify(expected.checks) ||
+        JSON.stringify(existing.evidenceReferences) !== JSON.stringify(expected.evidenceReferences) ||
+        JSON.stringify(existing.logs) !== JSON.stringify(expected.logs)) {
+        throw new Error("Final verification diagnostics archive conflicts with the current failure facts.");
+      }
+      return destination;
+    }
     const workspace = await this.options.workspaceManager.inspectOwned();
     if (workspace.runId !== this.options.runId || workspace.targetRevision !== input.targetRevision) {
       throw new Error("Verification diagnostics identity does not match the owned workspace.");
@@ -56,14 +74,6 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
       "status", "--porcelain=v1", "-z", "--untracked-files=all",
     ])).stdout;
     const changedPaths = parseStatusPaths(status).slice(0, MAX_ITEMS);
-    const directory = join(
-      this.stateDirectory,
-      "builds",
-      safeSegment(this.options.runId),
-      "audit",
-      "final-verification-diagnostics",
-    );
-    const destination = join(directory, `${safeSegment(input.generationId)}.json`);
     const record = {
       version: 1,
       kind: "final-verification-diagnostics",
@@ -73,18 +83,9 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
       targetRevision: input.targetRevision,
       workspaceId: workspace.workspaceId,
       changedPaths,
-      checks: boundJson(input.checks),
-      evidenceReferences: input.evidenceReferences.slice(0, MAX_ITEMS).map(redactAndBound),
-      logs: (input.logs ?? []).slice(0, MAX_ITEMS).map(redactAndBound),
+      ...redactedDiagnosticsPayload(input),
     };
     await mkdir(directory, { recursive: true });
-    try {
-      const existing = await readFile(destination, "utf8");
-      if (existing === `${JSON.stringify(record, null, 2)}\n`) return destination;
-      throw new Error("Final verification diagnostics archive conflicts with existing durable evidence.");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
     const temporary = `${destination}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     try { await rename(temporary, destination); }
@@ -95,6 +96,16 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
   private async git(cwd: string, args: readonly string[]) {
     const options: GitCommandOptions = { cwd, args };
     return await this.execute(options);
+  }
+
+  private diagnosticsDirectory(): string {
+    return join(
+      this.stateDirectory,
+      "builds",
+      safeSegment(this.options.runId),
+      "audit",
+      "final-verification-diagnostics",
+    );
   }
 }
 
@@ -138,7 +149,13 @@ export class OwnedFinalVerificationCleanup implements FinalVerificationCleanupCo
       if (!sameCleanupIdentity(receipt, input, this.options.runId)) {
         throw new Error("Final verification cleanup receipt conflicts with the requested identity.");
       }
-      return typeof receipt.diagnosticsPath === "string" ? { diagnosticsPath: receipt.diagnosticsPath } : {};
+      const diagnosticsPath = await validateReceiptDiagnosticsPath({
+        receipt,
+        input,
+        stateDirectory: this.stateDirectory,
+        runId: this.options.runId,
+      });
+      return diagnosticsPath ? { diagnosticsPath } : {};
     }
     const failures: unknown[] = [];
     try { await this.quiesceRun(); } catch (error) { failures.push(error); }
@@ -207,17 +224,21 @@ function parseStatusPaths(status: string): string[] {
   }
   return paths.sort((left, right) => left.localeCompare(right));
 }
-function redactAndBound(value: string): string {
-  return value
-    .replace(/\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s]+/gi, "$1=[REDACTED]")
-    .slice(0, MAX_TEXT_BYTES);
-}
-function boundJson(value: readonly unknown[]): unknown[] {
-  return value.slice(0, MAX_ITEMS).map((item) => {
-    const encoded = redactAndBound(JSON.stringify(item));
-    try { return JSON.parse(encoded) as unknown; }
-    catch { return { truncated: true, preview: encoded }; }
-  });
+function redactedDiagnosticsPayload(input: FinalVerificationDiagnosticsInput): {
+  checks: unknown;
+  evidenceReferences: string[];
+  logs: string[];
+} {
+  return {
+    checks: redactSensitiveValue(input.checks, {
+      maximumItems: MAX_ITEMS,
+      maximumTextLength: MAX_TEXT_BYTES,
+    }),
+    evidenceReferences: input.evidenceReferences.slice(0, MAX_ITEMS)
+      .map((value) => redactSensitiveText(value, MAX_TEXT_BYTES)),
+    logs: (input.logs ?? []).slice(0, MAX_ITEMS)
+      .map((value) => redactSensitiveText(value, MAX_TEXT_BYTES)),
+  };
 }
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -235,6 +256,69 @@ async function readReceipt(path: string): Promise<Record<string, unknown> | unde
     const value = JSON.parse(await readFile(path, "utf8")) as unknown;
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Cleanup receipt is malformed.");
     return value as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+async function validateReceiptDiagnosticsPath(input: {
+  receipt: Record<string, unknown>;
+  input: { generationId: string; taskId: string; targetRevision: string; failed?: FinalVerificationDiagnosticsInput };
+  stateDirectory: string;
+  runId: string;
+}): Promise<string | undefined> {
+  const value = input.receipt.diagnosticsPath;
+  if (value === undefined) {
+    if (input.input.failed) throw new Error("Cleanup receipt diagnostics archive is missing for a failed generation.");
+    return undefined;
+  }
+  if (!input.input.failed || typeof value !== "string") {
+    throw new Error("Cleanup receipt diagnostics path is invalid for this generation.");
+  }
+  const expected = join(
+    input.stateDirectory,
+    "builds",
+    safeSegment(input.runId),
+    "audit",
+    "final-verification-diagnostics",
+    `${safeSegment(input.input.generationId)}.json`,
+  );
+  if (resolve(value) !== resolve(expected)) {
+    throw new Error("Cleanup receipt diagnostics path is not Runner-owned.");
+  }
+  const record = await readDiagnosticsArchive(expected, {
+    runId: input.runId,
+    generationId: input.input.generationId,
+    taskId: input.input.taskId,
+    targetRevision: input.input.targetRevision,
+  });
+  if (!record) throw new Error("Cleanup receipt diagnostics archive is missing.");
+  return expected;
+}
+
+async function readDiagnosticsArchive(
+  path: string,
+  identity: { runId: string; generationId: string; taskId: string; targetRevision: string },
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const record = JSON.parse(await readFile(path, "utf8")) as unknown;
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error("Final verification diagnostics archive is malformed.");
+    }
+    const value = record as Record<string, unknown>;
+    if (value.version !== 1 || value.kind !== "final-verification-diagnostics" ||
+      value.runId !== identity.runId || value.generationId !== identity.generationId ||
+      value.taskId !== identity.taskId || value.targetRevision !== identity.targetRevision) {
+      throw new Error("Final verification diagnostics archive conflicts with the requested identity.");
+    }
+    const redacted = redactSensitiveValue(value, {
+      maximumItems: MAX_ITEMS,
+      maximumTextLength: MAX_TEXT_BYTES,
+    });
+    if (JSON.stringify(redacted) !== JSON.stringify(value)) {
+      throw new Error("Final verification diagnostics archive contains unsafe or unbounded values.");
+    }
+    return value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

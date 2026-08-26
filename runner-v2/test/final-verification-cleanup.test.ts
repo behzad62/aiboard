@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +41,126 @@ test("failed verification diagnostics archive dirty files before exact cleanup",
     assert.equal(archive.targetRevision, fixture.integration.revision);
     assert.deepEqual(archive.changedPaths, ["generated.log"]);
     assert.equal(JSON.stringify(archive).includes("super-secret"), false);
+  } finally { await closeFixture(fixture); }
+});
+
+test("diagnostics redact structured keys, argv pairs, bearer values, and URL credentials", async () => {
+  const fixture = await createFixture("structured-redaction");
+  try {
+    await fixture.workspace.create();
+    const diagnostics = new FinalVerificationDiagnosticsArchive({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      workspaceManager: fixture.workspace,
+    });
+    const path = await diagnostics.persist({
+      ...diagnosticsInput(fixture),
+      checks: [{
+        category: "tests",
+        command: {
+          args: ["--token", "argv-secret", "--api-key=url-secret", "--safe", "visible"],
+          env: { API_KEY: "object-secret", SAFE_VALUE: "visible" },
+          endpoint: "https://user:url-password@example.test/run?token=query-secret&safe=visible",
+        },
+      }],
+      evidenceReferences: ["Authorization: Bearer evidence-secret"],
+      logs: ["API_KEY whitespace-secret", "Bearer standalone-secret"],
+    });
+    const encoded = readFileSync(path, "utf8");
+    for (const secret of [
+      "argv-secret", "url-secret", "object-secret", "url-password", "query-secret",
+      "evidence-secret", "whitespace-secret", "standalone-secret",
+    ]) assert.doesNotMatch(encoded, new RegExp(secret));
+    assert.match(encoded, /visible/);
+    assert.match(encoded, /\[REDACTED\]/);
+  } finally { await closeFixture(fixture); }
+});
+
+test("failed cleanup converges after a crash between workspace deletion and receipt persistence", async () => {
+  const fixture = await createFixture("crash-after-workspace-delete");
+  try {
+    await fixture.workspace.create();
+    const diagnostics = new FinalVerificationDiagnosticsArchive({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      workspaceManager: fixture.workspace,
+    });
+    const archivedPath = await diagnostics.persist(diagnosticsInput(fixture));
+    await fixture.workspace.cleanup();
+    const cleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      stopRun: async () => undefined,
+      closeBrowserRun: async () => undefined,
+      workspaceManager: fixture.workspace,
+      diagnostics,
+    });
+    const result = await cleanup.cleanup({ ...cleanupIdentity(fixture), failed: diagnosticsInput(fixture) });
+    assert.equal(result.diagnosticsPath, archivedPath);
+    assert.equal(existsSync(fixture.workspace.path), false);
+    assert.deepEqual(
+      await cleanup.cleanup({ ...cleanupIdentity(fixture), failed: diagnosticsInput(fixture) }),
+      result,
+    );
+  } finally { await closeFixture(fixture); }
+});
+
+test("an existing diagnostics archive cannot be rebound to different failure facts", async () => {
+  const fixture = await createFixture("archive-rebind");
+  try {
+    await fixture.workspace.create();
+    const diagnostics = new FinalVerificationDiagnosticsArchive({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      workspaceManager: fixture.workspace,
+    });
+    await diagnostics.persist(diagnosticsInput(fixture));
+    await fixture.workspace.cleanup();
+    await assert.rejects(
+      diagnostics.persist({ ...diagnosticsInput(fixture), logs: ["different failure"] }),
+      /archive.*conflict|failure facts/i,
+    );
+  } finally { await closeFixture(fixture); }
+});
+
+test("a forged cleanup receipt cannot inject an unowned diagnostics path", async () => {
+  const fixture = await createFixture("forged-receipt");
+  try {
+    await fixture.workspace.create();
+    const receiptDirectory = join(
+      fixture.state,
+      "builds",
+      safeSegment(fixture.runId),
+      "audit",
+      "final-verification-cleanup",
+    );
+    mkdirSync(receiptDirectory, { recursive: true });
+    writeFileSync(join(receiptDirectory, `${safeSegment("generation-1")}.json`), JSON.stringify({
+      version: 1,
+      kind: "final-verification-cleanup-receipt",
+      runId: fixture.runId,
+      generationId: "generation-1",
+      taskId: "final-verification-1",
+      targetRevision: fixture.integration.revision,
+      diagnosticsPath: join(fixture.root, "attacker-controlled.json"),
+    }));
+    const cleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      stopRun: async () => undefined,
+      closeBrowserRun: async () => undefined,
+      workspaceManager: fixture.workspace,
+      diagnostics: new FinalVerificationDiagnosticsArchive({
+        stateDirectory: fixture.state,
+        runId: fixture.runId,
+        workspaceManager: fixture.workspace,
+      }),
+    });
+    await assert.rejects(
+      cleanup.cleanup({ ...cleanupIdentity(fixture), failed: diagnosticsInput(fixture) }),
+      /diagnostics.*owned|receipt.*diagnostics/i,
+    );
+    assert.equal(existsSync(fixture.workspace.path), true);
   } finally { await closeFixture(fixture); }
 });
 
@@ -143,6 +264,9 @@ function diagnosticsInput(fixture: Fixture) {
 }
 function cleanupIdentity(fixture: Fixture) {
   return { generationId: "generation-1", taskId: "final-verification-1", targetRevision: fixture.integration.revision };
+}
+function safeSegment(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
 interface Fixture { root: string; project: string; state: string; runId: string; integration: IntegrationManager; workspace: VerificationWorkspaceManager }

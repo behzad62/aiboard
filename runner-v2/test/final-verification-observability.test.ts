@@ -60,10 +60,29 @@ test("loads only bounded redacted diagnostics from the exact Runner-owned run di
     const runRoot = join(root, "builds", "run-segment", "audit", "final-verification-diagnostics");
     await mkdir(runRoot, { recursive: true });
     const path = join(runRoot, "generation.json");
-    await writeFile(path, JSON.stringify({ version: 1, kind: "final-verification-diagnostics", runId: "run-1", generationId: "generation-1", taskId: "verify-1", targetRevision: "revision-current", changedPaths: ["src/app.ts"], checks: [], evidenceReferences: [], logs: ["token=[REDACTED]"] }));
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      kind: "final-verification-diagnostics",
+      runId: "run-1",
+      generationId: "generation-1",
+      taskId: "verify-1",
+      targetRevision: "revision-current",
+      changedPaths: ["src/app.ts"],
+      checks: [{
+        authorization: "object-secret",
+        args: ["--token", "argv-secret"],
+        endpoint: "https://user:url-secret@example.test/?api_key=query-secret",
+      }],
+      evidenceReferences: ["Authorization: Bearer evidence-secret"],
+      logs: ["API_KEY whitespace-secret", "Bearer standalone-secret"],
+    }));
     const loaded = await loadFinalVerificationDiagnostics({ stateDirectory: root, runId: "run-1", expectedRunSegment: "run-segment", diagnosticsPath: path, generationId: "generation-1", taskId: "verify-1", targetRevision: "revision-current" });
     assert.deepEqual(loaded?.changedPaths, ["src/app.ts"]);
-    assert.doesNotMatch(JSON.stringify(loaded), /C:\\|runner-observability|secret-value/);
+    assert.doesNotMatch(
+      JSON.stringify(loaded),
+      /C:\\|runner-observability|object-secret|argv-secret|url-secret|query-secret|evidence-secret|whitespace-secret|standalone-secret/,
+    );
+    assert.match(JSON.stringify(loaded), /\[REDACTED\]/);
     const foreign = join(root, "foreign.json");
     await writeFile(foreign, JSON.stringify({ logs: ["secret-value"] }));
     assert.equal(await loadFinalVerificationDiagnostics({ stateDirectory: root, runId: "run-1", expectedRunSegment: "run-segment", diagnosticsPath: foreign, generationId: "generation-1", taskId: "verify-1", targetRevision: "revision-current" }), undefined);

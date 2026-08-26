@@ -245,24 +245,39 @@ test("durable cleanup failure blocks review and restart retries the exact genera
   const fixture = createFixture();
   const categories: FinalVerificationCategory[] = [];
   let cleanupCalls = 0;
+  let cleanupAvailable = false;
   const cleanupDriver: FinalVerificationCleanupDriver = {
     cleanup: async () => {
       cleanupCalls += 1;
-      if (cleanupCalls === 1) throw new Error("cleanup token=secret-value failed");
+      if (!cleanupAvailable) {
+        throw new Error(
+          "cleanup Authorization: Bearer secret-value API_KEY another-secret failed",
+        );
+      }
       return {};
     },
   };
   try {
     let runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver(categories), undefined, cleanupDriver);
-    for (let index = 0; index < 5; index += 1) await runtime.step();
-    assert.equal((await runtime.step()).action, "final_verification_cleanup_failed");
+    assert.deepEqual(await runtime.runUntilBlocked(100), {
+      status: "idle",
+      action: "final_verification_cleanup_failed",
+    });
     let current = runtime.projection().finalVerification?.current;
     assert.equal(current?.cleanup?.status, "failed");
-    assert.match(current?.cleanup?.error ?? "", /token=\[REDACTED\]/);
+    assert.match(current?.cleanup?.error ?? "", /Authorization=\[REDACTED\]/);
+    assert.doesNotMatch(current?.cleanup?.error ?? "", /secret-value|another-secret/);
     assert.equal(current?.review, undefined);
+    assert.equal(cleanupCalls, 1, "one autonomous pump may attempt cleanup only once");
+    assert.equal(
+      fixture.store.readRun(RUN_ID)
+        .filter((event) => event.type === "final_verification.cleanup_failed").length,
+      1,
+    );
 
     fixture.store.close();
     fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence });
+    cleanupAvailable = true;
     runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver(categories), undefined, cleanupDriver);
     assert.equal((await runtime.step()).action, "final_verification_cleanup_succeeded");
     current = runtime.projection().finalVerification?.current;

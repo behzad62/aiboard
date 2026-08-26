@@ -31,6 +31,7 @@ import {
   type WorkerRuntimeDriver,
 } from "./task-scheduler.js";
 import { ToolRegistry } from "./tool-registry.js";
+import { redactSensitiveText } from "./sensitive-redaction.js";
 
 export type ArchitectActionReason =
   | { type: "plan_required" }
@@ -917,7 +918,7 @@ export class BuildRuntime {
           error: boundedCleanupError(error),
         },
       });
-      return { status: "progressed", action: "final_verification_cleanup_failed" };
+      return { status: "idle", action: "final_verification_cleanup_failed" };
     }
   }
 
@@ -1065,7 +1066,5 @@ function emptyProjection(runId: string): SchedulerProjection {
 
 function boundedCleanupError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message
-    .replace(/\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s]+/gi, "$1=[REDACTED]")
-    .slice(0, 4_096) || "Final verification cleanup failed.";
+  return redactSensitiveText(message, 4_096) || "Final verification cleanup failed.";
 }

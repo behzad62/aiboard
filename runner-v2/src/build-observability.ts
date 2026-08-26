@@ -16,6 +16,7 @@ import type {
   SchedulerEvent,
 } from "./scheduler-store.js";
 import type { FinalVerificationCategory } from "./final-verification-contracts.js";
+import { redactSensitiveValue } from "./sensitive-redaction.js";
 
 export type FinalVerificationCategoryStatus = "pending" | "passed" | "failed" | "not_applicable";
 export type FinalVerificationDiagnosticValue =
@@ -197,8 +198,10 @@ export async function loadFinalVerificationDiagnostics(input: {
       record.taskId !== input.taskId || record.targetRevision !== input.targetRevision) return undefined;
     const strings = (value: unknown) => Array.isArray(value) && value.length <= MAX_DIAGNOSTICS_ITEMS && value.every((item) => typeof item === "string");
     if (!strings(record.changedPaths) || !Array.isArray(record.checks) || record.checks.length > MAX_DIAGNOSTICS_ITEMS || !strings(record.evidenceReferences) || !strings(record.logs)) return undefined;
-    const safe = JSON.stringify(record).replace(/\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s"}]+/gi, "$1=[REDACTED]");
-    const parsed = JSON.parse(safe) as FinalVerificationDiagnosticsManifest;
+    const parsed = redactSensitiveValue(record, {
+      maximumItems: MAX_DIAGNOSTICS_ITEMS,
+      maximumTextLength: 32 * 1024,
+    }) as FinalVerificationDiagnosticsManifest;
     return { ...parsed, changedPaths: [...parsed.changedPaths], checks: [...parsed.checks], evidenceReferences: [...parsed.evidenceReferences], logs: [...parsed.logs] };
   } catch { return undefined; }
 }
