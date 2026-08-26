@@ -12,11 +12,11 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current reviewed implementation head before this report update: `7f276396`
-- Current reviewed bundle revision: `afc003c0`
+- Current reviewed implementation head before this report update: `88fc2458`
+- Current reviewed bundle revision: `117fb39f`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
   review-repair commits through fail-closed browser-policy profile validation
-  and the bounded raw JSON-string-content escape-layer redaction correction.
+  and the property-aware, source-mapped raw credential redaction correction.
 - Historical-note convention: statements in the packet-era sections below that
   say a later packet was "locked," "deferred," or "remained with the
   controller" describe that packet's boundary at the time. They are not the
@@ -2259,5 +2259,114 @@ passed
 
 Commit `afc003c0` records the deterministic Runner V2 and WorkBench bundles
 generated from `7f276396`. Node policy remains maintained LTS lines 22/24 with
+the capability floor and no exact Node patch pin. This correction records
+current implementation evidence and does not declare the P2 phase outcome.
+
+## P2 raw-key authority and source-span re-review correction
+
+### Correction: Unicode-escaped keys and whole-text re-encoding broke the contract
+
+The `7f276396` section correctly reports one-layer raw fragment coverage, but
+two claims were too broad. Its activation regex classified only literal ASCII
+key text, so valid JSON Unicode escapes in any part of `access_token` or
+`clientSecret` bypassed authority. It also decoded and re-encoded the complete
+diagnostic after activation. That changed determinable unrelated context—for
+example, adding an escape before an unmatched quote—and a key-like prose token
+near an unrelated invalid escape could make the entire diagnostic fail closed
+without ever proving a property relationship.
+
+Commit `88fc2458` replaces global activation/transformation with bounded,
+property-aware source-span handling. It decodes an exact raw escaped key token,
+including JSON Unicode escapes, then classifies the decoded key through the
+shared `isSensitiveKey`. Authority requires an exact property colon or a
+recognized argv-pair relationship; an isolated `\"access_token\"` mention is
+not authority. The value suffix is decoded through the key's exact escape
+depth while retaining a source-boundary map. Only the exact sensitive value
+span is replaced, preserving key spelling, Unicode escape spelling, quote and
+backslash parity, unmatched-prefix text, and all other determinable context
+byte for byte. String value wrappers are preserved exactly; object, array, and
+scalar values are replaced as one bounded value. An invalid escape before a
+mechanically proven value boundary remains fail-closed.
+
+Key and quote inspection use the existing 64-step bounded policy. A new
+12-layer raw-escape regression proves the earlier eight-layer/4,096-byte first
+implementation cannot silently return. Complete JSON values still take the
+existing structural/string path, avoiding redundant raw scanning while
+preserving complete JSON validity, recursive encoded-string behavior, false
+positive controls, output limits, and idempotence.
+
+The direct regressions cover Unicode escapes at the prefix, middle,
+underscore, and camel-case positions; property-aware benign malformed prose;
+exact unmatched-quote and even-parity preservation; multi-key object, array,
+and argv values; invalid-boundary fail-closed behavior; idempotence; and twelve
+raw escape layers. Diagnostics persistence asserts the exact preserved log,
+and legacy receipt-first restart repair plus observability loading cover
+Unicode-escaped keys with opaque values.
+
+RED, self-review, mutation, restore, and current gate evidence:
+
+```text
+pre-fix focused redaction/cleanup/observability gate
+37 tests, 30 passed, 7 failed
+- Unicode-escaped raw key values leaked in direct, persistence,
+  receipt-first restart repair, and observability cases
+- benign malformed prose was erased
+- unmatched-quote and even-parity context was not preserved exactly
+
+first source-mapped implementation boundary guard
+1 test, 0 passed, 1 failed
+- an invalid escape after a raw scalar made an unbounded malformed value look
+  complete; invalid-boundary provenance was retained and made fail-closed
+
+first source-mapped implementation 12-layer guard
+1 test, 0 passed, 1 failed
+- the initial eight-layer/4,096-byte key cap leaked the opaque value
+- restored implementation uses the established 64-step inspection bound
+
+fault mutation bypassing the source-mapped raw redaction pass
+5 selected tests, 1 passed, 4 failed
+- the benign prose test correctly remained unchanged without authority
+- Unicode, exact context, even-parity, and malformed-boundary guards failed
+
+restored selected authority and preservation guards
+5 tests, 5 passed, 0 failed
+
+restored focused redaction/cleanup/observability gate
+39 tests, 39 passed, 0 failed
+
+Node.js 22.13.0 scoped direct, persistence, observability, and recovery guards
+9 tests, 9 passed, 0 failed
+
+combined final-verification plus redaction gate
+142 tests, 142 passed, 0 failed
+
+npm run test:runner-v2
+547 tests, 547 passed, 0 failed
+all 11 chained client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed; exit 0
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+
+targeted ESLint, full lint, git diff --check, and fix-only diff inspection
+passed
+```
+
+Commit `117fb39f` records the deterministic Runner V2 and WorkBench bundles
+generated from `88fc2458`. Node policy remains maintained LTS lines 22/24 with
 the capability floor and no exact Node patch pin. This correction records
 current implementation evidence and does not declare the P2 phase outcome.
