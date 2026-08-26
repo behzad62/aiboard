@@ -17,6 +17,7 @@ import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
 } from "./integration-manager.js";
+import type { OwnedFinalVerificationCleanup } from "./final-verification-cleanup.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
@@ -26,6 +27,8 @@ export interface NativeBuildRuntimeHandle {
   files(): Promise<IntegrationFileSnapshot>;
   compact(): void | Promise<void>;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
+  /** Constructed cleanup primitive; lifecycle wiring is owned by the P2.6 manager packet. */
+  finalVerificationCleanup?: OwnedFinalVerificationCleanup;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
 }

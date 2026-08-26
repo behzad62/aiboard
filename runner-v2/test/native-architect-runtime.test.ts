@@ -405,6 +405,7 @@ test("Plan-only rejects forged mutating browser and MCP calls even under Full ac
     screenshot: async () => Buffer.from("png"),
     events: async () => ({ console: [], network: [] }),
     close: async () => undefined,
+    closeRun: async () => undefined,
     closeAll: async () => undefined,
   } satisfies BrowserBackend;
   const mcp = {

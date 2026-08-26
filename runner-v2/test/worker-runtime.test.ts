@@ -51,6 +51,7 @@ const browserEvidenceBackend: BrowserBackend = {
   async screenshot() { return Buffer.from("arena-png"); },
   async events() { return { console: [], network: [] }; },
   async close() {},
+  async closeRun() {},
   async closeAll() {},
 };
 

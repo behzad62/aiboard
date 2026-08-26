@@ -190,6 +190,19 @@ export class VerificationWorkspaceManager {
     });
   }
 
+  /** Validate and expose the exact owned workspace without requiring it to be clean. */
+  async inspectOwned(): Promise<VerificationWorkspace> {
+    return await this.serialized(async () => {
+      await this.assertStateContainment();
+      const metadata = await this.readMetadata();
+      await this.assertOwnedWorkspace(metadata, {
+        requireCleanWorkspace: false,
+        requireCanonicalState: false,
+      });
+      return toWorkspace(metadata, this.metadataFilePath);
+    });
+  }
+
   /** Remove only this manager's owned worktree and metadata. */
   async cleanup(): Promise<void> {
     await this.serialized(async () => {

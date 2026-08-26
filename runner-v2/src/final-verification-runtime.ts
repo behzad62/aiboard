@@ -107,7 +107,7 @@ export interface FinalVerificationBrowserInput {
 }
 
 export interface FinalVerificationBrowserBackend {
-  open(sessionId: string, input: { url: string; width: number; height: number }): Promise<{ url: string; title: string }>;
+  open(sessionId: string, input: { url: string; width: number; height: number }, ownerRunId: string): Promise<{ url: string; title: string }>;
   snapshot(sessionId: string): Promise<{ url: string; title: string; text: string; html: string }>;
   screenshot(sessionId: string): Promise<Buffer>;
   events(sessionId: string): Promise<{ console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] }>;
@@ -340,7 +340,11 @@ export class FinalVerificationRuntime {
         )
         : undefined);
     this.browserSession = options.browserSession ?? (options.browserBackend
-      ? new BrowserBackendSessionAdapter(options.browserBackend, `${this.runId}:${this.taskId}`)
+      ? new BrowserBackendSessionAdapter(
+          options.browserBackend,
+          `${this.runId}:${this.generationId ?? "generation"}:${this.taskId}:${this.attempt ?? 1}`,
+          this.runId,
+        )
       : undefined);
     this.maxOutputBytes = positiveInteger(
       options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
@@ -1729,10 +1733,11 @@ class BrowserBackendSessionAdapter implements FinalVerificationBrowserSession {
   constructor(
     private readonly backend: FinalVerificationBrowserBackend,
     private readonly sessionId: string,
+    private readonly runId: string,
   ) {}
 
   async open(input: { url: string; width: number; height: number }): Promise<{ url: string; title: string }> {
-    return await this.backend.open(this.sessionId, input);
+    return await this.backend.open(this.sessionId, input, this.runId);
   }
 
   async snapshot(): Promise<{ url: string; title: string; text: string; html: string }> {

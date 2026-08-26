@@ -25,6 +25,10 @@ import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime } from "./final-verification-runtime.js";
+import {
+  FinalVerificationDiagnosticsArchive,
+  OwnedFinalVerificationCleanup,
+} from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
 import { ManagedProcessService } from "./managed-process.js";
 import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
@@ -174,6 +178,17 @@ export class NativeBuildFactory {
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       integrationManager,
+    });
+    const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
+      runId: spec.runId,
+      stopRun: (runId) => this.managedProcesses.stopRun(runId),
+      closeBrowserRun: (runId) => this.browserBackend.closeRun(runId),
+      workspaceManager: verificationWorkspace,
+      diagnostics: new FinalVerificationDiagnosticsArchive({
+        stateDirectory: this.options.stateDirectory,
+        runId: spec.runId,
+        workspaceManager: verificationWorkspace,
+      }),
     });
     const initialHealth = providerHealthFromSchedulerEvents(
       schedulerStore.readRun(spec.runId)
@@ -339,6 +354,7 @@ export class NativeBuildFactory {
     let closed = false;
     return {
       runtime,
+      finalVerificationCleanup,
       usage: () => {
         const budget = budgetLedger.snapshot(spec.runId);
         return {

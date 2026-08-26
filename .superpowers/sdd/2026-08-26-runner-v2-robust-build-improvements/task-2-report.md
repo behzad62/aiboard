@@ -1065,3 +1065,71 @@ passed (normal Git LF-to-CRLF warnings only)
 
 P2.5 authoritative completion enforcement is complete. P2.6 cleanup, audit,
 client projection, observability, and UI work remain intentionally deferred.
+
+## P2.6A exact-owned cleanup primitives
+
+Added explicit durable browser-session run ownership and exact
+`PlaywrightBrowserBackend.closeRun(runId)` cleanup. Production opens supply the
+owner; metadata binds owner and session identity; recovery validates it.
+Final-verification session IDs now contain run, generation, task, and attempt.
+Cleanup examines only individual state files, validates hashed metadata paths,
+and never removes the browser-state root; foreign metadata is preserved.
+
+Added `FinalVerificationDiagnosticsArchive`, which validates the dirty
+worktree through its existing Git ownership proof and atomically writes a
+bounded, redacted snapshot under the run's Runner-state audit root. Added
+`OwnedFinalVerificationCleanup` with fixed order: authenticated process-tree
+stop, exact-run browser close, required failed diagnostics persistence, then
+ownership-validating workspace cleanup. Pre-cleanup failures are bounded and
+aggregated and prevent workspace removal; successful cleanup is idempotent.
+
+`NativeBuildFactory` constructs and exposes the primitive as
+`NativeBuildRuntimeHandle.finalVerificationCleanup` for the next lifecycle
+packet. Scheduler events, completion/handoff, UI/client projection, and repair
+routing remain unchanged.
+
+### P2.6A TDD and fault evidence
+
+The browser tests were first: five existing cases passed and both new cases
+failed with `TypeError: reopened.closeRun is not a function`. After the slice,
+7/7 passed. The cleanup test was then added before its module and failed with
+`ERR_MODULE_NOT_FOUND`. Its first behavioral run was 1 pass/3 fail because the
+aggregate error hid underlying reasons; bounded details fixed that and 4/4
+passed.
+
+Fault-only mutations were restored after proving red:
+
+- Removing `ownerRunId === runId` made the exact-run test fail 0/1 because run
+  A cleanup deleted run B's persisted session.
+- Deleting the worktree before diagnostics made the archive-order test fail
+  0/1 with missing ownership metadata.
+
+### P2.6A validation evidence
+
+```text
+Focused browser/cleanup/runtime/workspace/process/worker/Architect set:
+53 tests, 53 passed, 0 failed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+Targeted ESLint
+passed with no warnings
+
+git diff --check
+passed (normal LF-to-CRLF warnings only)
+```
+
+| P2.6A requirement | Evidence | Result |
+|---|---|---|
+| Exact persisted browser owner | Versioned metadata and cross-run reopen test | Complete |
+| No task collision across runs/generations | Run-qualified and generation-qualified session IDs | Complete |
+| Foreign metadata cannot delete across runs | Owner/path filters and tamper test | Complete |
+| Failed dirty diagnostics precede deletion | Real dirty Git fixture, archive, ordering fault | Complete |
+| Diagnostic/process failures retain workspace | Injected failures and existence assertions | Complete |
+| Wrong/missing ownership refuses deletion | Tampered owner plus existing ownership-pair tests | Complete |
+| Idempotent exact cleanup | Repeated cleanup fixture | Complete |
+| Factory exposure only | Typed handle surface and factory construction | Complete |
+
+P2.6A primitives are complete. Durable lifecycle wiring, handoff blocking,
+client/UI projection, repair routing, and Playwright E2E remain deferred.
