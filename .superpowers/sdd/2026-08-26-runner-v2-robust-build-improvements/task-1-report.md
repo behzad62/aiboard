@@ -833,3 +833,114 @@ Production/test commit: `4828d4b6 runner-v2: remove setup policy marker`.
 This R7 report entry is included in the subsequent documentation commit. The
 tracked worktree is clean after that commit, with only ignored SDD artifacts
 outside tracked-state checks as permitted. P2 remains untouched.
+
+## Review fix round 2 — R1 assigned-worker authority
+
+This bounded packet addresses only R1 from the round-2 re-review. R2 remains
+deferred to its own packet; P2 was not started.
+
+### Reproduction before repair
+
+The reviewer probe was confirmed at the direct durable scheduler boundary. A
+current criterion task could be assigned with only `attempt`, leaving
+`assignedWorkerId` absent. In the same run, a valid same-task/same-attempt
+evidence record attributed to `{ role: "architect", id: "architect_1" }` could
+then be submitted and projected as submitted because the optional owner set
+was treated as unrestricted.
+
+The focused regressions were written before production edits. Against
+`7b88e0d9`, the scheduler check went red with the expected missing guards:
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+18 tests
+16 passed
+2 failed
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+  durable current criterion assignment requires an assigned worker identity
+  at runner-v2/test/scheduler-store.test.ts:654:12
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+  durable submission rejects legacy worker absence after acceptance upgrade
+  at runner-v2/test/scheduler-store.test.ts:739:12
+```
+
+The first failure demonstrated that a current evidence-capable assignment
+could omit its accountable worker. The second demonstrated that an active
+legacy assignment could carry that absence through the acceptance upgrade and
+accept Architect-owned evidence at submission.
+
+### Repair
+
+- Added a fail-closed `requiredAssignedWorkerId` invariant for non-empty worker
+  identity.
+- Current criterion assignments now reject missing or whitespace-only
+  `assignedWorkerId` before the scheduler event is durable.
+- Current criterion submissions, review requests, and review decisions reject
+  missing worker ownership in both the pure reducer and the durable evidence
+  validator. The validator now always passes the established owner into the
+  existing assigned-worker/descendant check.
+- Historical legacy tasks without acceptance criteria remain readable and can
+  pass the explicit upgrade gate. If such an active task reaches current
+  acceptance criteria without a worker identity, its evidence submission is
+  rejected rather than using legacy absence as an authority bypass.
+
+The direct durable regressions cover missing assignment identity, post-upgrade
+submission with Architect evidence, unrelated worker evidence, the assigned
+worker, and a properly attributed `worker_current:call_1` descendant. Rejected
+submission attempts leave the task running and do not append an event; rejected
+assignments leave the task planned and do not append an event.
+
+### Post-repair checks
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+18/18 passed
+
+npx tsx --test runner-v2/test/change-set.test.ts
+3/3 passed
+
+npx tsx --test runner-v2/test/evidence-tools.test.ts
+6/6 passed
+
+npx tsx --test runner-v2/test/task-scheduler.test.ts
+3/3 passed
+
+npx tsx --test runner-v2/test/acceptance-contracts.test.ts
+3/3 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/scheduler-store.ts runner-v2/test/scheduler-store.test.ts
+passed
+
+git diff --check
+passed (only normal CRLF normalization warnings from Git)
+```
+
+### Required fault-only red proof
+
+After the repair, only the assignment invariant call was fault-removed. The
+focused regression returned the expected red result:
+
+```text
+npx tsx --test --test-name-pattern "durable current criterion assignment requires an assigned worker identity" runner-v2/test/scheduler-store.test.ts
+1 test
+0 passed
+1 failed
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+  at runner-v2/test/scheduler-store.test.ts:654:12
+```
+
+Restoring only that invariant call returned the focused R1 set to 3/3 and the
+full scheduler store suite to 18/18. No test or authority control was
+weakened, and no repair cycle reached governed reclassification or the
+five-cycle cap.
+
+### Packet status
+
+Production/test commit: `e527bcef runner-v2: require worker identity for criterion evidence`.
+
+R2 remains the next separately bounded repair. The tracked worktree is clean
+after the documentation commit, with only ignored SDD artifacts permitted;
+`progress.md` was not edited and P2 remains untouched.
