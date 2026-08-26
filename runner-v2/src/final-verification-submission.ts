@@ -39,7 +39,7 @@ export interface FinalVerificationSubmissionOptions {
   currentIntegrationRevision?: FinalVerificationRevisionSource;
   /** Compatibility alias for callers that use the runtime option name. */
   integrationRevision?: FinalVerificationRevisionSource;
-  /** Optional artifact verification strengthens, but does not replace, evidence-ID checks. */
+  /** Required whenever submitted evidence cites content-addressed artifacts. */
   artifacts?: ArtifactStore;
   clock?: () => string;
 }
@@ -379,9 +379,11 @@ async function validateCheckEvidence(
     }
     validateFact(fact, check.category, run.targetRevision);
     if (fact.kind.startsWith("browser_")) browserKinds.add(fact.kind);
-    if (artifacts) {
-      for (const hash of evidenceFactArtifactHashes(fact)) await artifacts.verify(hash);
+    const artifactHashes = evidenceFactArtifactHashes(fact);
+    if (artifactHashes.length > 0 && !artifacts) {
+      throw new Error("Final verification submission requires an ArtifactStore for cited artifacts.");
     }
+    for (const hash of artifactHashes) await artifacts!.verify(hash);
   }
   if (check.category === "browser") {
     const requiredKinds = new Set(["browser_snapshot", "browser_screenshot", "browser_events"]);

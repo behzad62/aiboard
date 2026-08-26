@@ -30,6 +30,7 @@ test("submit_final_verification accepts one exact, current four-category generat
       { plan: fixture.plan, run: fixture.run },
       {
         evidenceStore: fixture.evidence,
+        artifacts: fixture.artifacts,
         currentIntegrationRevision: () => TARGET_REVISION,
         clock: () => "2026-08-26T00:00:02.000Z",
       },
@@ -54,6 +55,7 @@ test("submit_final_verification accepts one exact, current four-category generat
 
     const tool = createSubmitFinalVerificationTool({
       evidenceStore: fixture.evidence,
+      artifacts: fixture.artifacts,
       currentIntegrationRevision: () => TARGET_REVISION,
       clock: () => "2026-08-26T00:00:02.000Z",
     });
@@ -241,6 +243,7 @@ test("submission preserves validated not-applicable rationale and inspection", a
 interface Fixture {
   root: string;
   evidence: SqliteEvidenceStore;
+  artifacts: ArtifactStore;
   plan: FinalVerificationPlan;
   run: FinalVerificationRun;
   foreignEvidenceId: string;
@@ -385,6 +388,7 @@ async function createFixture(): Promise<Fixture> {
   return {
     root,
     evidence,
+    artifacts,
     plan,
     foreignEvidenceId: foreign.id,
     run: {
@@ -406,6 +410,7 @@ async function createFixture(): Promise<Fixture> {
 function options(fixture: Fixture) {
   return {
     evidenceStore: fixture.evidence,
+    artifacts: fixture.artifacts,
     currentIntegrationRevision: () => TARGET_REVISION,
     clock: () => "2026-08-26T00:00:02.000Z",
   };

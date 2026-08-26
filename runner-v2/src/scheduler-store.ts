@@ -22,7 +22,10 @@ import {
   type CriterionEvidenceLink,
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
-import type { EvidenceStore } from "./evidence-store.js";
+import {
+  evidenceFactArtifactHashes,
+  type EvidenceStore,
+} from "./evidence-store.js";
 import type {
   FinalVerificationCheckResult,
   FinalVerificationFact,
@@ -557,6 +560,29 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (event.type === "final_verification.check_completed") {
+    validateFinalVerificationCheckEvidence(projection, event, evidenceStore);
+    return;
+  }
+  if (event.type === "final_verification.submitted") {
+    const result = event.payload.submissionResult;
+    if (!isRecord(result) || !Array.isArray(result.checks)) {
+      throw new Error("Final verification submission result is invalid.");
+    }
+    for (const check of result.checks) {
+      validateFinalVerificationEvidenceSet({
+        projection,
+        event,
+        evidenceStore,
+        check,
+        targetRevision: requiredString(event.payload, "targetRevision"),
+        taskId: requiredString(event.payload, "taskId"),
+        generationId: requiredString(event.payload, "generationId"),
+        attempt: requiredPositiveInteger(event.payload, "attempt"),
+      });
+    }
+    return;
+  }
   if (event.type === "final_verification.repairs_planned") {
     const current = projection.finalVerification?.current;
     if (!current || !Array.isArray(event.payload.tasks)) {
@@ -715,6 +741,195 @@ export function validateSchedulerEvidenceEvent(
     records,
     "Review decision",
   );
+}
+
+function validateFinalVerificationCheckEvidence(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+  evidenceStore: EvidenceStore,
+): void {
+  const result = event.payload.result;
+  if (!isRecord(result)) throw new Error("Final verification check result is invalid.");
+  validateFinalVerificationEvidenceSet({
+    projection,
+    event,
+    evidenceStore,
+    check: result,
+    targetRevision: requiredString(event.payload, "targetRevision"),
+    taskId: requiredString(event.payload, "taskId"),
+    generationId: requiredString(event.payload, "generationId"),
+    attempt: requiredPositiveInteger(event.payload, "attempt"),
+  });
+}
+
+function validateFinalVerificationEvidenceSet(input: {
+  projection: SchedulerProjection;
+  event: SchedulerEvent;
+  evidenceStore: EvidenceStore;
+  check: unknown;
+  targetRevision: string;
+  taskId: string;
+  generationId: string;
+  attempt: number;
+}): void {
+  if (!isRecord(input.check)) throw new Error("Final verification check evidence is invalid.");
+  const category = requiredString(input.check, "category");
+  if (!["build", "tests", "runtime_smoke", "browser"].includes(category)) {
+    throw new Error(`Final verification fact category ${category} is invalid.`);
+  }
+  const evidenceIds = stringArray(input.check, "evidenceIds");
+  if (!Array.isArray(input.check.facts)) {
+    throw new Error(`Final verification ${category} facts are invalid.`);
+  }
+  const facts = input.check.facts;
+  const status = requiredString(input.check, "status");
+  if (status !== "required" && status !== "not_applicable") {
+    throw new Error(`Final verification ${category} status is invalid.`);
+  }
+  const issues = input.check.issues === undefined && input.event.type === "final_verification.submitted"
+    ? []
+    : input.check.issues;
+  if (typeof input.check.green !== "boolean" || !Array.isArray(issues) ||
+    issues.some((issue) => typeof issue !== "string")) {
+    throw new Error(`Final verification ${category} outcome schema is invalid.`);
+  }
+  if (status === "not_applicable" && (
+    input.check.green !== true || evidenceIds.length > 0 || facts.length > 0 || issues.length > 0
+  )) {
+    throw new Error(`Not-applicable final verification ${category} cannot carry executable evidence.`);
+  }
+  if (status === "required" && input.check.green === true && facts.length === 0) {
+    throw new Error(`Required final verification ${category} is missing evidence.`);
+  }
+  if (facts.length !== evidenceIds.length) {
+    throw new Error(`Final verification ${category} facts do not correspond exactly to evidence records.`);
+  }
+  if (new Set(evidenceIds).size !== evidenceIds.length) {
+    throw new Error(`Final verification ${category} evidence IDs must be unique.`);
+  }
+  const records = input.evidenceStore.getByIds({
+    runId: input.event.runId,
+    taskId: input.taskId,
+    ids: evidenceIds,
+  });
+  if (records.length !== evidenceIds.length) {
+    throw new Error(`Final verification ${category} cites missing or foreign evidence records.`);
+  }
+  for (let index = 0; index < facts.length; index += 1) {
+    const fact = facts[index];
+    assertFinalVerificationFactSchema(fact, category, input.targetRevision);
+    const record = records[index];
+    if (
+      record.id !== evidenceIds[index] ||
+      record.runId !== input.event.runId ||
+      record.taskId !== input.taskId ||
+      record.attempt !== input.attempt ||
+      record.status !== "observed" ||
+      !record.idempotencyKey.startsWith(`${input.generationId}:`) ||
+      !sameValue(record.fact, fact)
+    ) {
+      throw new Error(`Final verification ${category} fact does not match authoritative evidence ${evidenceIds[index]}.`);
+    }
+  }
+}
+
+export function finalVerificationEventArtifactHashes(event: SchedulerEvent): string[] {
+  const checks: unknown[] = [];
+  if (event.type === "final_verification.check_completed") checks.push(event.payload.result);
+  if (event.type === "final_verification.submitted" && isRecord(event.payload.submissionResult)) {
+    const submissionChecks = event.payload.submissionResult.checks;
+    if (Array.isArray(submissionChecks)) checks.push(...submissionChecks);
+  }
+  return checks.flatMap((check) => {
+    if (!isRecord(check) || !Array.isArray(check.facts)) return [];
+    return check.facts.flatMap((fact) => {
+      assertFinalVerificationFactSchema(fact, requiredString(check, "category"), requiredString(event.payload, "targetRevision"));
+      return evidenceFactArtifactHashes(fact as FinalVerificationFact);
+    });
+  });
+}
+
+function assertFinalVerificationFactSchema(
+  fact: unknown,
+  category: string,
+  targetRevision: string,
+): asserts fact is FinalVerificationFact {
+  if (!isRecord(fact) || fact.category !== category || typeof fact.kind !== "string") {
+    throw new Error(`Final verification ${category} fact schema is invalid.`);
+  }
+  for (const key of ["label", "startedAt", "finishedAt"] as const) {
+    requiredString(fact, key);
+  }
+  if (fact.targetRevision !== targetRevision) {
+    throw new Error(`Final verification ${category} fact targets a stale revision.`);
+  }
+  assertRevisionState(fact.startState, targetRevision, "startState");
+  assertRevisionState(fact.endState, targetRevision, "endState");
+  if (fact.kind === "command") {
+    for (const key of ["command", "executable", "cwd", "stdoutArtifactHash", "stderrArtifactHash"] as const) {
+      requiredString(fact, key);
+    }
+    if (!Array.isArray(fact.args) || fact.args.some((value) => typeof value !== "string")) {
+      throw new Error(`Final verification ${category} command args are invalid.`);
+    }
+    if (fact.exitCode !== null && !Number.isSafeInteger(fact.exitCode)) {
+      throw new Error(`Final verification ${category} exit code is invalid.`);
+    }
+    if (fact.signal !== null && typeof fact.signal !== "string") {
+      throw new Error(`Final verification ${category} signal is invalid.`);
+    }
+    for (const key of ["timedOut", "cancelled", "outputTruncated"] as const) {
+      if (typeof fact[key] !== "boolean") throw new Error(`Final verification ${category} ${key} is invalid.`);
+    }
+    if (fact.repositoryRevision !== targetRevision) {
+      throw new Error(`Final verification ${category} repository revision is invalid.`);
+    }
+    if (category === "runtime_smoke" && (
+      typeof fact.readinessSatisfied !== "boolean" ||
+      typeof fact.cleanupRequested !== "boolean"
+    )) {
+      throw new Error("Final verification runtime_smoke readiness facts are invalid.");
+    }
+    return;
+  }
+  if (category !== "browser") throw new Error(`Final verification ${category} fact kind is invalid.`);
+  requiredString(fact, "url");
+  requiredString(fact, "capturedAt");
+  requiredString(fact, "sessionId");
+  if (fact.kind === "browser_snapshot") {
+    if (typeof fact.title !== "string") throw new Error("Final verification browser title is invalid.");
+    requiredString(fact, "htmlArtifactHash");
+    if (!Number.isSafeInteger(fact.htmlBytes) || (fact.htmlBytes as number) < 0 || typeof fact.truncated !== "boolean") {
+      throw new Error("Final verification browser snapshot fact is invalid.");
+    }
+    return;
+  }
+  if (fact.kind === "browser_screenshot") {
+    requiredString(fact, "screenshotArtifactHash");
+    if (fact.mediaType !== "image/png" || !Number.isSafeInteger(fact.byteLength) || (fact.byteLength as number) < 0) {
+      throw new Error("Final verification browser screenshot fact is invalid.");
+    }
+    return;
+  }
+  if (fact.kind !== "browser_events") throw new Error("Final verification browser fact kind is invalid.");
+  requiredString(fact, "eventsArtifactHash");
+  for (const key of ["consoleEventCount", "consoleErrorCount", "networkEventCount", "networkFailureCount"] as const) {
+    if (!Number.isSafeInteger(fact[key]) || (fact[key] as number) < 0) {
+      throw new Error(`Final verification browser ${key} is invalid.`);
+    }
+  }
+  for (const key of ["consoleErrors", "pageErrors", "failedNetworkEvents", "policyViolations"] as const) {
+    if (!Array.isArray(fact[key])) throw new Error(`Final verification browser ${key} is invalid.`);
+  }
+  if (typeof fact.timedOut !== "boolean" || typeof fact.cancelled !== "boolean") {
+    throw new Error("Final verification browser termination facts are invalid.");
+  }
+}
+
+function assertRevisionState(value: unknown, revision: string, label: string): void {
+  if (!isRecord(value) || value.revision !== revision || typeof value.status !== "string") {
+    throw new Error(`Final verification fact ${label} is invalid.`);
+  }
 }
 
 function assertDurableEvidence(
@@ -1152,6 +1367,16 @@ export function reduceSchedulerEvent(
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
       assertTransitionAuthority(status, event.actor.role);
+      if (
+        status === "cancelled" &&
+        task.kind === "verification_repair" &&
+        task.verificationRepair?.sourceGenerationId ===
+          next.finalVerification?.current?.generationId
+      ) {
+        throw new Error(
+          "A current-generation verification repair cannot be cancelled; integrate or durably replace it.",
+        );
+      }
       if (
         status === "submitted" &&
         current.acceptanceContractStatus === "acceptance_contract_upgrade_required"
@@ -1992,7 +2217,12 @@ function recordFinalVerificationReviewDecision(
 ): void {
   const current = requireCurrentFinalVerification(projection, payload);
   const decision = requiredString(payload, "decision");
-  if (decision !== "approved" && decision !== "repair_required" && decision !== "rejected") {
+  if (decision === "rejected") {
+    throw new Error(
+      "Unstructured rejected final-verification reviews are invalid; use a structured repair_required decision.",
+    );
+  }
+  if (decision !== "approved" && decision !== "repair_required") {
     throw new Error(`Final verification review decision ${decision} is invalid.`);
   }
   const review = parseFinalVerificationReview(payload, decision);
@@ -2708,6 +2938,15 @@ function applyPlanReconciliation(
       );
     }
     if (update.action === "cancel") {
+      if (
+        task.kind === "verification_repair" &&
+        task.verificationRepair?.sourceGenerationId ===
+          projection.finalVerification?.current?.generationId
+      ) {
+        throw new Error(
+          "A current-generation verification repair cannot be cancelled during reconciliation.",
+        );
+      }
       candidateTasks[update.taskId] = applyTaskTransition(task, "cancelled", {
         assignedWorkerId: undefined,
         changeSetId: undefined,
@@ -3142,6 +3381,14 @@ function requiredString(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   if (typeof value !== "string" || !value) throw new Error(`Missing ${key}.`);
   return value;
+}
+
+function requiredPositiveInteger(payload: Record<string, unknown>, key: string): number {
+  const value = payload[key];
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${key} must be a positive integer.`);
+  }
+  return value as number;
 }
 
 function requiredAssignedWorkerId(value: unknown, label: string): string {

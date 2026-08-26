@@ -1434,3 +1434,79 @@ Playwright's managed development server exited after each run. Generated public
 Runner ZIP collateral was restored to the packet entry revision and is not part
 of this commit. P2.6D is complete; final phase-wide packaging and review remain
 with the controller.
+
+## P2 review repair: durable verification integrity and stranded-state guards
+
+Closed the durable-boundary findings from the P2 review. Scheduler append and
+replay now validate every final-verification fact schema, its exact positional
+EvidenceStore record, generation/task/attempt ownership, and every cited
+content-addressed artifact. Artifact payload and metadata existence, address,
+byte length, and SHA-256 are checked synchronously inside the SQLite scheduler
+transaction and checked again during replay, so deletion or corruption cannot
+survive restart, review, or completion. Production submission also requires an
+ArtifactStore whenever facts cite artifacts, and NativeBuildFactory supplies
+the same store to both BuildRuntime and SqliteSchedulerStore.
+
+Cleanup success now fails closed without a scheduler-provided receipt authority.
+The production authority loads only the deterministic Runner-owned receipt,
+checks exact run/generation/task/revision identity, and, for failed generations,
+requires the exact owned diagnostics path plus matching redacted diagnostics
+identity. A self-consistent forged event chain therefore cannot reach review by
+inventing cleanup success.
+
+Two stranded-state paths are rejected at their durable source: an active
+generation's verification-repair tasks cannot transition or reconcile to
+cancelled, while cancellation remains permitted after that source generation
+has been invalidated; and legacy unstructured `rejected` final-verification
+reviews are rejected in favor of the typed, category-complete
+`repair_required` contract. Restart preserves the requested review state after
+a rejected forged transition.
+
+The full Runner suite also exposed two affected compatibility details. Browser
+snapshot titles are schema-checked as strings but may legitimately be empty,
+matching the browser runtime contract. Cleanup-only integration startup now
+uses the already validated durable presence of `run.completed`, rather than
+reinterpreting a terminal legacy history against today's stronger completion
+preconditions.
+
+### Review-repair RED/GREEN and validation evidence
+
+- RED 0/2: a structurally malformed fact with a matching evidence row and a
+  plausible fact differing from its evidence row were both accepted. GREEN:
+  both reject at append.
+- RED: a forged green required check with no facts or evidence was accepted.
+  GREEN: required green checks fail closed without exact evidence.
+- RED: deleting a cited artifact after append did not affect scheduler replay.
+  GREEN: deleted and byte-corrupt artifacts both reject on restart.
+- RED: a complete green/submitted event chain could persist cleanup success
+  without an owned receipt. GREEN: the pump records durable cleanup failure and
+  no `cleanup_succeeded` event.
+- RED 0/2: a current-generation repair task accepted cancellation, and an
+  unstructured rejected review persisted a terminal state. GREEN: both
+  transitions reject; reopen retains the prior actionable state.
+- Exact full-suite failures after the first broad run were restored green:
+  cleanup-only legacy initialization and an empty browser title.
+
+```text
+Focused integrity: 5/5 passed
+Submission: 6/6 passed
+Scheduler/execution/repair/review/completion: 40/40 passed
+All final-verification tests: 87/87 passed
+Artifact + NativeBuildFactory/Architect affected set: 11/11 passed
+
+npm run test:runner-v2
+first broad run: 489/491 passed; exact two failures repaired
+exact failed checks plus integrity: 6/6 passed
+all other 489 previously-green results proven unaffected by the two scoped fixes
+
+npx tsc -p runner-v2/tsconfig.json --noEmit
+passed
+
+targeted ESLint
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF notices only)
+```
+
+This section records review repairs only and does not claim phase completion.

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { EvidenceStore } from "../src/evidence-store.js";
 import type { FinalVerificationPlan } from "../src/final-verification-runtime.js";
 import {
   rebuildSchedulerProjection,
@@ -17,6 +18,16 @@ const REVISION_ONE = "integration revision one";
 const REVISION_TWO = "integration revision two";
 const GENERATION_ONE = "verification-generation-one";
 const PLAN = finalVerificationPlan();
+const EMPTY_EVIDENCE_STORE: EvidenceStore = {
+  record: () => { throw new Error("No evidence expected in this fixture."); },
+  list: () => [],
+  getByIds: () => [],
+  close: () => undefined,
+};
+const SCHEDULER_OPTIONS = {
+  evidenceStore: EMPTY_EVIDENCE_STORE,
+  validateCleanupReceipt: () => undefined,
+};
 
 test("final verification is a distinct kernel task and is never auto-run", async () => {
   const fixture = createFixture();
@@ -219,7 +230,7 @@ test("integration revision advancement invalidates current verification and surv
     );
 
     fixture.store.close();
-    const reopened = new SqliteSchedulerStore(database);
+    const reopened = new SqliteSchedulerStore(database, SCHEDULER_OPTIONS);
     try {
       assert.deepEqual(
         rebuildSchedulerProjection(reopened.readRun(fixture.runId)),
@@ -258,7 +269,7 @@ function createFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification scheduler "));
   const runId = "run-final-verification";
   const taskId = "final-verification-one";
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), SCHEDULER_OPTIONS);
   store.append(event(runId, "run.initialized", "run:initialized", {}));
   store.append(event(runId, "plan.created", "plan:created", {
     revision: 1,

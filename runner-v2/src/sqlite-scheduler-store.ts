@@ -12,10 +12,13 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
+  finalVerificationEventArtifactHashes,
   reduceSchedulerEvent,
   validateSchedulerEvidenceEvent,
 } from "./scheduler-store.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type { ArtifactStore } from "./artifact-store.js";
+import type { FinalVerificationCleanupReceiptIdentity } from "./final-verification-cleanup.js";
 
 interface EventRow {
   event_id: string;
@@ -35,14 +38,22 @@ export interface SqliteSchedulerStoreOptions {
    * those events fail closed if this store is absent.
    */
   evidenceStore?: EvidenceStore;
+  /** Required for final-verification facts that cite content-addressed artifacts. */
+  artifacts?: Pick<ArtifactStore, "verifySync">;
+  /** Production authority for exact-owned cleanup receipts. */
+  validateCleanupReceipt?: (identity: FinalVerificationCleanupReceiptIdentity) => void;
 }
 
 export class SqliteSchedulerStore implements SchedulerStore {
   private readonly database: DatabaseSync;
   private readonly evidenceStore?: EvidenceStore;
+  private readonly artifacts?: Pick<ArtifactStore, "verifySync">;
+  private readonly validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"];
 
   constructor(databasePath: string, options: SqliteSchedulerStoreOptions = {}) {
     this.evidenceStore = options.evidenceStore;
+    this.artifacts = options.artifacts;
+    this.validateCleanupReceipt = options.validateCleanupReceipt;
     mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
     this.database.exec(`
@@ -76,6 +87,8 @@ export class SqliteSchedulerStore implements SchedulerStore {
       const priorProjection = replaySchedulerEvents(
         priorEvents,
         this.evidenceStore,
+        this.artifacts,
+        this.validateCleanupReceipt,
       );
       const existing = this.database
         .prepare(
@@ -124,8 +137,14 @@ export class SqliteSchedulerStore implements SchedulerStore {
         eventId: `sched_${randomUUID()}`,
         sequence: row.sequence,
       };
-      validateSchedulerEvent(priorProjection, event, this.evidenceStore);
       reduceSchedulerEvent(priorProjection, event);
+      validateSchedulerEvent(
+        priorProjection,
+        event,
+        this.evidenceStore,
+        this.artifacts,
+        this.validateCleanupReceipt,
+      );
       this.database
         .prepare(
           `INSERT INTO scheduler_events (
@@ -159,7 +178,12 @@ export class SqliteSchedulerStore implements SchedulerStore {
         )
         .all(runId) as unknown as EventRow[]
     ).map(decode);
-    replaySchedulerEvents(events, this.evidenceStore);
+    replaySchedulerEvents(
+      events,
+      this.evidenceStore,
+      this.artifacts,
+      this.validateCleanupReceipt,
+    );
     return events.filter((event) => event.sequence > afterSequence);
   }
 
@@ -194,11 +218,14 @@ function canonicalJson(value: unknown): string {
 function replaySchedulerEvents(
   events: readonly SchedulerEvent[],
   evidenceStore?: EvidenceStore,
+  artifacts?: Pick<ArtifactStore, "verifySync">,
+  validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"],
 ): SchedulerProjection | undefined {
   let projection: SchedulerProjection | undefined;
   for (const event of events) {
-    validateSchedulerEvent(projection, event, evidenceStore);
-    projection = reduceSchedulerEvent(projection, event);
+    const next = reduceSchedulerEvent(projection, event);
+    validateSchedulerEvent(projection, event, evidenceStore, artifacts, validateCleanupReceipt);
+    projection = next;
   }
   return projection;
 }
@@ -207,6 +234,8 @@ function validateSchedulerEvent(
   projection: SchedulerProjection | undefined,
   event: SchedulerEvent,
   evidenceStore?: EvidenceStore,
+  artifacts?: Pick<ArtifactStore, "verifySync">,
+  validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"],
 ): void {
   if (requiresAuthoritativeEvidenceStore(projection, event) && !evidenceStore) {
     throw new Error(
@@ -216,6 +245,35 @@ function validateSchedulerEvent(
   if (evidenceStore) {
     validateSchedulerEvidenceEvent(projection, event, evidenceStore);
   }
+  const artifactHashes = finalVerificationEventArtifactHashes(event);
+  if (artifactHashes.length > 0 && !artifacts) {
+    throw new Error("An ArtifactStore is required for final-verification evidence artifacts.");
+  }
+  for (const hash of artifactHashes) artifacts!.verifySync(hash);
+  if (event.type === "final_verification.cleanup_succeeded") {
+    const current = projection?.finalVerification?.current;
+    if (current?.cleanup?.status === "started" && (current.submissionResult || current.failure)) {
+      if (!validateCleanupReceipt) {
+        throw new Error("An authentic owned cleanup receipt validator is required.");
+      }
+      validateCleanupReceipt({
+        runId: event.runId,
+        generationId: requiredEventString(event.payload, "generationId"),
+        taskId: requiredEventString(event.payload, "taskId"),
+        targetRevision: requiredEventString(event.payload, "targetRevision"),
+        ...(typeof event.payload.diagnosticsPath === "string"
+          ? { diagnosticsPath: event.payload.diagnosticsPath }
+          : {}),
+        requiresDiagnostics: current.failure !== undefined,
+      });
+    }
+  }
+}
+
+function requiredEventString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required.`);
+  return value;
 }
 
 function requiresAuthoritativeEvidenceStore(
@@ -228,7 +286,9 @@ function requiresAuthoritativeEvidenceStore(
     event.type !== "review.requested" &&
     event.type !== "review.decided" &&
     event.type !== "final_verification.review_decided" &&
-    event.type !== "final_verification.repairs_planned"
+    event.type !== "final_verification.repairs_planned" &&
+    event.type !== "final_verification.check_completed" &&
+    event.type !== "final_verification.submitted"
   ) {
     return false;
   }
@@ -239,6 +299,13 @@ function requiresAuthoritativeEvidenceStore(
     return Array.isArray(event.payload.categoryReviews);
   }
   if (event.type === "final_verification.repairs_planned") return true;
+  if (event.type === "final_verification.check_completed") {
+    const result = event.payload.result;
+    return typeof result === "object" && result !== null &&
+      (Array.isArray((result as Record<string, unknown>).evidenceIds) ||
+        Array.isArray((result as Record<string, unknown>).facts));
+  }
+  if (event.type === "final_verification.submitted") return true;
   const taskId = event.payload.taskId;
   return (
     typeof taskId === "string" &&

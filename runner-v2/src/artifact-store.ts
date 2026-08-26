@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
+  readFileSync,
+} from "node:fs";
+import {
   access,
   mkdir,
   readFile,
@@ -128,6 +132,33 @@ export class ArtifactStore {
       throw new Error(`Artifact ${hash} hash mismatch.`);
     }
     return record;
+  }
+
+  /** Synchronous verification for transactional append/replay boundaries. */
+  verifySync(hash: string): ArtifactRecord {
+    const paths = this.paths(hash);
+    if (!existsSync(paths.payload) || !existsSync(paths.metadata)) {
+      throw new ArtifactNotFoundError(hash);
+    }
+    let parsed: ArtifactMetadata;
+    try {
+      parsed = JSON.parse(readFileSync(paths.metadata, "utf8")) as ArtifactMetadata;
+    } catch (error) {
+      throw new Error(`Artifact ${hash} metadata is invalid.`, { cause: error });
+    }
+    if (
+      parsed.hash !== hash ||
+      !Number.isSafeInteger(parsed.byteLength) ||
+      typeof parsed.mediaType !== "string" ||
+      !parsed.mediaType.trim()
+    ) {
+      throw new Error(`Artifact ${hash} metadata does not match its address.`);
+    }
+    const bytes = readFileSync(paths.payload);
+    if (digest(bytes) !== hash || bytes.byteLength !== parsed.byteLength) {
+      throw new Error(`Artifact ${hash} hash mismatch.`);
+    }
+    return { ...parsed, path: paths.payload, metadataPath: paths.metadata };
   }
 
   async remove(hash: string): Promise<void> {

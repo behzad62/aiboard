@@ -95,17 +95,11 @@ test("a review missing any final-verification category is rejected", async () =>
   }
 });
 
-test("mechanically non-green or unvalidated submission cannot be approved", async () => {
-  const fixture = createFixture({ nonGreenCategory: "tests" });
-  const tools = reviewTools(fixture.store, fixture.evidence);
-  try {
-    const result = await invokeReview(tools, approvedReview(), "non-green-review");
-    assert.equal(result.isError, true);
-    assert.match(result.error?.message ?? "", /green|submission|mechanical/i);
-    assert.equal(projection(fixture.store).finalVerification?.current?.review, undefined);
-  } finally {
-    fixture.close();
-  }
+test("mechanically non-green or unvalidated submission cannot be approved", () => {
+  assert.throws(
+    () => createFixture({ nonGreenCategory: "tests" }),
+    /submission result|validated submission|mechanical/i,
+  );
 });
 
 test("valid current review persists across reopen and is semantically deduplicated", async () => {
@@ -120,6 +114,7 @@ test("valid current review persists across reopen and is semantically deduplicat
     fixture.store.close();
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
     });
     const current = projection(fixture.store).finalVerification?.current;
     assert.equal(current?.review?.status, "approved");
@@ -294,15 +289,23 @@ function createFixture(options: {
     root,
     database,
     evidence,
-    store: new SqliteSchedulerStore(database, { evidenceStore: evidence }),
+    store: new SqliteSchedulerStore(database, {
+      evidenceStore: evidence,
+      validateCleanupReceipt: () => undefined,
+    }),
     close() {
       this.store.close();
       this.evidence.close();
       rmSync(this.root, { recursive: true, force: true });
     },
   };
-  appendBase(fixture.store, options);
-  return fixture;
+  try {
+    appendBase(fixture.store, options);
+    return fixture;
+  } catch (error) {
+    fixture.close();
+    throw error;
+  }
 }
 
 function appendBase(
@@ -312,7 +315,7 @@ function appendBase(
     nonGreenCategory?: FinalVerificationPlan["checks"][number]["category"];
   },
 ) {
-  const plan = finalPlan();
+  const plan = finalPlan(options.nonGreenCategory ? [options.nonGreenCategory] : []);
   store.append({
     runId: RUN_ID,
     type: "run.initialized",
@@ -455,16 +458,22 @@ function projection(store: SqliteSchedulerStore) {
   return rebuildSchedulerProjection(store.readRun(RUN_ID));
 }
 
-function finalPlan(): FinalVerificationPlan {
+function finalPlan(
+  requiredCategories: readonly FinalVerificationPlan["checks"][number]["category"][] = [],
+): FinalVerificationPlan {
   return {
     checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({
       category: category as FinalVerificationPlan["checks"][number]["category"],
-      status: "not_applicable" as const,
-      rationale: `No ${category} surface is configured in this fixture.`,
-      repositoryInspection: {
-        paths: ["package.json"],
-        summary: `The persisted inspection found no ${category} surface.`,
-      },
+      ...(requiredCategories.includes(category as FinalVerificationPlan["checks"][number]["category"])
+        ? { status: "required" as const }
+        : {
+            status: "not_applicable" as const,
+            rationale: `No ${category} surface is configured in this fixture.`,
+            repositoryInspection: {
+              paths: ["package.json"],
+              summary: `The persisted inspection found no ${category} surface.`,
+            },
+          }),
     })),
   };
 }

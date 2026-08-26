@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -31,6 +32,88 @@ export interface FinalVerificationCleanupController {
     targetRevision: string;
     failed?: FinalVerificationDiagnosticsInput;
   }): Promise<{ diagnosticsPath?: string }>;
+}
+
+export interface FinalVerificationCleanupReceiptIdentity {
+  runId: string;
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  diagnosticsPath?: string;
+  requiresDiagnostics: boolean;
+}
+
+/** Validate the owned receipt synchronously at scheduler append/replay boundaries. */
+export function validateOwnedFinalVerificationCleanupReceipt(
+  stateDirectory: string,
+  identity: FinalVerificationCleanupReceiptIdentity,
+): void {
+  const stateRoot = resolve(stateDirectory);
+  const receiptPath = join(
+    stateRoot,
+    "builds",
+    safeSegment(identity.runId),
+    "audit",
+    "final-verification-cleanup",
+    `${safeSegment(identity.generationId)}.json`,
+  );
+  const receipt = readOwnedJsonSync(receiptPath, "Final verification cleanup receipt");
+  if (!sameCleanupIdentity(receipt, identity, identity.runId)) {
+    throw new Error("Final verification cleanup receipt conflicts with the scheduler event identity.");
+  }
+  const receiptDiagnostics = receipt.diagnosticsPath;
+  if (identity.requiresDiagnostics) {
+    const expected = join(
+      stateRoot,
+      "builds",
+      safeSegment(identity.runId),
+      "audit",
+      "final-verification-diagnostics",
+      `${safeSegment(identity.generationId)}.json`,
+    );
+    if (
+      typeof receiptDiagnostics !== "string" ||
+      resolve(receiptDiagnostics) !== resolve(expected) ||
+      identity.diagnosticsPath === undefined ||
+      resolve(identity.diagnosticsPath) !== resolve(expected)
+    ) {
+      throw new Error("Final verification cleanup receipt diagnostics path is not Runner-owned.");
+    }
+    const diagnostics = readOwnedJsonSync(expected, "Final verification diagnostics archive");
+    if (
+      diagnostics.version !== 1 || diagnostics.kind !== "final-verification-diagnostics" ||
+      diagnostics.runId !== identity.runId || diagnostics.generationId !== identity.generationId ||
+      diagnostics.taskId !== identity.taskId || diagnostics.targetRevision !== identity.targetRevision
+    ) {
+      throw new Error("Final verification diagnostics archive conflicts with the cleanup event identity.");
+    }
+    const redacted = redactSensitiveValue(diagnostics, {
+      maximumItems: MAX_ITEMS,
+      maximumTextLength: MAX_TEXT_BYTES,
+    });
+    if (JSON.stringify(redacted) !== JSON.stringify(diagnostics)) {
+      throw new Error("Final verification diagnostics archive contains unsafe or unbounded values.");
+    }
+    return;
+  }
+  if (receiptDiagnostics !== undefined || identity.diagnosticsPath !== undefined) {
+    throw new Error("Final verification cleanup receipt has unexpected diagnostics for a green generation.");
+  }
+}
+
+function readOwnedJsonSync(path: string, label: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${label} is malformed.`);
+    }
+    return value as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`${label} is missing.`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 export class FinalVerificationDiagnosticsArchive implements FinalVerificationDiagnosticsWriter {

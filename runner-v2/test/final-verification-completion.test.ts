@@ -151,6 +151,7 @@ test("SQLite append and replay fail closed on forged completion", () => {
     }
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
     });
     assert.throws(() => fixture.store.readRun(RUN_ID), /completion|verification|ready/i);
   } finally {
@@ -577,7 +578,10 @@ function createStoreFixture(ready: boolean): StoreFixture {
     root,
     database,
     evidence,
-    store: new SqliteSchedulerStore(database, { evidenceStore: evidence }),
+    store: new SqliteSchedulerStore(database, {
+      evidenceStore: evidence,
+      validateCleanupReceipt: () => undefined,
+    }),
     close() {
       this.store.close();
       this.evidence.close();

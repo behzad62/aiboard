@@ -33,6 +33,7 @@ import { inspectFinalVerificationExecutionProfile } from "./final-verification-p
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
+  validateOwnedFinalVerificationCleanupReceipt,
 } from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
 import { ManagedProcessService } from "./managed-process.js";
@@ -143,6 +144,9 @@ export class NativeBuildFactory {
     const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
       evidenceStore,
+      artifacts: this.artifacts,
+      validateCleanupReceipt: (identity) =>
+        validateOwnedFinalVerificationCleanupReceipt(this.options.stateDirectory, identity),
     });
     const schedulerEvents = schedulerStore.readRun(spec.runId);
     const sessions = new SqliteAgentSessionStore(
@@ -377,6 +381,7 @@ export class NativeBuildFactory {
         );
       },
       evidenceStore,
+      artifacts: this.artifacts,
     });
     let closed = false;
     return {
@@ -542,7 +547,10 @@ export function integrationInitializationModeFromEvents(
   events: readonly SchedulerEvent[]
 ): "active" | "cleanup-only" {
   if (events.length === 0) return "active";
-  return rebuildSchedulerProjection(events).status === "completed"
+  // Callers obtain this list from SchedulerStore.readRun(), which already
+  // replays and validates every event. Do not reinterpret a terminal legacy
+  // history against today's stronger completion preconditions.
+  return events.some((event) => event.type === "run.completed")
     ? "cleanup-only"
     : "active";
 }

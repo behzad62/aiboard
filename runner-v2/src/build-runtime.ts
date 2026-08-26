@@ -33,6 +33,7 @@ import {
 import { ToolRegistry } from "./tool-registry.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
+import type { ArtifactStore } from "./artifact-store.js";
 
 export type ArchitectActionReason =
   | { type: "plan_required" }
@@ -156,6 +157,7 @@ export interface BuildRuntimeOptions {
   renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
   providerRetryDeadlineMs?: () => number | undefined;
   evidenceStore?: EvidenceStore;
+  artifacts?: ArtifactStore;
   finalVerificationDriver?: FinalVerificationCheckDriver;
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
@@ -180,6 +182,7 @@ export class BuildRuntime {
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
   private readonly evidenceStore?: EvidenceStore;
+  private readonly artifacts?: ArtifactStore;
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
@@ -199,6 +202,7 @@ export class BuildRuntime {
     this.renewBudgetWindow = options.renewBudgetWindow;
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.evidenceStore = options.evidenceStore;
+    this.artifacts = options.artifacts;
     this.finalVerificationDriver = options.finalVerificationDriver;
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
@@ -816,6 +820,7 @@ export class BuildRuntime {
       { plan: generation.plan, run },
       {
         evidenceStore: this.evidenceStore,
+        artifacts: this.artifacts,
         currentIntegrationRevision: () => this.projection().integrationRevision ?? "",
         clock: this.clock,
       },

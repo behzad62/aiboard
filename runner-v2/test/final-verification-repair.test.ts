@@ -138,6 +138,7 @@ test("repair tasks and provenance deduplicate across scheduler reopen", async ()
     fixture.store.close();
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
     });
     const reordered = validRepairPlan();
     reordered.tasks.reverse();
@@ -215,6 +216,57 @@ test("ordinary task transitions cannot rewrite verification repair provenance", 
       projection(fixture.store).tasks["repair-tests"]?.verificationRepair?.sourceGenerationId,
       GENERATION_ID,
     );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("current-generation verification repair tasks cannot be cancelled into a stranded run", async () => {
+  const fixture = createFixture();
+  try {
+    assert.equal((await invokeRepairs(
+      repairTools(fixture), validRepairPlan(), "repairs-before-cancel",
+    )).isError, false);
+    assert.throws(() => fixture.store.append({
+      runId: RUN_ID,
+      type: "task.transitioned",
+      occurredAt: "2026-08-26T00:30:00.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "cancel-current-repair",
+      payload: { taskId: "repair-tests", status: "cancelled" },
+    }), /verification repair|current generation|cancel/i);
+    assert.equal(projection(fixture.store).tasks["repair-tests"]?.status, "planned");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("unstructured rejected final-verification reviews fail closed instead of stranding restart", () => {
+  const fixture = createFixture({ reviewStatus: "requested" });
+  try {
+    assert.throws(() => fixture.store.append({
+      runId: RUN_ID,
+      type: "final_verification.review_decided",
+      occurredAt: "2026-08-26T00:00:11.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "unstructured-rejected-review",
+      payload: {
+        taskId: FINAL_TASK_ID,
+        generationId: GENERATION_ID,
+        targetRevision: REVISION_ONE,
+        submissionId: SUBMISSION_ID,
+        reviewId: REVIEW_ID,
+        attempt: 1,
+        decision: "rejected",
+      },
+    }), /structured|repair_required|rejected/i);
+    assert.equal(current(fixture.store)?.review?.status, "requested");
+    fixture.store.close();
+    fixture.store = new SqliteSchedulerStore(fixture.database, {
+      evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
+    });
+    assert.equal(current(fixture.store)?.review?.status, "requested");
   } finally {
     fixture.close();
   }
@@ -467,7 +519,7 @@ interface Fixture {
   close(): void;
 }
 
-function createFixture(options: { reviewStatus?: "approved" | "repair_required" } = {}): Fixture {
+function createFixture(options: { reviewStatus?: "approved" | "repair_required" | "requested" } = {}): Fixture {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification repair "));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
@@ -475,7 +527,10 @@ function createFixture(options: { reviewStatus?: "approved" | "repair_required" 
     root,
     database,
     evidence,
-    store: new SqliteSchedulerStore(database, { evidenceStore: evidence }),
+    store: new SqliteSchedulerStore(database, {
+      evidenceStore: evidence,
+      validateCleanupReceipt: () => undefined,
+    }),
     close() {
       this.store.close();
       this.evidence.close();
@@ -494,12 +549,15 @@ function createMechanicalFixture(): Fixture {
     root,
     database,
     evidence,
-    store: new SqliteSchedulerStore(database, { evidenceStore: evidence }),
+    store: new SqliteSchedulerStore(database, {
+      evidenceStore: evidence,
+      validateCleanupReceipt: () => undefined,
+    }),
     close() {
       this.store.close(); this.evidence.close(); rmSync(this.root, { recursive: true, force: true });
     },
   };
-  const plan = finalPlan();
+  const plan = finalPlan(["build"]);
   fixture.store.append({ runId: RUN_ID, type: "run.initialized", occurredAt: "2026-08-26T00:00:00.000Z", actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: {} });
   fixture.store.append({ runId: RUN_ID, type: "plan.created", occurredAt: "2026-08-26T00:00:01.000Z", actor: { role: "architect", id: "architect" }, idempotencyKey: "plan", payload: { revision: 1, tasks: [{ id: "implementation-one", objective: "Implement feature", dependencies: [], status: "integrated", requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "done", text: "Feature implemented." }], acceptanceCriteriaVersion: 1, attempt: 1 }] } });
   fixture.store.append({ runId: RUN_ID, type: "integration.revision_advanced", occurredAt: "2026-08-26T00:00:02.000Z", actor: { role: "runner", id: "integration" }, idempotencyKey: "rev-one", payload: { integrationRevision: REVISION_ONE } });
@@ -512,7 +570,7 @@ function createMechanicalFixture(): Fixture {
   return fixture;
 }
 
-function seed(store: SqliteSchedulerStore, reviewStatus: "approved" | "repair_required") {
+function seed(store: SqliteSchedulerStore, reviewStatus: "approved" | "repair_required" | "requested") {
   const plan = finalPlan();
   store.append({ runId: RUN_ID, type: "run.initialized", occurredAt: "2026-08-26T00:00:00.000Z", actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: {} });
   store.append({
@@ -530,12 +588,24 @@ function seed(store: SqliteSchedulerStore, reviewStatus: "approved" | "repair_re
   store.append({ runId: RUN_ID, type: "final_verification.cleanup_started", occurredAt: "2026-08-26T00:00:09.100Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "cleanup-start", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1 } });
   store.append({ runId: RUN_ID, type: "final_verification.cleanup_succeeded", occurredAt: "2026-08-26T00:00:09.200Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "cleanup-success", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1 } });
   store.append({ runId: RUN_ID, type: "final_verification.review_requested", occurredAt: "2026-08-26T00:00:10.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "review-request", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, submissionId: SUBMISSION_ID, reviewId: REVIEW_ID, attempt: 1 } });
+  if (reviewStatus === "requested") return;
   const failed = reviewStatus === "repair_required" ? ["tests", "browser"] : [];
   store.append({ runId: RUN_ID, type: "final_verification.review_decided", occurredAt: "2026-08-26T00:00:11.000Z", actor: { role: "architect", id: "architect" }, idempotencyKey: "review-decision", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, submissionId: SUBMISSION_ID, reviewId: REVIEW_ID, attempt: 1, decision: reviewStatus, summary: reviewStatus === "repair_required" ? "Tests and browser behavior need targeted repairs." : "All verification evidence supports approval.", categoryReviews: plan.checks.map((check) => ({ category: check.category, verdict: failed.includes(check.category) ? "repair_required" : "approved", rationale: `Persisted ${check.category} facts were semantically reviewed.`, evidenceIds: [] })) } });
 }
 
-function finalPlan(): FinalVerificationPlan {
-  return { checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({ category: category as FinalVerificationPlan["checks"][number]["category"], status: "not_applicable" as const, rationale: `No ${category} fixture.`, repositoryInspection: { paths: ["package.json"], summary: `No ${category} fixture.` } })) };
+function finalPlan(
+  requiredCategories: readonly FinalVerificationPlan["checks"][number]["category"][] = [],
+): FinalVerificationPlan {
+  return { checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({
+    category: category as FinalVerificationPlan["checks"][number]["category"],
+    ...(requiredCategories.includes(category as FinalVerificationPlan["checks"][number]["category"])
+      ? { status: "required" as const }
+      : {
+          status: "not_applicable" as const,
+          rationale: `No ${category} fixture.`,
+          repositoryInspection: { paths: ["package.json"], summary: `No ${category} fixture.` },
+        }),
+  })) };
 }
 
 function integrateRepair(fixture: Fixture, taskId: string, revision: string): void {

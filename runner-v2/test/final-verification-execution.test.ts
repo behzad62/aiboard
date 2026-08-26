@@ -51,6 +51,7 @@ test("restart reuses completed checks and executes only pending categories befor
     fixture.store.close();
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
     });
     runtime = buildRuntime(fixture.store, fixture.evidence, driver, () => {
       workerCalls += 1;
@@ -109,7 +110,7 @@ test("restart reuses completed checks and executes only pending categories befor
 });
 
 test("a non-green check is persisted once and stops the generation before submission", async () => {
-  const fixture = createFixture();
+  const fixture = createFixture(["build"]);
   const calls: FinalVerificationCategory[] = [];
   const driver = checkDriver(calls, "build");
   try {
@@ -130,7 +131,7 @@ test("a non-green check is persisted once and stops the generation before submis
 });
 
 test("a persisted mechanical failure is cleaned, typed into repair work, and survives restart exactly once", async () => {
-  const fixture = createFixture();
+  const fixture = createFixture(["tests"]);
   const calls: FinalVerificationCategory[] = [];
   const cleanupFailures: unknown[] = [];
   let architectCalls = 0;
@@ -203,7 +204,7 @@ test("a persisted mechanical failure is cleaned, typed into repair work, and sur
     assert.equal(runtime.projection().finalVerification?.current?.submission, undefined);
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
     runtime = runtimeFor();
     assert.equal((await runtime.step()).action, "final_verification_cleanup_succeeded");
     assert.equal(cleanupFailures.length, 1);
@@ -216,7 +217,7 @@ test("a persisted mechanical failure is cleaned, typed into repair work, and sur
       "C:/runner-state/diagnostics/failure.json");
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
     runtime = runtimeFor();
     assert.equal((await runtime.step()).action, "final_verification_repair_plan_required");
     const repair = runtime.projection().tasks["repair-tests-mechanical"];
@@ -276,7 +277,7 @@ test("durable cleanup failure blocks review and restart retries the exact genera
     );
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
     cleanupAvailable = true;
     runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver(categories), undefined, cleanupDriver);
     assert.equal((await runtime.step()).action, "final_verification_cleanup_succeeded");
@@ -291,7 +292,7 @@ test("durable cleanup failure blocks review and restart retries the exact genera
 });
 
 test("mechanical cleanup failure retries after restart without duplicating the failure report", async () => {
-  const fixture = createFixture();
+  const fixture = createFixture(["build"]);
   let cleanupCalls = 0;
   const cleanupDriver: FinalVerificationCleanupDriver = {
     cleanup: async (input) => {
@@ -311,7 +312,7 @@ test("mechanical cleanup failure retries after restart without duplicating the f
     assert.match(runtime.projection().finalVerification?.current?.cleanup?.error ?? "", /token=\[REDACTED\]/);
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
     runtime = buildRuntime(
       fixture.store, fixture.evidence, checkDriver([], "build"), undefined, cleanupDriver,
     );
@@ -328,7 +329,7 @@ test("mechanical cleanup failure retries after restart without duplicating the f
 });
 
 test("forged or stale failure reports and raw review approval cannot bypass mechanical failure", async () => {
-  const fixture = createFixture();
+  const fixture = createFixture(["build"]);
   try {
     const runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver([], "build"));
     await runtime.step();
@@ -400,13 +401,13 @@ test("forged or stale failure reports and raw review approval cannot bypass mech
 
 test("timeout, cancellation, browser policy, and missing evidence outcomes map into durable failures", async () => {
   const cases = [
-    { category: "build" as const, issue: "build timed out", fact: commandFailureFact({ timedOut: true }) },
-    { category: "tests" as const, issue: "tests cancelled", fact: commandFailureFact({ cancelled: true }) },
+    { category: "build" as const, issue: "build timed out", fact: undefined },
+    { category: "tests" as const, issue: "tests cancelled", fact: undefined },
     { category: "browser" as const, issue: "browser console and network policy violation", fact: undefined },
     { category: "runtime_smoke" as const, issue: "required runtime evidence is missing", fact: undefined },
   ];
   for (const scenario of cases) {
-    const fixture = createFixture();
+    const fixture = createFixture([scenario.category]);
     const driver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
         const result = completedCheck(input.category, input.category !== scenario.category);
@@ -536,53 +537,9 @@ function actualNonZeroTestDriver(calls: FinalVerificationCategory[]): FinalVerif
       assert.equal(result.status, 7);
       const completed = completedCheck("tests", false);
       completed.check.issues = [`test command exited with non-zero status ${result.status}`];
-      completed.check.facts = [{
-        kind: "command",
-        label: "actual non-zero test check",
-        command: process.execPath,
-        executable: process.execPath,
-        args: ["-e", "process.exit(7)"],
-        cwd: process.cwd(),
-        startedAt: completed.startedAt,
-        finishedAt: completed.finishedAt,
-        exitCode: result.status,
-        signal: result.signal,
-        timedOut: false,
-        cancelled: false,
-        outputTruncated: false,
-        stdoutArtifactHash: "0".repeat(64),
-        stderrArtifactHash: "0".repeat(64),
-        category: "tests",
-        targetRevision: REVISION_ONE,
-        startState: { revision: REVISION_ONE, status: "" },
-        endState: { revision: REVISION_ONE, status: "" },
-      }];
+      completed.check.facts = [];
       return completed;
     },
-  };
-}
-
-function commandFailureFact(overrides: { timedOut?: boolean; cancelled?: boolean }) {
-  return {
-    kind: "command" as const,
-    label: "failed command",
-    command: process.execPath,
-    executable: process.execPath,
-    args: ["-e", "process.exit(1)"],
-    cwd: process.cwd(),
-    startedAt: "2026-08-26T00:00:03.000Z",
-    finishedAt: "2026-08-26T00:00:04.000Z",
-    exitCode: null,
-    signal: null,
-    timedOut: overrides.timedOut ?? false,
-    cancelled: overrides.cancelled ?? false,
-    outputTruncated: false,
-    stdoutArtifactHash: "0".repeat(64),
-    stderrArtifactHash: "0".repeat(64),
-    category: "build" as const,
-    targetRevision: REVISION_ONE,
-    startState: { revision: REVISION_ONE, status: "" },
-    endState: { revision: REVISION_ONE, status: "" },
   };
 }
 
@@ -590,7 +547,9 @@ function completedCheck(
   category: FinalVerificationCategory,
   green = true,
 ): FinalVerificationCheckExecution {
-  const planned = finalVerificationPlan().checks.find((check) => check.category === category)!;
+  const planned = finalVerificationPlan(green ? [] : [category]).checks.find(
+    (check) => check.category === category,
+  )!;
   return {
     workspacePath: "C:/verification-workspace",
     startedAt: "2026-08-26T00:00:03.000Z",
@@ -605,11 +564,11 @@ function completedCheck(
   };
 }
 
-function createFixture() {
+function createFixture(requiredCategories: readonly FinalVerificationCategory[] = []) {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification execution "));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  const store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+  const store = new SqliteSchedulerStore(database, { evidenceStore: evidence, validateCleanupReceipt: () => undefined });
   store.append({
     runId: RUN_ID,
     type: "run.initialized",
@@ -657,7 +616,7 @@ function createFixture() {
       generationId: GENERATION_ID,
       targetRevision: REVISION_ONE,
       planVersion: 1,
-      plan: finalVerificationPlan(),
+      plan: finalVerificationPlan(requiredCategories),
     },
   });
   return {
@@ -669,16 +628,22 @@ function createFixture() {
   };
 }
 
-function finalVerificationPlan(): FinalVerificationPlan {
+function finalVerificationPlan(
+  requiredCategories: readonly FinalVerificationCategory[] = [],
+): FinalVerificationPlan {
   return {
     checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({
       category: category as FinalVerificationCategory,
-      status: "not_applicable" as const,
-      rationale: `No ${category} fixture is configured.`,
-      repositoryInspection: {
-        paths: ["package.json"],
-        summary: `No ${category} fixture is configured.`,
-      },
+      ...(requiredCategories.includes(category as FinalVerificationCategory)
+        ? { status: "required" as const }
+        : {
+            status: "not_applicable" as const,
+            rationale: `No ${category} fixture is configured.`,
+            repositoryInspection: {
+              paths: ["package.json"],
+              summary: `No ${category} fixture is configured.`,
+            },
+          }),
     })),
   };
 }
