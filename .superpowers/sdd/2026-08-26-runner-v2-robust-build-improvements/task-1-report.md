@@ -357,3 +357,97 @@ No test or control was weakened. No R3 failure reached governed reclassification
 Production/test packet commit: `f9f537bd runner-v2: clear retry acceptance projections`.
 
 The follow-up documentation commit records the final report hash and clean tracked state.
+
+## Review fix round 1 — R4 legacy completion and handoff gate packet
+
+This bounded repair addresses only R4. R6 and R7 remain queued; no P2 work was
+started. The existing pre-gate historical-completion replay test was retained:
+`completed legacy scheduler runs remain replayable and inspectable`.
+
+### Reproduction before edits
+
+Added a real `SqliteSchedulerStore` regression using the WAL-backed durable
+append path. It creates a legacy plan, records the explicit
+`acceptance_contract.upgrade_required` gate, then directly appends raw
+`run.completed` and `project.handoff_selected` events. Before the reducer guard
+was added:
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+14 tests, 13 passed, 1 failed
+AssertionError: Missing expected exception
+  gated active legacy runs reject raw completion and handoff selection until upgrade
+  at runner-v2/test/scheduler-store.test.ts:345
+```
+
+The first implementation attempt guarded on the legacy status alone and
+correctly exposed an important boundary distinction: a legacy plan has
+`acceptanceContractStatus = acceptance_contract_upgrade_required` before the
+explicit gate event, so that condition would incorrectly reject valid
+historical pre-gate completion and handoff replay. The authoritative gate
+marker is the durable `acceptanceUpgradeRequiredEventRecorded` flag.
+
+### Repair
+
+- The scheduler reducer now rejects raw Architect `run.completed` append and
+  raw user/runner `project.handoff_selected` append only when both the legacy
+  upgrade-required status and the durable explicit gate marker are present.
+- The append transaction therefore rolls back the rejected event, preserving
+  the active run and requested handoff projection for replay.
+- A successful `acceptance_contract.upgraded` event changes the status to
+  `current`; completion and handoff selection then append normally.
+- Historical completion before the gate remains readable and continues to map
+  to `legacy_completed`, preserving the existing replay compatibility rule.
+
+The focused regression exercises both direct durable paths: post-gate raw
+completion throws and leaves three events, post-gate handoff selection throws
+and leaves `requested`, and each operation succeeds after the Architect
+upgrade. Replay verifies the final status is `completed` with a `current`
+acceptance contract.
+
+### Post-repair checks
+
+```text
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+14/14 passed
+
+npx tsx --test --test-name-pattern "legacy|exhausted rejected|exhausted failed" runner-v2/test/build-runtime.test.ts
+4/4 passed
+
+npx tsx --test runner-v2/test/scheduler-store.test.ts runner-v2/test/build-runtime.test.ts runner-v2/test/recovery-smoke.test.ts
+30/31 passed; all 14 scheduler tests, the recovery test, and the selected
+lifecycle assertions passed. The sole failure was the known Windows EPERM
+temporary-directory cleanup race in build-runtime.test.ts after its assertions;
+this is the same pre-existing cleanup failure recorded in the R3 packet.
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/scheduler-store.ts runner-v2/test/scheduler-store.test.ts
+passed
+
+git diff --check
+passed (only normal CRLF normalization warnings from Git)
+```
+
+### Required fault-only red proofs
+
+Each proof changed only the corresponding R4 guard, ran the focused scheduler
+suite, and restored that guard before the next proof:
+
+1. Changed the `run.completed` guard condition to be impossible. The suite
+   returned 13/14 with `AssertionError: Missing expected exception` at line
+   345. Restoring only the completion guard returned 14/14.
+2. Changed the `project.handoff_selected` guard condition to be impossible.
+   The suite returned 13/14 with `AssertionError: Missing expected exception`
+   at line 404. Restoring only the handoff guard returned 14/14.
+
+No test or control was weakened. No R4 failure reached governed
+reclassification or the five-cycle cap. R6/R7 and P2 were not touched.
+
+### Packet status
+
+Production/test packet commit: `3240ba11 runner-v2: gate legacy completion after upgrade`.
+
+The follow-up documentation commit records this report section, the final
+report hash, and clean tracked state.
