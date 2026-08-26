@@ -13,6 +13,10 @@ import {
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { readyTaskIds, validateTaskGraph } from "../src/task-graph.js";
 import { TaskScheduler } from "../src/task-scheduler.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 const REVISION_ONE = "integration revision one";
 const REVISION_TWO = "integration revision two";
@@ -27,6 +31,7 @@ const EMPTY_EVIDENCE_STORE: EvidenceStore = {
 const SCHEDULER_OPTIONS = {
   evidenceStore: EMPTY_EVIDENCE_STORE,
   validateCleanupReceipt: () => undefined,
+  validateExecutionProfile: acceptFinalVerificationProfile,
 };
 
 test("final verification is a distinct kernel task and is never auto-run", async () => {
@@ -242,6 +247,7 @@ test("integration revision advancement invalidates current verification and surv
         targetRevision: REVISION_TWO,
         planVersion: 2,
         plan: PLAN,
+        executionProfile: emptyFinalVerificationProfile(REVISION_TWO),
       }));
       const current = rebuildSchedulerProjection(reopened.readRun(fixture.runId)).finalVerification?.current;
       assert.equal(current?.generationId, "verification-generation-two");
@@ -362,6 +368,7 @@ function generationEventFor(
       targetRevision: input.targetRevision,
       planVersion: input.planVersion,
       plan: input.plan,
+      executionProfile: emptyFinalVerificationProfile(input.targetRevision),
     },
   );
 }

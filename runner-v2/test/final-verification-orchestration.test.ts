@@ -18,6 +18,10 @@ import {
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { TaskScheduler } from "../src/task-scheduler.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 const INTEGRATION_REVISION = "integration-revision-one";
 const RUN_ID = "run-final-verification-orchestration";
@@ -60,6 +64,7 @@ test("terminal implementation work requires a typed final-verification plan", as
       },
       maxConcurrency: 1,
       workspaceFor: async () => "C:/unused",
+      finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
     });
 
     const step = await runtime.step();
@@ -122,6 +127,7 @@ test("plan_final_verification is idempotent and rejects a conflicting current pl
   for (const tool of createArchitectTools({
     store: fixture.store,
     finalVerificationPlanAvailable: true,
+    finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
   })) tools.register(tool);
   const context = {
     runId: RUN_ID,
@@ -192,6 +198,7 @@ test("a kernel final-verification task is excluded from worker scheduling", asyn
   for (const tool of createArchitectTools({
     store: fixture.store,
     finalVerificationPlanAvailable: true,
+    finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
   })) tools.register(tool);
   try {
     const result = await invokePlan(
@@ -234,7 +241,9 @@ test("a kernel final-verification task is excluded from worker scheduling", asyn
 
 function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification orchestration "));
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    validateExecutionProfile: acceptFinalVerificationProfile,
+  });
   store.append({
     runId: RUN_ID,
     type: "run.initialized",

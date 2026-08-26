@@ -9,6 +9,10 @@ import { BuildRuntime } from "../src/build-runtime.js";
 import type { FinalVerificationCommandFact } from "../src/final-verification-runtime.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 const RUN_ID = "final-verification-integrity";
 const TASK_ID = "final-verification-task";
@@ -163,6 +167,7 @@ async function createFixture(options: {
   const store = new SqliteSchedulerStore(database, {
     evidenceStore: evidence,
     artifacts,
+    validateExecutionProfile: acceptFinalVerificationProfile,
     ...(options.validateCleanupReceipt
       ? { validateCleanupReceipt: options.validateCleanupReceipt }
       : {}),
@@ -202,6 +207,7 @@ async function createFixture(options: {
       generationId: GENERATION_ID,
       targetRevision: REVISION,
       planVersion: 1,
+      executionProfile: emptyFinalVerificationProfile(REVISION),
       plan: {
         checks: [
           ...["build", "tests", "runtime_smoke", "browser"].map((category) => ({

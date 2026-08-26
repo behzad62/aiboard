@@ -659,27 +659,31 @@ function planFinalVerificationTool(
           "Final verification requires a canonical integration revision.",
         );
       }
-      let executionProfile: FinalVerificationExecutionProfile | undefined;
-      if (profileFor) {
-        try {
-          executionProfile = cloneFinalVerificationExecutionProfile(
-            await profileFor(projection.integrationRevision),
-          );
-        } catch (error) {
-          return errorOutput(
-            "final_verification_profile_unavailable",
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-        const authoritativeValidation = validateFinalVerificationPlan(input.plan, {
-          detectedSignals: executionProfile.detectedSignals,
-        });
-        if (!authoritativeValidation.valid) {
-          return errorOutput(
-            "final_verification_plan_conflicts_with_repository",
-            authoritativeValidation.issues.join(" "),
-          );
-        }
+      if (!profileFor) {
+        return errorOutput(
+          "final_verification_profile_unavailable",
+          "Final verification requires a runner-owned exact-revision execution profile authority.",
+        );
+      }
+      let executionProfile: FinalVerificationExecutionProfile;
+      try {
+        executionProfile = cloneFinalVerificationExecutionProfile(
+          await profileFor(projection.integrationRevision),
+        );
+      } catch (error) {
+        return errorOutput(
+          "final_verification_profile_unavailable",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      const authoritativeValidation = validateFinalVerificationPlan(input.plan, {
+        detectedSignals: executionProfile.detectedSignals,
+      });
+      if (!authoritativeValidation.valid) {
+        return errorOutput(
+          "final_verification_plan_conflicts_with_repository",
+          authoritativeValidation.issues.join(" "),
+        );
       }
       const revisionKey = shortHash(projection.integrationRevision);
       const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
@@ -695,7 +699,7 @@ function planFinalVerificationTool(
           targetRevision: projection.integrationRevision,
           planVersion,
           plan: input.plan,
-          ...(executionProfile ? { executionProfile } : {}),
+          executionProfile,
         },
       }, {
         type: "architect_action",

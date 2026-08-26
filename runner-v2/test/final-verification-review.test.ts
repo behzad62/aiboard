@@ -12,6 +12,10 @@ import type { FinalVerificationPlan } from "../src/final-verification-contracts.
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
 const RUN_ID = "run-final-verification-review";
@@ -115,6 +119,7 @@ test("valid current review persists across reopen and is semantically deduplicat
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     });
     const current = projection(fixture.store).finalVerification?.current;
     assert.equal(current?.review?.status, "approved");
@@ -292,6 +297,7 @@ function createFixture(options: {
     store: new SqliteSchedulerStore(database, {
       evidenceStore: evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     }),
     close() {
       this.store.close();
@@ -364,6 +370,7 @@ function appendBase(
       targetRevision: REVISION_ONE,
       planVersion: 1,
       plan,
+      executionProfile: emptyFinalVerificationProfile(REVISION_ONE),
     },
   });
   for (const [index, check] of plan.checks.entries()) {

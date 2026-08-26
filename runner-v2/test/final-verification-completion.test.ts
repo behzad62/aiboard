@@ -22,6 +22,10 @@ import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
@@ -152,6 +156,7 @@ test("SQLite append and replay fail closed on forged completion", () => {
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     });
     assert.throws(() => fixture.store.readRun(RUN_ID), /completion|verification|ready/i);
   } finally {
@@ -454,6 +459,7 @@ function validProjection(): SchedulerProjection {
         targetRevision: REVISION,
         planVersion: 1,
         plan,
+        executionProfile: emptyFinalVerificationProfile(REVISION),
         state: "current",
         completedChecks,
         submission: {
@@ -581,6 +587,7 @@ function createStoreFixture(ready: boolean): StoreFixture {
     store: new SqliteSchedulerStore(database, {
       evidenceStore: evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     }),
     close() {
       this.store.close();
@@ -629,6 +636,7 @@ function createStoreFixture(ready: boolean): StoreFixture {
       targetRevision: REVISION,
       planVersion: 1,
       plan,
+      executionProfile: emptyFinalVerificationProfile(REVISION),
     },
   });
   for (const [index, check] of plan.checks.entries()) {

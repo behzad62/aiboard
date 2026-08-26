@@ -18,6 +18,7 @@ import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
 
 const spec: NativeBuildSpec = {
   version: 1,
@@ -1829,6 +1830,7 @@ function requestedHandoffProjection(
           targetRevision: revision,
           planVersion: 1,
           plan,
+          executionProfile: emptyFinalVerificationProfile(revision),
           state: "current",
           completedChecks,
           submission: { submissionId, generationId, targetRevision: revision, attempt: 1 },

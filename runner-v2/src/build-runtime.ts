@@ -109,7 +109,7 @@ export interface FinalVerificationCheckDriverInput {
   attempt: number;
   plan: FinalVerificationPlan;
   category: FinalVerificationCategory;
-  executionProfile?: FinalVerificationExecutionProfile;
+  executionProfile: FinalVerificationExecutionProfile;
   signal?: AbortSignal;
 }
 
@@ -756,7 +756,7 @@ export class BuildRuntime {
           attempt: 1,
           plan: generation.plan,
           category: pending.category,
-          ...(generation.executionProfile ? { executionProfile: generation.executionProfile } : {}),
+          executionProfile: generation.executionProfile,
           signal: this.activeLifecycleSignal(),
         });
       } catch (error) {

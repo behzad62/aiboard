@@ -29,7 +29,7 @@ import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime } from "./final-verification-runtime.js";
-import { inspectFinalVerificationExecutionProfile } from "./final-verification-profile.js";
+import { FinalVerificationProfileAuthority } from "./final-verification-profile.js";
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
@@ -142,11 +142,17 @@ export class NativeBuildFactory {
       selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
     const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    const finalVerificationProfiles = new FinalVerificationProfileAuthority({
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+    });
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
       evidenceStore,
       artifacts: this.artifacts,
       validateCleanupReceipt: (identity) =>
         validateOwnedFinalVerificationCleanupReceipt(this.options.stateDirectory, identity),
+      validateExecutionProfile: ({ targetRevision, profile }) =>
+        finalVerificationProfiles.validate(profile, targetRevision),
     });
     const schedulerEvents = schedulerStore.readRun(spec.runId);
     const sessions = new SqliteAgentSessionStore(
@@ -349,7 +355,7 @@ export class NativeBuildFactory {
         cleanup: async (input) => await finalVerificationCleanup.cleanup(input),
       },
       finalVerificationProfileFor: async (targetRevision) =>
-        await inspectFinalVerificationExecutionProfile({
+        await finalVerificationProfiles.inspectAndPersist({
           repositoryRoot: integrationManager.path,
           targetRevision,
         }),

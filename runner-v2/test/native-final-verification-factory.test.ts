@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
-import { inspectFinalVerificationExecutionProfile } from "../src/final-verification-profile.js";
+import { FinalVerificationProfileAuthority } from "../src/final-verification-profile.js";
 import { NativeBuildFactory } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -66,10 +66,13 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
       idempotencyKey: "native-factory-verification",
     });
     const runRoot = join(state, "builds", safeSegment(runId));
-    scheduler = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId });
+    scheduler = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
+      validateExecutionProfile: (input) => authority.validate(input.profile, input.targetRevision),
+    });
     const integration = baseline.revision;
     const integrationPath = join(state, "integration", safeName(runId));
-    const profile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: integrationPath, targetRevision: integration });
+    const profile = await authority.inspectAndPersist({ repositoryRoot: integrationPath, targetRevision: integration });
     seedGeneration(scheduler, runId, integration, profile);
 
     writeFileSync(join(project, "uncommitted-user-note.txt"), "must remain untouched\n");

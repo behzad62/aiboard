@@ -21,6 +21,10 @@ import {
   type WorkerOutcome,
   type WorkerRuntimeDriver,
 } from "../src/task-scheduler.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 test("build runtime plans final verification after ordinary integration across restarts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-"));
@@ -71,9 +75,13 @@ test("build runtime plans final verification after ordinary integration across r
   }
   const workers = new ScriptedWorkers(router, evidenceByTask);
   const integration = new ScriptedIntegration();
+  const schedulerOptions = {
+    evidenceStore,
+    validateExecutionProfile: acceptFinalVerificationProfile,
+  };
   try {
     for (let restart = 0; restart < 20; restart += 1) {
-      const store = new SqliteSchedulerStore(database, { evidenceStore });
+      const store = new SqliteSchedulerStore(database, schedulerOptions);
       const runtime = new BuildRuntime({
         runId: "run_1",
         store,
@@ -84,6 +92,7 @@ test("build runtime plans final verification after ordinary integration across r
         workspaceFor: async (task) => `C:/work/${task.id}`,
         clock: () => "2026-07-12T00:00:00.000Z",
         evidenceStore,
+        finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
       });
       const step = await runtime.step();
       const projection = runtime.projection();
@@ -94,7 +103,7 @@ test("build runtime plans final verification after ordinary integration across r
       }
     }
 
-    recoveredStore = new SqliteSchedulerStore(database, { evidenceStore });
+    recoveredStore = new SqliteSchedulerStore(database, schedulerOptions);
     const recovered = new BuildRuntime({
       runId: "run_1",
       store: recoveredStore,
@@ -104,6 +113,7 @@ test("build runtime plans final verification after ordinary integration across r
       maxConcurrency: 2,
       workspaceFor: async (task) => `C:/work/${task.id}`,
       evidenceStore,
+      finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
     });
     const projection = recovered.projection();
     assert.equal(projection.status, "running");

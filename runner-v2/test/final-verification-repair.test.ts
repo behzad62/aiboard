@@ -13,6 +13,10 @@ import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { TaskScheduler } from "../src/task-scheduler.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 const RUN_ID = "run-final-verification-repair";
 const FINAL_TASK_ID = "final-verification-repair-source";
@@ -139,6 +143,7 @@ test("repair tasks and provenance deduplicate across scheduler reopen", async ()
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     });
     const reordered = validRepairPlan();
     reordered.tasks.reverse();
@@ -265,6 +270,7 @@ test("unstructured rejected final-verification reviews fail closed instead of st
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     });
     assert.equal(current(fixture.store)?.review?.status, "requested");
   } finally {
@@ -444,6 +450,8 @@ function buildRuntime(
       integrate: async () => ({ status: "integrated", integrationRevision: REVISION_TWO }),
     },
     maxConcurrency: 2,
+    finalVerificationProfileFor: async (targetRevision) =>
+      emptyFinalVerificationProfile(targetRevision),
     workspaceFor: async (task) => `C:/repair/${task.id}`,
   });
 }
@@ -530,6 +538,7 @@ function createFixture(options: { reviewStatus?: "approved" | "repair_required" 
     store: new SqliteSchedulerStore(database, {
       evidenceStore: evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     }),
     close() {
       this.store.close();
@@ -552,6 +561,7 @@ function createMechanicalFixture(): Fixture {
     store: new SqliteSchedulerStore(database, {
       evidenceStore: evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     }),
     close() {
       this.store.close(); this.evidence.close(); rmSync(this.root, { recursive: true, force: true });
@@ -561,7 +571,7 @@ function createMechanicalFixture(): Fixture {
   fixture.store.append({ runId: RUN_ID, type: "run.initialized", occurredAt: "2026-08-26T00:00:00.000Z", actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: {} });
   fixture.store.append({ runId: RUN_ID, type: "plan.created", occurredAt: "2026-08-26T00:00:01.000Z", actor: { role: "architect", id: "architect" }, idempotencyKey: "plan", payload: { revision: 1, tasks: [{ id: "implementation-one", objective: "Implement feature", dependencies: [], status: "integrated", requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "done", text: "Feature implemented." }], acceptanceCriteriaVersion: 1, attempt: 1 }] } });
   fixture.store.append({ runId: RUN_ID, type: "integration.revision_advanced", occurredAt: "2026-08-26T00:00:02.000Z", actor: { role: "runner", id: "integration" }, idempotencyKey: "rev-one", payload: { integrationRevision: REVISION_ONE } });
-  fixture.store.append({ runId: RUN_ID, type: "final_verification.generation_created", occurredAt: "2026-08-26T00:00:03.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "generation", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, planVersion: 1, plan } });
+  fixture.store.append({ runId: RUN_ID, type: "final_verification.generation_created", occurredAt: "2026-08-26T00:00:03.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "generation", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, planVersion: 1, plan, executionProfile: emptyFinalVerificationProfile(REVISION_ONE) } });
   fixture.store.append({ runId: RUN_ID, type: "final_verification.check_completed", occurredAt: "2026-08-26T00:00:04.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "check:build", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1, workspacePath: "C:/verify", startedAt: "2026-08-26T00:00:03.000Z", finishedAt: "2026-08-26T00:00:04.000Z", result: { ...plan.checks[0], green: false, evidenceIds: [], facts: [], issues: ["build exited non-zero"] } } });
   const failure = deriveFinalVerificationFailure(current(fixture.store)!, 1);
   fixture.store.append({ runId: RUN_ID, type: "final_verification.failure_reported", occurredAt: "2026-08-26T00:00:05.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "failure", payload: { ...failure } });
@@ -580,7 +590,7 @@ function seed(store: SqliteSchedulerStore, reviewStatus: "approved" | "repair_re
     },
   });
   store.append({ runId: RUN_ID, type: "integration.revision_advanced", occurredAt: "2026-08-26T00:00:02.000Z", actor: { role: "runner", id: "integration" }, idempotencyKey: "rev-one", payload: { integrationRevision: REVISION_ONE } });
-  store.append({ runId: RUN_ID, type: "final_verification.generation_created", occurredAt: "2026-08-26T00:00:03.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "generation", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, planVersion: 1, plan } });
+  store.append({ runId: RUN_ID, type: "final_verification.generation_created", occurredAt: "2026-08-26T00:00:03.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "generation", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, planVersion: 1, plan, executionProfile: emptyFinalVerificationProfile(REVISION_ONE) } });
   for (const [index, check] of plan.checks.entries()) {
     store.append({ runId: RUN_ID, type: "final_verification.check_completed", occurredAt: `2026-08-26T00:00:0${index + 4}.000Z`, actor: { role: "runner", id: "runtime" }, idempotencyKey: `check:${check.category}`, payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1, workspacePath: "C:/verify", startedAt: "2026-08-26T00:00:04.000Z", finishedAt: "2026-08-26T00:00:05.000Z", result: { ...check, green: true, evidenceIds: [], facts: [], issues: [] } } });
   }

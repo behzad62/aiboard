@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { FinalVerificationDetectedSignal } from "./final-verification-contracts.js";
@@ -21,6 +23,113 @@ export interface FinalVerificationExecutionProfile {
   };
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
+}
+
+interface FinalVerificationProfileArchive {
+  version: 1;
+  kind: "final-verification-execution-profile";
+  runId: string;
+  targetRevision: string;
+  digest: string;
+  profile: FinalVerificationExecutionProfile;
+}
+
+/** Runner-owned durable authority for exact-revision execution profiles. */
+export class FinalVerificationProfileAuthority {
+  private readonly stateDirectory: string;
+
+  constructor(private readonly options: { stateDirectory: string; runId: string }) {
+    this.stateDirectory = resolve(options.stateDirectory);
+    if (!options.runId.trim()) throw new Error("Final verification profile authority requires a runId.");
+  }
+
+  async inspectAndPersist(input: {
+    repositoryRoot: string;
+    targetRevision: string;
+    execute?: GitRunner;
+  }): Promise<FinalVerificationExecutionProfile> {
+    return await this.persistInspected(await inspectFinalVerificationExecutionProfile(input));
+  }
+
+  private async persistInspected(
+    profile: FinalVerificationExecutionProfile,
+  ): Promise<FinalVerificationExecutionProfile> {
+    const durable = cloneFinalVerificationExecutionProfile(profile);
+    const digest = finalVerificationProfileDigest(this.options.runId, durable);
+    const path = this.archivePath(digest);
+    const archive: FinalVerificationProfileArchive = {
+      version: 1,
+      kind: "final-verification-execution-profile",
+      runId: this.options.runId,
+      targetRevision: durable.targetRevision,
+      digest,
+      profile: durable,
+    };
+    try {
+      this.validate(durable, durable.targetRevision);
+      return durable;
+    } catch (error) {
+      if (!isMissingArchiveError(error)) throw error;
+    }
+    await mkdir(dirname(path), { recursive: true });
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(archive, null, 2)}\n`, "utf8");
+    try { await rename(temporary, path); }
+    catch (error) {
+      if (!fileExists(path)) throw error;
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+    this.validate(durable, durable.targetRevision);
+    return durable;
+  }
+
+  validate(profile: unknown, targetRevision: string): void {
+    assertFinalVerificationExecutionProfile(profile, targetRevision);
+    const durable = cloneFinalVerificationExecutionProfile(profile);
+    const digest = finalVerificationProfileDigest(this.options.runId, durable);
+    const path = this.archivePath(digest);
+    let archive: unknown;
+    try { archive = JSON.parse(readFileSync(path, "utf8")) as unknown; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error("Runner-owned final verification execution profile archive is missing.", { cause: error });
+      }
+      throw new Error("Runner-owned final verification execution profile archive is invalid.", { cause: error });
+    }
+    if (!archive || typeof archive !== "object" || Array.isArray(archive)) {
+      throw new Error("Runner-owned final verification execution profile archive is malformed.");
+    }
+    const value = archive as Partial<FinalVerificationProfileArchive>;
+    if (
+      value.version !== 1 || value.kind !== "final-verification-execution-profile" ||
+      value.runId !== this.options.runId || value.targetRevision !== targetRevision ||
+      value.digest !== digest || stableJson(value.profile) !== stableJson(durable)
+    ) {
+      throw new Error("Runner-owned final verification execution profile archive conflicts with the scheduler event.");
+    }
+  }
+
+  private archivePath(digest: string): string {
+    return join(
+      this.stateDirectory,
+      "builds",
+      safeSegment(this.options.runId),
+      "audit",
+      "final-verification-profiles",
+      `${digest}.json`,
+    );
+  }
+}
+
+export function finalVerificationProfileDigest(
+  runId: string,
+  profile: FinalVerificationExecutionProfile,
+): string {
+  assertFinalVerificationExecutionProfile(profile, profile.targetRevision);
+  return createHash("sha256")
+    .update(stableJson({ runId, targetRevision: profile.targetRevision, profile }))
+    .digest("hex");
 }
 
 export async function inspectFinalVerificationExecutionProfile(options: {
@@ -241,4 +350,23 @@ function cloneBrowser(browser: FinalVerificationBrowserInput): FinalVerification
     },
     ...(browser.server ? { server: cloneSmoke(browser.server) } : {}),
   };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function safeSegment(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
+}
+
+function fileExists(path: string): boolean { return existsSync(path); }
+function isMissingArchiveError(error: unknown): boolean {
+  return error instanceof Error && /profile archive is missing/i.test(error.message);
 }

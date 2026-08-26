@@ -19,6 +19,7 @@ import {
 import type { EvidenceStore } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { FinalVerificationCleanupReceiptIdentity } from "./final-verification-cleanup.js";
+import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 
 interface EventRow {
   event_id: string;
@@ -42,6 +43,12 @@ export interface SqliteSchedulerStoreOptions {
   artifacts?: Pick<ArtifactStore, "verifySync">;
   /** Production authority for exact-owned cleanup receipts. */
   validateCleanupReceipt?: (identity: FinalVerificationCleanupReceiptIdentity) => void;
+  /** Production authority for runner-inspected exact-revision profiles. */
+  validateExecutionProfile?: (input: {
+    runId: string;
+    targetRevision: string;
+    profile: FinalVerificationExecutionProfile;
+  }) => void;
 }
 
 export class SqliteSchedulerStore implements SchedulerStore {
@@ -49,11 +56,13 @@ export class SqliteSchedulerStore implements SchedulerStore {
   private readonly evidenceStore?: EvidenceStore;
   private readonly artifacts?: Pick<ArtifactStore, "verifySync">;
   private readonly validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"];
+  private readonly validateExecutionProfile?: SqliteSchedulerStoreOptions["validateExecutionProfile"];
 
   constructor(databasePath: string, options: SqliteSchedulerStoreOptions = {}) {
     this.evidenceStore = options.evidenceStore;
     this.artifacts = options.artifacts;
     this.validateCleanupReceipt = options.validateCleanupReceipt;
+    this.validateExecutionProfile = options.validateExecutionProfile;
     mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
     this.database.exec(`
@@ -89,6 +98,7 @@ export class SqliteSchedulerStore implements SchedulerStore {
         this.evidenceStore,
         this.artifacts,
         this.validateCleanupReceipt,
+        this.validateExecutionProfile,
       );
       const existing = this.database
         .prepare(
@@ -144,6 +154,7 @@ export class SqliteSchedulerStore implements SchedulerStore {
         this.evidenceStore,
         this.artifacts,
         this.validateCleanupReceipt,
+        this.validateExecutionProfile,
       );
       this.database
         .prepare(
@@ -183,6 +194,7 @@ export class SqliteSchedulerStore implements SchedulerStore {
       this.evidenceStore,
       this.artifacts,
       this.validateCleanupReceipt,
+      this.validateExecutionProfile,
     );
     return events.filter((event) => event.sequence > afterSequence);
   }
@@ -220,11 +232,19 @@ function replaySchedulerEvents(
   evidenceStore?: EvidenceStore,
   artifacts?: Pick<ArtifactStore, "verifySync">,
   validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"],
+  validateExecutionProfile?: SqliteSchedulerStoreOptions["validateExecutionProfile"],
 ): SchedulerProjection | undefined {
   let projection: SchedulerProjection | undefined;
   for (const event of events) {
     const next = reduceSchedulerEvent(projection, event);
-    validateSchedulerEvent(projection, event, evidenceStore, artifacts, validateCleanupReceipt);
+    validateSchedulerEvent(
+      projection,
+      event,
+      evidenceStore,
+      artifacts,
+      validateCleanupReceipt,
+      validateExecutionProfile,
+    );
     projection = next;
   }
   return projection;
@@ -236,6 +256,7 @@ function validateSchedulerEvent(
   evidenceStore?: EvidenceStore,
   artifacts?: Pick<ArtifactStore, "verifySync">,
   validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"],
+  validateExecutionProfile?: SqliteSchedulerStoreOptions["validateExecutionProfile"],
 ): void {
   if (requiresAuthoritativeEvidenceStore(projection, event) && !evidenceStore) {
     throw new Error(
@@ -250,6 +271,18 @@ function validateSchedulerEvent(
     throw new Error("An ArtifactStore is required for final-verification evidence artifacts.");
   }
   for (const hash of artifactHashes) artifacts!.verifySync(hash);
+  if (event.type === "final_verification.generation_created") {
+    if (!validateExecutionProfile) {
+      throw new Error(
+        "A runner-owned execution-profile authority is required for final verification.",
+      );
+    }
+    validateExecutionProfile({
+      runId: event.runId,
+      targetRevision: requiredEventString(event.payload, "targetRevision"),
+      profile: event.payload.executionProfile as FinalVerificationExecutionProfile,
+    });
+  }
   if (event.type === "final_verification.cleanup_succeeded") {
     const current = projection?.finalVerification?.current;
     if (current?.cleanup?.status === "started" && (current.submissionResult || current.failure)) {

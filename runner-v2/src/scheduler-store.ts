@@ -232,7 +232,7 @@ export interface FinalVerificationGenerationProjection {
   targetRevision: string;
   planVersion: number;
   plan: FinalVerificationPlan;
-  executionProfile?: FinalVerificationExecutionProfile;
+  executionProfile: FinalVerificationExecutionProfile;
   state: "current" | "invalidated";
   invalidatedByRevision?: string;
   completedChecks?: FinalVerificationCompletedCheckProjection[];
@@ -1964,15 +1964,13 @@ function createFinalVerificationGeneration(
       `Final verification generation targets stale integration revision ${generation.targetRevision}.`,
     );
   }
-  if (generation.executionProfile) {
-    const authoritativePlan = validateFinalVerificationPlan(generation.plan, {
-      detectedSignals: generation.executionProfile.detectedSignals,
-    });
-    if (!authoritativePlan.valid) {
-      throw new Error(
-        `Final verification plan conflicts with runner-detected signals: ${authoritativePlan.issues.join(" ")}`,
-      );
-    }
+  const authoritativePlan = validateFinalVerificationPlan(generation.plan, {
+    detectedSignals: generation.executionProfile.detectedSignals,
+  });
+  if (!authoritativePlan.valid) {
+    throw new Error(
+      `Final verification plan conflicts with runner-detected signals: ${authoritativePlan.issues.join(" ")}`,
+    );
   }
   const existing = projection.finalVerification?.current;
   if (existing) {
@@ -2019,9 +2017,7 @@ function createFinalVerificationGeneration(
       targetRevision: generation.targetRevision,
       planVersion: generation.planVersion,
       plan: planFinalVerification(generation.plan),
-      ...(generation.executionProfile
-        ? { executionProfile: cloneFinalVerificationExecutionProfile(generation.executionProfile) }
-        : {}),
+      executionProfile: cloneFinalVerificationExecutionProfile(generation.executionProfile),
       state: "current",
     },
     history: [...(projection.finalVerification?.history ?? [])].map(
@@ -2525,23 +2521,19 @@ function parseFinalVerificationGeneration(payload: Record<string, unknown>): {
   targetRevision: string;
   planVersion: number;
   plan: FinalVerificationPlan;
-  executionProfile?: FinalVerificationExecutionProfile;
+  executionProfile: FinalVerificationExecutionProfile;
 } {
   const planVersion = requiredNumber(payload, "planVersion");
   if (planVersion < 1) throw new Error("Final verification planVersion must be positive.");
   const targetRevision = requiredString(payload, "targetRevision");
-  if (payload.executionProfile !== undefined) {
-    assertFinalVerificationExecutionProfile(payload.executionProfile, targetRevision);
-  }
+  assertFinalVerificationExecutionProfile(payload.executionProfile, targetRevision);
   return {
     taskId: requiredString(payload, "taskId"),
     generationId: requiredString(payload, "generationId"),
     targetRevision,
     planVersion,
     plan: planFinalVerification(payload.plan),
-    ...(payload.executionProfile !== undefined
-      ? { executionProfile: cloneFinalVerificationExecutionProfile(payload.executionProfile) }
-      : {}),
+    executionProfile: cloneFinalVerificationExecutionProfile(payload.executionProfile),
   };
 }
 
@@ -2678,7 +2670,7 @@ function sameFinalVerificationGeneration(
     targetRevision: string;
     planVersion: number;
     plan: FinalVerificationPlan;
-    executionProfile?: FinalVerificationExecutionProfile;
+    executionProfile: FinalVerificationExecutionProfile;
   },
 ): boolean {
   return left.taskId === right.taskId &&
@@ -2717,9 +2709,7 @@ function cloneFinalVerificationGeneration(
   return {
     ...generation,
     plan: planFinalVerification(generation.plan),
-    ...(generation.executionProfile
-      ? { executionProfile: cloneFinalVerificationExecutionProfile(generation.executionProfile) }
-      : {}),
+    executionProfile: cloneFinalVerificationExecutionProfile(generation.executionProfile),
     ...(generation.completedChecks
       ? { completedChecks: generation.completedChecks.map(cloneFinalVerificationCompletedCheck) }
       : {}),

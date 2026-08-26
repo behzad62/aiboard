@@ -18,6 +18,10 @@ import type {
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 const RUN_ID = "run-final-verification-execution";
 const REVISION_ONE = "a".repeat(40);
@@ -52,6 +56,7 @@ test("restart reuses completed checks and executes only pending categories befor
     fixture.store = new SqliteSchedulerStore(fixture.database, {
       evidenceStore: fixture.evidence,
       validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
     });
     runtime = buildRuntime(fixture.store, fixture.evidence, driver, () => {
       workerCalls += 1;
@@ -204,7 +209,7 @@ test("a persisted mechanical failure is cleaned, typed into repair work, and sur
     assert.equal(runtime.projection().finalVerification?.current?.submission, undefined);
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined, validateExecutionProfile: acceptFinalVerificationProfile });
     runtime = runtimeFor();
     assert.equal((await runtime.step()).action, "final_verification_cleanup_succeeded");
     assert.equal(cleanupFailures.length, 1);
@@ -217,7 +222,7 @@ test("a persisted mechanical failure is cleaned, typed into repair work, and sur
       "C:/runner-state/diagnostics/failure.json");
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined, validateExecutionProfile: acceptFinalVerificationProfile });
     runtime = runtimeFor();
     assert.equal((await runtime.step()).action, "final_verification_repair_plan_required");
     const repair = runtime.projection().tasks["repair-tests-mechanical"];
@@ -277,7 +282,7 @@ test("durable cleanup failure blocks review and restart retries the exact genera
     );
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined, validateExecutionProfile: acceptFinalVerificationProfile });
     cleanupAvailable = true;
     runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver(categories), undefined, cleanupDriver);
     assert.equal((await runtime.step()).action, "final_verification_cleanup_succeeded");
@@ -312,7 +317,7 @@ test("mechanical cleanup failure retries after restart without duplicating the f
     assert.match(runtime.projection().finalVerification?.current?.cleanup?.error ?? "", /token=\[REDACTED\]/);
 
     fixture.store.close();
-    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined });
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence, validateCleanupReceipt: () => undefined, validateExecutionProfile: acceptFinalVerificationProfile });
     runtime = buildRuntime(
       fixture.store, fixture.evidence, checkDriver([], "build"), undefined, cleanupDriver,
     );
@@ -568,7 +573,7 @@ function createFixture(requiredCategories: readonly FinalVerificationCategory[] 
   const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification execution "));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  const store = new SqliteSchedulerStore(database, { evidenceStore: evidence, validateCleanupReceipt: () => undefined });
+  const store = new SqliteSchedulerStore(database, { evidenceStore: evidence, validateCleanupReceipt: () => undefined, validateExecutionProfile: acceptFinalVerificationProfile });
   store.append({
     runId: RUN_ID,
     type: "run.initialized",
@@ -617,6 +622,7 @@ function createFixture(requiredCategories: readonly FinalVerificationCategory[] 
       targetRevision: REVISION_ONE,
       planVersion: 1,
       plan: finalVerificationPlan(requiredCategories),
+      executionProfile: emptyFinalVerificationProfile(REVISION_ONE),
     },
   });
   return {
