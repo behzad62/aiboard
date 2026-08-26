@@ -586,13 +586,27 @@ function buildObjective(discussion: Discussion): string {
 }
 
 function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void {
+  const verificationState = (task: NativeBuildProjection["tasks"][string]) => {
+    if (task.kind !== "final_verification") return { kind: task.kind };
+    const current = projection.finalVerification?.current;
+    return {
+      kind: task.kind,
+      ...(current && current.taskId === task.id ? { generation: {
+        categories: (current.completedChecks ?? []).map((check) => ({ status: check.green ? "passed" : "failed" })),
+        cleanup: { status: current.cleanup?.status ?? "pending" },
+        review: { status: current.review?.status ?? "pending" },
+        repairs: (current.repairTaskIds ?? []).map((taskId) => ({ status: projection.tasks[taskId]?.status ?? "missing" })),
+      } } : {}),
+    };
+  };
   emit({
     type: "build_plan",
     cycle: projection.planRevision,
     tasks: Object.values(projection.tasks).map((task) => ({
       id: task.id,
       title: task.objective,
-      status: nativeBuildTaskStatus(task.status),
+      status: nativeBuildTaskStatus(task.status, verificationState(task)),
+      kind: task.kind,
     })),
   });
   for (const task of Object.values(projection.tasks)) {
@@ -600,7 +614,8 @@ function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void
       type: "task_status",
       taskId: task.id,
       title: task.objective,
-      status: nativeBuildTaskStatus(task.status),
+      status: nativeBuildTaskStatus(task.status, verificationState(task)),
+      kind: task.kind,
       worker: task.assignedWorkerId,
       cycle: projection.planRevision,
     });

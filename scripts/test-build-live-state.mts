@@ -153,6 +153,22 @@ assert.notEqual(
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
 assert.equal(nativeBuildTaskStatus("submitted"), "review");
+assert.equal(nativeBuildTaskStatus("planned", {
+  kind: "final_verification",
+  generation: { categories: [{ status: "passed" }, { status: "pending" }], cleanup: { status: "pending" }, review: { status: "pending" }, repairs: [] },
+}), "in_progress", "a kernel verification task reflects active checks instead of remaining planned");
+assert.equal(nativeBuildTaskStatus("planned", {
+  kind: "final_verification",
+  generation: { categories: [{ status: "passed" }], cleanup: { status: "succeeded" }, review: { status: "requested" }, repairs: [] },
+}), "review");
+assert.equal(nativeBuildTaskStatus("planned", {
+  kind: "final_verification",
+  generation: { categories: [{ status: "failed" }], cleanup: { status: "succeeded" }, review: { status: "repair_required" }, repairs: [{ status: "running" }] },
+}), "fixing");
+assert.equal(nativeBuildTaskStatus("planned", {
+  kind: "final_verification",
+  generation: { categories: [{ status: "passed" }], cleanup: { status: "succeeded" }, review: { status: "approved" }, repairs: [] },
+}), "done");
 assert.equal(nativeBuildDiscussionStatus({ status: "running" } as never), "running");
 assert.equal(nativeBuildDiscussionStatus({ status: "paused" } as never), "stopped");
 assert.equal(nativeBuildDiscussionStatus({ status: "completed" } as never), "completed");

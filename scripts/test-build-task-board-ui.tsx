@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { BuildTaskBoard } from "../components/BuildTaskBoard";
+import { FinalVerificationManifest } from "../components/RunnerV2ObservabilityPanel";
 
 const markup = renderToStaticMarkup(
   <BuildTaskBoard
@@ -72,5 +73,37 @@ const evidenceOnlyMarkup = renderToStaticMarkup(
 );
 assert.match(evidenceOnlyMarkup, /Evidence submitted/);
 assert.match(evidenceOnlyMarkup, /Architect verdict: Not reviewed/);
+
+const verificationMarkup = renderToStaticMarkup(
+  <FinalVerificationManifest verification={{
+    canonicalRevision: "abcdef1234567890",
+    history: [],
+    current: {
+      generationId: "generation-3", taskId: "verify-3", targetRevision: "abcdef1234567890", revisionStatus: "current",
+      categories: [
+        { category: "build", applicability: "required", status: "passed", evidenceIds: ["e1"], issues: [] },
+        { category: "tests", applicability: "required", status: "pending", evidenceIds: [], issues: [] },
+        { category: "runtime_smoke", applicability: "not_applicable", rationale: "No server", repositoryInspection: { inspectedPaths: ["package.json"], summary: "No server" }, status: "not_applicable", evidenceIds: [], issues: [] },
+        { category: "browser", applicability: "required", status: "failed", evidenceIds: ["e2"], issues: ["Console error"] },
+      ],
+      submission: { status: "pending" }, cleanup: { status: "succeeded", diagnosticsAvailable: true }, review: { status: "pending" }, repairs: [{ taskId: "repair-browser", status: "running" }],
+    },
+  }} />
+);
+assert.match(verificationMarkup, /Revision abcdef123456/);
+assert.match(verificationMarkup, /Generation generation-3/);
+assert.match(verificationMarkup, />Build</);
+assert.match(verificationMarkup, />Tests</);
+assert.match(verificationMarkup, />Runtime</);
+assert.match(verificationMarkup, />Browser</);
+assert.match(verificationMarkup, /Diagnostics saved/);
+assert.match(verificationMarkup, /Repair required/);
+assert.match(verificationMarkup, /Repair in progress/);
+
+const kernelTaskMarkup = renderToStaticMarkup(<BuildTaskBoard tasks={[{
+  id: "verify-3", title: "Verify integrated revision", kind: "final_verification", status: "review",
+}]} files={[]} />);
+assert.match(kernelTaskMarkup, /Final verification/);
+assert.match(kernelTaskMarkup, /In review/);
 
 console.log("PASS build task board UI");

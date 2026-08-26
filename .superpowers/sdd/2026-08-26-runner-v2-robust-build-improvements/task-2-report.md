@@ -1289,3 +1289,66 @@ passed (normal Git LF-to-CRLF warnings only)
 
 P2.6B2 is complete. Client/UI projection, broader audit export, and Playwright
 E2E remain deferred to later P2.6 packets.
+
+## P2.6C canonical observability, audit, client, and UI
+
+Added a stable final-verification observability projection derived directly
+from the durable scheduler singleton. It represents the exact canonical and
+target revisions, generation/task identity, all four category plans and
+states, mechanical failure, submission, exact-owned cleanup, diagnostics
+availability, Architect decision, repair task status, and eight bounded stale
+history summaries. Evidence remains a mechanical fact and never becomes an
+Architect approval.
+
+The factory loads a diagnostics manifest only from the exact hashed run audit
+directory beneath Runner state. The loader bounds bytes and list sizes,
+validates schema plus run/generation/task/revision identity, re-redacts
+sensitive assignments, rejects arbitrary or cross-run paths, and never exposes
+the absolute diagnostics path. Both `/build/observability` and `/build/audit`
+carry the same canonical projection.
+
+Client contracts now type task kind, discriminated repair provenance, durable
+final-verification state, and the canonical observability/audit shape. The
+user-facing projection prefers canonical scheduler state over evidence
+inference, always shows Build, Tests, Runtime, and Browser including pending
+and N/A, and reports missing/stale verification, mechanical failure, cleanup
+failure, and repair work as actionable blockers.
+
+The Verification card is now a restrained flight-check manifest using existing
+tokens: exact short revision/generation header, four responsive category lanes,
+cleanup/diagnostics status, Architect release seal, and repair status. Static
+render inspection confirmed a single-column narrow base that progressively
+becomes two/four columns, semantic dark-mode token classes, no motion, and a
+clear heading/list hierarchy. The task board labels the kernel task as Final
+verification, derives its display state from checks/cleanup/review/repairs,
+and keeps implementation-task counts separate.
+
+### P2.6C TDD, mutations, and validation evidence
+
+- Server RED: the focused test failed at import because
+  `projectFinalVerificationObservability` and the strict diagnostics loader did
+  not exist. Restored GREEN: 3/3.
+- Client RED: evidence-only inference returned only a failed Tests row instead
+  of the four canonical lanes. Restored GREEN: observability script PASS.
+- Task-state RED: a planned kernel task remained `planned` while checks were in
+  progress. Restored GREEN: build-live-state script PASS.
+- UI RED: the flight-check manifest export did not exist. Restored GREEN:
+  static task-board/UI render script PASS.
+- Mutation 1, restored: forcing evidence-only inference failed the canonical
+  matrix because Build, Runtime N/A, and Browser pending disappeared.
+- Mutation 2, restored: dropping cleanup-failure status and blocker handling
+  produced `cleanup_pending` instead of `failed` and failed the blocker test.
+
+```text
+final-verification observability + control server: 11/11 passed
+client observability: PASS
+task-board static render: PASS
+build live state: PASS
+Runner TypeScript: PASS
+application TypeScript: PASS
+targeted ESLint: PASS
+git diff --check: PASS (normal LF-to-CRLF warnings only)
+```
+
+P2.6C is complete. Real-process/browser lifecycle E2E remains intentionally
+deferred to the next P2.6 packet.

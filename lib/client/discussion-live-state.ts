@@ -502,8 +502,25 @@ export function durableBuildHandoffPanels(
 }
 
 export function nativeBuildTaskStatus(
-  status: string
+  status: string,
+  verification?: {
+    kind?: string;
+    generation?: {
+      categories: Array<{ status: string }>;
+      cleanup: { status: string };
+      review: { status: string };
+      repairs: Array<{ status: string }>;
+    };
+  },
 ): "planned" | "in_progress" | "review" | "fixing" | "done" | "failed" {
+  if (verification?.kind === "final_verification" && verification.generation) {
+    const generation = verification.generation;
+    if (generation.repairs.length > 0 || generation.review.status === "repair_required") return "fixing";
+    if (generation.categories.some((category) => category.status === "failed") || generation.cleanup.status === "failed") return "failed";
+    if (generation.review.status === "approved") return "done";
+    if (generation.cleanup.status === "succeeded" || generation.review.status === "requested") return "review";
+    return "in_progress";
+  }
   if (status === "planned") return "planned";
   if (["assigned", "running", "waiting_guidance"].includes(status)) {
     return "in_progress";

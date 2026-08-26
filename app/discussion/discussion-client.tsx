@@ -423,6 +423,7 @@ function DiscussionPageInner() {
               id: t.id,
               title: t.title,
               status: t.status as BuildTaskView["status"],
+              kind: t.kind,
             }))
           );
           break;
@@ -434,6 +435,7 @@ function DiscussionPageInner() {
               title: event.title,
               status: event.status,
               worker: event.worker ?? (idx >= 0 ? prev[idx].worker : undefined),
+              kind: event.kind ?? (idx >= 0 ? prev[idx].kind : undefined),
             };
             if (idx >= 0) {
               const copy = [...prev];

@@ -710,6 +710,15 @@ test("native Build projections and pump controls are runner-owned API routes", a
       providers: [],
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      finalVerification: {
+        canonicalRevision: "revision_final",
+        history: [],
+        current: {
+          generationId: "generation-1", taskId: "verify-1", targetRevision: "revision_final", revisionStatus: "current",
+          categories: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({ category, applicability: "required", status: "pending", evidenceIds: [], issues: [] })),
+          submission: { status: "pending" }, cleanup: { status: "pending", diagnosticsAvailable: false }, review: { status: "pending" }, repairs: [],
+        },
+      },
     }),
     step: async () => {
       steps += 1;
@@ -805,6 +814,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     const observed = await json(observability);
     assert.equal((observed.agents as unknown[]).length, 1);
     assert.equal((observed.tools as unknown[]).length, 1);
+    assert.equal((observed.finalVerification as { current: { generationId: string } }).current.generationId, "generation-1");
 
     const completeTranscript = await fetch(
       `${url}/v2/runs/run_1/build/transcript`,
@@ -871,6 +881,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
     assert.equal((audit.usage as { models: unknown[] }).models.length, 1);
     assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
+    assert.equal((audit.observability as { finalVerification: { current: { targetRevision: string } } }).finalVerification.current.targetRevision, "revision_final");
     assert.deepEqual(audit.acceptanceContract, {
       status: "current",
       planRevision: 1,

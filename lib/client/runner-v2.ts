@@ -94,6 +94,77 @@ export interface NativeBuildTask {
   failureReason?: string;
   integrationRevision?: string;
   conflictPaths?: string[];
+  kind?: "implementation" | "verification_repair" | "final_verification";
+  generationId?: string;
+  targetRevision?: string;
+  verificationRepair?: NativeVerificationRepairProvenance;
+}
+
+export type NativeFinalVerificationCategory = "build" | "tests" | "runtime_smoke" | "browser";
+export type NativeFinalVerificationDiagnosticValue =
+  | null | boolean | number | string
+  | NativeFinalVerificationDiagnosticValue[]
+  | { [key: string]: NativeFinalVerificationDiagnosticValue };
+
+export interface NativeVerificationRepairProvenance {
+  sourceGenerationId: string;
+  finalVerificationTaskId: string;
+  targetRevision: string;
+  categories: NativeFinalVerificationCategory[];
+  evidenceIds: string[];
+  source:
+    | { type: "semantic_review"; submissionId: string; reviewId: string }
+    | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
+}
+
+export interface NativeFinalVerificationObservability {
+  canonicalRevision?: string;
+  current?: NativeFinalVerificationGenerationObservability;
+  history: Array<{
+    generationId: string;
+    taskId: string;
+    targetRevision: string;
+    revisionStatus: "stale";
+    invalidatedByRevision?: string;
+  }>;
+}
+
+export interface NativeFinalVerificationGenerationObservability {
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  revisionStatus: "current" | "stale";
+  categories: Array<{
+    category: NativeFinalVerificationCategory;
+    applicability: "required" | "not_applicable";
+    rationale?: string;
+    repositoryInspection?: { inspectedPaths: string[]; summary: string };
+    status: "pending" | "passed" | "failed" | "not_applicable";
+    evidenceIds: string[];
+    issues: string[];
+  }>;
+  submission: { status: "pending" | "submitted"; submissionId?: string; green?: boolean };
+  mechanicalFailure?: { failureId: string; failedCategories: NativeFinalVerificationCategory[]; evidenceIds: string[] };
+  cleanup: {
+    status: "pending" | "started" | "succeeded" | "failed";
+    attempt?: number;
+    error?: string;
+    diagnosticsAvailable: boolean;
+    diagnostics?: {
+      version: 1;
+      kind: "final-verification-diagnostics";
+      runId: string;
+      generationId: string;
+      taskId: string;
+      targetRevision: string;
+      changedPaths: string[];
+      checks: NativeFinalVerificationDiagnosticValue[];
+      evidenceReferences: string[];
+      logs: string[];
+    };
+  };
+  review: { status: "pending" | "requested" | "approved" | "repair_required" | "rejected"; summary?: string };
+  repairs: Array<{ taskId: string; status: string }>;
 }
 
 export type NativeAcceptanceContractStatus =
@@ -196,6 +267,25 @@ export interface NativeBuildProjection {
     projectRevision?: string;
   };
   integrationRevision?: string;
+  finalVerification?: {
+    current?: {
+      taskId: string;
+      generationId: string;
+      targetRevision: string;
+      planVersion: number;
+      plan: { checks: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; repositoryInspection?: { paths: string[]; summary: string } }> };
+      state: "current" | "invalidated";
+      invalidatedByRevision?: string;
+      cleanup?: { generationId: string; taskId: string; targetRevision: string; attempt: number; status: "started" | "succeeded" | "failed"; startedAt: string; finishedAt?: string; error?: string; diagnosticsPath?: string };
+      failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
+      submission?: { submissionId: string; generationId: string; targetRevision: string; attempt: number };
+      submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean };
+      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }> } };
+      repairTaskIds?: string[];
+      completedChecks?: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; green: boolean; evidenceIds: string[]; issues: string[]; attempt: number; startedAt: string; finishedAt: string }>;
+    };
+    history: Array<{ generationId: string; taskId: string; targetRevision: string; state: "invalidated"; invalidatedByRevision?: string }>;
+  };
   lastSequence: number;
 }
 
@@ -470,6 +560,7 @@ export interface NativeBuildObservability {
     integrationRevision: string;
     commits: Array<{ revision: string; parents: string[]; subject: string }>;
   };
+  finalVerification?: NativeFinalVerificationObservability;
 }
 
 export interface NativeBuildAuditExport {

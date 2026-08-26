@@ -18,6 +18,7 @@ export interface BuildTaskView {
   title: string;
   status: "planned" | "in_progress" | "review" | "fixing" | "done" | "failed";
   worker?: string;
+  kind?: "implementation" | "verification_repair" | "final_verification";
   acceptanceCriteria?: BuildTaskCriterionView[];
 }
 
@@ -87,7 +88,8 @@ export function BuildTaskBoard({
 }) {
   if (tasks.length === 0 && files.length === 0 && commands.length === 0)
     return null;
-  const doneCount = tasks.filter((t) => t.status === "done").length;
+  const implementationTasks = tasks.filter((task) => task.kind !== "final_verification");
+  const doneCount = implementationTasks.filter((task) => task.status === "done").length;
 
   // Reflect where files ACTUALLY went, not just where they were meant to go.
   const diskCount = files.filter((f) => f.location === "disk").length;
@@ -112,7 +114,7 @@ export function BuildTaskBoard({
           Build plan
         </h2>
         <span className="text-sm text-muted-foreground">
-          {doneCount}/{tasks.length} tasks done{locationNote}
+          {doneCount}/{implementationTasks.length} implementation tasks done{locationNote}
         </span>
       </div>
 
@@ -144,8 +146,9 @@ export function BuildTaskBoard({
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">
                     <span className="font-mono text-xs text-muted-foreground">{task.id}</span>{" "}
-                    {task.title}
+                    {task.kind === "final_verification" ? "Final verification" : task.title}
                   </p>
+                  {task.kind === "final_verification" && <p className="text-xs text-muted-foreground">Checks the exact integrated revision</p>}
                   {task.worker && (
                     <p className="text-xs text-muted-foreground">{task.worker}</p>
                   )}

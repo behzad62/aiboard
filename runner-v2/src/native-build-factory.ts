@@ -21,6 +21,10 @@ import type {
   BuildObservabilitySnapshot,
   BuildToolObservation,
 } from "./build-observability.js";
+import {
+  loadFinalVerificationDiagnostics,
+  projectFinalVerificationObservability,
+} from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
@@ -378,6 +382,18 @@ export class NativeBuildFactory {
         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
         const schedulerEvents = schedulerStore.readRun(spec.runId);
         const schedulerProjection = rebuildSchedulerProjection(schedulerEvents);
+        const finalGeneration = schedulerProjection.finalVerification?.current;
+        const diagnostics = finalGeneration
+          ? await loadFinalVerificationDiagnostics({
+              stateDirectory: this.options.stateDirectory,
+              runId: spec.runId,
+              expectedRunSegment: safeSegment(spec.runId),
+              diagnosticsPath: finalGeneration.cleanup?.diagnosticsPath,
+              generationId: finalGeneration.generationId,
+              taskId: finalGeneration.taskId,
+              targetRevision: finalGeneration.targetRevision,
+            })
+          : undefined;
         return {
           runId: spec.runId,
           budget: budgetLedger.snapshot(spec.runId),
@@ -414,6 +430,10 @@ export class NativeBuildFactory {
             integrationRevision: integrationManager.revision,
             commits: await integrationManager.history(50),
           },
+          finalVerification: projectFinalVerificationObservability(
+            schedulerProjection,
+            diagnostics,
+          ),
         };
       },
       transcript: async (afterSequence = 0) =>

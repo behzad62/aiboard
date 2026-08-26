@@ -24,6 +24,7 @@ import type {
   NativeBuildEvidenceFact,
   NativeBuildObservability,
   NativeBuildProjection,
+  NativeFinalVerificationObservability,
 } from "@/lib/client/runner-v2";
 import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
@@ -111,7 +112,7 @@ export function runnerBuildControlSummary(projection: NativeBuildProjection | nu
   };
 }
 
-type UserFacingVerificationStatus = "passed" | "failed" | "recorded";
+type UserFacingVerificationStatus = "pending" | "passed" | "failed" | "not_applicable" | "recorded";
 
 export type RunnerAcceptanceEvidenceStatus = "submitted" | "not_submitted";
 export type RunnerAcceptanceVerdictStatus =
@@ -374,6 +375,11 @@ export function runnerUserFacingObservability(
     detail: string;
     status: UserFacingVerificationStatus;
   }>;
+  verificationSeal?: {
+    generationId: string;
+    targetRevision: string;
+    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "failed" | "stale";
+  };
   problems: UserFacingProblem[];
 } {
   const tasks = projection ? Object.values(projection.tasks) : [];
@@ -392,7 +398,7 @@ export function runnerUserFacingObservability(
     }
   }
 
-  const verification = [...newestEvidence.entries()]
+  const evidenceVerification = [...newestEvidence.entries()]
     .sort(([, left], [, right]) => right.record.createdAt.localeCompare(left.record.createdAt))
     .map(([key, { category, record }]) => {
       const status = evidenceStatus(record.fact);
@@ -404,8 +410,51 @@ export function runnerUserFacingObservability(
         status,
       };
     });
+  const canonical = snapshot.finalVerification?.current;
+  const categoryLabels: Record<string, string> = {
+    build: "Build", tests: "Tests", runtime_smoke: "Runtime", browser: "Browser",
+  };
+  const verification = canonical
+    ? canonical.categories.map((category) => ({
+        key: `${canonical.generationId}:${category.category}`,
+        category: categoryLabels[category.category],
+        title: category.status === "not_applicable"
+          ? "Not needed for this revision"
+          : `Exact revision ${canonical.targetRevision.slice(0, 12)}`,
+        detail: category.status === "pending"
+          ? "Runner is waiting to check this category on the exact integrated revision."
+          : category.status === "not_applicable"
+            ? category.rationale ?? "Repository inspection found no applicable surface."
+            : category.status === "failed"
+              ? category.issues.join(" ") || "This check did not pass; Runner will preserve diagnostics and schedule repair."
+              : "The current integrated revision passed this mechanical check.",
+        status: category.status,
+      }))
+    : evidenceVerification;
 
   const problems: UserFacingProblem[] = [];
+  let verificationSeal: {
+    generationId: string;
+    targetRevision: string;
+    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "failed" | "stale";
+  } | undefined;
+  if (canonical) {
+    const status = canonical.revisionStatus === "stale" ? "stale"
+      : canonical.cleanup.status === "failed" ? "failed"
+      : canonical.mechanicalFailure || canonical.review.status === "repair_required" || canonical.repairs.length > 0 ? "repair_required"
+      : canonical.categories.some((category) => category.status === "failed") ? "failed"
+      : canonical.categories.some((category) => category.status === "pending") ? "checks_pending"
+      : canonical.cleanup.status !== "succeeded" ? "cleanup_pending"
+      : canonical.review.status === "approved" ? "approved"
+      : "review_pending";
+    verificationSeal = { generationId: canonical.generationId, targetRevision: canonical.targetRevision, status };
+    if (canonical.revisionStatus === "stale") problems.push({ key: "final-verification:stale", title: "Verification is stale", detail: "The integrated revision changed. Runner must verify the new exact revision before completion." });
+    if (canonical.mechanicalFailure || canonical.categories.some((category) => category.status === "failed")) problems.push({ key: "final-verification:failure", title: "Final verification found a problem", detail: canonical.cleanup.diagnosticsAvailable ? "Diagnostics were saved. Runner will repair the failed checks and verify the next integrated revision." : "Runner will preserve diagnostics, repair the failed checks, and verify again." });
+    if (canonical.cleanup.status === "failed") problems.push({ key: "final-verification:cleanup", title: "Verification cleanup failed", detail: "Completion is blocked until Runner safely closes verification resources and removes only its owned workspace." });
+    if (canonical.repairs.length > 0 || canonical.review.status === "repair_required") problems.push({ key: "final-verification:repair", title: canonical.repairs.some((repair) => !["integrated", "cancelled"].includes(repair.status)) ? "Verification repair is in progress" : "Verification repair required", detail: "Runner is fixing the failed category. A fresh verification generation will check the repaired revision." });
+  } else if (snapshot.finalVerification && projection && projection.status !== "completed" && projection.runPolicy !== "plan_only") {
+    problems.push({ key: "final-verification:missing", title: "Final verification has not started", detail: "Runner waits for all implementation work, then checks the exact integrated revision before completion." });
+  }
   if (projection?.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
     problems.push({
       key: "acceptance-contract:upgrade",
@@ -508,6 +557,7 @@ export function runnerUserFacingObservability(
       })),
     },
     verification,
+    ...(verificationSeal ? { verificationSeal } : {}),
     problems,
   };
 }
@@ -651,7 +701,9 @@ export function RunnerV2ObservabilityPanel({
           </UserSection>
         )}
 
-        <UserSection
+        {snapshot.finalVerification?.current ? (
+          <FinalVerificationManifest verification={snapshot.finalVerification} />
+        ) : <UserSection
           title="Verification"
           icon={<ShieldCheck className="h-4 w-4" />}
           accent={runnerVerificationTone(view.verification)}
@@ -676,7 +728,7 @@ export function RunnerV2ObservabilityPanel({
               Verification results will appear after the runner records its first check.
             </p>
           )}
-        </UserSection>
+        </UserSection>}
 
         <UserSection
           title="Problems requiring attention"
@@ -882,9 +934,57 @@ export function RunnerV2ObservabilityPanel({
   );
 }
 
+export function FinalVerificationManifest({
+  verification,
+}: {
+  verification: NativeFinalVerificationObservability;
+}) {
+  const current = verification.current;
+  if (!current) {
+    return (
+      <UserSection title="Final verification" icon={<ShieldCheck className="h-4 w-4" />} accent="progress">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Runner waits for the exact integrated revision, then checks Build, Tests, Runtime, and Browser before completion.
+        </p>
+      </UserSection>
+    );
+  }
+  const labels: Record<string, string> = { build: "Build", tests: "Tests", runtime_smoke: "Runtime", browser: "Browser" };
+  const label = (status: string) => status === "not_applicable" ? "N/A" : status[0].toUpperCase() + status.slice(1);
+  const seal = current.review.status === "approved" ? "Architect approved"
+    : current.review.status === "repair_required" || current.repairs.length > 0 ? "Repair required"
+    : current.review.status === "requested" ? "Architect review in progress"
+    : "Architect review pending";
+  return (
+    <section aria-label="Final verification manifest" className="min-w-0 rounded-lg border border-primary/25 bg-muted/10 p-3.5 text-foreground xl:col-span-2">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-primary/15 pb-3">
+        <div>
+          <div className="flex items-center gap-2 text-primary"><ShieldCheck className="h-4 w-4" /><h3 className="text-xs font-semibold text-foreground">Final verification</h3></div>
+          <p className="mt-2 font-mono text-[0.68rem] text-muted-foreground">Revision {current.targetRevision.slice(0, 12)} · Generation {current.generationId}</p>
+        </div>
+        <Badge variant={current.revisionStatus === "current" ? "secondary" : "warning"}>{current.revisionStatus === "current" ? "Exact revision" : "Stale revision"}</Badge>
+      </div>
+      <div className="grid gap-2 py-3 sm:grid-cols-2 lg:grid-cols-4">
+        {current.categories.map((category) => (
+          <div key={category.category} className="rounded-md border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold">{labels[category.category]}</p><span className={`text-[0.68rem] font-semibold ${verificationStatusClass(category.status)}`}>{label(category.status)}</span></div>
+            <p className="mt-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">{category.status === "pending" ? "Waiting for the exact revision check." : category.status === "not_applicable" ? category.rationale : category.status === "failed" ? category.issues.join(" ") || "Check failed." : "Current revision passed."}</p>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-2 border-t border-primary/15 pt-3 text-[0.7rem] sm:grid-cols-3">
+        <p><span className="font-medium">Cleanup</span><br /><span className="text-muted-foreground">{current.cleanup.status === "succeeded" ? "Complete" : label(current.cleanup.status)}{current.cleanup.diagnosticsAvailable ? " · Diagnostics saved" : ""}</span></p>
+        <p><span className="font-medium">Release seal</span><br /><span className="text-muted-foreground">{seal}</span></p>
+        <p><span className="font-medium">Repair</span><br /><span className="text-muted-foreground">{current.repairs.length > 0 ? "Repair in progress" : "No repair scheduled"}</span></p>
+      </div>
+    </section>
+  );
+}
+
 function verificationStatusClass(status: UserFacingVerificationStatus): string {
   if (status === "passed") return "text-emerald-600 dark:text-emerald-400";
   if (status === "failed") return "text-destructive";
+  if (status === "not_applicable") return "text-muted-foreground";
   return "text-amber-600 dark:text-amber-400";
 }
 
