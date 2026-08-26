@@ -427,7 +427,7 @@ export class FinalVerificationRuntime {
     validateCommandMap(input.commands);
     const check = plan.checks.find((entry) => entry.category === category);
     if (!check) throw new Error(`Final verification category ${category} is not planned.`);
-    const workspace = await this.workspaceManager.create();
+    const workspace = await this.createOrResumeCategoryWorkspace();
     await this.assertCurrentRevision(workspace);
     const runOrdinal = ++this.runOrdinal;
     const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
@@ -467,6 +467,17 @@ export class FinalVerificationRuntime {
         `Verification workspace is stale: target revision ${workspace.targetRevision} ` +
           `does not match current integration revision ${current}.`,
       );
+    }
+  }
+
+  private async createOrResumeCategoryWorkspace(): Promise<VerificationWorkspace> {
+    try {
+      return await this.workspaceManager.create();
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "Verification workspace is dirty.") {
+        throw error;
+      }
+      return await this.workspaceManager.resumeForNextCheck();
     }
   }
 

@@ -105,6 +105,13 @@ test("reopens the same valid workspace and rejects dirty or wrong-revision works
       () => recovered.reopen(),
       /verification workspace.*dirty/i,
     );
+    assert.deepEqual(await recovered.resumeForNextCheck(), created);
+    writeFileSync(join(fixture.project, "canonical-mutation.txt"), "unsafe\n");
+    await assert.rejects(
+      () => recovered.resumeForNextCheck(),
+      /canonical.*dirty/i,
+    );
+    rmSync(join(fixture.project, "canonical-mutation.txt"), { force: true });
     rmSync(join(created.path, "verification-output.txt"), { force: true });
 
     await runGit({ cwd: created.path, args: ["reset", "--hard", "HEAD"] });

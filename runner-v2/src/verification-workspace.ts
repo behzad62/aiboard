@@ -190,6 +190,34 @@ export class VerificationWorkspaceManager {
     });
   }
 
+  /**
+   * Resume an owned workspace between final-verification categories.
+   *
+   * Earlier categories may intentionally leave generated files for later
+   * checks. Ownership, revision, and canonical-checkout invariants still apply;
+   * only the disposable worktree cleanliness requirement is relaxed.
+   */
+  async resumeForNextCheck(): Promise<VerificationWorkspace> {
+    return await this.serialized(async () => {
+      const revision = this.resolveTargetRevision();
+      await this.assertStateContainment();
+      if (!(await pathExists(this.workspacePath)) || !(await pathExists(this.metadataFilePath))) {
+        throw new Error("Verification workspace and ownership metadata must exist before check resume.");
+      }
+      const metadata = await this.readMetadata();
+      if (metadata.targetRevision !== revision) {
+        throw new Error(
+          "Verification workspace target revision does not match the requested integration revision."
+        );
+      }
+      await this.assertOwnedWorkspace(metadata, {
+        requireCleanWorkspace: false,
+        requireCanonicalState: true,
+      });
+      return toWorkspace(metadata, this.metadataFilePath);
+    });
+  }
+
   /** Validate and expose the exact owned workspace without requiring it to be clean. */
   async inspectOwned(): Promise<VerificationWorkspace> {
     return await this.serialized(async () => {

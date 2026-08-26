@@ -1352,3 +1352,85 @@ git diff --check: PASS (normal LF-to-CRLF warnings only)
 
 P2.6C is complete. Real-process/browser lifecycle E2E remains intentionally
 deferred to the next P2.6 packet.
+
+## P2.6D real-process, environment, and Playwright verification
+
+Added `tests/e2e/runner-v2-final-verification.spec.ts` with deterministic local
+Git fixtures under explicit temporary roots whose canonical project and Runner
+state paths are siblings containing spaces. The five real-process cases prove:
+exact-revision Build/Tests command arrays; runtime health through the Windows
+managed-process service; a real Playwright browser context with DOM, screenshot,
+console, and network evidence; generated-file isolation; diagnostics retention,
+redaction, and arbitrary/cross-run refusal; explicit N/A and detected-script
+rejection; integrated non-zero test detection; stale-revision refusal; durable
+category resume/dedupe and singleton submission; CLI `--port 0` restart and port
+release; and cancellation cleanup for descendant processes, browser contexts,
+and assigned ports. No model or external network is used.
+
+The E2E exposed one in-scope defect: after Build generated an untracked bundle
+in the disposable verification worktree, the next scheduler-selected category
+failed with `Verification workspace is dirty.` Added
+`resumeForNextCheck()`, which relaxes only disposable-worktree cleanliness while
+still validating exact ownership, target revision, canonical checkout state,
+and Git association. `runCategory()` uses it only after the exact dirty-worktree
+create error. The strict clean `create()`/`reopen()` APIs remain unchanged.
+
+### P2.6D red and fault evidence
+
+- Initial Playwright RED: production Runner modules were transformed as CommonJS
+  and failed on `import.meta`; a scoped `tests/e2e/package.json` ESM boundary
+  fixed loading without changing the repository package mode.
+- Real resume RED: 2/3 then-current E2E cases passed; generated Build output made
+  Tests fail at `Verification workspace is dirty.` The focused fix returned the
+  resume case green while canonical-dirty and wrong-revision unit guards stayed
+  red/green as intended.
+- Removing the target-revision comparison made the stale E2E resolve instead of
+  rejecting at its exact `rejects.toThrow` assertion.
+- Forcing the scheduler to select the first check after restart produced
+  `Evidence idempotency conflict for generation-resume:1:build:0`.
+- Removing the screenshot-specific evidence guard made the browser suite 3/4;
+  the missing-screenshot assertion saw only the generic missing-artifact issue.
+- Running commands in the canonical repository instead of the owned workspace
+  made the full E2E fail because `generated/bundle.txt` was absent from the
+  verification worktree.
+- Replacing owned-process stop with poll made cancellation cleanup fail with an
+  `EBUSY` locked verification worktree.
+
+Every fault was restored before final verification.
+
+### P2.6D final validation
+
+```text
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5/5 passed in 21.3s (3.8s, 2.8s, 2.7s, 3.3s, 4.9s)
+
+npx playwright test tests/e2e/responsive-tabs.spec.ts
+2/2 passed in 4.8s
+
+Affected Runner runtime/browser/execution/cleanup/workspace/build/recovery/
+Node/Git set
+49/49 passed in 22.08s
+
+Node 22.13.0 node:sqlite smoke
+passed; Git 2.53.0.windows.1 detected
+
+Node 22.13.0 node-version + Git preflight
+5/5 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx tsc --noEmit
+passed
+
+targeted ESLint
+passed with no warnings
+
+git diff --check
+passed (normal LF-to-CRLF notices only)
+```
+
+Playwright's managed development server exited after each run. Generated public
+Runner ZIP collateral was restored to the packet entry revision and is not part
+of this commit. P2.6D is complete; final phase-wide packaging and review remain
+with the controller.
