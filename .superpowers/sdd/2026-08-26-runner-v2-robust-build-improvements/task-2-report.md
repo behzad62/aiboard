@@ -12,7 +12,8 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current implementation head before this report update: `d34ee668`
+- Current reviewed implementation and bundle head before this report update:
+  `0ba25595`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
   review-repair commits through authoritative browser policy and comprehensive
   structural credential redaction.
@@ -1800,3 +1801,46 @@ passed
 
 These corrections supersede the two overbroad claims while preserving the
 historical packet evidence. They record fixes and do not claim phase completion.
+
+## Fresh post-re-review broad-gate evidence
+
+The following gates were run after commits `6b180f8d`, `d34ee668`, and
+`2ab16809`. The first unbounded full-suite invocation completed its test child
+but left an orphaned Windows npm/cmd wrapper without an observable exit result;
+that wrapper alone was terminated, and the identical command was immediately
+rerun with bounded output capture. Only the rerun below is counted as gate
+evidence.
+
+```text
+affected combined final-verification tests
+112 tests, 112 passed, 0 failed
+
+npm run test:runner-v2
+519 tests, 519 passed, 0 failed
+all 11 chained product client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed
+exit 0
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+```
+
+Commit `0ba25595` records the deterministic Runner V2 and WorkBench bundles
+generated from the reviewed source. Node policy remains the maintained 22/24
+LTS ranges with the required `node:sqlite` capability floor and no exact Node
+24 patch pin. This section is current implementation evidence and does not
+declare the P2 phase outcome.
