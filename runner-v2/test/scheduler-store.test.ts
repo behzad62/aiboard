@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -181,6 +181,127 @@ test("scheduler events recover exact task and blocking-guidance state", () => {
     assert.equal(projection.lastSequence, 4);
     recovered.close();
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("raw pre-P1 scheduler WAL fixtures preserve ordering and one legacy gate across reopens", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-pre-p1-wal-"));
+  const database = join(root, "scheduler.sqlite");
+  const wal = `${database}-wal`;
+  const runId = "run_raw_pre_p1";
+  const raw = new DatabaseSync(database);
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    raw.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE scheduler_events (
+        event_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        UNIQUE(run_id, sequence),
+        UNIQUE(run_id, idempotency_key)
+      );
+      CREATE INDEX idx_scheduler_events
+      ON scheduler_events(run_id, sequence);
+    `);
+    const insert = raw.prepare(`
+      INSERT INTO scheduler_events (
+        event_id, run_id, sequence, event_type, occurred_at,
+        actor_json, idempotency_key, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      "legacy_event_1",
+      runId,
+      1,
+      "run.policy_configured",
+      "2026-07-12T00:00:00.000Z",
+      JSON.stringify({ role: "runner", id: "legacy-runner" }),
+      "run-policy-configured",
+      JSON.stringify({ runPolicy: "finish" }),
+    );
+    insert.run(
+      "legacy_event_2",
+      runId,
+      2,
+      "plan.created",
+      "2026-07-12T00:00:01.000Z",
+      JSON.stringify({ role: "architect", id: "legacy-architect" }),
+      "plan:1",
+      JSON.stringify({
+        revision: 1,
+        tasks: [{
+          id: "task_raw_legacy",
+          objective: "Recover a raw pre-P1 task",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: ["code"],
+          attempt: 0,
+        }],
+      }),
+    );
+    assert.equal(existsSync(wal), true, "raw fixture must retain its WAL sidecar");
+
+    store = new SqliteSchedulerStore(database);
+    assert.deepEqual(
+      store.readRun(runId).map((event) => [event.sequence, event.eventId, event.type]),
+      [
+        [1, "legacy_event_1", "run.policy_configured"],
+        [2, "legacy_event_2", "plan.created"],
+      ],
+    );
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun(runId)).acceptanceContractStatus,
+      "acceptance_contract_upgrade_required",
+    );
+
+    const gate: NewSchedulerEvent = {
+      runId,
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-12T00:00:02.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_raw_legacy"] },
+    };
+    const firstGate = store.append(gate);
+    assert.equal(firstGate.sequence, 3);
+    assert.throws(
+      () => store!.append({ ...gate, idempotencyKey: "acceptance-contract-upgrade-required-duplicate" }),
+      /already recorded|upgrade gate/i,
+    );
+    assert.equal(
+      store.readRun(runId).filter((event) => event.type === "acceptance_contract.upgrade_required").length,
+      1,
+    );
+    assert.equal(existsSync(wal), true, "WAL sidecar must remain present through current-store append");
+
+    const beforeReopen = store.readRun(runId);
+    store.close();
+    store = undefined;
+    assert.equal(existsSync(wal), true, "raw connection must keep the WAL sidecar for reopen");
+
+    store = new SqliteSchedulerStore(database);
+    assert.deepEqual(store.readRun(runId), beforeReopen);
+    store.close();
+    store = undefined;
+
+    store = new SqliteSchedulerStore(database);
+    const secondReopen = store.readRun(runId);
+    assert.deepEqual(secondReopen, beforeReopen);
+    assert.equal(
+      secondReopen.filter((event) => event.type === "acceptance_contract.upgrade_required").length,
+      1,
+    );
+  } finally {
+    store?.close();
+    raw.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
