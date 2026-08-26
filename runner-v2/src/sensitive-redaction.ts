@@ -50,7 +50,10 @@ function redactSensitiveTextInternal(
   const redactedJsonStrings = jsonTextDepth < MAXIMUM_JSON_TEXT_DEPTH
     ? redactJsonStringLiterals(redactedJson, limits, jsonTextDepth)
     : redactedJson;
-  const redactedJsonProperties = redactQuotedJsonProperties(redactedJsonStrings);
+  const redactedRawJson = jsonTextDepth < MAXIMUM_JSON_TEXT_DEPTH
+    ? redactRawJsonStringContent(redactedJsonStrings, limits, jsonTextDepth)
+    : redactedJsonStrings;
+  const redactedJsonProperties = redactQuotedJsonProperties(redactedRawJson);
   const redactedUrls = redactedJsonProperties.replace(URL_VALUE, redactUrl);
   const redactedAssignments = redactAssignments(redactedUrls);
   return redactedAssignments.replace(BEARER_VALUE, `Bearer ${REDACTED}`)
@@ -279,6 +282,102 @@ function nestedJsonStringRequiresRedaction(value: string, limits: RedactionLimit
       return redactSensitiveTextInternal(decoded, limits, MAXIMUM_JSON_TEXT_DEPTH) !== decoded;
     }
     decoded = parsed;
+  }
+  return true;
+}
+
+function redactRawJsonStringContent(
+  value: string,
+  limits: RedactionLimits,
+  jsonTextDepth: number,
+): string {
+  if (!containsEscapedSensitiveKey(value)) return value;
+  const layer = decodeRawJsonStringContentLayer(value);
+  if (layer.status === "none") return value;
+  if (layer.status === "invalid") {
+    return REDACTED;
+  }
+  let redacted = redactSensitiveTextInternal(layer.value, limits, jsonTextDepth + 1);
+  if (
+    redacted === layer.value
+    && jsonTextDepth + 1 >= MAXIMUM_JSON_TEXT_DEPTH
+    && nestedRawJsonStringContentRequiresRedaction(layer.value, limits)
+  ) redacted = REDACTED;
+  return redacted === layer.value
+    ? value
+    : JSON.stringify(redacted).slice(1, -1);
+}
+
+type RawJsonStringContentLayer =
+  | { status: "none" }
+  | { status: "invalid" }
+  | { status: "decoded"; value: string };
+
+function decodeRawJsonStringContentLayer(value: string): RawJsonStringContentLayer {
+  if (!value.includes("\\\"")) return { status: "none" };
+  let output = "";
+  let segmentStart = 0;
+  let backslashRun = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (character === "\\") {
+      backslashRun += 1;
+      continue;
+    }
+    if (character !== '"') {
+      backslashRun = 0;
+      continue;
+    }
+    const escaped = backslashRun % 2 === 1;
+    backslashRun = 0;
+    if (escaped) continue;
+    const segment = decodeJsonStringContentSegment(value.slice(segmentStart, index));
+    if (segment === undefined) return { status: "invalid" };
+    output += segment + '"';
+    segmentStart = index + 1;
+  }
+  const tail = decodeJsonStringContentSegment(value.slice(segmentStart));
+  return tail === undefined
+    ? { status: "invalid" }
+    : { status: "decoded", value: output + tail };
+}
+
+function decodeJsonStringContentSegment(value: string): string | undefined {
+  try {
+    const decoded = JSON.parse(`"${value}"`) as unknown;
+    return typeof decoded === "string" ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function containsEscapedSensitiveKey(value: string): boolean {
+  const candidate = /(\\+)"([A-Za-z_][A-Za-z0-9_-]*)(\\+)"/g;
+  let match: RegExpExecArray | null;
+  while ((match = candidate.exec(value)) !== null) {
+    if (isSensitiveKey(match[2]!)) return true;
+  }
+  return false;
+}
+
+function nestedRawJsonStringContentRequiresRedaction(
+  value: string,
+  limits: RedactionLimits,
+): boolean {
+  let current = value;
+  for (let depth = 0; depth < MAXIMUM_JSON_STRING_BOUND_INSPECTIONS; depth += 1) {
+    const layer = decodeRawJsonStringContentLayer(current);
+    if (layer.status === "invalid") return containsEscapedSensitiveKey(current);
+    if (layer.status === "none") {
+      return redactSensitiveTextInternal(current, limits, MAXIMUM_JSON_TEXT_DEPTH) !== current;
+    }
+    const directlyRedacted = redactSensitiveTextInternal(
+      layer.value,
+      limits,
+      MAXIMUM_JSON_TEXT_DEPTH,
+    );
+    if (directlyRedacted !== layer.value) return true;
+    current = layer.value;
   }
   return true;
 }

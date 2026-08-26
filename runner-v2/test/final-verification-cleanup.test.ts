@@ -88,6 +88,9 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
           clientSecret: { value: "json-encoded-object-secret" },
           refresh_token: ["json-encoded-array-secret"],
         }))} tail`,
+        String.raw`payload={\"access_token\":\"raw-escaped-diagnostic-secret\"} tail`,
+        String.raw`prefix "noise payload={\"clientSecret\":{\"value\":\"raw-escaped-odd-quote-secret\"}} tail`,
+        `${"{".repeat(65)} ${String.raw`payload=[{\"refresh_token\":[\"raw-escaped-late-array-secret\"]}]`}`,
       ],
     });
     const encoded = readFileSync(path, "utf8");
@@ -98,6 +101,7 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
       "json-log-access-secret", "json-log-client-secret", "json-fragment-secret",
       "json-array-secret", "json-array-nested-secret", "json-object-secret", "json-late-secret",
       "json-odd-quote-secret", "json-encoded-access-secret", "json-encoded-object-secret", "json-encoded-array-secret",
+      "raw-escaped-diagnostic-secret", "raw-escaped-odd-quote-secret", "raw-escaped-late-array-secret",
     ]) assert.doesNotMatch(encoded, new RegExp(secret));
     assert.match(encoded, /visible/);
     assert.match(encoded, /\[REDACTED\]/);
@@ -165,6 +169,8 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
           access_token: "legacy-json-encoded-secret",
           clientSecret: { value: "legacy-json-encoded-object-secret" },
         }))}`,
+        String.raw`payload={\"access_token\":\"legacy-raw-escaped-secret\"}`,
+        String.raw`prefix "noise payload={\"clientSecret\":{\"value\":\"legacy-raw-escaped-odd-secret\"}}`,
       ],
     }, null, 2)}\n`);
 
@@ -216,7 +222,7 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
     const repairedText = readFileSync(archivedPath, "utf8");
     assert.doesNotMatch(
       repairedText,
-      /legacy-access-token-secret|legacy-client-secret|legacy-json-access-secret|legacy-json-client-secret|legacy-json-private-secret|legacy-json-array-secret|legacy-json-late-secret|legacy-json-odd-quote-secret|legacy-json-encoded-secret|legacy-json-encoded-object-secret/,
+      /legacy-access-token-secret|legacy-client-secret|legacy-json-access-secret|legacy-json-client-secret|legacy-json-private-secret|legacy-json-array-secret|legacy-json-late-secret|legacy-json-odd-quote-secret|legacy-json-encoded-secret|legacy-json-encoded-object-secret|legacy-raw-escaped-secret|legacy-raw-escaped-odd-secret/,
     );
     assert.match(repairedText, /\[REDACTED\]/);
     const repaired = JSON.parse(repairedText) as { changedPaths: string[] };

@@ -210,3 +210,66 @@ test("an unmatched quote prefix cannot hide a later JSON-encoded literal", () =>
   assert.match(redacted, /\[REDACTED\]/);
   assert.equal(redactSensitiveText(redacted), redacted);
 });
+
+test("redacts a raw one-layer JSON-string-content fragment", () => {
+  const input = String.raw`payload={\"access_token\":\"SLASH_SECRET\"} tail`;
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, String.raw`payload={\"access_token\":\"[REDACTED]\"} tail`);
+  assert.doesNotMatch(redacted, /SLASH_SECRET/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("redacts raw escaped fragments inside a single-quote wrapper", () => {
+  const input = String.raw`'payload={\"clientSecret\":{\"value\":\"SINGLE_RAW_SECRET\"}}' tail`;
+  const redacted = redactSensitiveText(input);
+  assert.doesNotMatch(redacted, /SINGLE_RAW_SECRET/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.match(redacted, /^'payload=/);
+  assert.match(redacted, /' tail$/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("redacts raw escaped object, array, argv, and multiple-key values", () => {
+  const input = String.raw`payload=[{\"access_token\":\"RAW_OBJECT_SECRET\",\"clientSecret\":{\"value\":\"RAW_NESTED_SECRET\"}},[\"--private-key\",\"RAW_ARGV_SECRET\"],{\"refresh_token\":[\"RAW_ARRAY_SECRET\"]}] tail`;
+  const redacted = redactSensitiveText(input);
+  assert.doesNotMatch(redacted, /RAW_(?:OBJECT|NESTED|ARGV|ARRAY)_SECRET/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("redacts even and odd nested backslash escape layers", () => {
+  const variants = [
+    [String.raw`payload={\\\"access_token\\\":\\\"ODD_SLASH_SECRET\\\"}`, "ODD_SLASH_SECRET"],
+    [String.raw`payload={\\"access_token\\":\\"EVEN_SLASH_SECRET\\"}`, "EVEN_SLASH_SECRET"],
+  ] as const;
+  for (const [input, secret] of variants) {
+    const redacted = redactSensitiveText(input);
+    assert.doesNotMatch(redacted, new RegExp(secret));
+    assert.match(redacted, /\[REDACTED\]/);
+    assert.equal(redactSensitiveText(redacted), redacted);
+  }
+});
+
+test("an unmatched quote cannot hide a later raw escaped fragment", () => {
+  const input = String.raw`prefix "noise payload={\"access_token\":\"ODD_QUOTE_RAW_SECRET\"} tail`;
+  const redacted = redactSensitiveText(input);
+  assert.doesNotMatch(redacted, /ODD_QUOTE_RAW_SECRET/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("malformed brace prefixes cannot exhaust later raw escaped redaction", () => {
+  const input = `${"{".repeat(65)} ${String.raw`payload={\"access_token\":\"LATE_RAW_SECRET\"} tail`}`;
+  const redacted = redactSensitiveText(input);
+  assert.doesNotMatch(redacted, /LATE_RAW_SECRET/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("an indeterminate malformed raw fragment fails closed", () => {
+  const input = String.raw`prefix \q payload={\"access_token\":BROKEN_RAW_SECRET tail`;
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, "[REDACTED]");
+  assert.doesNotMatch(redacted, /BROKEN_RAW_SECRET/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
