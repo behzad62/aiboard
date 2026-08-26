@@ -59,9 +59,18 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
       checks: [{
         category: "tests",
         command: {
-          args: ["--token", "argv-secret", "--api-key=url-secret", "--safe", "visible"],
-          env: { API_KEY: "object-secret", SAFE_VALUE: "visible" },
-          endpoint: "https://user:url-password@example.test/run?token=query-secret&safe=visible",
+          args: [
+            "--token", "argv-secret", "--api-key=url-secret",
+            "--access-token", "argv-access-secret", "--client-secret=argv-client-secret",
+            "--safe", "visible",
+          ],
+          env: {
+            API_KEY: "object-secret",
+            ACCESS_TOKEN: "object-access-secret",
+            clientSecret: "object-client-secret",
+            SAFE_VALUE: "visible",
+          },
+          endpoint: "https://user:url-password@example.test/run?access_token=query-access-secret&client_secret=query-client-secret&safe=visible",
         },
       }],
       evidenceReferences: ["Authorization: Bearer evidence-secret"],
@@ -70,7 +79,8 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
     const encoded = readFileSync(path, "utf8");
     for (const secret of [
       "argv-secret", "url-secret", "object-secret", "url-password", "query-secret",
-      "evidence-secret", "whitespace-secret", "standalone-secret",
+      "argv-access-secret", "argv-client-secret", "object-access-secret", "object-client-secret",
+      "query-access-secret", "query-client-secret", "evidence-secret", "whitespace-secret", "standalone-secret",
     ]) assert.doesNotMatch(encoded, new RegExp(secret));
     assert.match(encoded, /visible/);
     assert.match(encoded, /\[REDACTED\]/);
@@ -124,7 +134,8 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
     writeFileSync(archivedPath, `${JSON.stringify({
       ...legacyArchive,
       changedPaths: [
-        "token=legacy-changed-path-secret.txt",
+        "access_token=legacy-access-token-secret.txt",
+        "client_secret=legacy-client-secret.txt",
         ...Array.from({ length: 205 }, (_, index) => `generated-${index}.txt`),
       ],
     }, null, 2)}\n`);
@@ -175,7 +186,7 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
     assert.deepEqual(recovered, { diagnosticsPath: archivedPath });
     assert.equal(existsSync(fixture.workspace.path), false);
     const repairedText = readFileSync(archivedPath, "utf8");
-    assert.doesNotMatch(repairedText, /legacy-changed-path-secret/);
+    assert.doesNotMatch(repairedText, /legacy-access-token-secret|legacy-client-secret/);
     assert.match(repairedText, /\[REDACTED\]/);
     const repaired = JSON.parse(repairedText) as { changedPaths: string[] };
     assert.equal(repaired.changedPaths.length, 200);
