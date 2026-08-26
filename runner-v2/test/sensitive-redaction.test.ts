@@ -121,3 +121,27 @@ test("redacts safely parseable JSON containers and quoted properties embedded in
   assert.match(redacted, /visible-tokenizer/);
   assert.equal(redactSensitiveText(redacted), redacted);
 });
+
+test("redacts an embedded sensitive JSON object value without corrupting surrounding text", () => {
+  const input = 'before "clientSecret":{"nested":{"value":"OBJECT_SECRET","escaped":"quote-\\\"secret"}} after';
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, 'before "clientSecret":"[REDACTED]" after');
+  assert.doesNotMatch(redacted, /OBJECT_SECRET|quote-/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("redacts an embedded sensitive JSON array value including nested containers", () => {
+  const input = 'before "access_token":["ARRAY_SECRET",{"nested":["NESTED_ARRAY_SECRET"]}] after';
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, 'before "access_token":"[REDACTED]" after');
+  assert.doesNotMatch(redacted, /ARRAY_SECRET|NESTED_ARRAY_SECRET/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("unrelated malformed container prefixes cannot exhaust later sensitive-property redaction", () => {
+  const input = `${"{".repeat(65)} diagnostic "access_token":{"value":"LATE_SECRET"} tail`;
+  const redacted = redactSensitiveText(input);
+  assert.doesNotMatch(redacted, /LATE_SECRET/);
+  assert.match(redacted, /"access_token":"\[REDACTED\]" tail$/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});

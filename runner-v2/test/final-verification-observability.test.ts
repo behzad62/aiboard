@@ -78,13 +78,15 @@ test("loads only bounded redacted diagnostics from the exact Runner-owned run di
         "API_KEY whitespace-secret",
         "Bearer standalone-secret",
         '{"access_token":"json-observability-secret","clientSecret":"json-client-secret"}',
+        'diagnostic "access_token":["json-array-observability-secret"] tail',
+        `${"{".repeat(65)} diagnostic "clientSecret":{"value":"json-late-observability-secret"} tail`,
       ],
     }));
     const loaded = await loadFinalVerificationDiagnostics({ stateDirectory: root, runId: "run-1", expectedRunSegment: "run-segment", diagnosticsPath: path, generationId: "generation-1", taskId: "verify-1", targetRevision: "revision-current" });
     assert.deepEqual(loaded?.changedPaths, ["src/app.ts"]);
     assert.doesNotMatch(
       JSON.stringify(loaded),
-      /C:\\|runner-observability|object-secret|argv-secret|url-secret|query-secret|evidence-secret|whitespace-secret|standalone-secret|json-observability-secret|json-client-secret/,
+      /C:\\|runner-observability|object-secret|argv-secret|url-secret|query-secret|evidence-secret|whitespace-secret|standalone-secret|json-observability-secret|json-client-secret|json-array-observability-secret|json-late-observability-secret/,
     );
     assert.match(JSON.stringify(loaded), /\[REDACTED\]/);
     const foreign = join(root, "foreign.json");

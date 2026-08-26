@@ -2,7 +2,6 @@ const REDACTED = "[REDACTED]";
 const ASSIGNMENT_CANDIDATE = /(?<![A-Za-z0-9_-])((?:--?)?[A-Za-z_][A-Za-z0-9_-]*)(\s*(?::|=)\s*|\s+)(?:Bearer\s+)?([^\s,;&]+)/g;
 const BEARER_VALUE = /\bBearer\s+[^\s,;]+/gi;
 const URL_VALUE = /https?:\/\/[^\s"'<>]+/gi;
-const QUOTED_JSON_PROPERTY = /("(?:\\.|[^"\\])*")(\s*:\s*)("(?:\\.|[^"\\])*"|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
 const MAXIMUM_JSON_TEXT_DEPTH = 8;
 const MAXIMUM_JSON_CONTAINER_ATTEMPTS = 64;
 
@@ -155,14 +154,68 @@ function jsonContainerEnd(value: string, start: number): number | undefined {
 }
 
 function redactQuotedJsonProperties(value: string): string {
-  return value.replace(QUOTED_JSON_PROPERTY, (match, rawKey: string, separator: string) => {
+  let output = "";
+  let copiedThrough = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== '"') continue;
+    const keyEnd = jsonStringEnd(value, index);
+    if (keyEnd === undefined) continue;
     let key: unknown;
-    try { key = JSON.parse(rawKey) as unknown; }
-    catch { return match; }
-    return typeof key === "string" && isSensitiveKey(key)
-      ? `${rawKey}${separator}${JSON.stringify(REDACTED)}`
-      : match;
-  });
+    try { key = JSON.parse(value.slice(index, keyEnd)) as unknown; }
+    catch {
+      index = keyEnd - 1;
+      continue;
+    }
+    let separatorEnd = keyEnd;
+    while (/\s/.test(value[separatorEnd] ?? "")) separatorEnd += 1;
+    if (value[separatorEnd] !== ":") {
+      index = keyEnd - 1;
+      continue;
+    }
+    separatorEnd += 1;
+    while (/\s/.test(value[separatorEnd] ?? "")) separatorEnd += 1;
+    if (typeof key !== "string" || !isSensitiveKey(key)) {
+      index = keyEnd - 1;
+      continue;
+    }
+    const valueEnd = jsonValueEnd(value, separatorEnd);
+    output += value.slice(copiedThrough, separatorEnd) + JSON.stringify(REDACTED);
+    if (valueEnd === undefined) {
+      copiedThrough = value.length;
+      break;
+    }
+    copiedThrough = valueEnd;
+    index = valueEnd - 1;
+  }
+  return copiedThrough === 0 ? value : output + value.slice(copiedThrough);
+}
+
+function jsonStringEnd(value: string, start: number): number | undefined {
+  if (value[start] !== '"') return undefined;
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') return index + 1;
+  }
+  return undefined;
+}
+
+function jsonValueEnd(value: string, start: number): number | undefined {
+  const first = value[start];
+  if (first === '"') return jsonStringEnd(value, start);
+  if (first === "{" || first === "[") return jsonContainerEnd(value, start);
+  const scalar = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(value.slice(start));
+  if (!scalar) return undefined;
+  const end = start + scalar[0].length;
+  return end === value.length || /[\s,}\]]/.test(value[end]!) ? end : undefined;
 }
 
 function redactUrl(value: string): string {
