@@ -79,8 +79,20 @@ export interface GuidanceProjection {
   challengeReason?: string;
 }
 
+export interface CriterionSubmissionProjection {
+  taskId: string;
+  attempt: number;
+  acceptanceCriteriaVersion?: number;
+  changeSetId?: string;
+  criterionEvidenceLinks?: CriterionEvidenceLink[];
+}
+
 export interface ReviewProjection {
   taskId: string;
+  /** Omitted only for legacy projections that predate attempt binding. */
+  attempt?: number;
+  /** Omitted only for legacy projections that predate criterion versioning. */
+  acceptanceCriteriaVersion?: number;
   status: "requested" | "approved" | "rejected";
   summary?: string;
   evidenceArtifactHashes: string[];
@@ -97,6 +109,8 @@ export interface AcceptanceContractAuditProjection {
     criterionEvidenceLinks: CriterionEvidenceLink[];
     criterionVerdicts: CriterionReviewVerdict[];
     reviewStatus?: ReviewProjection["status"];
+    submissionHistory: CriterionSubmissionProjection[];
+    reviewHistory: ReviewProjection[];
   }>;
 }
 
@@ -168,6 +182,10 @@ export interface SchedulerProjection {
   tasks: Record<string, BuildTask>;
   guidance: Record<string, GuidanceProjection>;
   reviews: Record<string, ReviewProjection>;
+  /** Completed submissions retained as immutable attempt/version history. */
+  submissionHistory?: Record<string, CriterionSubmissionProjection[]>;
+  /** Completed Architect decisions retained as immutable attempt/version history. */
+  reviewHistory?: Record<string, ReviewProjection[]>;
   runtime: RuntimeProjection;
   integrationRevision?: string;
   projectHandoff?: ProjectHandoffProjection;
@@ -408,6 +426,12 @@ export function acceptanceContractAuditProjection(
               : {}),
           })),
           ...(review ? { reviewStatus: review.status } : {}),
+          submissionHistory: (projection.submissionHistory?.[task.id] ?? []).map(
+            cloneSubmissionProjection
+          ),
+          reviewHistory: (projection.reviewHistory?.[task.id] ?? []).map(
+            cloneReviewProjection
+          ),
         }];
       })
     ),
@@ -462,6 +486,8 @@ export function reduceSchedulerEvent(
     tasks: { ...current.tasks },
     guidance: { ...current.guidance },
     reviews: { ...current.reviews },
+    submissionHistory: cloneSubmissionHistory(current.submissionHistory),
+    reviewHistory: cloneReviewHistory(current.reviewHistory),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -616,6 +642,7 @@ export function reduceSchedulerEvent(
         );
       }
       next.tasks[taskId] = revised;
+      if (grantsFreshAttempt) delete next.reviews[taskId];
       if (next.acceptanceContractStatus !== "legacy_completed") {
         next.acceptanceContractStatus = acceptanceContractStatusForTasks(
           Object.values(next.tasks)
@@ -646,6 +673,8 @@ export function reduceSchedulerEvent(
       }
       const transitionPatch =
         (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      const startsRetry =
+        status === "planned" && (task.status === "rejected" || task.status === "failed");
       const submittedEvidenceLinks =
         status === "submitted" && task.acceptanceCriteria
           ? boundCriterionEvidenceLinks(task, transitionPatch)
@@ -663,13 +692,34 @@ export function reduceSchedulerEvent(
           );
         }
       }
-      next.tasks[taskId] = applyTaskTransition(
+      const transitionedTask = applyTaskTransition(
         task,
         status,
         submittedEvidenceLinks
           ? { ...transitionPatch, criterionEvidenceLinks: submittedEvidenceLinks }
           : transitionPatch,
       );
+      next.tasks[taskId] = transitionedTask;
+      if (startsRetry) delete next.reviews[taskId];
+      if (status === "submitted") {
+        appendSubmissionHistory(next, {
+          taskId,
+          attempt: task.attempt,
+          ...(task.acceptanceCriteriaVersion !== undefined
+            ? { acceptanceCriteriaVersion: task.acceptanceCriteriaVersion }
+            : {}),
+          ...(transitionedTask.changeSetId !== undefined
+            ? { changeSetId: transitionedTask.changeSetId }
+            : {}),
+          ...(transitionedTask.criterionEvidenceLinks
+            ? {
+                criterionEvidenceLinks: cloneCriterionEvidenceLinks(
+                  transitionedTask.criterionEvidenceLinks
+                ),
+              }
+            : {}),
+        });
+      }
       if (status === "integrated") {
         const integrationRevision = next.tasks[taskId].integrationRevision;
         if (integrationRevision) next.integrationRevision = integrationRevision;
@@ -802,6 +852,10 @@ export function reduceSchedulerEvent(
       next.tasks[taskId] = applyTaskTransition(task, "architect_review");
       next.reviews[taskId] = {
         taskId,
+        attempt: task.attempt,
+        ...(task.acceptanceCriteriaVersion !== undefined
+          ? { acceptanceCriteriaVersion: task.acceptanceCriteriaVersion }
+          : {}),
         status: "requested",
         evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
         ...(boundRequestedLinks
@@ -873,8 +927,12 @@ export function reduceSchedulerEvent(
         }));
       }
       next.tasks[taskId] = applyTaskTransition(task, decision);
-      next.reviews[taskId] = {
+      const review: ReviewProjection = {
         taskId,
+        attempt: task.attempt,
+        ...(task.acceptanceCriteriaVersion !== undefined
+          ? { acceptanceCriteriaVersion: task.acceptanceCriteriaVersion }
+          : {}),
         status: decision,
         summary: requiredString(event.payload, "summary"),
         evidenceArtifactHashes: stringArray(event.payload, "evidenceArtifactHashes"),
@@ -888,6 +946,8 @@ export function reduceSchedulerEvent(
           : {}),
         ...(criterionVerdicts ? { criterionVerdicts } : {}),
       };
+      next.reviews[taskId] = review;
+      appendReviewHistory(next, review);
       if (event.payload.planReconciliation !== undefined) {
         applyPlanReconciliation(
           next,
@@ -1482,6 +1542,8 @@ function emptySchedulerProjection(event: SchedulerEvent): SchedulerProjection {
     tasks: {},
     guidance: {},
     reviews: {},
+    submissionHistory: {},
+    reviewHistory: {},
     runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
     lastSequence: event.sequence,
   };
@@ -1526,6 +1588,95 @@ function stringArray(payload: Record<string, unknown>, key: string): string[] {
     throw new Error(`Missing ${key}.`);
   }
   return [...value] as string[];
+}
+
+function appendSubmissionHistory(
+  projection: SchedulerProjection,
+  submission: CriterionSubmissionProjection
+): void {
+  const history = projection.submissionHistory ?? (projection.submissionHistory = {});
+  history[submission.taskId] = [
+    ...(history[submission.taskId] ?? []),
+    cloneSubmissionProjection(submission),
+  ];
+}
+
+function appendReviewHistory(
+  projection: SchedulerProjection,
+  review: ReviewProjection
+): void {
+  const history = projection.reviewHistory ?? (projection.reviewHistory = {});
+  history[review.taskId] = [
+    ...(history[review.taskId] ?? []),
+    cloneReviewProjection(review),
+  ];
+}
+
+function cloneSubmissionHistory(
+  history: SchedulerProjection["submissionHistory"]
+): Record<string, CriterionSubmissionProjection[]> {
+  return Object.fromEntries(
+    Object.entries(history ?? {}).map(([taskId, submissions]) => [
+      taskId,
+      (submissions ?? []).map(cloneSubmissionProjection),
+    ])
+  );
+}
+
+function cloneReviewHistory(
+  history: SchedulerProjection["reviewHistory"]
+): Record<string, ReviewProjection[]> {
+  return Object.fromEntries(
+    Object.entries(history ?? {}).map(([taskId, reviews]) => [
+      taskId,
+      (reviews ?? []).map(cloneReviewProjection),
+    ])
+  );
+}
+
+function cloneSubmissionProjection(
+  submission: CriterionSubmissionProjection
+): CriterionSubmissionProjection {
+  return {
+    ...submission,
+    ...(submission.criterionEvidenceLinks
+      ? { criterionEvidenceLinks: cloneCriterionEvidenceLinks(submission.criterionEvidenceLinks) }
+      : {}),
+  };
+}
+
+function cloneReviewProjection(review: ReviewProjection): ReviewProjection {
+  return {
+    ...review,
+    evidenceArtifactHashes: [...review.evidenceArtifactHashes],
+    ...(review.criterionEvidenceLinks
+      ? { criterionEvidenceLinks: cloneCriterionEvidenceLinks(review.criterionEvidenceLinks) }
+      : {}),
+    ...(review.criterionVerdicts
+      ? { criterionVerdicts: cloneCriterionReviewVerdicts(review.criterionVerdicts) }
+      : {}),
+  };
+}
+
+function cloneCriterionEvidenceLinks(
+  links: readonly CriterionEvidenceLink[]
+): CriterionEvidenceLink[] {
+  return links.map((link) => ({
+    ...link,
+    artifactHashes: [...link.artifactHashes],
+  }));
+}
+
+function cloneCriterionReviewVerdicts(
+  verdicts: readonly CriterionReviewVerdict[]
+): CriterionReviewVerdict[] {
+  return verdicts.map((verdict) => ({
+    ...verdict,
+    evidenceIds: [...verdict.evidenceIds],
+    ...(verdict.artifactHashes
+      ? { artifactHashes: [...verdict.artifactHashes] }
+      : {}),
+  }));
 }
 
 function cloneBuildTask(task: BuildTask): BuildTask {

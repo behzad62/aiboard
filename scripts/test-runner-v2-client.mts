@@ -300,6 +300,98 @@ const clientProjection = projectNativeAcceptanceContract({
 assert.equal(clientProjection.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
 assert.equal(clientProjection.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
 
+const retryProjection = projectNativeAcceptanceContract(({
+  planRevision: 2,
+  acceptanceContractStatus: "current",
+  tasks: {
+    task_a: {
+      id: "task_a",
+      objective: "Retry task",
+      dependencies: [],
+      status: "submitted",
+      requiredCapabilities: ["code"],
+      acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+      acceptanceCriteriaVersion: 2,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_attempt_1",
+        artifactHashes: ["a".repeat(64)],
+        attempt: 1,
+      }],
+      attempt: 2,
+    },
+  },
+  reviews: {
+    task_a: {
+      taskId: "task_a",
+      status: "rejected",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "unsatisfied",
+        rationale: "Attempt one is incomplete.",
+        evidenceIds: ["evidence_attempt_1"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    },
+  },
+  submissionHistory: {
+    task_a: [{
+      taskId: "task_a",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      changeSetId: "changeset_attempt_1",
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_attempt_1",
+        artifactHashes: ["a".repeat(64)],
+        attempt: 1,
+      }],
+    }],
+  },
+  reviewHistory: {
+    task_a: [{
+      taskId: "task_a",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      status: "rejected",
+      summary: "Attempt one is incomplete.",
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "unsatisfied",
+        rationale: "Attempt one is incomplete.",
+        evidenceIds: ["evidence_attempt_1"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    }],
+  },
+} as unknown as NativeBuildProjection));
+assert.deepEqual(retryProjection.tasks.task_a.criterionEvidenceLinks, []);
+assert.deepEqual(retryProjection.tasks.task_a.criterionVerdicts, []);
+assert.equal(retryProjection.tasks.task_a.reviewStatus, undefined);
+const retryTaskHistory = retryProjection.tasks.task_a as typeof retryProjection.tasks.task_a & {
+  submissionHistory: Array<{ attempt: number; acceptanceCriteriaVersion?: number }>;
+  reviewHistory: Array<{ attempt?: number; acceptanceCriteriaVersion?: number; status: string }>;
+};
+assert.deepEqual(retryTaskHistory.submissionHistory, [{
+  taskId: "task_a",
+  attempt: 1,
+  acceptanceCriteriaVersion: 1,
+  changeSetId: "changeset_attempt_1",
+  criterionEvidenceLinks: [{
+    criterionId: "behavior",
+    evidenceId: "evidence_attempt_1",
+    artifactHashes: ["a".repeat(64)],
+    attempt: 1,
+  }],
+}]);
+assert.equal(retryTaskHistory.reviewHistory[0].attempt, 1);
+assert.equal(retryTaskHistory.reviewHistory[0].acceptanceCriteriaVersion, 1);
+assert.equal(retryTaskHistory.reviewHistory[0].status, "rejected");
+
 const attachmentCalls: string[] = [];
 const attachmentFetch: typeof fetch = async (input) => {
   const url = String(input);

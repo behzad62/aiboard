@@ -880,6 +880,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
           acceptanceCriteriaVersion: 1,
           criterionEvidenceLinks: [],
           criterionVerdicts: [],
+          submissionHistory: [],
+          reviewHistory: [],
         },
       },
     });

@@ -6,6 +6,7 @@ import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  acceptanceContractAuditProjection,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
 } from "../src/scheduler-store.js";
@@ -371,6 +372,123 @@ test("durable submission rejects fabricated evidence IDs and hashes", () => {
   } finally {
     store.close();
     evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retry clears the current acceptance projection while replay preserving versioned history", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-retry-projection-"));
+  const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
+  const oldLink = {
+    criterionId: "behavior",
+    evidenceId: "evidence_attempt_1",
+    artifactHashes: ["a".repeat(64)],
+    taskId: "task_retry",
+    attempt: 1,
+  };
+  try {
+    store.append(event("run_retry_projection", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_retry",
+        objective: "Retry projection",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 0,
+      }],
+    }));
+    store.append(event("run_retry_projection", "task.transitioned", "assign:1", {
+      taskId: "task_retry",
+      status: "assigned",
+      patch: { attempt: 1, assignedWorkerId: "worker_1" },
+    }));
+    store.append(event("run_retry_projection", "task.transitioned", "running:1", {
+      taskId: "task_retry",
+      status: "running",
+      patch: {},
+    }));
+    store.append(event("run_retry_projection", "task.transitioned", "submit:1", {
+      taskId: "task_retry",
+      status: "submitted",
+      patch: {
+        changeSetId: "changeset_attempt_1",
+        criterionEvidenceLinks: [oldLink],
+      },
+    }));
+    store.append({
+      runId: "run_retry_projection",
+      type: "review.decided",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "review:1",
+      payload: {
+        taskId: "task_retry",
+        decision: "rejected",
+        summary: "Attempt one is incomplete.",
+        evidenceArtifactHashes: ["a".repeat(64)],
+        criterionVerdicts: [{
+          criterionId: "behavior",
+          verdict: "unsatisfied",
+          rationale: "Attempt one is incomplete.",
+          evidenceIds: ["evidence_attempt_1"],
+          artifactHashes: ["a".repeat(64)],
+        }],
+      },
+    });
+    store.append(event("run_retry_projection", "task.transitioned", "retry:1", {
+      taskId: "task_retry",
+      status: "planned",
+      patch: {},
+    }));
+
+    const beforeRestart = rebuildSchedulerProjection(store.readRun("run_retry_projection"));
+    assert.equal(beforeRestart.tasks.task_retry.status, "planned");
+    assert.equal(beforeRestart.tasks.task_retry.criterionEvidenceLinks, undefined);
+    assert.equal(beforeRestart.tasks.task_retry.changeSetId, undefined);
+    assert.equal(beforeRestart.reviews.task_retry, undefined);
+    assert.deepEqual(beforeRestart.submissionHistory?.task_retry, [{
+      taskId: "task_retry",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      changeSetId: "changeset_attempt_1",
+      criterionEvidenceLinks: [oldLink],
+    }]);
+    assert.deepEqual(beforeRestart.reviewHistory?.task_retry, [{
+      taskId: "task_retry",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      status: "rejected",
+      summary: "Attempt one is incomplete.",
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionEvidenceLinks: [oldLink],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "unsatisfied",
+        rationale: "Attempt one is incomplete.",
+        evidenceIds: ["evidence_attempt_1"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    }]);
+    const audit = acceptanceContractAuditProjection(beforeRestart);
+    assert.deepEqual(audit.tasks.task_retry.criterionEvidenceLinks, []);
+    assert.deepEqual(audit.tasks.task_retry.criterionVerdicts, []);
+    assert.equal(audit.tasks.task_retry.reviewStatus, undefined);
+    assert.equal(audit.tasks.task_retry.submissionHistory[0].attempt, 1);
+    assert.equal(audit.tasks.task_retry.reviewHistory[0].acceptanceCriteriaVersion, 1);
+
+    store.close();
+    store = new SqliteSchedulerStore(database);
+    const recovered = rebuildSchedulerProjection(store.readRun("run_retry_projection"));
+    assert.deepEqual(recovered.tasks.task_retry, beforeRestart.tasks.task_retry);
+    assert.deepEqual(recovered.reviews, beforeRestart.reviews);
+    assert.deepEqual(recovered.submissionHistory, beforeRestart.submissionHistory);
+    assert.deepEqual(recovered.reviewHistory, beforeRestart.reviewHistory);
+  } finally {
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

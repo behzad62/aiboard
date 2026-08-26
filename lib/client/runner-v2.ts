@@ -122,6 +122,14 @@ export interface NativeCriterionReviewVerdict {
   artifactHashes?: string[];
 }
 
+export interface NativeCriterionSubmissionProjection {
+  taskId: string;
+  attempt: number;
+  acceptanceCriteriaVersion?: number;
+  changeSetId?: string;
+  criterionEvidenceLinks?: NativeCriterionEvidenceLink[];
+}
+
 export interface NativeGuidanceProjection {
   requestId: string;
   taskId: string;
@@ -138,6 +146,10 @@ export interface NativeGuidanceProjection {
 
 export interface NativeReviewProjection {
   taskId: string;
+  /** Omitted only for legacy projections that predate attempt binding. */
+  attempt?: number;
+  /** Omitted only for legacy projections that predate criterion versioning. */
+  acceptanceCriteriaVersion?: number;
   status: "requested" | "approved" | "rejected";
   summary?: string;
   evidenceArtifactHashes: string[];
@@ -159,6 +171,8 @@ export interface NativeBuildProjection {
   tasks: Record<string, NativeBuildTask>;
   guidance: Record<string, NativeGuidanceProjection>;
   reviews: Record<string, NativeReviewProjection>;
+  submissionHistory?: Record<string, NativeCriterionSubmissionProjection[]>;
+  reviewHistory?: Record<string, NativeReviewProjection[]>;
   runtime: {
     providerHealth: Record<string, unknown>;
     workerAssignments: Record<string, { runtimeId: string }>;
@@ -191,6 +205,8 @@ export interface NativeAcceptanceContractTaskProjection {
   criterionEvidenceLinks: NativeCriterionEvidenceLink[];
   criterionVerdicts: NativeCriterionReviewVerdict[];
   reviewStatus?: NativeReviewProjection["status"];
+  submissionHistory: NativeCriterionSubmissionProjection[];
+  reviewHistory: NativeReviewProjection[];
 }
 
 export interface NativeAcceptanceContractProjection {
@@ -475,12 +491,24 @@ export interface NativeBuildAuditExport {
 export function projectNativeAcceptanceContract(
   projection: Pick<
     NativeBuildProjection,
-    "planRevision" | "tasks" | "reviews" | "acceptanceContractStatus"
+    | "planRevision"
+    | "tasks"
+    | "reviews"
+    | "submissionHistory"
+    | "reviewHistory"
+    | "acceptanceContractStatus"
   >
 ): NativeAcceptanceContractProjection {
   const tasks = Object.fromEntries(
     Object.values(projection.tasks).map((task) => {
-      const review = projection.reviews[task.id];
+      const candidateReview = projection.reviews[task.id];
+      const review = candidateReview &&
+        task.status !== "planned" &&
+        isCurrentAcceptanceProjection(task, candidateReview)
+        ? candidateReview
+        : undefined;
+      const criterionEvidenceLinks = (task.criterionEvidenceLinks ?? [])
+        .filter((link) => link.attempt === undefined || link.attempt === task.attempt);
       return [task.id, {
         acceptanceCriteria: (task.acceptanceCriteria ?? []).map((criterion) => ({
           id: criterion.id,
@@ -489,7 +517,7 @@ export function projectNativeAcceptanceContract(
         ...(task.acceptanceCriteriaVersion !== undefined
           ? { acceptanceCriteriaVersion: task.acceptanceCriteriaVersion }
           : {}),
-        criterionEvidenceLinks: (task.criterionEvidenceLinks ?? []).map((link) => ({
+        criterionEvidenceLinks: criterionEvidenceLinks.map((link) => ({
           criterionId: link.criterionId,
           evidenceId: link.evidenceId,
           artifactHashes: [...link.artifactHashes],
@@ -506,6 +534,12 @@ export function projectNativeAcceptanceContract(
             : {}),
         })),
         ...(review ? { reviewStatus: review.status } : {}),
+        submissionHistory: (projection.submissionHistory?.[task.id] ?? []).map(
+          cloneNativeSubmissionProjection
+        ),
+        reviewHistory: (projection.reviewHistory?.[task.id] ?? []).map(
+          cloneNativeReviewProjection
+        ),
       } satisfies NativeAcceptanceContractTaskProjection];
     })
   ) as Record<string, NativeAcceptanceContractTaskProjection>;
@@ -513,6 +547,62 @@ export function projectNativeAcceptanceContract(
     status: projection.acceptanceContractStatus ?? "current",
     planRevision: projection.planRevision,
     tasks,
+  };
+}
+
+function isCurrentAcceptanceProjection(
+  task: NativeBuildTask,
+  projection: Pick<NativeReviewProjection, "attempt" | "acceptanceCriteriaVersion">
+): boolean {
+  return (
+    (projection.attempt === undefined || projection.attempt === task.attempt) &&
+    (projection.acceptanceCriteriaVersion === undefined ||
+      task.acceptanceCriteriaVersion === undefined ||
+      projection.acceptanceCriteriaVersion === task.acceptanceCriteriaVersion)
+  );
+}
+
+function cloneNativeSubmissionProjection(
+  submission: NativeCriterionSubmissionProjection
+): NativeCriterionSubmissionProjection {
+  return {
+    ...submission,
+    ...(submission.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: submission.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+  };
+}
+
+function cloneNativeReviewProjection(
+  review: NativeReviewProjection
+): NativeReviewProjection {
+  return {
+    ...review,
+    evidenceArtifactHashes: [...review.evidenceArtifactHashes],
+    ...(review.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: review.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+    ...(review.criterionVerdicts
+      ? {
+          criterionVerdicts: review.criterionVerdicts.map((verdict) => ({
+            ...verdict,
+            evidenceIds: [...verdict.evidenceIds],
+            ...(verdict.artifactHashes
+              ? { artifactHashes: [...verdict.artifactHashes] }
+              : {}),
+          })),
+        }
+      : {}),
   };
 }
 

@@ -122,6 +122,8 @@ export function applyTaskTransition(
   if (Object.hasOwn(patch, "criterionEvidenceLinks") && status !== "submitted") {
     throw new Error("Criterion evidence links may only be recorded when submitting a task.");
   }
+  const startsRetry =
+    status === "planned" && (task.status === "rejected" || task.status === "failed");
   return {
     ...task,
     ...patch,
@@ -142,6 +144,14 @@ export function applyTaskTransition(
             ...link,
             artifactHashes: [...link.artifactHashes],
           })),
+        }
+      : {}),
+    ...(startsRetry
+      ? {
+          assignedWorkerId: undefined,
+          changeSetId: undefined,
+          criterionEvidenceLinks: undefined,
+          failureReason: undefined,
         }
       : {}),
     status,
