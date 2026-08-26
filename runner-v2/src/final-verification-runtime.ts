@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
-import type { AgentActor } from "./agent-contracts.js";
+import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import type { ManagedProcessService, ManagedProcessSnapshot } from "./managed-process.js";
 import {
   planFinalVerification,
   type FinalVerificationCategory,
@@ -33,6 +34,47 @@ export interface FinalVerificationCommand {
   timeoutMs?: number;
 }
 
+export interface FinalVerificationManagedProcessInput {
+  executable: string;
+  args: string[];
+  cwd: string;
+}
+
+export interface FinalVerificationManagedProcess {
+  start(input: FinalVerificationManagedProcessInput): Promise<FinalVerificationManagedProcessObservation>;
+  poll(processId: string): Promise<FinalVerificationManagedProcessObservation>;
+  stop(processId: string): Promise<FinalVerificationManagedProcessObservation>;
+}
+
+export interface FinalVerificationManagedProcessObservation {
+  processId: string;
+  status: "running" | "stopped" | "exited_unknown";
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+export interface FinalVerificationReadiness {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  healthCheck?: (input: {
+    endpoint?: string;
+    observation: FinalVerificationManagedProcessObservation;
+  }) => boolean | Promise<boolean>;
+  expectedStatus?: number;
+}
+
+export interface FinalVerificationRuntimeSmokeInput {
+  label: string;
+  executable: string;
+  args: string[];
+  endpoint?: string;
+  timeoutMs?: number;
+  readiness: FinalVerificationReadiness;
+  releasePort?: (endpoint?: string) => void | Promise<void>;
+}
+
 export type FinalVerificationRevisionSource =
   | string
   | (() => string | Promise<string>);
@@ -48,6 +90,8 @@ export interface FinalVerificationRuntimeOptions {
   clock?: () => string;
   integrationRevision?: FinalVerificationRevisionSource;
   currentIntegrationRevision?: FinalVerificationRevisionSource;
+  managedProcess?: FinalVerificationManagedProcess;
+  managedProcessService?: ManagedProcessService;
   maxOutputBytes?: number;
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
@@ -56,6 +100,7 @@ export interface FinalVerificationRuntimeOptions {
 export interface FinalVerificationRunInput {
   plan: unknown;
   commands?: Partial<Record<FinalVerificationCategory, readonly FinalVerificationCommand[]>>;
+  runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   signal?: AbortSignal;
 }
 
@@ -65,16 +110,19 @@ export interface FinalVerificationRepositoryState {
 }
 
 export interface FinalVerificationCommandFact extends CommandEvidenceFact {
-  category: "build" | "tests";
+  category: FinalVerificationCategory;
   executable: string;
   targetRevision: string;
   startState: FinalVerificationRepositoryState;
   endState: FinalVerificationRepositoryState;
+  endpoint?: string;
+  readinessSatisfied?: boolean;
+  cleanupRequested?: boolean;
 }
 
 export interface FinalVerificationEvidence {
   id: string;
-  category: "build" | "tests";
+  category: FinalVerificationCategory;
   fact: FinalVerificationCommandFact;
 }
 
@@ -99,6 +147,16 @@ export interface FinalVerificationRun {
   finishedAt: string;
   checks: readonly FinalVerificationCheckResult[];
   green: boolean;
+}
+
+interface MutableVerificationCheck {
+  category: FinalVerificationCategory;
+  status: FinalVerificationStatus;
+  rationale?: string;
+  repositoryInspection?: FinalVerificationRepositoryInspection;
+  evidenceIds: string[];
+  facts: FinalVerificationCommandFact[];
+  issues: string[];
 }
 
 interface ProcessResult {
@@ -134,6 +192,7 @@ export class FinalVerificationRuntime {
   private readonly attempt?: number;
   private readonly clock: () => string;
   private readonly integrationRevision?: FinalVerificationRevisionSource;
+  private readonly managedProcess?: FinalVerificationManagedProcess;
   private readonly maxOutputBytes: number;
   private readonly defaultTimeoutMs: number;
   private readonly maximumTimeoutMs: number;
@@ -156,6 +215,14 @@ export class FinalVerificationRuntime {
     this.attempt = options.attempt;
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.integrationRevision = options.integrationRevision ?? options.currentIntegrationRevision;
+    this.managedProcess = options.managedProcess ?? (options.managedProcessService
+      ? new ManagedProcessServiceAdapter(
+          options.managedProcessService,
+          this.runId,
+          this.taskId,
+          this.actor,
+        )
+      : undefined);
     this.maxOutputBytes = positiveInteger(
       options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
       "maxOutputBytes",
@@ -191,6 +258,7 @@ export class FinalVerificationRuntime {
         await this.runCheck({
           check,
           commands: input.commands?.[check.category],
+          runtimeSmoke: input.runtimeSmoke,
           workspace,
           generationId,
           runOrdinal,
@@ -233,13 +301,14 @@ export class FinalVerificationRuntime {
   private async runCheck(input: {
     check: FinalVerificationCheck;
     commands: readonly FinalVerificationCommand[] | undefined;
+    runtimeSmoke: FinalVerificationRuntimeSmokeInput | undefined;
     workspace: VerificationWorkspace;
     generationId: string;
     runOrdinal: number;
     signal?: AbortSignal;
   }): Promise<FinalVerificationCheckResult> {
     const { check } = input;
-    const base = {
+    const base: MutableVerificationCheck = {
       category: check.category,
       status: check.status,
       ...(check.rationale !== undefined ? { rationale: check.rationale } : {}),
@@ -256,6 +325,16 @@ export class FinalVerificationRuntime {
         return { ...base, green: false };
       }
       return { ...base, green: true };
+    }
+    if (check.category === "runtime_smoke") {
+      return await this.runRuntimeSmokeCheck({
+        base,
+        input: input.runtimeSmoke,
+        workspace: input.workspace,
+        generationId: input.generationId,
+        runOrdinal: input.runOrdinal,
+        signal: input.signal,
+      });
     }
     if (!EXECUTABLE_CATEGORIES.has(check.category)) {
       base.issues.push(`Required category ${check.category} is not supported by this command runtime.`);
@@ -367,10 +446,254 @@ export class FinalVerificationRuntime {
     };
   }
 
+  private async runRuntimeSmokeCheck(input: {
+    base: MutableVerificationCheck;
+    input: FinalVerificationRuntimeSmokeInput | undefined;
+    workspace: VerificationWorkspace;
+    generationId: string;
+    runOrdinal: number;
+    signal?: AbortSignal;
+  }): Promise<FinalVerificationCheckResult> {
+    const smoke = input.input;
+    if (!smoke) {
+      input.base.issues.push("Required runtime_smoke check has no runtime command.");
+      return { ...input.base, green: false };
+    }
+    if (!this.managedProcess) {
+      input.base.issues.push("Required runtime_smoke check has no managed process service.");
+      return { ...input.base, green: false };
+    }
+    validateRuntimeSmoke(smoke, this.maximumTimeoutMs);
+
+    const startedAt = this.clock();
+    const startState = await repositoryState(input.workspace.path);
+    let observation: FinalVerificationManagedProcessObservation | undefined;
+    let readinessSatisfied = false;
+    let timedOut = false;
+    let cancelled = false;
+    let startError: Error | undefined;
+
+    try {
+      if (input.signal?.aborted) {
+        cancelled = true;
+      } else {
+        try {
+          observation = await this.managedProcess.start({
+            executable: smoke.executable,
+            args: [...smoke.args],
+            cwd: input.workspace.path,
+          });
+        } catch (error) {
+          startError = asError(error);
+        }
+        if (observation) {
+          const readiness = await this.waitForRuntimeReadiness({
+            smoke,
+            observation,
+            signal: input.signal,
+          });
+          observation = readiness.observation;
+          readinessSatisfied = readiness.ready;
+          timedOut = readiness.timedOut;
+          cancelled = readiness.cancelled;
+          if (readiness.issue) input.base.issues.push(readiness.issue);
+        }
+      }
+    } finally {
+      if (observation) {
+        try {
+          observation = (await this.managedProcess.stop(observation.processId)) ?? observation;
+        } catch (error) {
+          input.base.issues.push(`runtime_smoke process cleanup failed: ${asError(error).message}.`);
+        }
+      }
+      if (smoke.releasePort) {
+        try {
+          await smoke.releasePort(smoke.endpoint);
+        } catch (error) {
+          input.base.issues.push(`runtime_smoke port cleanup failed: ${asError(error).message}.`);
+        }
+      }
+    }
+
+    const finishedAt = this.clock();
+    const endState = await repositoryState(input.workspace.path);
+    if (input.signal?.aborted && !cancelled) cancelled = true;
+    const stdoutArtifact = await this.artifacts.put(
+      Buffer.from(observation?.stdout ?? ""),
+      "text/plain",
+      `runtime_smoke ${smoke.label} stdout`,
+    );
+    const stderrArtifact = await this.artifacts.put(
+      Buffer.from(observation?.stderr ?? (startError?.message ?? "")),
+      "text/plain",
+      `runtime_smoke ${smoke.label} stderr`,
+    );
+    const fact: FinalVerificationCommandFact = {
+      kind: "command",
+      category: "runtime_smoke",
+      label: smoke.label,
+      executable: smoke.executable,
+      command: smoke.executable,
+      args: [...smoke.args],
+      cwd: input.workspace.path,
+      startedAt,
+      finishedAt,
+      exitCode: observation?.exitCode ?? null,
+      signal: observation?.signal ?? null,
+      timedOut,
+      cancelled,
+      outputTruncated: false,
+      stdoutArtifactHash: stdoutArtifact.hash,
+      stderrArtifactHash: stderrArtifact.hash,
+      repositoryRevision: input.workspace.targetRevision,
+      targetRevision: input.workspace.targetRevision,
+      startState,
+      endState,
+      ...(smoke.endpoint ? { endpoint: smoke.endpoint } : {}),
+      readinessSatisfied,
+      cleanupRequested: observation !== undefined,
+    };
+    input.base.facts.push(fact);
+
+    if (startError) {
+      input.base.issues.push(`runtime_smoke command ${smoke.label} could not start: ${startError.message}.`);
+    }
+    if (cancelled) input.base.issues.push(`runtime_smoke command ${smoke.label} was cancelled.`);
+    if (timedOut) input.base.issues.push(`runtime_smoke command ${smoke.label} timed out before readiness.`);
+    if (!readinessSatisfied && !timedOut && !cancelled) {
+      input.base.issues.push(`runtime_smoke command ${smoke.label} did not become ready.`);
+    }
+    if (observation && observation.exitCode !== null && observation.exitCode !== 0) {
+      input.base.issues.push(
+        `runtime_smoke command ${smoke.label} exited with non-zero code ${String(observation.exitCode)}.`,
+      );
+    }
+    if (startState.revision !== input.workspace.targetRevision) {
+      input.base.issues.push(
+        `runtime_smoke command ${smoke.label} started at revision ${startState.revision}, ` +
+          `not target revision ${input.workspace.targetRevision}.`,
+      );
+    }
+    if (endState.revision !== input.workspace.targetRevision) {
+      input.base.issues.push(
+        `runtime_smoke command ${smoke.label} changed the verification revision from ` +
+          `${input.workspace.targetRevision} to ${endState.revision}.`,
+      );
+    }
+
+    const evidenceId = this.recordEvidence(
+      fact,
+      input.generationId,
+      "runtime_smoke",
+      0,
+      finishedAt,
+      input.runOrdinal,
+    );
+    if (evidenceId) input.base.evidenceIds.push(evidenceId);
+    else input.base.issues.push(`runtime_smoke command ${smoke.label} has no durable evidence record.`);
+    return {
+      ...input.base,
+      green: input.base.issues.length === 0 && input.base.evidenceIds.length === input.base.facts.length,
+    };
+  }
+
+  private async waitForRuntimeReadiness(input: {
+    smoke: FinalVerificationRuntimeSmokeInput;
+    observation: FinalVerificationManagedProcessObservation;
+    signal?: AbortSignal;
+  }): Promise<{
+    observation: FinalVerificationManagedProcessObservation;
+    ready: boolean;
+    timedOut: boolean;
+    cancelled: boolean;
+    issue?: string;
+  }> {
+    if (!this.managedProcess) {
+      return {
+        observation: input.observation,
+        ready: false,
+        timedOut: false,
+        cancelled: false,
+        issue: "Managed process service is unavailable.",
+      };
+    }
+    const timeoutMs = Math.min(
+      input.smoke.readiness.timeoutMs ?? input.smoke.timeoutMs ?? this.defaultTimeoutMs,
+      this.maximumTimeoutMs,
+    );
+    const pollIntervalMs = Math.min(
+      input.smoke.readiness.pollIntervalMs ?? 100,
+      Math.max(1, timeoutMs),
+    );
+    const deadline = Date.now() + timeoutMs;
+    let observation = input.observation;
+    while (true) {
+      if (input.signal?.aborted) {
+        return { observation, ready: false, timedOut: false, cancelled: true };
+      }
+      if (observation.status !== "running") {
+        return {
+          observation,
+          ready: false,
+          timedOut: false,
+          cancelled: false,
+          issue: `runtime_smoke process exited before readiness (exit code ${String(observation.exitCode)}).`,
+        };
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        return { observation, ready: false, timedOut: true, cancelled: false };
+      }
+      let healthOperation: Promise<boolean> | boolean;
+      try {
+        healthOperation = input.smoke.readiness.healthCheck
+          ? input.smoke.readiness.healthCheck({ endpoint: input.smoke.endpoint, observation })
+          : endpointIsHealthy(input.smoke.endpoint, input.smoke.readiness.expectedStatus);
+      } catch (error) {
+        return {
+          observation,
+          ready: false,
+          timedOut: false,
+          cancelled: false,
+          issue: `runtime_smoke readiness probe failed: ${asError(error).message}.`,
+        };
+      }
+      const health = await raceWithAbortAndTimeout(
+        healthOperation,
+        input.signal,
+        remainingMs,
+      );
+      if (health.kind === "cancelled") {
+        return { observation, ready: false, timedOut: false, cancelled: true };
+      }
+      if (health.kind === "timeout") {
+        return { observation, ready: false, timedOut: true, cancelled: false };
+      }
+      if (health.kind === "error") {
+        return {
+          observation,
+          ready: false,
+          timedOut: false,
+          cancelled: false,
+          issue: `runtime_smoke readiness probe failed: ${asError(health.error).message}.`,
+        };
+      }
+      if (health.value) return { observation, ready: true, timedOut: false, cancelled: false };
+      const delay = await delayWithAbort(
+        Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())),
+        input.signal,
+      );
+      if (delay.cancelled) return { observation, ready: false, timedOut: false, cancelled: true };
+      if (Date.now() >= deadline) return { observation, ready: false, timedOut: true, cancelled: false };
+      observation = await this.managedProcess.poll(observation.processId);
+    }
+  }
+
   private recordEvidence(
     fact: FinalVerificationCommandFact,
     generationId: string,
-    category: "build" | "tests",
+    category: FinalVerificationCategory,
     index: number,
     createdAt: string,
     runOrdinal: number,
@@ -618,4 +941,169 @@ function generationFor(runId: string, revision: string): string {
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer.`);
   return value;
+}
+
+async function endpointIsHealthy(endpoint: string | undefined, expectedStatus = 200): Promise<boolean> {
+  if (!endpoint) return false;
+  try {
+    const response = await fetch(endpoint);
+    return response.status === expectedStatus;
+  } catch {
+    return false;
+  }
+}
+
+function validateRuntimeSmoke(
+  input: FinalVerificationRuntimeSmokeInput,
+  maximumTimeoutMs: number,
+): void {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("runtime_smoke input must be an object.");
+  }
+  if (typeof input.label !== "string" || input.label.trim().length === 0) {
+    throw new Error("runtime_smoke label is required.");
+  }
+  if (typeof input.executable !== "string" || input.executable.trim().length === 0) {
+    throw new Error("runtime_smoke executable is required.");
+  }
+  if (!Array.isArray(input.args) || input.args.some((arg) => typeof arg !== "string")) {
+    throw new Error("runtime_smoke args must be a string array.");
+  }
+  if (input.endpoint !== undefined) {
+    let parsed: URL;
+    try {
+      parsed = new URL(input.endpoint);
+    } catch {
+      throw new Error("runtime_smoke endpoint must be an HTTP(S) URL.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("runtime_smoke endpoint must be an HTTP(S) URL.");
+    }
+  }
+  validateTimeout(input.timeoutMs, maximumTimeoutMs, "runtime_smoke timeoutMs");
+  if (!input.readiness || typeof input.readiness !== "object") {
+    throw new Error("runtime_smoke readiness is required.");
+  }
+  if (typeof input.readiness.healthCheck !== "function" && !input.endpoint) {
+    throw new Error("runtime_smoke readiness requires a healthCheck function or endpoint.");
+  }
+  validateTimeout(input.readiness.timeoutMs, maximumTimeoutMs, "runtime_smoke readiness timeoutMs");
+  if (
+    input.readiness.pollIntervalMs !== undefined &&
+    (!Number.isSafeInteger(input.readiness.pollIntervalMs) || input.readiness.pollIntervalMs < 1)
+  ) {
+    throw new Error("runtime_smoke readiness pollIntervalMs must be a positive integer.");
+  }
+  if (
+    input.readiness.expectedStatus !== undefined &&
+    (!Number.isSafeInteger(input.readiness.expectedStatus) || input.readiness.expectedStatus < 100 || input.readiness.expectedStatus > 599)
+  ) {
+    throw new Error("runtime_smoke readiness expectedStatus must be an HTTP status.");
+  }
+  if (input.releasePort !== undefined && typeof input.releasePort !== "function") {
+    throw new Error("runtime_smoke releasePort must be a function.");
+  }
+}
+
+function validateTimeout(value: number | undefined, maximum: number, label: string): void {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > maximum)) {
+    throw new Error(`${label} must be from 1 to ${maximum}.`);
+  }
+}
+
+type PromiseRaceResult<T> =
+  | { kind: "value"; value: T }
+  | { kind: "timeout" }
+  | { kind: "cancelled" }
+  | { kind: "error"; error: unknown };
+
+function raceWithAbortAndTimeout<T>(
+  operation: Promise<T> | T,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<PromiseRaceResult<T>> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
+    timeout.unref();
+    const onAbort = () => settle({ kind: "cancelled" });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const settle = (result: PromiseRaceResult<T>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    if (signal?.aborted) {
+      settle({ kind: "cancelled" });
+      return;
+    }
+    Promise.resolve(operation).then(
+      (value) => settle({ kind: "value", value }),
+      (error: unknown) => settle({ kind: "error", error }),
+    );
+  });
+}
+
+async function delayWithAbort(
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+): Promise<{ cancelled: boolean }> {
+  if (signal?.aborted) return { cancelled: true };
+  return await new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => settle({ cancelled: false }), milliseconds);
+    timer.unref();
+    const onAbort = () => settle({ cancelled: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const settle = (result: { cancelled: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+  });
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+class ManagedProcessServiceAdapter implements FinalVerificationManagedProcess {
+  private readonly sessionId: string;
+
+  constructor(
+    private readonly service: ManagedProcessService,
+    private readonly runId: string,
+    taskId: string,
+    private readonly actor: AgentActor,
+  ) {
+    this.sessionId = `final-verification:${taskId}`;
+  }
+
+  async start(input: FinalVerificationManagedProcessInput): Promise<ManagedProcessSnapshot> {
+    return await this.service.start(
+      { command: input.executable, args: [...input.args], cwd: "." },
+      this.context(),
+      input.cwd,
+    );
+  }
+
+  async poll(processId: string): Promise<ManagedProcessSnapshot> {
+    return this.service.poll(processId, this.context());
+  }
+
+  async stop(processId: string): Promise<ManagedProcessSnapshot> {
+    return await this.service.signal(processId, "SIGTERM", this.context());
+  }
+
+  private context(): ToolExecutionContext {
+    return {
+      runId: this.runId,
+      sessionId: this.sessionId,
+      actor: { ...this.actor },
+    };
+  }
 }

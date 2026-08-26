@@ -7,8 +7,9 @@
 - P2 entry revision: `000f54e1`
 - P2.1 implementation revision: `3dcb0cc1`
 - P2.2 implementation revision: `97f52add`
-- P2.3A implementation revision: packet commit (reported at handoff)
-- Scope completed: P2.1, P2.2, and P2.3A only. P2.3B and later packets were not started.
+- P2.3A implementation revision: `b82a1a3a`
+- P2.3B1a implementation revision: this packet commit (reported at handoff)
+- Scope completed: P2.1, P2.2, P2.3A, and P2.3B1a only. P2.3B2 and later packets were not started.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -185,7 +186,73 @@ passed
 | Cleanup is scoped to owned verification state | Cleanup test preserves integration path/revision/history and canonical checkout | Complete |
 
 P2.3B runtime_smoke/browser and submit-tool work, plus P2.4+ scheduler/completion
-work, remain locked for the controller.
+work, remain locked for the controller. (The B1a runtime_smoke slice below is
+the sole exception in this packet; browser and submit-tool work remain deferred.)
+
+## P2.3B1a runtime-smoke verification
+
+Extended `runner-v2/src/final-verification-runtime.ts` with a narrow
+managed-process adapter over the existing Windows-supervised process service.
+Required `runtime_smoke` checks now launch the exact executable/argument array
+inside the pinned disposable workspace, require an explicit health/readiness
+condition within a bounded deadline, capture endpoint/stdout/stderr/revision
+facts and durable evidence, and stop the owned process tree in a `finally`
+path. Optional port-release cleanup is also executed on success, failure,
+timeout, and cancellation. A process that exits unhealthy, a timeout, or a
+cancellation is mechanically non-green; readiness never grants semantic
+completion authority.
+
+### P2.3B1a TDD and prove-red evidence
+
+The runtime-smoke test file was added against the existing command-only
+runtime and initially ran red:
+
+```text
+npx tsx --test runner-v2/test/final-verification-runtime-b1.test.ts
+4 tests, 0 passed, 4 failed
+AssertionError: required runtime_smoke was unsupported / had no facts
+```
+
+After the managed-process/readiness implementation, the focused suite passed
+4/4. Removing the readiness-success guard produced 3 pass/1 fail (the healthy
+server result became non-green). Removing the owned-process cleanup guard
+produced 1 pass/3 fail (the managed records remained `running` after success,
+timeout, and cancellation). Each guard was restored and the focused suite
+returned to 4/4 green.
+
+The focused cases launch a small HTTP server from a path containing spaces,
+wait for health, capture endpoint/stdout evidence, cover unhealthy exit,
+deadline timeout, and cancellation, and assert the process tree is stopped and
+the port is reusable.
+
+### P2.3B1a validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts runner-v2/test/final-verification-runtime-b1.test.ts runner-v2/test/process-tools.test.ts runner-v2/test/managed-process.test.ts runner-v2/test/evidence-tools.test.ts runner-v2/test/sqlite-evidence-store.test.ts runner-v2/test/verification-workspace.test.ts runner-v2/test/workspace-manager.test.ts
+51/51 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/final-verification-runtime.ts runner-v2/test/final-verification-runtime.test.ts runner-v2/test/final-verification-runtime-b1.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warning only)
+```
+
+### P2.3B1a requirement audit
+
+| P2.3B1a requirement | Evidence | Result |
+|---|---|---|
+| Exact managed command in pinned workspace | Real ManagedProcessService adapter and path-with-spaces server test | Complete |
+| Explicit readiness/health deadline | Health callback/HTTP endpoint and timeout test | Complete |
+| Endpoint/stdout/stderr/revision evidence | Runtime-smoke command fact plus ArtifactStore/EvidenceStore assertions | Complete |
+| Stop process tree and release port on every exit | Success, timeout, unhealthy exit, cancellation and port-reuse assertions | Complete |
+| Non-green unhealthy/timeout/cancel outcomes | Focused result assertions and readiness guard fault proof | Complete |
+| No canonical checkout mutation or ChangeSet | Shared P2.3A workspace/revision checks remain green; no ChangeSet surface added | Complete |
+
+P2.3B2 browser and submit-tool work remains intentionally deferred.
 
 ## P2.3A command verification runtime
 
@@ -246,8 +313,8 @@ npx tsx --test runner-v2/test/final-verification-runtime.test.ts runner-v2/test/
 ```
 
 The affected process/evidence/workspace regression set passed 83/83 tests
-(including integration and workspace-manager coverage); no P2.3B or P2.4
-surface was started in this packet.
+(including integration and workspace-manager coverage); no P2.3B2 browser or
+submit-tool, or P2.4 surface, was started in this packet.
 
 ### P2.3A requirement audit
 
@@ -262,5 +329,5 @@ surface was started in this packet.
 
 ## Packet status
 
-P2.3A is complete in the implementation commit recorded above. P2.3B
-runtime_smoke/browser and submit-tool work remains intentionally deferred.
+P2.3A and P2.3B1a are complete in the implementation commits recorded above.
+P2.3B2 browser/submit-tool work and P2.4+ remain intentionally deferred.
