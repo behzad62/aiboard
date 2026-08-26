@@ -12,8 +12,16 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- P2.4B1a implementation revision: this packet commit (reported at handoff)
-- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, P2.3B1b, P2.3B2, P2.4A, and P2.4B1a only. Final-verification execution/review, repair routing, P2.5, and P2.6 remain locked.
+- Current implementation head before this report update: `d34ee668`
+- Implemented scope: every P2 packet from P2.1 through P2.6D, including all
+  review-repair commits through authoritative browser policy and comprehensive
+  structural credential redaction.
+- Historical-note convention: statements in the packet-era sections below that
+  say a later packet was "locked," "deferred," or "remained with the
+  controller" describe that packet's boundary at the time. They are not the
+  current implementation status.
+- This report records implementation and evidence; it does not declare the P2
+  phase outcome or replace the independent review gate.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -1706,3 +1714,89 @@ Playwright, lint, publication, and production-build gates are current. Node
 policy remains maintained LTS lines 22/24 with the capability floor and no
 exact `24.18.0` pin. This appendix records repair evidence and does not claim
 phase completion.
+
+## P2 independent re-review corrections
+
+### Correction: browser policy semantics were not fully authoritative
+
+The earlier `0e842199` section claimed full browser mechanical semantics. That
+claim was disproven: durable semantics trusted the captured
+`policyViolations` summary and accepted a required green browser fact carrying
+an unallowlisted console error under `consoleErrors: "fail"`. Runtime had the
+real evaluator, but append, reducer, replay, and submission did not recompute
+the exact persisted policy.
+
+Commit `6b180f8d` corrects the authority boundary. One pure browser policy
+evaluator is now shared by runtime capture and durable semantics. It validates
+console/page/network event item shapes, classifies exact failures, applies
+console/page/network policy and allowlists, produces the canonical violation
+list, and enforces event-count equality/lower bounds. Durable semantics requires
+the supplied violation list to equal that recomputation; a green check requires
+zero recomputed violations. Requested URL remains profile-bound while a normal
+observed redirect remains valid.
+
+RED and restore evidence:
+
+```text
+direct semantics before fix: 1/3 passed, 2/3 failed
+submission forged empty violation summary: 0/1 passed
+raw SQLite append forged empty violation summary: 0/1 passed
+SQLite replay with scheduler+evidence tamper: 0/1 passed
+fault mutation replacing persisted fail policy with all-allow: 0/1 passed
+restored named mutation test: 1/1 passed
+
+npx tsx --test runner-v2/test/final-verification-browser-policy.test.ts runner-v2/test/final-verification-browser.test.ts runner-v2/test/final-verification-integrity.test.ts runner-v2/test/final-verification-submission.test.ts
+26 tests, 26 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed
+
+targeted ESLint and git diff --check
+passed
+```
+
+### Correction: redaction key coverage was not comprehensive
+
+The earlier `8bfe0639` and `72353566` sections correctly described the then-
+tested exact keys but overstated structural coverage. The previous regex leaked
+common nested/object/argv/env/text/query/changed-path forms including
+`access_token` and `client_secret`, and could produce malformed partial text
+redaction.
+
+Commit `d34ee668` centralizes `isSensitiveKey` and applies it to object keys,
+argv pairs, text assignments, URL query names, and therefore changed paths and
+legacy archive repair. It recognizes snake, kebab, camel, argv, env, and query
+forms for access/refresh/ID/API tokens, client secrets, API/private keys,
+password/passwd/passphrase, authorization/auth, and credentials. Bearer values
+and URL credentials remain protected. `secretary` and `tokenizer` remain
+visible, redaction is idempotent, and assignment-shaped array values cannot be
+mistaken for argv keys.
+
+The legacy regression now exercises the exact sequence with both
+`access_token` and `client_secret`: unsafe archive persisted, workspace deleted,
+receipt written, scheduler validation rejected, restart repairs the owned
+archive without the workspace, synchronous validation succeeds, and repeated
+cleanup is idempotent.
+
+RED and restore evidence:
+
+```text
+direct structural redaction before fix: 0/2 passed
+diagnostics nested/argv/env/query coverage before fix: 0/1 passed
+legacy receipt-first archive repair before fix: 0/1 passed
+fault mutation disabling multipart key classification: 0/1 passed
+restored direct redaction: 2/2 passed
+restored legacy restart repair: 1/1 passed
+
+npx tsx --test runner-v2/test/sensitive-redaction.test.ts runner-v2/test/final-verification-cleanup.test.ts runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-observability.test.ts
+23 tests, 23 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed
+
+targeted ESLint and git diff --check
+passed
+```
+
+These corrections supersede the two overbroad claims while preserving the
+historical packet evidence. They record fixes and do not claim phase completion.
