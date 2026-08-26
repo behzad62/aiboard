@@ -74,7 +74,15 @@ test("scheduler bounds concurrency, respects dependencies, and releases guidance
     assert.equal(scheduler.activeCount(), 1);
     assert.equal(scheduler.projection().guidance.guidance_b.status, "open");
 
-    driver.resolve("a", { type: "submitted", changeSetId: "changeset_a" });
+    driver.resolve("a", {
+      type: "submitted",
+      changeSetId: "changeset_a",
+      criterionEvidenceLinks: [{
+        criterionId: "ready",
+        evidenceId: "evidence_a",
+        artifactHashes: ["a".repeat(64)],
+      }],
+    });
     await waitFor(() => scheduler.projection().tasks.a.status === "submitted");
     transitionToIntegrated(store, "run_1", "a");
     await scheduler.tick();
@@ -165,6 +173,11 @@ function task(id: string, dependencies: string[] = []): BuildTask {
     id,
     objective: `Objective ${id}`,
     dependencies,
+    acceptanceCriteria: [{
+      id: "ready",
+      text: `Task ${id} is complete.`,
+    }],
+    acceptanceCriteriaVersion: 1,
     status: "planned",
     requiredCapabilities: [],
     attempt: 0,

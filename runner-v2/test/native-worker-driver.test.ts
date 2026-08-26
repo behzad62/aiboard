@@ -189,6 +189,11 @@ test("native worker fails over with the same session, context, tools, and eviden
       toolTurn("submit", "submit_task", {
         summary: "Change value to two",
         readiness: "ready_for_architect_review",
+        criterionEvidenceLinks: [{
+          criterionId: "value",
+          evidenceId: expectedEvidenceId("run_1", "task_a", "worker:run_1:task_a:1", "evidence"),
+          artifactHashes: [emptyArtifactHash()],
+        }],
       }),
     ]);
     const candidates: AgentRuntimeCandidate[] = [
@@ -447,7 +452,19 @@ function seedRunningTask(store: SqliteSchedulerStore): void {
   store.append({
     runId: "run_1", type: "plan.created", occurredAt: "2026-07-12T00:00:00.000Z",
     actor: { role: "architect", id: "architect_1" }, idempotencyKey: "plan:1",
-    payload: { revision: 1, tasks: [{ id: "task_a", objective: "Change the value and create testing evidence", dependencies: [], status: "planned", requiredCapabilities: ["code"], attempt: 0 }] },
+    payload: { revision: 1, tasks: [{
+      id: "task_a",
+      objective: "Change the value and create testing evidence",
+      dependencies: [],
+      acceptanceCriteria: [{
+        id: "value",
+        text: "The value is changed to two and testing evidence is recorded.",
+      }],
+      acceptanceCriteriaVersion: 1,
+      status: "planned",
+      requiredCapabilities: ["code"],
+      attempt: 0,
+    }] },
   });
   store.append({
     runId: "run_1", type: "task.transitioned", occurredAt: "2026-07-12T00:00:00.000Z",
@@ -470,4 +487,19 @@ function rebuildTask(store: SqliteSchedulerStore) {
 
 function toolTurn(callId: string, name: string, args: unknown): ModelTurn {
   return { blocks: [{ type: "tool_call", callId, name, arguments: args }], stopReason: "tool_calls" };
+}
+
+function expectedEvidenceId(
+  runId: string,
+  taskId: string,
+  sessionId: string,
+  callId: string
+): string {
+  return `evidence_${createHash("sha256")
+    .update(`${runId}\0${taskId}\0evidence:${sessionId}:${callId}`)
+    .digest("hex")}`;
+}
+
+function emptyArtifactHash(): string {
+  return createHash("sha256").update(Buffer.alloc(0)).digest("hex");
 }
