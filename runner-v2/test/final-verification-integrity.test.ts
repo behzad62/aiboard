@@ -7,7 +7,12 @@ import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { BuildRuntime } from "../src/build-runtime.js";
-import type { FinalVerificationCommandFact } from "../src/final-verification-runtime.js";
+import type {
+  FinalVerificationBrowserEventsFact,
+  FinalVerificationBrowserScreenshotFact,
+  FinalVerificationBrowserSnapshotFact,
+  FinalVerificationCommandFact,
+} from "../src/final-verification-runtime.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
@@ -98,6 +103,113 @@ test("scheduler rejects a self-consistent nonzero-but-green chain", async () => 
       () => fixture.store.append(checkEvent(fact, record.id)),
       /non-green process semantics|exit/i,
     );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("scheduler append recomputes browser policy from captured events", async () => {
+  const fixture = await createFixture({ requiredCategory: "browser" });
+  try {
+    const facts = await browserFacts(fixture.artifacts, {
+      consoleEventCount: 1,
+      consoleErrorCount: 1,
+      consoleErrors: [{
+        type: "error",
+        text: "forged append console failure",
+        source: "console",
+        occurredAt: "2026-08-26T00:00:03.500Z",
+      }],
+      policyViolations: [],
+    });
+    const evidenceIds = facts.map((fact, index) => fixture.evidence.record({
+      runId: RUN_ID,
+      taskId: TASK_ID,
+      actor: { role: "architect", id: "forged-browser" },
+      fact,
+      createdAt: "2026-08-26T00:00:04.000Z",
+      idempotencyKey: `${GENERATION_ID}:1:browser:${index}`,
+      attempt: 1,
+    }).id);
+    assert.throws(
+      () => fixture.store.append(browserCheckEvent(facts, evidenceIds)),
+      /policy violation|console error/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("scheduler replay recomputes browser policy after durable event tampering", async () => {
+  const fixture = await createFixture({ requiredCategory: "browser" });
+  try {
+    const facts = await browserFacts(fixture.artifacts);
+    const records = facts.map((fact, index) => fixture.evidence.record({
+      runId: RUN_ID,
+      taskId: TASK_ID,
+      actor: { role: "architect", id: "browser" },
+      fact,
+      createdAt: "2026-08-26T00:00:04.000Z",
+      idempotencyKey: `${GENERATION_ID}:1:browser:${index}`,
+      attempt: 1,
+    }));
+    fixture.store.append(browserCheckEvent(facts, records.map((record) => record.id)));
+    fixture.closeStore();
+    fixture.closeEvidence();
+
+    const consoleFailure = {
+      type: "error", text: "forged replay console failure", source: "console",
+      occurredAt: "2026-08-26T00:00:03.500Z",
+    };
+    const raw = new DatabaseSync(fixture.database);
+    const schedulerRow = raw.prepare(
+      "SELECT payload_json FROM scheduler_events WHERE event_type = 'final_verification.check_completed'",
+    ).get() as { payload_json: string };
+    const schedulerPayload = JSON.parse(schedulerRow.payload_json) as {
+      result: { facts: Array<Record<string, unknown>> };
+    };
+    Object.assign(schedulerPayload.result.facts[2]!, {
+      consoleEventCount: 1,
+      consoleErrorCount: 1,
+      consoleErrors: [consoleFailure],
+      policyViolations: [],
+    });
+    raw.prepare(
+      "UPDATE scheduler_events SET payload_json = ? WHERE event_type = 'final_verification.check_completed'",
+    ).run(JSON.stringify(schedulerPayload));
+    raw.close();
+
+    const rawEvidence = new DatabaseSync(join(fixture.root, "evidence.sqlite"));
+    const evidenceRow = rawEvidence.prepare(
+      "SELECT fact_json FROM evidence_records WHERE idempotency_key = ?",
+    ).get(`${GENERATION_ID}:1:browser:2`) as { fact_json: string };
+    const evidenceFact = JSON.parse(evidenceRow.fact_json) as Record<string, unknown>;
+    Object.assign(evidenceFact, {
+      consoleEventCount: 1,
+      consoleErrorCount: 1,
+      consoleErrors: [consoleFailure],
+      policyViolations: [],
+    });
+    rawEvidence.prepare(
+      "UPDATE evidence_records SET fact_json = ? WHERE idempotency_key = ?",
+    ).run(JSON.stringify(evidenceFact), `${GENERATION_ID}:1:browser:2`);
+    rawEvidence.close();
+
+    const restartedEvidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+    const restarted = new SqliteSchedulerStore(fixture.database, {
+      evidenceStore: restartedEvidence,
+      artifacts: fixture.artifacts,
+      validateExecutionProfile: acceptFinalVerificationProfile,
+    });
+    try {
+      assert.throws(
+        () => restarted.readRun(RUN_ID),
+        /policy violation|console error/i,
+      );
+    } finally {
+      restarted.close();
+      restartedEvidence.close();
+    }
   } finally {
     fixture.close();
   }
@@ -288,7 +400,7 @@ test("a forged end-to-end event chain cannot claim cleanup without an authentic 
 
 async function createFixture(options: {
   allNotApplicable?: boolean;
-  requiredCategory?: "build" | "runtime_smoke";
+  requiredCategory?: "build" | "runtime_smoke" | "browser";
   validateCleanupReceipt?: () => void;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 verification integrity "));
@@ -342,6 +454,8 @@ async function createFixture(options: {
         ? emptyFinalVerificationProfile(REVISION)
         : options.requiredCategory === "runtime_smoke"
           ? runtimeExecutionProfile()
+          : options.requiredCategory === "browser"
+            ? browserExecutionProfile()
           : buildExecutionProfile(),
       plan: {
         checks: [
@@ -465,6 +579,73 @@ function runtimeExecutionProfile() {
   };
 }
 
+function browserExecutionProfile() {
+  return {
+    version: 1 as const,
+    targetRevision: REVISION,
+    inspectedPaths: ["package.json"],
+    detectedSignals: [{ category: "browser" as const, source: "fixture", detail: "browser" }],
+    commands: {},
+    browser: {
+      label: "browser",
+      url: "http://127.0.0.1:4173/",
+      policy: { consoleErrors: "fail" as const, pageErrors: "fail" as const, failedNetworkEvents: "fail" as const },
+    },
+  };
+}
+
+async function browserFacts(
+  artifacts: ArtifactStore,
+  eventOverrides: Partial<FinalVerificationBrowserEventsFact> = {},
+): Promise<[FinalVerificationBrowserSnapshotFact, FinalVerificationBrowserScreenshotFact, FinalVerificationBrowserEventsFact]> {
+  const html = await artifacts.put(Buffer.from("<main>ok</main>"), "text/html", "browser html");
+  const screenshot = await artifacts.put(Buffer.from("png"), "image/png", "browser screenshot");
+  const events = await artifacts.put(Buffer.from("{}"), "application/json", "browser events");
+  const state = { revision: REVISION, status: "" };
+  const common = {
+    category: "browser" as const,
+    label: "browser",
+    capturedAt: "2026-08-26T00:00:04.000Z",
+    sessionId: "browser-session",
+    url: "http://127.0.0.1:4173/home",
+    requestedUrl: "http://127.0.0.1:4173/",
+    startedAt: "2026-08-26T00:00:03.000Z",
+    finishedAt: "2026-08-26T00:00:04.000Z",
+    targetRevision: REVISION,
+    startState: state,
+    endState: state,
+  };
+  return [{
+    ...common,
+    kind: "browser_snapshot",
+    title: "fixture",
+    htmlArtifactHash: html.hash,
+    htmlBytes: 15,
+    truncated: false,
+  }, {
+    ...common,
+    kind: "browser_screenshot",
+    screenshotArtifactHash: screenshot.hash,
+    mediaType: "image/png",
+    byteLength: 3,
+  }, {
+    ...common,
+    kind: "browser_events",
+    eventsArtifactHash: events.hash,
+    consoleEventCount: 0,
+    consoleErrorCount: 0,
+    networkEventCount: 0,
+    networkFailureCount: 0,
+    consoleErrors: [],
+    pageErrors: [],
+    failedNetworkEvents: [],
+    policyViolations: [],
+    timedOut: false,
+    cancelled: false,
+    ...eventOverrides,
+  }];
+}
+
 function checkEvent(fact: FinalVerificationCommandFact, evidenceId: string) {
   return {
     runId: RUN_ID,
@@ -486,6 +667,36 @@ function checkEvent(fact: FinalVerificationCommandFact, evidenceId: string) {
         green: true,
         evidenceIds: [evidenceId],
         facts: [fact],
+        issues: [],
+      },
+    },
+  };
+}
+
+function browserCheckEvent(
+  facts: readonly [FinalVerificationBrowserSnapshotFact, FinalVerificationBrowserScreenshotFact, FinalVerificationBrowserEventsFact],
+  evidenceIds: string[],
+) {
+  return {
+    runId: RUN_ID,
+    type: "final_verification.check_completed" as const,
+    occurredAt: "2026-08-26T00:00:04.000Z",
+    actor: { role: "runner" as const, id: "runtime" },
+    idempotencyKey: `${GENERATION_ID}:check:browser`,
+    payload: {
+      taskId: TASK_ID,
+      generationId: GENERATION_ID,
+      targetRevision: REVISION,
+      attempt: 1,
+      workspacePath: "C:/verification",
+      startedAt: "2026-08-26T00:00:03.000Z",
+      finishedAt: "2026-08-26T00:00:04.000Z",
+      result: {
+        category: "browser" as const,
+        status: "required" as const,
+        green: true,
+        evidenceIds,
+        facts,
         issues: [],
       },
     },

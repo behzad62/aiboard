@@ -210,6 +210,32 @@ test("submission rejects non-green required results and missing browser/runtime 
   }
 });
 
+test("submission recomputes browser policy instead of trusting a forged empty violation summary", async () => {
+  const fixture = await createFixture({
+    browserEvents: {
+      consoleEventCount: 1,
+      consoleErrorCount: 1,
+      consoleErrors: [{
+        type: "error",
+        text: "submission console failure",
+        source: "console",
+        occurredAt: "2026-08-26T00:00:00.500Z",
+      }],
+      policyViolations: [],
+    },
+    browserPolicy: { consoleErrors: "fail" },
+  });
+  try {
+    await assert.rejects(
+      () => submit_final_verification({ plan: fixture.plan, run: fixture.run }, options(fixture)),
+      /policy violation|console error/i,
+    );
+  } finally {
+    fixture.evidence.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("submission preserves validated not-applicable rationale and inspection", async () => {
   const fixture = await createFixture();
   try {
@@ -261,7 +287,10 @@ interface Fixture {
   foreignEvidenceId: string;
 }
 
-async function createFixture(): Promise<Fixture> {
+async function createFixture(options: {
+  browserEvents?: Partial<FinalVerificationBrowserEventsFact>;
+  browserPolicy?: { consoleErrors?: "fail" | "allow" };
+} = {}): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification submission "));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
@@ -369,6 +398,7 @@ async function createFixture(): Promise<Fixture> {
     policyViolations: [],
     timedOut: false,
     cancelled: false,
+    ...options.browserEvents,
   };
   const facts: Array<{ category: "build" | "tests" | "runtime_smoke" | "browser"; fact: EvidenceFact; index: number }> = [
     { category: "build", fact: commandFact("build", "build"), index: 0 },
@@ -438,7 +468,7 @@ async function createFixture(): Promise<Fixture> {
           endpoint: "http://127.0.0.1:4173/health",
           readiness: { expectedStatus: 200 },
         },
-        browser: { label: "browser acceptance", url: snapshot.requestedUrl, policy: {} },
+        browser: { label: "browser acceptance", url: snapshot.requestedUrl, policy: options.browserPolicy ?? {} },
       },
       targetRevision: TARGET_REVISION,
       workspacePath,

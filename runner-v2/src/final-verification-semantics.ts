@@ -4,6 +4,8 @@ import type {
   FinalVerificationCommand,
   FinalVerificationFact,
 } from "./final-verification-runtime.js";
+import type { BrowserConsoleEvent, BrowserNetworkEvent } from "./browser-tools.js";
+import { evaluateFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 
 export interface FinalVerificationCheckSemanticsInput {
   check: unknown;
@@ -89,6 +91,30 @@ export function assertFinalVerificationCheckSemantics(
     }
     assertWorkspaceState(value, input.targetRevision, input.workspacePath, false);
   }
+  if (facts[2] !== undefined) {
+    const events = facts[2] as Record<string, unknown>;
+    const evaluation = evaluateFinalVerificationBrowserPolicy({
+      consoleErrors: events.consoleErrors as BrowserConsoleEvent[],
+      pageErrors: events.pageErrors as BrowserConsoleEvent[],
+      failedNetworkEvents: events.failedNetworkEvents as BrowserNetworkEvent[],
+    }, specification.policy);
+    if (!Array.isArray(events.policyViolations) ||
+      events.policyViolations.some((violation) => typeof violation !== "string") ||
+      !sameStrings(events.policyViolations as string[], evaluation.policyViolations)) {
+      throw new Error("Final verification browser policy violations conflict with captured events and policy.");
+    }
+    if (events.consoleErrorCount !== evaluation.consoleErrors.length ||
+      !nonNegativeInteger(events.consoleEventCount) ||
+      (events.consoleEventCount as number) < evaluation.consoleErrors.length + evaluation.pageErrors.length ||
+      events.networkFailureCount !== evaluation.failedNetworkEvents.length ||
+      !nonNegativeInteger(events.networkEventCount) ||
+      (events.networkEventCount as number) < evaluation.failedNetworkEvents.length) {
+      throw new Error("Final verification browser event counts conflict with captured failures.");
+    }
+    if (check.green === true && evaluation.policyViolations.length > 0) {
+      throw new Error("Green browser verification contains recomputed policy violations.");
+    }
+  }
   if (check.green) {
     const snapshot = facts[0] as Record<string, unknown>;
     const screenshot = facts[1] as Record<string, unknown>;
@@ -99,13 +125,8 @@ export function assertFinalVerificationCheckSemantics(
     if (screenshot.mediaType !== "image/png" || !positiveInteger(screenshot.byteLength)) {
       throw new Error("Green browser screenshot is missing or invalid.");
     }
-    if (events.timedOut !== false || events.cancelled !== false ||
-      !Array.isArray(events.policyViolations) || events.policyViolations.length > 0) {
+    if (events.timedOut !== false || events.cancelled !== false) {
       throw new Error("Green browser events contain timeout, cancellation, or policy violations.");
-    }
-    if (!Array.isArray(events.consoleErrors) || events.consoleErrors.length !== events.consoleErrorCount ||
-      !Array.isArray(events.failedNetworkEvents) || events.failedNetworkEvents.length !== events.networkFailureCount) {
-      throw new Error("Green browser event counts do not match captured failures.");
     }
     if (snapshot.sessionId !== screenshot.sessionId || snapshot.sessionId !== events.sessionId ||
       snapshot.url !== screenshot.url || snapshot.url !== events.url) {

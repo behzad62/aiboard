@@ -34,6 +34,17 @@ import {
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
 import type { FinalVerificationPortLease } from "./final-verification-port-authority.js";
+import {
+  captureFinalVerificationBrowserFailures,
+  evaluateFinalVerificationBrowserPolicy,
+  type FinalVerificationBrowserPolicy,
+  type FinalVerificationBrowserPolicyEvaluation,
+} from "./final-verification-browser-policy.js";
+
+export type {
+  FinalVerificationBrowserFailurePolicy,
+  FinalVerificationBrowserPolicy,
+} from "./final-verification-browser-policy.js";
 
 export type { FinalVerificationPlan } from "./final-verification-contracts.js";
 
@@ -91,17 +102,6 @@ export interface FinalVerificationRuntimeSmokeInput {
   timeoutMs?: number;
   readiness: FinalVerificationReadiness;
   releasePort?: (endpoint?: string) => void | Promise<void>;
-}
-
-export type FinalVerificationBrowserFailurePolicy = "fail" | "allow";
-
-export interface FinalVerificationBrowserPolicy {
-  consoleErrors?: FinalVerificationBrowserFailurePolicy;
-  pageErrors?: FinalVerificationBrowserFailurePolicy;
-  failedNetworkEvents?: FinalVerificationBrowserFailurePolicy;
-  allowedConsoleErrorPatterns?: readonly string[];
-  allowedPageErrorPatterns?: readonly string[];
-  allowedNetworkFailurePatterns?: readonly string[];
 }
 
 export interface FinalVerificationBrowserInput {
@@ -936,6 +936,7 @@ export class FinalVerificationRuntime {
     let screenshotArtifact: { hash: string } | undefined;
     let eventsArtifact: { hash: string } | undefined;
     let policyViolations: string[] = [];
+    let policyEvaluation: FinalVerificationBrowserPolicyEvaluation | undefined;
 
     const operation = async <T>(
       label: string,
@@ -1036,9 +1037,19 @@ export class FinalVerificationRuntime {
             console: events.console.map((event) => ({ ...event })),
             network: events.network.map((event) => ({ ...event })),
           };
-          policyViolations = browserPolicyViolations(events, browserInput.policy);
-          for (const violation of policyViolations) {
-            input.base.issues.push(`browser ${browserInput.label} policy violation: ${violation}`);
+          try {
+            policyEvaluation = evaluateFinalVerificationBrowserPolicy(
+              captureFinalVerificationBrowserFailures(events),
+              browserInput.policy,
+            );
+            policyViolations = policyEvaluation.policyViolations;
+            for (const violation of policyViolations) {
+              input.base.issues.push(`browser ${browserInput.label} policy violation: ${violation}`);
+            }
+          } catch (error) {
+            input.base.issues.push(
+              `browser ${browserInput.label} events are invalid: ${asError(error).message}`,
+            );
           }
           try {
             eventsArtifact = await this.artifacts.put(
@@ -1132,10 +1143,7 @@ export class FinalVerificationRuntime {
         endState,
       });
     }
-    if (events && eventsArtifact) {
-      const consoleErrors = events.console.filter(isConsoleError);
-      const pageErrors = events.console.filter(isPageError);
-      const failedNetworkEvents = events.network.filter(isFailedNetworkEvent);
+    if (events && eventsArtifact && policyEvaluation) {
       facts.push({
         kind: "browser_events",
         category: "browser",
@@ -1143,9 +1151,9 @@ export class FinalVerificationRuntime {
         capturedAt: finishedAt,
         eventsArtifactHash: eventsArtifact.hash,
         consoleEventCount: events.console.length,
-        consoleErrorCount: consoleErrors.length,
+        consoleErrorCount: policyEvaluation.consoleErrors.length,
         networkEventCount: events.network.length,
-        networkFailureCount: failedNetworkEvents.length,
+        networkFailureCount: policyEvaluation.failedNetworkEvents.length,
         sessionId,
         url: observedUrl,
         requestedUrl: browserInput.url,
@@ -1154,9 +1162,9 @@ export class FinalVerificationRuntime {
         targetRevision: input.workspace.targetRevision,
         startState,
         endState,
-        consoleErrors,
-        pageErrors,
-        failedNetworkEvents,
+        consoleErrors: policyEvaluation.consoleErrors,
+        pageErrors: policyEvaluation.pageErrors,
+        failedNetworkEvents: policyEvaluation.failedNetworkEvents,
         policyViolations: [...policyViolations],
         timedOut,
         cancelled,
@@ -1664,61 +1672,6 @@ async function endpointIsHealthy(endpoint: string | undefined, expectedStatus = 
   } catch {
     return false;
   }
-}
-
-function isConsoleError(event: BrowserConsoleEvent): boolean {
-  const source = browserConsoleSource(event);
-  return source !== "pageerror" && event.type === "error";
-}
-
-function isPageError(event: BrowserConsoleEvent): boolean {
-  return browserConsoleSource(event) === "pageerror" || event.type === "pageerror";
-}
-
-function isFailedNetworkEvent(event: BrowserNetworkEvent): boolean {
-  return Boolean(event.failure) || (event.status !== undefined && event.status >= 400);
-}
-
-function browserConsoleSource(event: BrowserConsoleEvent): "console" | "pageerror" | undefined {
-  const source = (event as BrowserConsoleEvent & { source?: unknown }).source;
-  return source === "console" || source === "pageerror" ? source : undefined;
-}
-
-function browserPolicyViolations(
-  events: { console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] },
-  policy: FinalVerificationBrowserPolicy,
-): string[] {
-  const violations: string[] = [];
-  const consoleErrors = events.console.filter(isConsoleError);
-  const pageErrors = events.console.filter(isPageError);
-  const failedNetworkEvents = events.network.filter(isFailedNetworkEvent);
-  if ((policy.consoleErrors ?? "fail") === "fail") {
-    for (const event of consoleErrors) {
-      if (!matchesBrowserPattern(event.text, policy.allowedConsoleErrorPatterns)) {
-        violations.push(`unallowed console error: ${event.text}`);
-      }
-    }
-  }
-  if ((policy.pageErrors ?? "fail") === "fail") {
-    for (const event of pageErrors) {
-      if (!matchesBrowserPattern(event.text, policy.allowedPageErrorPatterns)) {
-        violations.push(`unallowed page error: ${event.text}`);
-      }
-    }
-  }
-  if ((policy.failedNetworkEvents ?? "fail") === "fail") {
-    for (const event of failedNetworkEvents) {
-      const description = `${event.method} ${event.url} ${event.status ?? ""} ${event.failure ?? ""}`.trim();
-      if (!matchesBrowserPattern(description, policy.allowedNetworkFailurePatterns)) {
-        violations.push(`unallowed network failure: ${description}`);
-      }
-    }
-  }
-  return violations;
-}
-
-function matchesBrowserPattern(value: string, patterns: readonly string[] | undefined): boolean {
-  return patterns?.some((pattern) => value.includes(pattern)) ?? false;
 }
 
 function validateBrowserInput(
