@@ -12,11 +12,11 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current reviewed implementation head before this report update: `c2bb5f8b`
-- Current reviewed bundle revision: `98d7340c`
+- Current reviewed implementation head before this report update: `1c878c0b`
+- Current reviewed bundle revision: `273e84bb`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
   review-repair commits through fail-closed browser-policy profile validation
-  and structured JSON diagnostic redaction.
+  and the key-directed container-valued structured-text redaction correction.
 - Historical-note convention: statements in the packet-era sections below that
   say a later packet was "locked," "deferred," or "remained with the
   controller" describe that packet's boundary at the time. They are not the
@@ -1971,3 +1971,93 @@ and passed 8/8. Commit `98d7340c` records the deterministic reviewed bundles.
 Node policy remains maintained LTS lines 22/24 with the capability floor and no
 exact Node patch pin. This section corrects prior claims and records evidence;
 it does not declare the P2 phase outcome.
+
+## P2 structured-text redaction re-review correction
+
+### Correction: embedded container-valued properties and late keys could bypass redaction
+
+The `82e24f58` section correctly reports protection for complete JSON text and
+scalar-valued quoted properties, but its structured-text coverage claim was
+still too broad. The quoted-property matcher accepted only string, boolean,
+null, and numeric values. Therefore an otherwise recognizable sensitive key
+whose value was an embedded object or array remained visible. Separately, the
+generic JSON-container discovery pass stopped after 64 candidate opening
+braces, so unrelated malformed prefix text could exhaust discovery before a
+later sensitive property.
+
+Commit `1c878c0b` replaces scalar-only property matching with a key-directed,
+escape-aware JSON-value scanner. It scans quoted keys across the full
+diagnostic string, classifies them through the shared `isSensitiveKey`, and
+replaces the complete following string, scalar, object, or array value. A
+balanced container is consumed as one value, preserving valid surrounding JSON
+and ordinary diagnostic text; an unclosed or otherwise indeterminate value is
+handled fail-closed. Because discovery starts from the recognized sensitive
+key, unrelated malformed braces cannot consume a global security-attempt
+budget. Existing structural recursion/item/text limits, maximum output length,
+URL/bearer/assignment handling, false-positive controls, and idempotence remain
+in force. The 64-attempt limit remains only an optimization for generic
+parseable-container normalization and is no longer authoritative for finding
+sensitive properties.
+
+The regressions cover an embedded sensitive object with nested and escaped
+content, an embedded sensitive array containing nested containers, and a later
+sensitive object after 65 malformed opening braces. The same cases flow through
+new diagnostics persistence, the bounded observability loader, and the exact
+legacy receipt-first recovery sequence after workspace deletion.
+
+RED, mutation, restore, and current gate evidence:
+
+```text
+pre-fix focused redaction/cleanup/observability gate
+20 tests, 14 passed, 6 failed
+- embedded sensitive object value leaked
+- embedded sensitive array value leaked
+- later sensitive value after 65 malformed braces leaked
+- new diagnostics archive, observability loader, and legacy receipt-first
+  restart repair leaked the corresponding values
+
+fault mutation bypassing the key-directed quoted-property pass
+3 tests, 0 passed, 3 failed
+
+restored direct guards
+3 tests, 3 passed, 0 failed
+
+restored focused redaction/cleanup/observability gate
+20 tests, 20 passed, 0 failed
+
+Node.js 22.13.0 scoped direct, diagnostics, observability, and recovery guards
+6 tests, 6 passed, 0 failed
+
+combined final-verification plus redaction gate
+123 tests, 123 passed, 0 failed
+
+npm run test:runner-v2
+528 tests, 528 passed, 0 failed
+all 11 chained client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed; exit 0
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+
+targeted ESLint, full lint, git diff --check, and fix-only diff inspection
+passed
+```
+
+Commit `273e84bb` records the deterministic Runner V2 and WorkBench bundles
+generated from `1c878c0b`. Node policy remains maintained LTS lines 22/24 with
+the capability floor and no exact Node patch pin. This correction records
+current implementation evidence and does not declare the P2 phase outcome.
