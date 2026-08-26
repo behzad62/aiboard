@@ -120,6 +120,50 @@ test("runs build and test commands in the pinned workspace and records immutable
   }
 });
 
+test("executes one scheduler-selected category with the durable generation identity", async () => {
+  const fixture = await createFixture("single-category");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    integrationManager: fixture.integration,
+  });
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    taskId: "final-verification-task",
+    generationId: "durable-generation",
+    attempt: 1,
+    currentIntegrationRevision: () => fixture.integration.revision,
+  });
+  try {
+    const category = await runtime.runCategory({
+      plan: buildTestPlan(),
+      commands: {
+        tests: [{
+          label: "selected test command",
+          executable: process.execPath,
+          args: ["-e", "process.stdout.write('selected tests passed')"],
+        }],
+      },
+    }, "tests");
+    assert.equal(category.generationId, "durable-generation");
+    assert.equal(category.check.category, "tests");
+    assert.equal(category.check.green, true);
+    assert.equal(evidence.list({ runId: fixture.runId }).length, 1);
+    assert.match(evidence.list({ runId: fixture.runId })[0]!.idempotencyKey,
+      /^durable-generation:1:tests:0$/);
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
 test("nonzero, timeout, and cancellation outcomes are mechanically non-green", async () => {
   const fixture = await createFixture("failures");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));

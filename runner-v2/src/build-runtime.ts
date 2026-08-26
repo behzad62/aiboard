@@ -13,6 +13,15 @@ import type {
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type {
+  FinalVerificationCategory,
+  FinalVerificationPlan,
+} from "./final-verification-contracts.js";
+import type {
+  FinalVerificationCheckResult,
+  FinalVerificationRun,
+} from "./final-verification-runtime.js";
+import { submitFinalVerification } from "./final-verification-submission.js";
 import {
   TaskScheduler,
   type TaskSchedulerOptions,
@@ -68,6 +77,28 @@ export interface IntegrationRuntimeDriver {
   }): Promise<IntegrationRuntimeResult>;
 }
 
+export interface FinalVerificationCheckDriverInput {
+  runId: string;
+  taskId: string;
+  generationId: string;
+  targetRevision: string;
+  attempt: number;
+  plan: FinalVerificationPlan;
+  category: FinalVerificationCategory;
+  signal?: AbortSignal;
+}
+
+export interface FinalVerificationCheckExecution {
+  workspacePath: string;
+  startedAt: string;
+  finishedAt: string;
+  check: FinalVerificationCheckResult;
+}
+
+export interface FinalVerificationCheckDriver {
+  executeCheck(input: FinalVerificationCheckDriverInput): Promise<FinalVerificationCheckExecution>;
+}
+
 export interface BuildRuntimeOptions {
   runId: string;
   runPolicy?: NativeBuildRunPolicy;
@@ -83,6 +114,7 @@ export interface BuildRuntimeOptions {
   renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
   providerRetryDeadlineMs?: () => number | undefined;
   evidenceStore?: EvidenceStore;
+  finalVerificationDriver?: FinalVerificationCheckDriver;
 }
 
 export interface BuildStepResult {
@@ -104,6 +136,7 @@ export class BuildRuntime {
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
   private readonly evidenceStore?: EvidenceStore;
+  private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -120,6 +153,7 @@ export class BuildRuntime {
     this.renewBudgetWindow = options.renewBudgetWindow;
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.evidenceStore = options.evidenceStore;
+    this.finalVerificationDriver = options.finalVerificationDriver;
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -456,6 +490,10 @@ export class BuildRuntime {
     }
 
     projection = this.projection();
+    const finalVerification = projection.finalVerification?.current;
+    if (finalVerification) {
+      return await this.advanceFinalVerification(finalVerification);
+    }
     const tasks = Object.values(projection.tasks);
     const implementationTasks = tasks.filter(
       (task) => task.kind !== "final_verification"
@@ -503,6 +541,132 @@ export class BuildRuntime {
       return { status: "progressed", action: "workers_advanced" };
     }
     return { status: "idle", action: "no_mechanical_progress" };
+  }
+
+  private async advanceFinalVerification(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): Promise<BuildStepResult> {
+    if (generation.submission) {
+      return { status: "idle", action: "final_verification_awaiting_review" };
+    }
+    if (generation.completedChecks?.some((check) => !check.green)) {
+      return { status: "idle", action: "final_verification_non_green" };
+    }
+    const pending = generation.plan.checks.find(
+      (planned) => !generation.completedChecks?.some(
+        (completed) => completed.category === planned.category,
+      ),
+    );
+    if (pending) {
+      if (!this.finalVerificationDriver) {
+        throw new Error("Final verification execution requires a FinalVerificationCheckDriver.");
+      }
+      let result: FinalVerificationCheckExecution;
+      try {
+        result = await this.finalVerificationDriver.executeCheck({
+          runId: this.runId,
+          taskId: generation.taskId,
+          generationId: generation.generationId,
+          targetRevision: generation.targetRevision,
+          attempt: 1,
+          plan: generation.plan,
+          category: pending.category,
+          signal: this.activeLifecycleSignal(),
+        });
+      } catch (error) {
+        if (!this.isCurrentGeneration(generation)) {
+          return { status: "progressed", action: "final_verification_invalidated" };
+        }
+        throw error;
+      }
+      if (!this.isCurrentGeneration(generation)) {
+        return { status: "progressed", action: "final_verification_invalidated" };
+      }
+      if (result.check.category !== pending.category) {
+        throw new Error(
+          `Final verification driver returned ${result.check.category} for ${pending.category}.`,
+        );
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.check_completed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:check:${pending.category}`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt: 1,
+          workspacePath: result.workspacePath,
+          startedAt: result.startedAt,
+          finishedAt: result.finishedAt,
+          result: result.check,
+        },
+      });
+      const status = this.projection().status === "paused" ? "paused" : "progressed";
+      return {
+        status,
+        action: result.check.green
+          ? "final_verification_check_completed"
+          : "final_verification_check_non_green",
+      };
+    }
+    if (!this.evidenceStore) {
+      throw new Error("Final verification submission requires an EvidenceStore.");
+    }
+    const completed = generation.completedChecks ?? [];
+    const run: FinalVerificationRun = {
+      generationId: generation.generationId,
+      runId: this.runId,
+      taskId: generation.taskId,
+      attempt: 1,
+      plan: generation.plan,
+      targetRevision: generation.targetRevision,
+      workspacePath: completed[0]!.workspacePath,
+      startedAt: completed[0]!.startedAt,
+      finishedAt: completed.at(-1)!.finishedAt,
+      checks: completed.map(({ attempt: _attempt, workspacePath: _workspacePath,
+        startedAt: _startedAt, finishedAt: _finishedAt, ...check }) => check),
+      green: true,
+    };
+    const submission = await submitFinalVerification(
+      { plan: generation.plan, run },
+      {
+        evidenceStore: this.evidenceStore,
+        currentIntegrationRevision: () => this.projection().integrationRevision ?? "",
+        clock: this.clock,
+      },
+    );
+    if (!this.isCurrentGeneration(generation)) {
+      return { status: "progressed", action: "final_verification_invalidated" };
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "final_verification.submitted",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `${generation.generationId}:submission`,
+      payload: {
+        generationId: generation.generationId,
+        taskId: generation.taskId,
+        targetRevision: generation.targetRevision,
+        submissionId: `final-verification-submission:${generation.generationId}`,
+        attempt: 1,
+        submissionResult: submission,
+      },
+    });
+    return { status: "progressed", action: "final_verification_submitted" };
+  }
+
+  private isCurrentGeneration(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): boolean {
+    const projection = this.projection();
+    const current = projection.finalVerification?.current;
+    return projection.integrationRevision === generation.targetRevision &&
+      current?.generationId === generation.generationId &&
+      current.targetRevision === generation.targetRevision;
   }
 
   private ensureInitialized(): void {

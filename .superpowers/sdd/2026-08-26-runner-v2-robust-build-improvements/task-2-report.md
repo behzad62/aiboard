@@ -651,3 +651,113 @@ script. No P2.3 code or test was changed.
 P2.4B1a implementation/test/report commit is recorded in the execution metadata
 after the final clean-state verification. Final-verification execution/review,
 repair routing, P2.5, and P2.6 remain intentionally deferred.
+
+## P2.4B2a kernel execution and durable resume
+
+Added the kernel-owned execution path for a current P2.4A generation. The
+Build runtime now selects the first uncompleted category from the exact P2.1
+plan, invokes a dedicated `FinalVerificationCheckDriver`, and checkpoints the
+mechanical result before another category may start. Native construction wires
+that driver to `FinalVerificationRuntime.runCategory` with the scheduler's
+generation identity, final-verification task, attempt, canonical integration
+revision, durable evidence store, managed-process service, browser backend, and
+owned verification workspace. The final task never enters a worker runtime.
+
+Each durable check event binds generation, task, revision, attempt, workspace,
+timestamps, planned category metadata, facts, evidence IDs, and issues. Replay
+rejects conflicts while exact event idempotency and category projection prevent
+duplicate work. A reopened scheduler and fresh Build runtime reuse completed
+facts and execute only pending categories. A factual non-green result (including
+runtime timeout/cancellation facts) is retained and stops the generation.
+
+After all four categories are durably green, Build runtime reconstructs the
+exact P2.3 run, calls `submitFinalVerification`, and appends one validated
+submission result/reference. Further pumps expose an awaiting-review state and
+cannot duplicate checks or submission. The completed-check and submission
+projection is automatically available in Architect context through the existing
+final-verification projection. No Architect review, repair-task routing,
+`complete_run` gate, or cleanup-policy work was added.
+
+Revision currency is checked by the verification workspace/runtime, after each
+driver call, inside P2.3 submission validation, and immediately before durable
+submission append. Integration advancement invalidates the current generation;
+the Build runtime discards the returned stale result and appends neither a check
+nor a submission.
+
+### P2.4B2a TDD and fault evidence
+
+The focused execution suite was added first and failed 0/3 at HEAD `59207ac4`:
+
+```text
+npx tsx --test runner-v2/test/final-verification-execution.test.ts
+3 tests, 0 passed, 3 failed
+actual: { status: "idle", action: "no_mechanical_progress" }
+expected actions: final_verification_check_completed,
+final_verification_check_non_green, final_verification_invalidated
+```
+
+After the minimal runtime/store/factory implementation the suite passed 3/3.
+Two independent fault-only injections were then made and restored:
+
+- Replacing pending-category selection with the first planned category made the
+  restart test fail 0/1: calls were `[build, build, build, build]` instead of
+  `[build, tests, runtime_smoke, browser]`. This proves durable completed-check
+  reuse/deduplication controls execution after restart.
+- Removing the post-driver current-revision/generation guard made the stale
+  revision test fail 0/1 with `Final verification event does not reference a
+  current generation.` The restored guard stops before stale checkpoint or
+  submission persistence.
+
+The existing P2.4A/B1a worker-exclusion fault proof remains applicable to this
+packet's driver boundary; the execution fixture additionally asserts zero
+worker calls through interruption, restart, all four checks, submission, and a
+repeated pump. The restored focused suite passed 3/3.
+
+### P2.4B2a validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-execution.test.ts
+3/3 passed
+
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts
+5/5 passed (includes scheduler-selected single-category execution)
+
+npx tsx --test runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-runtime.test.ts runner-v2/test/final-verification-submission.test.ts runner-v2/test/final-verification-orchestration.test.ts runner-v2/test/scheduler-store.test.ts
+40/40 passed
+
+npx tsx --test runner-v2/test/build-runtime.test.ts runner-v2/test/build-runtime-b1.test.ts runner-v2/test/native-build-manager.test.ts runner-v2/test/recovery.test.ts runner-v2/test/final-verification-runtime-b1.test.ts runner-v2/test/final-verification-browser.test.ts
+53/53 passed
+
+npm run test:runner-v2
+435/435 Runner tests passed; every chained client, policy, UI, live-state,
+transcript, files, stats, and observability check passed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+npx eslint runner-v2/src/build-runtime.ts runner-v2/src/final-verification-runtime.ts runner-v2/src/native-build-factory.ts runner-v2/src/scheduler-store.ts runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-runtime.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+### P2.4B2a requirement audit
+
+| P2.4B2a requirement | Evidence | Result |
+|---|---|---|
+| Execute current planned generation through FinalVerificationRuntime | Native factory driver plus direct `runCategory` test | Complete |
+| Never route verification through a worker | Dedicated Build-runtime boundary and zero-worker-call execution/restart assertion | Complete |
+| Persist each check before the next starts | One-step-per-check events and interruption/reopen fixture | Complete |
+| Resume only pending categories | SQLite reopen assertion and completed-check fault proof | Complete |
+| Persist non-green facts and stop | Focused non-green test and runtime timeout/cancel affected suites | Complete |
+| Append exactly one validated P2.3 submission | Four-check execution, durable result/reference, repeated-pump assertion | Complete |
+| Prevent duplicate evidence/check/submission | Generation/category idempotency, projection reuse, submission singleton | Complete |
+| Invalidate on integration advancement | During-check revision test and restored stale guard fault proof | Complete |
+| Expose execution/submission to Architect | Existing context includes cloned current generation projection | Complete |
+| Later semantic lifecycle work remains out of scope | No review, repair, completion-gate, or cleanup changes | Complete |
+
+## Packet status
+
+P2.4B2a implementation, tests, and report are complete. Architect review,
+repair-task creation, the completion gate, and P2.6 cleanup remain deferred.

@@ -10,7 +10,11 @@ import type { AgentModel } from "./agent-contracts.js";
 import type { ModelCostBasisSnapshot } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
-import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import {
+  BuildRuntime,
+  type FinalVerificationCheckDriver,
+  type IntegrationRuntimeDriver,
+} from "./build-runtime.js";
 import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
 import type { ModelCostEstimator } from "./budgeted-model.js";
 import type {
@@ -20,6 +24,7 @@ import type {
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
+import { FinalVerificationRuntime } from "./final-verification-runtime.js";
 import { GoogleModel } from "./google-model.js";
 import { ManagedProcessService } from "./managed-process.js";
 import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
@@ -59,6 +64,7 @@ import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { WorkspaceManager } from "./workspace-manager.js";
+import { VerificationWorkspaceManager } from "./verification-workspace.js";
 
 export interface NativeBuildFactoryOptions {
   projectRoot: string;
@@ -163,6 +169,12 @@ export class NativeBuildFactory {
       initializationMode: integrationInitializationModeFromEvents(schedulerEvents),
     });
     await integrationManager.initialize();
+    const verificationWorkspace = new VerificationWorkspaceManager({
+      repositoryRoot: this.options.projectRoot,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+    });
     const initialHealth = providerHealthFromSchedulerEvents(
       schedulerStore.readRun(spec.runId)
     );
@@ -261,6 +273,32 @@ export class NativeBuildFactory {
             };
       },
     };
+    const finalVerificationDriver: FinalVerificationCheckDriver = {
+      executeCheck: async (input) => {
+        const verification = new FinalVerificationRuntime({
+          workspaceManager: verificationWorkspace,
+          artifacts: this.artifacts,
+          evidenceStore,
+          runId: input.runId,
+          taskId: input.taskId,
+          attempt: input.attempt,
+          generationId: input.generationId,
+          currentIntegrationRevision: () => integrationManager.revision,
+          managedProcessService: this.managedProcesses,
+          browserBackend: this.browserBackend,
+        });
+        const result = await verification.runCategory(
+          { plan: input.plan, signal: input.signal },
+          input.category,
+        );
+        return {
+          workspacePath: result.workspacePath,
+          startedAt: result.startedAt,
+          finishedAt: result.finishedAt,
+          check: result.check,
+        };
+      },
+    };
     const runtime = new BuildRuntime({
       runId: spec.runId,
       runPolicy: spec.runPolicy,
@@ -268,6 +306,7 @@ export class NativeBuildFactory {
       workerDriver,
       architectDriver,
       integrationDriver,
+      finalVerificationDriver,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {

@@ -19,6 +19,11 @@ import {
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type {
+  FinalVerificationCheckResult,
+  FinalVerificationFact,
+} from "./final-verification-runtime.js";
+import type { FinalVerificationSubmission } from "./final-verification-submission.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -58,6 +63,7 @@ export type SchedulerEventType =
   | "acceptance_contract.upgraded"
   | "integration.revision_advanced"
   | "final_verification.generation_created"
+  | "final_verification.check_completed"
   | "final_verification.submitted"
   | "final_verification.review_requested"
   | "final_verification.review_decided";
@@ -195,8 +201,18 @@ export interface FinalVerificationGenerationProjection {
   plan: FinalVerificationPlan;
   state: "current" | "invalidated";
   invalidatedByRevision?: string;
+  completedChecks?: FinalVerificationCompletedCheckProjection[];
   submission?: FinalVerificationSubmissionReference;
+  submissionResult?: FinalVerificationSubmission;
   review?: FinalVerificationReviewReference;
+}
+
+export interface FinalVerificationCompletedCheckProjection
+  extends FinalVerificationCheckResult {
+  attempt: number;
+  workspacePath: string;
+  startedAt: string;
+  finishedAt: string;
 }
 
 export interface FinalVerificationProjection {
@@ -651,6 +667,13 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner may create a final verification generation.");
       }
       createFinalVerificationGeneration(next, event.payload);
+      break;
+    }
+    case "final_verification.check_completed": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may complete a final verification check.");
+      }
+      recordFinalVerificationCheck(next, event.payload);
       break;
     }
     case "final_verification.submitted": {
@@ -1403,10 +1426,48 @@ function recordFinalVerificationSubmission(
     throw new Error("Final verification submission conflicts with the current generation.");
   }
   current.submission = { ...submission };
+  if (payload.submissionResult !== undefined) {
+    const submissionResult = parseFinalVerificationSubmissionResult(payload);
+    assertFinalVerificationSubmissionResult(current, submission, submissionResult);
+    current.submissionResult = submissionResult;
+  }
   projection.tasks[current.taskId] = {
     ...projection.tasks[current.taskId],
     verificationSubmissionId: submission.submissionId,
   };
+}
+
+function recordFinalVerificationCheck(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  const completed = parseFinalVerificationCompletedCheck(payload);
+  assertFinalVerificationBinding(current, completed);
+  const planned = current.plan.checks.find(
+    (check) => check.category === completed.category,
+  );
+  if (!planned) {
+    throw new Error(`Final verification category ${completed.category} is not planned.`);
+  }
+  if (!sameValue(projectFinalVerificationCheck(completed), planned)) {
+    throw new Error(
+      `Final verification category ${completed.category} does not match the current plan.`,
+    );
+  }
+  const existing = current.completedChecks?.find(
+    (check) => check.category === completed.category,
+  );
+  if (existing) {
+    if (sameValue(existing, completed)) return;
+    throw new Error(
+      `Final verification category ${completed.category} already has a conflicting result.`,
+    );
+  }
+  current.completedChecks = [
+    ...(current.completedChecks ?? []).map(cloneFinalVerificationCompletedCheck),
+    cloneFinalVerificationCompletedCheck(completed),
+  ];
 }
 
 function recordFinalVerificationReviewRequest(
@@ -1534,6 +1595,106 @@ function parseFinalVerificationSubmission(
   };
 }
 
+function parseFinalVerificationCompletedCheck(
+  payload: Record<string, unknown>,
+): FinalVerificationCompletedCheckProjection & {
+  generationId: string;
+  targetRevision: string;
+} {
+  const result = payload.result;
+  if (!isRecord(result)) {
+    throw new Error("Final verification check requires a result object.");
+  }
+  const category = requiredString(result, "category");
+  if (
+    category !== "build" &&
+    category !== "tests" &&
+    category !== "runtime_smoke" &&
+    category !== "browser"
+  ) {
+    throw new Error(`Final verification check category ${category} is invalid.`);
+  }
+  const status = requiredString(result, "status");
+  if (status !== "required" && status !== "not_applicable") {
+    throw new Error(`Final verification check status ${status} is invalid.`);
+  }
+  if (typeof result.green !== "boolean") {
+    throw new Error(`Final verification check ${category} requires a green fact.`);
+  }
+  const evidenceIds = stringArray(result, "evidenceIds");
+  const issues = stringArray(result, "issues");
+  if (!Array.isArray(result.facts)) {
+    throw new Error(`Final verification check ${category} requires fact records.`);
+  }
+  const rationale = result.rationale;
+  if (rationale !== undefined && (typeof rationale !== "string" || !rationale.trim())) {
+    throw new Error(`Final verification check ${category} has invalid rationale.`);
+  }
+  return {
+    generationId: requiredString(payload, "generationId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    attempt: requiredPositiveNumber(payload, "attempt"),
+    workspacePath: requiredString(payload, "workspacePath"),
+    startedAt: requiredString(payload, "startedAt"),
+    finishedAt: requiredString(payload, "finishedAt"),
+    category,
+    status,
+    green: result.green,
+    ...(typeof rationale === "string" ? { rationale } : {}),
+    ...(isRecord(result.repositoryInspection)
+      ? {
+          repositoryInspection: result.repositoryInspection as unknown as
+            FinalVerificationCompletedCheckProjection["repositoryInspection"],
+        }
+      : {}),
+    evidenceIds,
+    facts: result.facts as FinalVerificationFact[],
+    issues,
+  };
+}
+
+function parseFinalVerificationSubmissionResult(
+  payload: Record<string, unknown>,
+): FinalVerificationSubmission {
+  if (!isRecord(payload.submissionResult)) {
+    throw new Error("Final verification submission requires its validated result.");
+  }
+  return cloneJson(payload.submissionResult) as unknown as FinalVerificationSubmission;
+}
+
+function assertFinalVerificationSubmissionResult(
+  current: FinalVerificationGenerationProjection,
+  reference: FinalVerificationSubmissionReference,
+  result: FinalVerificationSubmission,
+): void {
+  if (
+    result.kind !== "final_verification_submission" ||
+    result.green !== true ||
+    result.generationId !== current.generationId ||
+    result.taskId !== current.taskId ||
+    result.targetRevision !== current.targetRevision ||
+    result.attempt !== reference.attempt ||
+    result.runId === undefined ||
+    !Array.isArray(result.checks) ||
+    result.checks.length !== current.plan.checks.length
+  ) {
+    throw new Error("Final verification submission result is stale or malformed.");
+  }
+  const completed = current.completedChecks ?? [];
+  if (completed.length !== current.plan.checks.length) {
+    throw new Error("Final verification submission requires every completed check.");
+  }
+  for (const check of result.checks) {
+    const durable = completed.find((entry) => entry.category === check.category);
+    if (!durable || !durable.green || durable.issues.length > 0) {
+      throw new Error(`Final verification submission check ${check.category} is not durably green.`);
+    }
+    if (!sameValue(projectFinalVerificationSubmissionCheck(durable), check)) {
+      throw new Error(`Final verification submission check ${check.category} conflicts with durable execution.`);
+    }
+  }
+}
+
 function parseFinalVerificationReview(
   payload: Record<string, unknown>,
   status: FinalVerificationReviewReference["status"],
@@ -1593,11 +1754,56 @@ function cloneFinalVerificationGeneration(
   return {
     ...generation,
     plan: planFinalVerification(generation.plan),
+    ...(generation.completedChecks
+      ? { completedChecks: generation.completedChecks.map(cloneFinalVerificationCompletedCheck) }
+      : {}),
     ...(generation.submission
       ? { submission: { ...generation.submission } }
       : {}),
+    ...(generation.submissionResult
+      ? { submissionResult: cloneJson(generation.submissionResult) }
+      : {}),
     ...(generation.review ? { review: { ...generation.review } } : {}),
   };
+}
+
+function cloneFinalVerificationCompletedCheck(
+  check: FinalVerificationCompletedCheckProjection,
+): FinalVerificationCompletedCheckProjection {
+  return cloneJson(check) as unknown as FinalVerificationCompletedCheckProjection;
+}
+
+function projectFinalVerificationCheck(
+  check: FinalVerificationCompletedCheckProjection,
+): FinalVerificationPlan["checks"][number] {
+  return {
+    category: check.category,
+    status: check.status,
+    ...(check.rationale !== undefined ? { rationale: check.rationale } : {}),
+    ...(check.repositoryInspection
+      ? { repositoryInspection: cloneJson(check.repositoryInspection) }
+      : {}),
+  };
+}
+
+function projectFinalVerificationSubmissionCheck(
+  check: FinalVerificationCompletedCheckProjection,
+): FinalVerificationSubmission["checks"][number] {
+  return {
+    category: check.category,
+    status: check.status,
+    green: true,
+    ...(check.rationale !== undefined ? { rationale: check.rationale } : {}),
+    ...(check.repositoryInspection
+      ? { repositoryInspection: cloneJson(check.repositoryInspection) }
+      : {}),
+    evidenceIds: [...check.evidenceIds],
+    facts: cloneJson(check.facts),
+  };
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function requiredPositiveNumber(

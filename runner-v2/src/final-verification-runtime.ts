@@ -135,6 +135,7 @@ export interface FinalVerificationRuntimeOptions {
   taskId?: string;
   actor?: AgentActor;
   attempt?: number;
+  generationId?: string;
   clock?: () => string;
   integrationRevision?: FinalVerificationRevisionSource;
   currentIntegrationRevision?: FinalVerificationRevisionSource;
@@ -248,6 +249,18 @@ export interface FinalVerificationRun {
   green: boolean;
 }
 
+export interface FinalVerificationCategoryRun {
+  generationId: string;
+  runId: string;
+  taskId: string;
+  attempt?: number;
+  targetRevision: string;
+  workspacePath: string;
+  startedAt: string;
+  finishedAt: string;
+  check: FinalVerificationCheckResult;
+}
+
 interface MutableVerificationCheck {
   category: FinalVerificationCategory;
   status: FinalVerificationStatus;
@@ -289,6 +302,7 @@ export class FinalVerificationRuntime {
   private readonly taskId: string;
   private readonly actor: AgentActor;
   private readonly attempt?: number;
+  private readonly generationId?: string;
   private readonly clock: () => string;
   private readonly integrationRevision?: FinalVerificationRevisionSource;
   private readonly managedProcess?: FinalVerificationManagedProcess;
@@ -314,6 +328,7 @@ export class FinalVerificationRuntime {
       id: "final-verification-runtime",
     };
     this.attempt = options.attempt;
+    this.generationId = options.generationId;
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.integrationRevision = options.integrationRevision ?? options.currentIntegrationRevision;
     this.managedProcess = options.managedProcess ?? (options.managedProcessService
@@ -349,6 +364,9 @@ export class FinalVerificationRuntime {
     if (this.attempt !== undefined && (!Number.isSafeInteger(this.attempt) || this.attempt < 1)) {
       throw new Error("attempt must be a positive integer.");
     }
+    if (this.generationId !== undefined && !this.generationId.trim()) {
+      throw new Error("generationId must be non-empty.");
+    }
   }
 
   async run(input: FinalVerificationRunInput): Promise<FinalVerificationRun> {
@@ -358,7 +376,7 @@ export class FinalVerificationRuntime {
     await this.assertCurrentRevision(workspace);
 
     const runOrdinal = ++this.runOrdinal;
-    const generationId = generationFor(this.runId, workspace.targetRevision);
+    const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
     const startedAt = this.clock();
     const checks: FinalVerificationCheckResult[] = [];
     for (const check of plan.checks) {
@@ -394,6 +412,45 @@ export class FinalVerificationRuntime {
   /** Alias for callers that name the operation execute. */
   async execute(input: FinalVerificationRunInput): Promise<FinalVerificationRun> {
     return await this.run(input);
+  }
+
+  /** Execute one category while retaining the exact full-generation plan. */
+  async runCategory(
+    input: FinalVerificationRunInput,
+    category: FinalVerificationCategory,
+  ): Promise<FinalVerificationCategoryRun> {
+    const plan = planFinalVerification(input.plan);
+    validateCommandMap(input.commands);
+    const check = plan.checks.find((entry) => entry.category === category);
+    if (!check) throw new Error(`Final verification category ${category} is not planned.`);
+    const workspace = await this.workspaceManager.create();
+    await this.assertCurrentRevision(workspace);
+    const runOrdinal = ++this.runOrdinal;
+    const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
+    const startedAt = this.clock();
+    const result = await this.runCheck({
+      check,
+      commands: input.commands?.[category],
+      runtimeSmoke: input.runtimeSmoke,
+      browser: input.browser,
+      workspace,
+      generationId,
+      runOrdinal,
+      signal: input.signal,
+    });
+    await this.assertCurrentRevision(workspace);
+    const finishedAt = this.clock();
+    return {
+      generationId,
+      runId: this.runId,
+      taskId: this.taskId,
+      ...(this.attempt !== undefined ? { attempt: this.attempt } : {}),
+      targetRevision: workspace.targetRevision,
+      workspacePath: workspace.path,
+      startedAt,
+      finishedAt,
+      check: freezeCheck(result),
+    };
   }
 
   private async assertCurrentRevision(workspace: VerificationWorkspace): Promise<void> {
