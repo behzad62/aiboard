@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   AgentModel,
 } from "./agent-contracts.js";
+import type { AcceptanceCriterion } from "./acceptance-contracts.js";
 import {
   runAgentLoop,
   type AgentLoopResult,
@@ -63,6 +64,9 @@ export interface RunWorkerTaskOptions {
   runId: string;
   sessionId: string;
   taskId: string;
+  acceptanceCriteria?: readonly AcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  attempt?: number;
   actorId: string;
   permissionProfile: PermissionProfile;
   workspace: TaskWorkspace;
@@ -99,6 +103,9 @@ export async function runWorkerTask(
   options: RunWorkerTaskOptions
 ): Promise<WorkerTaskResult> {
   const clock = options.clock ?? (() => new Date().toISOString());
+  const taskContract = schedulerTask(options);
+  const acceptanceCriteria = options.acceptanceCriteria ?? taskContract?.acceptanceCriteria;
+  const attempt = options.attempt ?? taskContract?.attempt;
   let messages = [...options.initialMessages];
   if (options.sessions.events(options.sessionId).length === 0) {
     await options.sessions.create({
@@ -175,6 +182,7 @@ export async function runWorkerTask(
       artifacts: options.artifacts,
       ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
       taskId: options.taskId,
+      ...(attempt !== undefined ? { attempt } : {}),
       clock,
       ...(options.allowedCommands
         ? { allowedCommands: options.allowedCommands }
@@ -193,6 +201,7 @@ export async function runWorkerTask(
       artifacts: options.artifacts,
       taskId: options.taskId,
       clock,
+      ...(attempt !== undefined ? { attempt } : {}),
       ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
     })) broker.register(tool);
   }
@@ -249,18 +258,22 @@ export async function runWorkerTask(
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;
-  broker.register(createSubmitTaskTool(async ({ summary, unresolvedConcerns }) => {
-    const evidenceHashes = options.evidenceStore
-      ? evidenceArtifactHashes(
-          options.evidenceStore.list({
-            runId: options.runId,
-            taskId: options.taskId,
-            limit: 1_000,
-          }),
-          options.actorId
-        )
-      : [];
-    if (evidenceHashes.length === 0) {
+  broker.register(createSubmitTaskTool(async ({
+    summary,
+    unresolvedConcerns,
+    criterionEvidenceLinks,
+  }) => {
+    const evidenceRecords = options.evidenceStore?.list({
+      runId: options.runId,
+      taskId: options.taskId,
+      limit: 1_000,
+    }) ?? [];
+    const evidenceHashes = evidenceArtifactHashes(
+      evidenceRecords,
+      options.actorId,
+      attempt
+    );
+    if (!acceptanceCriteria && evidenceHashes.length === 0) {
       throw new Error(
         "Task submission requires durable evidence; record command or browser facts first."
       );
@@ -286,7 +299,21 @@ export async function runWorkerTask(
       workspacePath: options.workspace.path,
       taskCommit: commit,
       artifacts: options.artifacts,
-      evidenceArtifactHashes: evidenceHashes,
+      ...(acceptanceCriteria
+        ? {
+            acceptanceCriteria,
+            ...(options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion) !== undefined
+              ? {
+                  acceptanceCriteriaVersion:
+                    options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion,
+                }
+              : {},
+            criterionEvidenceLinks,
+            evidenceRecords,
+            taskId: options.taskId,
+            attempt,
+          }
+        : { evidenceArtifactHashes: evidenceHashes }),
       externalEffects: externalEffectReferences(
         options.ledger.listRun(options.runId),
         options.sessionId
@@ -296,7 +323,7 @@ export async function runWorkerTask(
       unresolvedConcerns,
     });
     return producedChangeSet;
-  }));
+  }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined }));
 
   const toolRuntime = options.budgetLedger
     ? new BudgetedToolRuntime({
@@ -407,7 +434,8 @@ function taskMemoryIds(options: RunWorkerTaskOptions): string[] {
 
 function evidenceArtifactHashes(
   records: ReturnType<EvidenceStore["list"]>,
-  actorId: string
+  actorId: string,
+  attempt?: number
 ): string[] {
   return [
     ...new Set(
@@ -418,9 +446,21 @@ function evidenceArtifactHashes(
             (record.actor.role === "subagent" &&
               record.actor.id.startsWith(`${actorId}:`))
         )
+        .filter((record) =>
+          attempt === undefined ||
+          record.attempt === undefined ||
+          record.attempt === attempt
+        )
         .flatMap((record) => evidenceFactArtifactHashes(record.fact))
     ),
   ];
+}
+
+function schedulerTask(options: RunWorkerTaskOptions) {
+  if (!options.schedulerStore) return undefined;
+  const events = options.schedulerStore.readRun(options.runId);
+  if (events.length === 0) return undefined;
+  return rebuildSchedulerProjection(events).tasks[options.taskId];
 }
 
 function changeSetFromMessages(

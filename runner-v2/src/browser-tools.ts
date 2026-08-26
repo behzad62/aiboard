@@ -322,6 +322,7 @@ export interface BrowserToolsOptions {
   taskId: string;
   maximumDomBytes?: number;
   clock?: () => string;
+  attempt?: number;
 }
 
 export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unknown>[] {
@@ -356,6 +357,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         },
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
       return json({
         url: snapshot.url,
@@ -400,6 +402,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         },
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
       return {
         content: [
@@ -447,6 +450,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         },
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
       return json(events);
     }, external("browser.events"), true),

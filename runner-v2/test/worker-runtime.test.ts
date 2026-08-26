@@ -537,6 +537,95 @@ test("worker subagent edits the shared task workspace and returns without parent
   }
 });
 
+test("worker submission cannot bypass exact criterion evidence coverage", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-criterion-contract-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "unchanged\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let evidenceStore: SqliteEvidenceStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_criterion_contract",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_criterion_contract",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_criterion");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    const result = await runWorkerTask({
+      model: new ScriptedModel([
+        toolTurn("evidence", "run_evidence_command", {
+          label: "criterion check",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('checked')"],
+          cwd: ".",
+        }),
+        toolTurn("submit", "submit_task", {
+          summary: "Submit without the second criterion",
+          readiness: "ready_for_architect_review",
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: "missing-evidence-record",
+            artifactHashes: ["a".repeat(64)],
+          }],
+        }),
+      ]),
+      runId: "run_criterion_contract",
+      sessionId: "session_criterion_contract",
+      taskId: "task_criterion",
+      actorId: "worker_criterion",
+      attempt: 1,
+      acceptanceCriteria: [
+        { id: "behavior", text: "The behavior is implemented." },
+        { id: "verification", text: "The focused check passes." },
+      ],
+      permissionProfile: "full",
+      workspace,
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore,
+      initialMessages: [
+        { id: "system", role: "system", content: "Record evidence and submit." },
+      ],
+    });
+    assert.equal(result.loop.status, "suspended");
+    assert.equal(result.loop.reason, "provider_error");
+    assert.equal(result.changeSet, undefined);
+    assert.equal(
+      result.loop.messages.some((message) =>
+        message.role === "tool" &&
+        typeof message.content === "object" &&
+        !Array.isArray(message.content) &&
+        message.content.isError === true &&
+        /missing|criterion/i.test(
+          message.content.error?.message ??
+          message.content.content.map((block) => block.type === "text" ? block.text : "").join(" ")
+        )
+      ),
+      true
+    );
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    evidenceStore?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function toolTurn(callId: string, name: string, args: unknown): ModelTurn {
   return {
     blocks: [{ type: "tool_call", callId, name, arguments: args }],

@@ -174,6 +174,13 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         runId: assignment.runId,
         sessionId,
         taskId: assignment.task.id,
+        ...(assignment.task.acceptanceCriteria
+          ? { acceptanceCriteria: assignment.task.acceptanceCriteria }
+          : {}),
+        ...(assignment.task.acceptanceCriteriaVersion !== undefined
+          ? { acceptanceCriteriaVersion: assignment.task.acceptanceCriteriaVersion }
+          : {}),
+        attempt: assignment.attempt,
         actorId: assignment.workerId,
         permissionProfile: this.options.permissionProfile,
         workspace,

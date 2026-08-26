@@ -29,6 +29,7 @@ export interface EvidenceToolsOptions {
   maximumTimeoutMs?: number;
   clock?: () => string;
   allowedCommands?: readonly string[];
+  attempt?: number;
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
@@ -105,9 +106,10 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           taskId: options.taskId,
           actor: context.actor,
           fact,
-          createdAt: finishedAt,
-          idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
-        });
+        createdAt: finishedAt,
+        idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
+      });
         return { content: [{ type: "json", value: record }], isError: false };
       } catch (error) {
         return failure(

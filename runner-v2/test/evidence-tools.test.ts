@@ -44,6 +44,7 @@ test("evidence command records mechanical facts and artifacts without a verdict"
       };
     };
     assert.equal(record.fact.exitCode, 3);
+    assert.equal((record as { attempt?: number }).attempt, 1);
     assert.equal("verdict" in record, false);
     assert.equal(
       (await artifacts.get(record.fact.stdoutArtifactHash)).toString("utf8"),
@@ -63,6 +64,7 @@ test("evidence command records mechanical facts and artifacts without a verdict"
     if (recovered[0].fact.kind === "command") {
       assert.equal(recovered[0].fact.exitCode, 3);
     }
+    assert.equal(recovered[0].attempt, 1);
   } finally {
     store.close();
     fixture.cleanup();
@@ -199,8 +201,9 @@ function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
   for (const tool of createEvidenceTools({
     store,
     artifacts,
-    taskId: "task_a",
-    maxOutputBytes: 1024 * 1024,
+      taskId: "task_a",
+      maxOutputBytes: 1024 * 1024,
+      attempt: 1,
   })) registry.register(tool);
   return registry;
 }

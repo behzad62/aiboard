@@ -90,6 +90,8 @@ export interface EvidenceRecord {
   fact: EvidenceFact;
   createdAt: string;
   idempotencyKey: string;
+  /** Attempt identity for new records; omitted on legacy evidence rows. */
+  attempt?: number;
 }
 
 export interface RecordEvidenceInput {
@@ -99,6 +101,7 @@ export interface RecordEvidenceInput {
   fact: EvidenceFact;
   createdAt: string;
   idempotencyKey: string;
+  attempt?: number;
 }
 
 export interface ListEvidenceInput {

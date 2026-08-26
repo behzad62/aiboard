@@ -21,6 +21,7 @@ interface EvidenceRow {
   fact_json: string;
   created_at: string;
   idempotency_key: string;
+  attempt: number | null;
 }
 
 export class SqliteEvidenceStore implements EvidenceStore {
@@ -45,6 +46,12 @@ export class SqliteEvidenceStore implements EvidenceStore {
       CREATE INDEX IF NOT EXISTS idx_evidence_run_task
       ON evidence_records(run_id, task_id, sequence);
     `);
+    const columns = this.database
+      .prepare("PRAGMA table_info(evidence_records)")
+      .all() as Array<{ name?: unknown }>;
+    if (!columns.some((column) => column.name === "attempt")) {
+      this.database.exec("ALTER TABLE evidence_records ADD COLUMN attempt INTEGER");
+    }
   }
 
   record(input: RecordEvidenceInput): EvidenceRecord {
@@ -61,13 +68,14 @@ export class SqliteEvidenceStore implements EvidenceStore {
       fact: cloneFact(input.fact),
       createdAt: input.createdAt,
       idempotencyKey: input.idempotencyKey,
+      ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
     };
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const existing = this.database
         .prepare(
           `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                  created_at, idempotency_key
+                  created_at, idempotency_key, attempt
            FROM evidence_records WHERE run_id = ? AND idempotency_key = ?`
         )
         .get(input.runId, input.idempotencyKey) as EvidenceRow | undefined;
@@ -75,6 +83,7 @@ export class SqliteEvidenceStore implements EvidenceStore {
         const decoded = decode(existing);
         if (
           decoded.taskId !== record.taskId ||
+          decoded.attempt !== record.attempt ||
           JSON.stringify(decoded.actor) !== JSON.stringify(record.actor) ||
           JSON.stringify(decoded.fact) !== JSON.stringify(record.fact)
         ) throw new Error(`Evidence idempotency conflict for ${input.idempotencyKey}.`);
@@ -85,8 +94,8 @@ export class SqliteEvidenceStore implements EvidenceStore {
         .prepare(
           `INSERT INTO evidence_records (
             evidence_id, run_id, task_id, actor_json, fact_json,
-            created_at, idempotency_key
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+            created_at, idempotency_key, attempt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           record.id,
@@ -95,7 +104,8 @@ export class SqliteEvidenceStore implements EvidenceStore {
           JSON.stringify(record.actor),
           JSON.stringify(record.fact),
           record.createdAt,
-          record.idempotencyKey
+          record.idempotencyKey,
+          record.attempt ?? null
         );
       this.database.exec("COMMIT");
       return cloneRecord(record);
@@ -114,7 +124,7 @@ export class SqliteEvidenceStore implements EvidenceStore {
       ? this.database
           .prepare(
             `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                    created_at, idempotency_key
+                    created_at, idempotency_key, attempt
              FROM evidence_records WHERE run_id = ? AND task_id = ?
              ORDER BY sequence LIMIT ?`
           )
@@ -122,7 +132,7 @@ export class SqliteEvidenceStore implements EvidenceStore {
       : this.database
           .prepare(
             `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                    created_at, idempotency_key
+                    created_at, idempotency_key, attempt
              FROM evidence_records WHERE run_id = ?
              ORDER BY sequence LIMIT ?`
           )
@@ -145,12 +155,21 @@ function decode(row: EvidenceRow): EvidenceRecord {
     fact: JSON.parse(row.fact_json) as EvidenceFact,
     createdAt: row.created_at,
     idempotencyKey: row.idempotency_key,
+    ...(row.attempt !== null && row.attempt !== undefined
+      ? { attempt: row.attempt }
+      : {}),
   };
 }
 
 function validate(input: RecordEvidenceInput): void {
   if (!input.runId || !input.taskId || !input.idempotencyKey) {
     throw new Error("Evidence run, task, and idempotency key are required.");
+  }
+  if (
+    input.attempt !== undefined &&
+    (!Number.isSafeInteger(input.attempt) || input.attempt < 1)
+  ) {
+    throw new Error("Evidence attempt must be a positive integer.");
   }
   const hashes = evidenceFactArtifactHashes(input.fact);
   for (const hash of hashes) {
