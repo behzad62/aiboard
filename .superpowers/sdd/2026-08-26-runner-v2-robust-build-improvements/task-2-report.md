@@ -965,3 +965,103 @@ passed (normal Git LF-to-CRLF warnings only)
 
 P2.4B3 repair orchestration and fresh-generation lifecycle are complete. The
 P2.5 completion gate and P2.6 cleanup/UI remain intentionally deferred.
+
+## P2.5 authoritative completion gate
+
+Added one exported scheduler-boundary completion predicate/assertion and routed
+every Finish/Budgeted completion authority through it. The predicate requires
+all ordinary implementation and verification-repair tasks to be integrated or
+validly cancelled, a nonempty canonical integration revision, one current
+kernel verification generation targeting that exact revision, an exact bound
+kernel task, a valid four-category P2.1 plan, one green persisted completed fact
+per category, required-category facts/evidence, justified N/A representation,
+one exact green P2.3 submission/result, and one structured current Architect
+approval whose category rationales and evidence references exactly match the
+submission. Invalidated history is auditable but cannot satisfy the current
+singleton requirement.
+
+The reducer now invokes the assertion for raw/replayed `run.completed`,
+`project.handoff_requested`, and `project.handoff_selected` events. Selection
+also requires its result revision to equal the verified canonical revision.
+The typed `complete_run` tool evaluates the same predicate and returns
+`completion_not_ready` with structured issues before append; the reducer remains
+the final authority. BuildRuntime advances an approved current generation to
+the existing typed completion-decision action, and its generation-specific
+postcondition prevents prose/no-op handoff creation.
+
+Direct BuildRuntime selection still appends through the reducer. NativeBuildManager
+now asserts readiness before invoking the physical project-handoff driver, so a
+stale selection cannot mutate the user project before durable rejection. The
+generic RunSupervisor gained `completeBuild`, which accepts completion only
+when the authoritative SchedulerProjection is both durably completed and
+readiness-green. Control and CLI synchronization use that method and therefore
+cannot convert a forged `BuildStepResult { status: "completed" }` into generic
+completion. Plan-only retains its intentional valid-plan/user-choice lifecycle;
+no Finish/Budgeted compatibility or bypass flag was added. Legacy raw-completion
+tests now assert the no-grandfathering invariant.
+
+### P2.5 TDD and fault evidence
+
+The focused completion test was created first. Its initial run failed 0/1:
+
+```text
+npx tsx --test runner-v2/test/final-verification-completion.test.ts
+Missing expected exception: run.completed must reject missing ordinary task terminal
+```
+
+Subsequent red-first boundaries found and fixed:
+
+- valid approved BuildRuntime returned `idle` instead of requesting handoff;
+- control synchronization changed the generic run to `completed` from a forged
+  completed result instead of leaving it `running`;
+- NativeBuildManager called the physical handoff once before stale reducer
+  rejection (`1 !== 0`);
+- RunSupervisor had no gated Build completion method.
+
+Three mandated fault-only mutations were made and restored:
+
+- Removing the raw `run.completed` reducer assertion made the raw matrix fail
+  0/1 with `Missing expected exception` for a nonterminal ordinary task.
+- Removing the current-target/canonical-revision equality guard made the raw
+  matrix fail 0/1 with `Missing expected exception` for the current revision.
+- Allowing RunSupervisor to complete directly from the generic result made its
+  focused test fail 0/1: actual `completed`, expected `running`.
+
+The restored focused suite passed 7/7.
+
+### P2.5 validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-completion.test.ts runner-v2/test/architect-tools.test.ts runner-v2/test/guidance-review.test.ts runner-v2/test/build-runtime.test.ts runner-v2/test/scheduler-store.test.ts runner-v2/test/native-build-manager.test.ts runner-v2/test/control-server.test.ts runner-v2/test/recovery-smoke.test.ts runner-v2/test/recovery.test.ts
+96/96 passed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+npx eslint runner-v2/src/architect-tools.ts runner-v2/src/build-runtime.ts runner-v2/src/cli.ts runner-v2/src/control-server.ts runner-v2/src/native-build-manager.ts runner-v2/src/run-supervisor.ts runner-v2/src/scheduler-store.ts runner-v2/test/final-verification-completion.test.ts runner-v2/test/guidance-review.test.ts runner-v2/test/native-build-manager.test.ts runner-v2/test/scheduler-store.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+### P2.5 requirement audit
+
+| P2.5 requirement | Evidence | Result |
+|---|---|---|
+| Shared durable completion assertion | Exported scheduler predicate/assertion used by all terminal reducers | Complete |
+| Ordinary tasks and canonical revision terminal/current | Raw matrix dimensions and predicate checks | Complete |
+| Exact current green four-category submission | Completed-fact/submission identity, category, attempt, plan, evidence checks | Complete |
+| Exact structured semantic approval | Review identity, current revision, category rationale/verdict/evidence checks | Complete |
+| Obsolete history cannot authorize completion | Missing-current/history fixture and revision-advance case | Complete |
+| Tool/prose bypasses fail closed | Structured tool error and runtime typed-action postcondition | Complete |
+| Raw/SQLite forged events fail closed | Three-event raw matrix plus SQLite append/replay fixture | Complete |
+| Direct/native/control/CLI paths are gated | Runtime reducer, pre-physical manager assertion, supervisor synchronization | Complete |
+| Revision advancement immediately blocks all paths | Tool, raw completion, and direct selection stale test | Complete |
+| Plan-only and user choice remain unchanged | Existing plan-only runtime/store/native-manager affected tests | Complete |
+| P2.6 remains out of scope | No cleanup, audit export, client, observability, or UI behavior added | Complete |
+
+## Packet status
+
+P2.5 authoritative completion enforcement is complete. P2.6 cleanup, audit,
+client projection, observability, and UI work remain intentionally deferred.

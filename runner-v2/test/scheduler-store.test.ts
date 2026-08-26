@@ -45,7 +45,7 @@ test("Finish and Budgeted reject forged plan-only handoff payloads", () => {
           summary: "Forged plan-only handoff",
           runPolicy: "plan_only",
         },
-      }), /requires terminal task states/i);
+      }), /terminal|completion is not ready/i);
       assert.equal(
         rebuildSchedulerProjection(store.readRun(runId)).projectHandoff,
         undefined
@@ -720,7 +720,7 @@ test("legacy active runs require exactly one acceptance-contract upgrade before 
   }
 });
 
-test("completed legacy scheduler runs remain replayable and inspectable", () => {
+test("legacy scheduler completion has no final-verification grandfathering", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-legacy-completed-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
   try {
@@ -728,17 +728,20 @@ test("completed legacy scheduler runs remain replayable and inspectable", () => 
       revision: 1,
       tasks: [task("task_done", "integrated", [])],
     }));
-    store.append({
-      runId: "run_legacy_completed",
-      type: "run.completed",
-      occurredAt: "2026-07-13T00:00:00.000Z",
-      actor: { role: "architect", id: "architect_1" },
-      idempotencyKey: "run-completed",
-      payload: {},
-    });
+    assert.throws(
+      () => store.append({
+        runId: "run_legacy_completed",
+        type: "run.completed",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "run-completed",
+        payload: {},
+      }),
+      /completion|verification|revision/i,
+    );
     const projection = rebuildSchedulerProjection(store.readRun("run_legacy_completed"));
-    assert.equal(projection.status, "completed");
-    assert.equal(projection.acceptanceContractStatus, "legacy_completed");
+    assert.equal(projection.status, "running");
+    assert.equal(projection.acceptanceContractStatus, "acceptance_contract_upgrade_required");
     assert.equal(projection.tasks.task_done.objective, "Objective task_done");
   } finally {
     store.close();
@@ -791,17 +794,20 @@ test("gated active legacy runs reject raw completion and handoff selection until
         }],
       },
     });
-    store.append({
-      runId: "run_gate_completion",
-      type: "run.completed",
-      occurredAt: "2026-07-13T00:00:00.000Z",
-      actor: { role: "architect", id: "architect_1" },
-      idempotencyKey: "run-completed-after-upgrade",
-      payload: {},
-    });
-    const completed = rebuildSchedulerProjection(store.readRun("run_gate_completion"));
-    assert.equal(completed.status, "completed");
-    assert.equal(completed.acceptanceContractStatus, "current");
+    assert.throws(
+      () => store.append({
+        runId: "run_gate_completion",
+        type: "run.completed",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "run-completed-after-upgrade",
+        payload: {},
+      }),
+      /completion|verification|revision/i,
+    );
+    const incomplete = rebuildSchedulerProjection(store.readRun("run_gate_completion"));
+    assert.equal(incomplete.status, "running");
+    assert.equal(incomplete.acceptanceContractStatus, "current");
 
     store.append(policyEvent("run_gate_handoff", "plan_only"));
     store.append(event("run_gate_handoff", "plan.created", "plan:1", {

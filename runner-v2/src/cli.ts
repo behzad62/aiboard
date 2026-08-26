@@ -15,6 +15,9 @@ import { SqlitePermissionStore } from "./permission-store.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
+import {
+  type SchedulerProjection,
+} from "./scheduler-store.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -98,7 +101,12 @@ async function main(): Promise<void> {
       createRuntime: (spec) => buildFactory.create(spec),
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
-        syncAutonomousBuildLifecycle(supervisor, runId, result),
+        syncAutonomousBuildLifecycle(
+          supervisor,
+          runId,
+          result,
+          builds.projection(runId),
+        ),
       onPumpError: (runId, error) => writeRunnerWarning(runId, error),
       runArtifactCompaction: (operation) =>
         buildFactory.runArtifactCompaction(operation),
@@ -180,13 +188,18 @@ async function main(): Promise<void> {
 function syncAutonomousBuildLifecycle(
   supervisor: RunSupervisor,
   runId: string,
-  result: BuildStepResult
+  result: BuildStepResult,
+  build: SchedulerProjection,
 ): void {
   const run = supervisor.getRun(runId);
-  if (result.status === "completed" && run.state === "running") {
-    supervisor.complete(
+  if (
+    result.status === "completed" &&
+    run.state === "running"
+  ) {
+    supervisor.completeBuild(
       runId,
-      `autonomous-build-completed:${run.lastSequence}`
+      `autonomous-build-completed:${run.lastSequence}`,
+      build,
     );
   } else if (result.status === "paused" && run.state === "running") {
     supervisor.pause(

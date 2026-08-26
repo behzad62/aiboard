@@ -7,6 +7,7 @@ import {
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import {
   planFinalVerification,
+  validateFinalVerificationPlan,
   type FinalVerificationCategory,
   type FinalVerificationPlan,
 } from "./final-verification-contracts.js";
@@ -275,6 +276,181 @@ export interface SchedulerStore {
   append(input: NewSchedulerEvent): SchedulerEvent;
   readRun(runId: string, afterSequence?: number): SchedulerEvent[];
   close(): void;
+}
+
+export interface BuildCompletionReadiness {
+  ready: boolean;
+  issues: string[];
+}
+
+/**
+ * The authoritative Build completion invariant shared by every terminal path.
+ * Plan-only runs intentionally retain their existing plan handoff lifecycle.
+ */
+export function buildCompletionReadiness(
+  projection: SchedulerProjection,
+): BuildCompletionReadiness {
+  const issues: string[] = [];
+  if (projection.runPolicy === "plan_only") {
+    if (projection.planRevision <= 0) issues.push("Plan-only completion requires a valid plan.");
+    return { ready: issues.length === 0, issues };
+  }
+
+  const nonterminal = Object.values(projection.tasks).find(
+    (task) => task.kind !== "final_verification" &&
+      task.status !== "integrated" && task.status !== "cancelled",
+  );
+  if (nonterminal) {
+    issues.push(`Ordinary task ${nonterminal.id} is not terminal (${nonterminal.status}).`);
+  }
+  const integrationRevision = projection.integrationRevision;
+  if (!integrationRevision?.trim()) {
+    issues.push("Canonical integration revision is missing.");
+  }
+  const current = projection.finalVerification?.current;
+  if (!current || current.state !== "current") {
+    issues.push("A current final-verification generation is required.");
+    return { ready: false, issues };
+  }
+  if (projection.finalVerification?.history.some((generation) => generation.state === "current")) {
+    issues.push("Final-verification history contains a second current generation.");
+  }
+  if (current.targetRevision !== integrationRevision) {
+    issues.push("Current final-verification target does not match the canonical integration revision.");
+  }
+  const task = projection.tasks[current.taskId];
+  if (
+    !task || task.kind !== "final_verification" ||
+    task.generationId !== current.generationId ||
+    task.targetRevision !== current.targetRevision ||
+    task.planVersion !== current.planVersion ||
+    !sameValue(task.verificationPlan, current.plan)
+  ) {
+    issues.push("Current final-verification task binding is invalid.");
+  }
+  const planValidation = validateFinalVerificationPlan(current.plan);
+  if (!planValidation.valid) {
+    issues.push(`Current final-verification plan is invalid: ${planValidation.issues.join(" ")}`);
+  }
+  const plannedCategories = current.plan.checks.map((check) => check.category);
+  const completed = current.completedChecks ?? [];
+  if (
+    completed.length !== plannedCategories.length ||
+    new Set(completed.map((check) => check.category)).size !== plannedCategories.length
+  ) {
+    issues.push("Completed final-verification facts must represent every planned category exactly once.");
+  }
+  for (const planned of current.plan.checks) {
+    const check = completed.find((candidate) => candidate.category === planned.category);
+    if (!check || !sameValue(projectFinalVerificationCheck(check), planned)) {
+      issues.push(`Completed final-verification category ${planned.category} is missing or conflicts with the plan.`);
+      continue;
+    }
+    if (check.green !== true || check.issues.length > 0) {
+      issues.push(`Completed final-verification category ${planned.category} is not mechanically green.`);
+    }
+    if (planned.status === "required") {
+      if (check.evidenceIds.length === 0 || check.facts.length === 0 || check.evidenceIds.length !== check.facts.length) {
+        issues.push(`Required final-verification category ${planned.category} is missing evidence.`);
+      }
+    } else if (check.evidenceIds.length > 0 || check.facts.length > 0) {
+      issues.push(`Not-applicable final-verification category ${planned.category} carries executable evidence.`);
+    }
+  }
+
+  const submission = current.submission;
+  const result = current.submissionResult;
+  if (!submission || !result) {
+    issues.push("A complete persisted final-verification submission result is required.");
+  } else {
+    if (
+      submission.generationId !== current.generationId ||
+      submission.targetRevision !== current.targetRevision ||
+      result.kind !== "final_verification_submission" ||
+      result.runId !== projection.runId ||
+      result.taskId !== current.taskId ||
+      result.generationId !== current.generationId ||
+      result.targetRevision !== current.targetRevision ||
+      result.attempt !== submission.attempt ||
+      result.green !== true ||
+      !sameValue(result.plan, current.plan)
+    ) {
+      issues.push("Final-verification submission is stale, foreign, incomplete, or non-green.");
+    }
+    if (
+      result.checks.length !== plannedCategories.length ||
+      new Set(result.checks.map((check) => check.category)).size !== plannedCategories.length
+    ) {
+      issues.push("Final-verification submission must represent every planned category exactly once.");
+    }
+    for (const planned of current.plan.checks) {
+      const submitted = result.checks.find((check) => check.category === planned.category);
+      const checkpoint = completed.find((check) => check.category === planned.category);
+      if (
+        !submitted || submitted.green !== true ||
+        !sameValue({
+          category: submitted.category,
+          status: submitted.status,
+          ...(submitted.rationale !== undefined ? { rationale: submitted.rationale } : {}),
+          ...(submitted.repositoryInspection
+            ? { repositoryInspection: submitted.repositoryInspection }
+            : {}),
+        }, planned) ||
+        !checkpoint || checkpoint.attempt !== submission.attempt ||
+        !sameValue(submitted.evidenceIds, checkpoint.evidenceIds) ||
+        !sameValue(submitted.facts, checkpoint.facts)
+      ) {
+        issues.push(`Submitted final-verification category ${planned.category} is incomplete or conflicts with persisted facts.`);
+      }
+    }
+  }
+
+  const review = current.review;
+  if (
+    !review || review.status !== "approved" || !review.decision ||
+    review.decision.decision !== "approved" ||
+    review.generationId !== current.generationId ||
+    review.targetRevision !== current.targetRevision ||
+    review.submissionId !== submission?.submissionId ||
+    review.attempt !== submission?.attempt ||
+    review.decision.targetRevision !== current.targetRevision ||
+    review.decision.failedCategories.length > 0
+  ) {
+    issues.push("A current structured approved final-verification review is required.");
+  } else if (result) {
+    const categoryReviews = review.decision.categoryReviews;
+    if (
+      categoryReviews.length !== plannedCategories.length ||
+      new Set(categoryReviews.map((category) => category.category)).size !== plannedCategories.length
+    ) {
+      issues.push("Final-verification review must represent every planned category exactly once.");
+    }
+    for (const planned of current.plan.checks) {
+      const categoryReview = categoryReviews.find((candidate) => candidate.category === planned.category);
+      const submitted = result.checks.find((candidate) => candidate.category === planned.category);
+      if (
+        !categoryReview || categoryReview.verdict !== "approved" ||
+        !categoryReview.rationale.trim() || !submitted ||
+        !sameValue([...categoryReview.evidenceIds].sort(), [...submitted.evidenceIds].sort())
+      ) {
+        issues.push(`Approved final-verification review for ${planned.category} is missing or cites invalid evidence.`);
+      }
+    }
+  }
+  if (
+    task?.verificationSubmissionId !== submission?.submissionId ||
+    task?.verificationReviewId !== review?.reviewId
+  ) {
+    issues.push("Final-verification task submission/review references are invalid.");
+  }
+  return { ready: issues.length === 0, issues };
+}
+
+export function assertBuildCompletionReady(projection: SchedulerProjection): void {
+  const readiness = buildCompletionReadiness(projection);
+  if (!readiness.ready) {
+    throw new Error(`Build completion is not ready: ${readiness.issues.join(" ")}`);
+  }
 }
 
 export function rebuildSchedulerProjection(
@@ -1200,6 +1376,7 @@ export function reduceSchedulerEvent(
           "Run completion is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
         );
       }
+      assertBuildCompletionReady(current);
       next.status = "completed";
       if (current.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
         next.acceptanceContractStatus = "legacy_completed";
@@ -1218,14 +1395,7 @@ export function reduceSchedulerEvent(
           throw new Error("Plan-only final project handoff requires a valid plan.");
         }
       } else {
-        const nonterminal = Object.values(next.tasks).find(
-          (task) => task.status !== "integrated" && task.status !== "cancelled"
-        );
-        if (nonterminal) {
-          throw new Error(
-            `Final project handoff requires terminal task states; ${nonterminal.id} is ${nonterminal.status}.`
-          );
-        }
+        assertBuildCompletionReady(current);
       }
       next.projectHandoff = {
         status: "requested",
@@ -1251,6 +1421,7 @@ export function reduceSchedulerEvent(
       if (current.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
+      assertBuildCompletionReady(current);
       const choice = requiredString(event.payload, "choice");
       if (choice !== "keep_integration_branch" && choice !== "apply_to_project") {
         throw new Error(`Final project handoff choice ${choice} is invalid.`);
@@ -1259,6 +1430,18 @@ export function reduceSchedulerEvent(
         throw new Error("Automatic project handoff must apply to the project.");
       }
       const projectRevision = event.payload.projectRevision;
+      const selectedIntegrationRevision = requiredString(
+        event.payload,
+        "integrationRevision",
+      );
+      if (
+        current.runPolicy !== "plan_only" &&
+        selectedIntegrationRevision !== current.integrationRevision
+      ) {
+        throw new Error(
+          "Final project handoff selection does not match the verified integration revision.",
+        );
+      }
       if (
         projectRevision !== undefined &&
         (typeof projectRevision !== "string" || !projectRevision.trim())
@@ -1269,7 +1452,7 @@ export function reduceSchedulerEvent(
         ...current.projectHandoff,
         status: "selected",
         choice,
-        integrationRevision: requiredString(event.payload, "integrationRevision"),
+        integrationRevision: selectedIntegrationRevision,
         integrationBranch: requiredString(event.payload, "integrationBranch"),
         appliedToProject: event.payload.appliedToProject === true,
         ...(typeof projectRevision === "string" ? { projectRevision } : {}),

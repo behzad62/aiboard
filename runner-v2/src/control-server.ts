@@ -15,6 +15,7 @@ import type { BuildControlPlane } from "./build-runtime-registry.js";
 import {
   acceptanceContractAuditProjection,
   type ProjectHandoffChoice,
+  type SchedulerProjection,
 } from "./scheduler-store.js";
 import {
   assertBuildRunPolicyLimits,
@@ -516,7 +517,7 @@ export class ControlServer {
         if (projection.status !== "completed") {
           throw new Error("Final project handoff did not complete the Build.");
         }
-        this.syncBuildLifecycle(runId, "completed");
+        this.syncBuildLifecycle(runId, "completed", projection);
         sendJson(response, 200, projection);
         return;
       }
@@ -644,7 +645,8 @@ export class ControlServer {
 
   private syncBuildLifecycle(
     runId: string,
-    status: "progressed" | "paused" | "completed" | "idle"
+    status: "progressed" | "paused" | "completed" | "idle",
+    completedProjection?: SchedulerProjection,
   ): void {
     let run;
     try {
@@ -654,7 +656,12 @@ export class ControlServer {
       throw error;
     }
     if (status === "completed" && !["completed", "failed", "stopped"].includes(run.state)) {
-      this.supervisor.complete(runId, `native-build-completed:${run.lastSequence}`);
+      const build = completedProjection ?? this.requireBuilds().projection(runId);
+      this.supervisor.completeBuild(
+        runId,
+        `native-build-completed:${run.lastSequence}`,
+        build,
+      );
     } else if (status === "paused" && run.state === "running") {
       this.supervisor.pause(runId, `native-build-paused:${run.lastSequence}`, "native-build");
     }

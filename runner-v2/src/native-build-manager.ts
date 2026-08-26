@@ -12,6 +12,7 @@ import type {
   SchedulerEvent,
   SchedulerProjection,
 } from "./scheduler-store.js";
+import { assertBuildCompletionReady } from "./scheduler-store.js";
 import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
@@ -281,6 +282,7 @@ export class NativeBuildManager implements BuildControlPlane {
       if (projection.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
+      assertBuildCompletionReady(projection);
       const result = await handle.projectHandoff(choice);
       const selected = handle.runtime.selectProjectHandoff(
         choice,

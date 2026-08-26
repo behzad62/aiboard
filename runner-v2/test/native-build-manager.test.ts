@@ -167,15 +167,7 @@ test("completed project handoff replays without applying the project twice", asy
   let handoffCalls = 0;
   const selectionActors: unknown[] = [];
   let manager: NativeBuildManager | undefined;
-  let projection: SchedulerProjection = {
-    ...fakeRuntime("run_1").projection(),
-    status: "paused" as const,
-    projectHandoff: {
-      status: "requested" as const,
-      summary: "Ready",
-      options: ["keep_integration_branch", "apply_to_project"],
-    },
-  };
+  let projection: SchedulerProjection = requestedHandoffProjection("budgeted");
   try {
     manager = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
@@ -1251,16 +1243,7 @@ test("settlement admitted after a live scan schedules a fresh compaction generat
       },
       createRuntime: async (input) => {
         let projection: SchedulerProjection = input.runId === "run_queued"
-          ? {
-              ...fakeRuntime(input.runId).projection(),
-              status: "paused",
-              runPolicy: "plan_only",
-              projectHandoff: {
-                status: "requested",
-                summary: "Ready",
-                options: ["keep_integration_branch", "apply_to_project"],
-              },
-            }
+          ? requestedHandoffProjection("plan_only")
           : fakeRuntime(input.runId).projection();
         projections.set(input.runId, projection);
         return {
@@ -1691,9 +1674,122 @@ function handleProjections(_runId: string) {
 function requestedHandoffProjection(
   runPolicy: "finish" | "budgeted" | "plan_only" | undefined
 ): SchedulerProjection {
+  if (runPolicy === "finish" || runPolicy === "budgeted") {
+    const revision = "revision_final";
+    const generationId = "generation_final";
+    const taskId = "final_verification_final";
+    const submissionId = "submission_final";
+    const reviewId = "review_final";
+    const plan = {
+      checks: (["build", "tests", "runtime_smoke", "browser"] as const).map(
+        (category) => ({
+          category,
+          status: "not_applicable" as const,
+          rationale: `No ${category} fixture exists.`,
+          repositoryInspection: {
+            paths: ["package.json"],
+            summary: `No ${category} entry point exists.`,
+          },
+        }),
+      ),
+    };
+    const completedChecks = plan.checks.map((check) => ({
+      ...check,
+      green: true,
+      evidenceIds: [],
+      facts: [],
+      issues: [],
+      attempt: 1,
+      workspacePath: "C:/verification",
+      startedAt: "2026-07-14T00:00:00.000Z",
+      finishedAt: "2026-07-14T00:00:01.000Z",
+    }));
+    const submissionChecks = plan.checks.map((check) => ({
+      ...check,
+      green: true as const,
+      evidenceIds: [],
+      facts: [],
+    }));
+    return {
+      ...fakeRuntime("run_1").projection(),
+      runPolicy,
+      planRevision: 1,
+      status: "paused",
+      integrationRevision: revision,
+      tasks: {
+        [taskId]: {
+          id: taskId,
+          kind: "final_verification",
+          objective: "Verify the canonical integrated revision.",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: ["verification"],
+          attempt: 0,
+          generationId,
+          targetRevision: revision,
+          planVersion: 1,
+          verificationPlan: plan,
+          verificationSubmissionId: submissionId,
+          verificationReviewId: reviewId,
+        },
+      },
+      finalVerification: {
+        current: {
+          taskId,
+          generationId,
+          targetRevision: revision,
+          planVersion: 1,
+          plan,
+          state: "current",
+          completedChecks,
+          submission: { submissionId, generationId, targetRevision: revision, attempt: 1 },
+          submissionResult: {
+            kind: "final_verification_submission",
+            generationId,
+            runId: "run_1",
+            taskId,
+            attempt: 1,
+            targetRevision: revision,
+            plan,
+            checks: submissionChecks,
+            evidenceIds: [],
+            submittedAt: "2026-07-14T00:00:02.000Z",
+            green: true,
+          },
+          review: {
+            reviewId,
+            submissionId,
+            generationId,
+            targetRevision: revision,
+            attempt: 1,
+            status: "approved",
+            decision: {
+              decision: "approved",
+              summary: "All final-verification categories are approved.",
+              targetRevision: revision,
+              categoryReviews: plan.checks.map((check) => ({
+                category: check.category,
+                verdict: "approved" as const,
+                rationale: `The ${check.category} inspection supports approval.`,
+                evidenceIds: [],
+              })),
+              failedCategories: [],
+            },
+          },
+        },
+        history: [],
+      },
+      projectHandoff: {
+        status: "requested",
+        summary: "Ready",
+        options: ["keep_integration_branch", "apply_to_project"],
+      },
+    };
+  }
   return {
     ...fakeRuntime("run_1").projection(),
     ...(runPolicy ? { runPolicy } : {}),
+    ...(runPolicy === "plan_only" ? { planRevision: 1 } : {}),
     status: "paused",
     projectHandoff: {
       status: "requested",

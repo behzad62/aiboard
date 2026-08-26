@@ -7,6 +7,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import {
+  buildCompletionReadiness,
   rebuildSchedulerProjection,
   type SchedulerStore,
 } from "./scheduler-store.js";
@@ -1062,6 +1063,14 @@ function completeRunTool(
         return errorOutput(
           "acceptance_contract_upgrade_required",
           "Run completion is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+        );
+      }
+      const readiness = buildCompletionReadiness(projection);
+      if (!readiness.ready) {
+        return errorOutput(
+          "completion_not_ready",
+          `Build completion is not ready: ${readiness.issues.join(" ")}`,
+          readiness.issues,
         );
       }
       return appendEvent(store, {

@@ -417,39 +417,10 @@ test("only Architect tools can approve, request integration, and complete", asyn
     const complete = await invoke(registry, architectContext(), "complete_run", {
       summary: "Architect accepts the handoff.",
     });
-    assert.equal(complete.isError, false);
-    assert.equal(projection(store).status, "paused");
-    assert.deepEqual(projection(store).projectHandoff, {
-      status: "requested",
-      summary: "Architect accepts the handoff.",
-      options: ["keep_integration_branch", "apply_to_project"],
-    });
-
-    assert.throws(() => store.append({
-      runId: "run_1",
-      type: "project.handoff_selected",
-      occurredAt: now(),
-      actor: { role: "architect", id: "architect_1" },
-      idempotencyKey: "handoff:invalid-authority",
-      payload: { choice: "keep_integration_branch" },
-    }), /requires the user or runner/i);
-
-    store.append({
-      runId: "run_1",
-      type: "project.handoff_selected",
-      occurredAt: now(),
-      actor: { role: "user", id: "local-user" },
-      idempotencyKey: "handoff:keep",
-      payload: {
-        choice: "keep_integration_branch",
-        integrationRevision: "revision_final",
-        integrationBranch: "aiboard/integration/run_1",
-        appliedToProject: false,
-      },
-    });
-    assert.equal(projection(store).status, "completed");
-    assert.equal(projection(store).projectHandoff?.status, "selected");
-    assert.equal(projection(store).projectHandoff?.choice, "keep_integration_branch");
+    assert.equal(complete.isError, true);
+    assert.equal(complete.error?.code, "completion_not_ready");
+    assert.equal(projection(store).status, "running");
+    assert.equal(projection(store).projectHandoff, undefined);
   });
 });
 

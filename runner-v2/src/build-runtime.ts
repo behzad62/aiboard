@@ -569,7 +569,17 @@ export class BuildRuntime {
         return { status: "idle", action: "final_verification_submission_unvalidated" };
       }
       if (generation.review?.status === "approved") {
-        return { status: "idle", action: "final_verification_approved" };
+        await this.runArchitect(
+          { type: "completion_decision_required" },
+          this.projection(),
+        );
+        const completed = this.projection();
+        if (completed.projectHandoff?.status !== "requested") {
+          throw new Error(
+            "Architect returned from completion_decision_required without a typed action.",
+          );
+        }
+        return this.afterArchitect("completion_decision_required");
       }
       if (
         generation.review?.status === "repair_required" ||
