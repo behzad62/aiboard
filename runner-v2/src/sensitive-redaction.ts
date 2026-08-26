@@ -4,6 +4,7 @@ const BEARER_VALUE = /\bBearer\s+[^\s,;]+/gi;
 const URL_VALUE = /https?:\/\/[^\s"'<>]+/gi;
 const MAXIMUM_JSON_TEXT_DEPTH = 8;
 const MAXIMUM_JSON_CONTAINER_ATTEMPTS = 64;
+const MAXIMUM_JSON_STRING_BOUND_INSPECTIONS = 64;
 
 interface RedactionLimits {
   maximumDepth: number;
@@ -46,7 +47,10 @@ function redactSensitiveTextInternal(
   const redactedJson = jsonTextDepth < MAXIMUM_JSON_TEXT_DEPTH
     ? redactJsonContainers(value, limits, jsonTextDepth)
     : value;
-  const redactedJsonProperties = redactQuotedJsonProperties(redactedJson);
+  const redactedJsonStrings = jsonTextDepth < MAXIMUM_JSON_TEXT_DEPTH
+    ? redactJsonStringLiterals(redactedJson, limits, jsonTextDepth)
+    : redactedJson;
+  const redactedJsonProperties = redactQuotedJsonProperties(redactedJsonStrings);
   const redactedUrls = redactedJsonProperties.replace(URL_VALUE, redactUrl);
   const redactedAssignments = redactAssignments(redactedUrls);
   return redactedAssignments.replace(BEARER_VALUE, `Bearer ${REDACTED}`)
@@ -156,26 +160,42 @@ function jsonContainerEnd(value: string, start: number): number | undefined {
 function redactQuotedJsonProperties(value: string): string {
   let output = "";
   let copiedThrough = 0;
+  let candidateStart: number | undefined;
+  let backslashRun = 0;
   for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== '"') continue;
-    const keyEnd = jsonStringEnd(value, index);
-    if (keyEnd === undefined) continue;
+    const character = value[index]!;
+    if (character === "\\") {
+      backslashRun += 1;
+      continue;
+    }
+    if (character !== '"') {
+      backslashRun = 0;
+      continue;
+    }
+    const escaped = backslashRun % 2 === 1;
+    backslashRun = 0;
+    if (escaped) continue;
+    if (candidateStart === undefined) {
+      candidateStart = index;
+      continue;
+    }
+    const keyEnd = index + 1;
     let key: unknown;
-    try { key = JSON.parse(value.slice(index, keyEnd)) as unknown; }
+    try { key = JSON.parse(value.slice(candidateStart, keyEnd)) as unknown; }
     catch {
-      index = keyEnd - 1;
+      candidateStart = index;
       continue;
     }
     let separatorEnd = keyEnd;
     while (/\s/.test(value[separatorEnd] ?? "")) separatorEnd += 1;
     if (value[separatorEnd] !== ":") {
-      index = keyEnd - 1;
+      candidateStart = index;
       continue;
     }
     separatorEnd += 1;
     while (/\s/.test(value[separatorEnd] ?? "")) separatorEnd += 1;
     if (typeof key !== "string" || !isSensitiveKey(key)) {
-      index = keyEnd - 1;
+      candidateStart = index;
       continue;
     }
     const valueEnd = jsonValueEnd(value, separatorEnd);
@@ -186,8 +206,81 @@ function redactQuotedJsonProperties(value: string): string {
     }
     copiedThrough = valueEnd;
     index = valueEnd - 1;
+    candidateStart = undefined;
+    backslashRun = 0;
   }
   return copiedThrough === 0 ? value : output + value.slice(copiedThrough);
+}
+
+function redactJsonStringLiterals(
+  value: string,
+  limits: RedactionLimits,
+  jsonTextDepth: number,
+): string {
+  let output = "";
+  let copiedThrough = 0;
+  let candidateStart: number | undefined;
+  let backslashRun = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (character === "\\") {
+      backslashRun += 1;
+      continue;
+    }
+    if (character !== '"') {
+      backslashRun = 0;
+      continue;
+    }
+    const escaped = backslashRun % 2 === 1;
+    backslashRun = 0;
+    if (escaped) continue;
+    if (candidateStart === undefined) {
+      candidateStart = index;
+      continue;
+    }
+    const end = index + 1;
+    let decoded: unknown;
+    try { decoded = JSON.parse(value.slice(candidateStart, end)) as unknown; }
+    catch {
+      candidateStart = index;
+      continue;
+    }
+    if (typeof decoded !== "string") {
+      candidateStart = index;
+      continue;
+    }
+    let redacted = redactSensitiveTextInternal(decoded, limits, jsonTextDepth + 1);
+    if (
+      redacted === decoded
+      && jsonTextDepth + 1 >= MAXIMUM_JSON_TEXT_DEPTH
+      && nestedJsonStringRequiresRedaction(decoded, limits)
+    ) redacted = REDACTED;
+    if (redacted !== decoded) {
+      output += value.slice(copiedThrough, candidateStart) + JSON.stringify(redacted);
+      copiedThrough = end;
+      candidateStart = undefined;
+      continue;
+    }
+    candidateStart = index;
+  }
+  return copiedThrough === 0 ? value : output + value.slice(copiedThrough);
+}
+
+function nestedJsonStringRequiresRedaction(value: string, limits: RedactionLimits): boolean {
+  let decoded: unknown = value;
+  for (let depth = 0; depth < MAXIMUM_JSON_STRING_BOUND_INSPECTIONS; depth += 1) {
+    if (typeof decoded !== "string") {
+      return JSON.stringify(redactSensitiveValueInternal(decoded, limits, MAXIMUM_JSON_TEXT_DEPTH))
+        !== JSON.stringify(decoded);
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(decoded) as unknown; }
+    catch {
+      return redactSensitiveTextInternal(decoded, limits, MAXIMUM_JSON_TEXT_DEPTH) !== decoded;
+    }
+    decoded = parsed;
+  }
+  return true;
 }
 
 function jsonStringEnd(value: string, start: number): number | undefined {

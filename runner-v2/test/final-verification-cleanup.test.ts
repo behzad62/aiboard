@@ -82,6 +82,12 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
         'diagnostic "access_token":["json-array-secret",{"value":"json-array-nested-secret"}] tail',
         'diagnostic "clientSecret":{"value":"json-object-secret"} tail',
         `${"{".repeat(65)} diagnostic "private_key":{"value":"json-late-secret"} tail`,
+        'prefix "noise diagnostic "access_token":{"value":"json-odd-quote-secret"} tail',
+        `payload=${JSON.stringify(JSON.stringify({
+          access_token: "json-encoded-access-secret",
+          clientSecret: { value: "json-encoded-object-secret" },
+          refresh_token: ["json-encoded-array-secret"],
+        }))} tail`,
       ],
     });
     const encoded = readFileSync(path, "utf8");
@@ -91,6 +97,7 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
       "query-access-secret", "query-client-secret", "evidence-secret", "whitespace-secret", "standalone-secret",
       "json-log-access-secret", "json-log-client-secret", "json-fragment-secret",
       "json-array-secret", "json-array-nested-secret", "json-object-secret", "json-late-secret",
+      "json-odd-quote-secret", "json-encoded-access-secret", "json-encoded-object-secret", "json-encoded-array-secret",
     ]) assert.doesNotMatch(encoded, new RegExp(secret));
     assert.match(encoded, /visible/);
     assert.match(encoded, /\[REDACTED\]/);
@@ -153,6 +160,11 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
         'legacy fragment "private_key":"legacy-json-private-secret"',
         'legacy fragment "access_token":["legacy-json-array-secret"]',
         `${"{".repeat(65)} legacy fragment "clientSecret":{"value":"legacy-json-late-secret"}`,
+        'prefix "noise legacy "access_token":{"value":"legacy-json-odd-quote-secret"}',
+        `payload=${JSON.stringify(JSON.stringify({
+          access_token: "legacy-json-encoded-secret",
+          clientSecret: { value: "legacy-json-encoded-object-secret" },
+        }))}`,
       ],
     }, null, 2)}\n`);
 
@@ -204,7 +216,7 @@ test("restart repairs a legacy unsafe diagnostics archive after its cleanup rece
     const repairedText = readFileSync(archivedPath, "utf8");
     assert.doesNotMatch(
       repairedText,
-      /legacy-access-token-secret|legacy-client-secret|legacy-json-access-secret|legacy-json-client-secret|legacy-json-private-secret|legacy-json-array-secret|legacy-json-late-secret/,
+      /legacy-access-token-secret|legacy-client-secret|legacy-json-access-secret|legacy-json-client-secret|legacy-json-private-secret|legacy-json-array-secret|legacy-json-late-secret|legacy-json-odd-quote-secret|legacy-json-encoded-secret|legacy-json-encoded-object-secret/,
     );
     assert.match(repairedText, /\[REDACTED\]/);
     const repaired = JSON.parse(repairedText) as { changedPaths: string[] };

@@ -80,13 +80,18 @@ test("loads only bounded redacted diagnostics from the exact Runner-owned run di
         '{"access_token":"json-observability-secret","clientSecret":"json-client-secret"}',
         'diagnostic "access_token":["json-array-observability-secret"] tail',
         `${"{".repeat(65)} diagnostic "clientSecret":{"value":"json-late-observability-secret"} tail`,
+        'prefix "noise observability "access_token":{"value":"json-odd-quote-observability-secret"} tail',
+        `payload=${JSON.stringify(JSON.stringify({
+          access_token: "json-encoded-observability-secret",
+          clientSecret: { value: "json-encoded-object-observability-secret" },
+        }))} tail`,
       ],
     }));
     const loaded = await loadFinalVerificationDiagnostics({ stateDirectory: root, runId: "run-1", expectedRunSegment: "run-segment", diagnosticsPath: path, generationId: "generation-1", taskId: "verify-1", targetRevision: "revision-current" });
     assert.deepEqual(loaded?.changedPaths, ["src/app.ts"]);
     assert.doesNotMatch(
       JSON.stringify(loaded),
-      /C:\\|runner-observability|object-secret|argv-secret|url-secret|query-secret|evidence-secret|whitespace-secret|standalone-secret|json-observability-secret|json-client-secret|json-array-observability-secret|json-late-observability-secret/,
+      /C:\\|runner-observability|object-secret|argv-secret|url-secret|query-secret|evidence-secret|whitespace-secret|standalone-secret|json-observability-secret|json-client-secret|json-array-observability-secret|json-late-observability-secret|json-odd-quote-observability-secret|json-encoded-observability-secret|json-encoded-object-observability-secret/,
     );
     assert.match(JSON.stringify(loaded), /\[REDACTED\]/);
     const foreign = join(root, "foreign.json");

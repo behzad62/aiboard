@@ -145,3 +145,68 @@ test("unrelated malformed container prefixes cannot exhaust later sensitive-prop
   assert.match(redacted, /"access_token":"\[REDACTED\]" tail$/);
   assert.equal(redactSensitiveText(redacted), redacted);
 });
+
+test("an unmatched quote prefix cannot hide a later sensitive property", () => {
+  const input = 'prefix "noise diagnostic "access_token":{"value":"ODD_QUOTE_SECRET"} tail';
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, 'prefix "noise diagnostic "access_token":"[REDACTED]" tail');
+  assert.doesNotMatch(redacted, /ODD_QUOTE_SECRET/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("redacts a JSON-encoded object string with scalar, object, array, and multiple sensitive keys", () => {
+  const literal = JSON.stringify(JSON.stringify({
+    access_token: "ENCODED_ACCESS_SECRET",
+    clientSecret: { value: "ENCODED_OBJECT_SECRET" },
+    refresh_token: ["ENCODED_ARRAY_SECRET", { nested: "ENCODED_NESTED_SECRET" }],
+    safe: { secretary: "visible-secretary", tokenizer: "visible-tokenizer" },
+  }));
+  const redacted = redactSensitiveText(`payload=${literal} tail`);
+  const encoded = redacted.slice("payload=".length, -" tail".length);
+  const decoded = JSON.parse(JSON.parse(encoded) as string) as Record<string, unknown>;
+  assert.equal(decoded.access_token, "[REDACTED]");
+  assert.equal(decoded.clientSecret, "[REDACTED]");
+  assert.equal(decoded.refresh_token, "[REDACTED]");
+  assert.doesNotMatch(redacted, /ENCODED_(?:ACCESS|OBJECT|ARRAY|NESTED)_SECRET/);
+  assert.match(redacted, /visible-secretary/);
+  assert.match(redacted, /visible-tokenizer/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("recursively redacts nested JSON string literals and preserves valid encoding", () => {
+  const objectText = JSON.stringify({ id_token: "NESTED_ENCODED_SECRET", safe: "visible" });
+  const nestedLiteral = JSON.stringify(JSON.stringify(JSON.stringify(objectText)));
+  const redacted = redactSensitiveText(`payload=${nestedLiteral} tail`);
+  const outer = redacted.slice("payload=".length, -" tail".length);
+  const decodedObject = JSON.parse(JSON.parse(JSON.parse(JSON.parse(outer) as string) as string) as string) as Record<string, unknown>;
+  assert.equal(decodedObject.id_token, "[REDACTED]");
+  assert.equal(decodedObject.safe, "visible");
+  assert.doesNotMatch(redacted, /NESTED_ENCODED_SECRET/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("deep JSON string encoding fails closed at the recursion bound", () => {
+  let encoded = JSON.stringify({ access_token: "DEPTH_BOUND_SECRET" });
+  for (let depth = 0; depth < 12; depth += 1) encoded = JSON.stringify(encoded);
+  const redacted = redactSensitiveText(encoded);
+  assert.doesNotMatch(redacted, /DEPTH_BOUND_SECRET/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("deep JSON string inspection preserves documented non-sensitive keys", () => {
+  let encoded = JSON.stringify({ secretary: "visible-secretary", tokenizer: "visible-tokenizer" });
+  for (let depth = 0; depth < 12; depth += 1) encoded = JSON.stringify(encoded);
+  const redacted = redactSensitiveText(encoded);
+  assert.match(redacted, /visible-secretary/);
+  assert.match(redacted, /visible-tokenizer/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("an unmatched quote prefix cannot hide a later JSON-encoded literal", () => {
+  const literal = JSON.stringify(JSON.stringify({ access_token: "ODD_ENCODED_SECRET" }));
+  const redacted = redactSensitiveText(`prefix "noise payload=${literal} tail`);
+  assert.doesNotMatch(redacted, /ODD_ENCODED_SECRET/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
