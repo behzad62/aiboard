@@ -632,6 +632,226 @@ test("durable submission rejects fabricated evidence IDs and hashes", () => {
   }
 });
 
+test("durable current criterion assignment requires an assigned worker identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-assigned-worker-required-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  try {
+    store.append(event("run_assigned_worker_required", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_assigned_worker",
+        objective: "Require worker ownership",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+        acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to the assigned worker." }],
+        acceptanceCriteriaVersion: 1,
+      }],
+    }));
+
+    assert.throws(
+      () => store.append(event("run_assigned_worker_required", "task.transitioned", "assign:1", {
+        taskId: "task_assigned_worker",
+        status: "assigned",
+        patch: { attempt: 1 },
+      })),
+      /assigned worker/i,
+    );
+    const projection = rebuildSchedulerProjection(
+      store.readRun("run_assigned_worker_required")
+    );
+    assert.equal(projection.tasks.task_assigned_worker.status, "planned");
+    assert.equal(projection.tasks.task_assigned_worker.assignedWorkerId, undefined);
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable submission rejects legacy worker absence after acceptance upgrade", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-upgraded-worker-required-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  try {
+    store.append(event("run_upgraded_worker_required", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_upgraded_worker",
+        objective: "Require worker ownership after upgrade",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+      }],
+    }));
+    store.append({
+      runId: "run_upgraded_worker_required",
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_upgraded_worker"] },
+    });
+    store.append(event("run_upgraded_worker_required", "task.transitioned", "assign:1", {
+      taskId: "task_upgraded_worker",
+      status: "assigned",
+      patch: { attempt: 1 },
+    }));
+    store.append(event("run_upgraded_worker_required", "task.transitioned", "run:1", {
+      taskId: "task_upgraded_worker",
+      status: "running",
+      patch: {},
+    }));
+    store.append({
+      runId: "run_upgraded_worker_required",
+      type: "acceptance_contract.upgraded",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: "task_upgraded_worker",
+          acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to the assigned worker." }],
+        }],
+      },
+    });
+    const evidence = evidenceStore.record({
+      runId: "run_upgraded_worker_required",
+      taskId: "task_upgraded_worker",
+      actor: { role: "architect", id: "architect_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "Architect evidence",
+        capturedAt: "2026-07-13T00:00:00.000Z",
+        screenshotArtifactHash: "a".repeat(64),
+        mediaType: "image/png",
+        byteLength: 16,
+      },
+      createdAt: "2026-07-13T00:00:00.000Z",
+      idempotencyKey: "architect-evidence",
+      attempt: 1,
+    });
+
+    assert.throws(
+      () => store.append(event("run_upgraded_worker_required", "task.transitioned", "submit:1", {
+        taskId: "task_upgraded_worker",
+        status: "submitted",
+        patch: {
+          changeSetId: "changeset_architect_evidence",
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: evidence.id,
+            artifactHashes: ["a".repeat(64)],
+            taskId: "task_upgraded_worker",
+            attempt: 1,
+          }],
+        },
+      })),
+      /assigned worker/i,
+    );
+    const projection = rebuildSchedulerProjection(
+      store.readRun("run_upgraded_worker_required")
+    );
+    assert.equal(projection.tasks.task_upgraded_worker.status, "running");
+    assert.equal(store.readRun("run_upgraded_worker_required").length, 5);
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable criterion submission permits only the assigned worker or an attributed descendant", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-worker-evidence-controls-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  const scenarios = [
+    { name: "architect", actor: { role: "architect" as const, id: "architect_1" }, accepted: false },
+    { name: "unrelated-worker", actor: { role: "worker" as const, id: "worker_other" }, accepted: false },
+    { name: "assigned-worker", actor: { role: "worker" as const, id: "worker_current" }, accepted: true },
+    { name: "attributed-descendant", actor: { role: "subagent" as const, id: "worker_current:call_1" }, accepted: true },
+  ];
+  try {
+    for (const scenario of scenarios) {
+      const runId = `run_worker_evidence_${scenario.name}`;
+      store.append(event(runId, "plan.created", "plan:1", {
+        revision: 1,
+        tasks: [{
+          id: "task_worker_evidence",
+          objective: "Check evidence ownership",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: [],
+          attempt: 0,
+          acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to the assigned worker." }],
+          acceptanceCriteriaVersion: 1,
+        }],
+      }));
+      store.append(event(runId, "task.transitioned", "assign:1", {
+        taskId: "task_worker_evidence",
+        status: "assigned",
+        patch: { attempt: 1, assignedWorkerId: "worker_current" },
+      }));
+      store.append(event(runId, "task.transitioned", "run:1", {
+        taskId: "task_worker_evidence",
+        status: "running",
+        patch: {},
+      }));
+      const evidence = evidenceStore.record({
+        runId,
+        taskId: "task_worker_evidence",
+        actor: scenario.actor,
+        fact: {
+          kind: "browser_screenshot",
+          label: `${scenario.name} evidence`,
+          capturedAt: "2026-07-13T00:00:00.000Z",
+          screenshotArtifactHash: "b".repeat(64),
+          mediaType: "image/png",
+          byteLength: 16,
+        },
+        createdAt: "2026-07-13T00:00:00.000Z",
+        idempotencyKey: `${scenario.name}-evidence`,
+        attempt: 1,
+      });
+      const submission = () => store.append(event(runId, "task.transitioned", "submit:1", {
+        taskId: "task_worker_evidence",
+        status: "submitted",
+        patch: {
+          changeSetId: `changeset_${scenario.name}`,
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: evidence.id,
+            artifactHashes: ["b".repeat(64)],
+            taskId: "task_worker_evidence",
+            attempt: 1,
+          }],
+        },
+      }));
+      if (scenario.accepted) {
+        submission();
+        assert.equal(
+          rebuildSchedulerProjection(store.readRun(runId)).tasks.task_worker_evidence.status,
+          "submitted"
+        );
+      } else {
+        assert.throws(submission, /outside the assigned worker/i);
+        assert.equal(
+          rebuildSchedulerProjection(store.readRun(runId)).tasks.task_worker_evidence.status,
+          "running"
+        );
+      }
+    }
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("retry clears the current acceptance projection while replay preserving versioned history", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-retry-projection-"));
   const database = join(root, "scheduler.sqlite");

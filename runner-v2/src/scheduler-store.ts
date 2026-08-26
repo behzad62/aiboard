@@ -222,6 +222,10 @@ export function validateSchedulerEvidenceEvent(
     const taskId = requiredString(event.payload, "taskId");
     const task = projection.tasks[taskId];
     if (task?.acceptanceCriteria) {
+      const assignedWorkerId = requiredAssignedWorkerId(
+        task.assignedWorkerId,
+        "Task submission",
+      );
       const links = boundCriterionEvidenceLinks(task, event.payload.patch);
       const records = getEvidenceRecords(evidenceStore, event.runId, task.id, links);
       assertDurableEvidence(
@@ -232,9 +236,7 @@ export function validateSchedulerEvidenceEvent(
           runId: event.runId,
           taskId: task.id,
           attempt: task.attempt,
-          ...(task.assignedWorkerId
-            ? { assignedWorkerId: task.assignedWorkerId }
-            : {}),
+          assignedWorkerId,
         },
         "Task submission",
       );
@@ -245,6 +247,10 @@ export function validateSchedulerEvidenceEvent(
     const taskId = requiredString(event.payload, "taskId");
     const task = projection.tasks[taskId];
     if (task?.acceptanceCriteria) {
+      const assignedWorkerId = requiredAssignedWorkerId(
+        task.assignedWorkerId,
+        "Review request",
+      );
       const links = boundCriterionEvidenceLinks(task, event.payload.criterionEvidenceLinks);
       const records = getEvidenceRecords(evidenceStore, event.runId, task.id, links);
       assertDurableEvidence(
@@ -255,9 +261,7 @@ export function validateSchedulerEvidenceEvent(
           runId: event.runId,
           taskId: task.id,
           attempt: task.attempt,
-          ...(task.assignedWorkerId
-            ? { assignedWorkerId: task.assignedWorkerId }
-            : {}),
+          assignedWorkerId,
         },
         "Review request",
       );
@@ -273,6 +277,10 @@ export function validateSchedulerEvidenceEvent(
   const taskId = requiredString(event.payload, "taskId");
   const task = projection.tasks[taskId];
   if (!task?.acceptanceCriteria || !task.criterionEvidenceLinks) return;
+  const assignedWorkerId = requiredAssignedWorkerId(
+    task.assignedWorkerId,
+    "Review decision",
+  );
   const records = getEvidenceRecords(
     evidenceStore,
     event.runId,
@@ -283,9 +291,7 @@ export function validateSchedulerEvidenceEvent(
     runId: event.runId,
     taskId: task.id,
     attempt: task.attempt,
-    ...(task.assignedWorkerId
-      ? { assignedWorkerId: task.assignedWorkerId }
-      : {}),
+    assignedWorkerId,
   };
   assertDurableEvidence(
     task.acceptanceCriteria,
@@ -673,6 +679,9 @@ export function reduceSchedulerEvent(
       }
       const transitionPatch =
         (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      if (status === "assigned" && task.acceptanceCriteria) {
+        requiredAssignedWorkerId(transitionPatch.assignedWorkerId, "Task assignment");
+      }
       const startsRetry =
         status === "planned" && (task.status === "rejected" || task.status === "failed");
       const submittedEvidenceLinks =
@@ -680,6 +689,7 @@ export function reduceSchedulerEvent(
           ? boundCriterionEvidenceLinks(task, transitionPatch)
           : undefined;
       if (status === "submitted" && task.acceptanceCriteria) {
+        requiredAssignedWorkerId(task.assignedWorkerId, "Task submission");
         const links = submittedEvidenceLinks;
         const validation = validateCriterionEvidenceLinks(
           task.acceptanceCriteria,
@@ -838,6 +848,7 @@ export function reduceSchedulerEvent(
         ? boundCriterionEvidenceLinks(task, requestedLinks)
         : undefined;
       if (task.acceptanceCriteria) {
+        requiredAssignedWorkerId(task.assignedWorkerId, "Review request");
         const validation = validateCriterionEvidenceLinks(
           task.acceptanceCriteria,
           boundRequestedLinks ?? [],
@@ -892,6 +903,7 @@ export function reduceSchedulerEvent(
       }
       let criterionVerdicts: CriterionReviewVerdict[] | undefined;
       if (task.acceptanceCriteria) {
+        requiredAssignedWorkerId(task.assignedWorkerId, "Review decision");
         const links = task.criterionEvidenceLinks;
         if (!links) {
           throw new Error(`Task ${taskId} has no submitted criterion evidence mappings.`);
@@ -1717,6 +1729,15 @@ function cloneBuildTask(task: BuildTask): BuildTask {
 function requiredString(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   if (typeof value !== "string" || !value) throw new Error(`Missing ${key}.`);
+  return value;
+}
+
+function requiredAssignedWorkerId(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(
+      `${label} requires a non-empty assigned worker identity for criterion evidence.`
+    );
+  }
   return value;
 }
 
