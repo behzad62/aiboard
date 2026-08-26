@@ -180,6 +180,7 @@ export class NativeBuildFactory {
       integrationManager,
     });
     const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       stopRun: (runId) => this.managedProcesses.stopRun(runId),
       closeBrowserRun: (runId) => this.browserBackend.closeRun(runId),
@@ -322,6 +323,9 @@ export class NativeBuildFactory {
       architectDriver,
       integrationDriver,
       finalVerificationDriver,
+      finalVerificationCleanupDriver: {
+        cleanup: async (input) => await finalVerificationCleanup.cleanup(input),
+      },
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {

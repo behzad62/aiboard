@@ -116,6 +116,16 @@ export interface FinalVerificationCheckDriver {
   executeCheck(input: FinalVerificationCheckDriverInput): Promise<FinalVerificationCheckExecution>;
 }
 
+export interface FinalVerificationCleanupDriver {
+  cleanup(input: {
+    runId: string;
+    generationId: string;
+    taskId: string;
+    targetRevision: string;
+    attempt: number;
+  }): Promise<{ diagnosticsPath?: string }>;
+}
+
 export interface BuildRuntimeOptions {
   runId: string;
   runPolicy?: NativeBuildRunPolicy;
@@ -132,6 +142,7 @@ export interface BuildRuntimeOptions {
   providerRetryDeadlineMs?: () => number | undefined;
   evidenceStore?: EvidenceStore;
   finalVerificationDriver?: FinalVerificationCheckDriver;
+  finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
 }
 
 export interface BuildStepResult {
@@ -154,6 +165,7 @@ export class BuildRuntime {
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
   private readonly evidenceStore?: EvidenceStore;
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
+  private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -171,6 +183,7 @@ export class BuildRuntime {
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.evidenceStore = options.evidenceStore;
     this.finalVerificationDriver = options.finalVerificationDriver;
+    this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -568,6 +581,9 @@ export class BuildRuntime {
       if (!generation.submissionResult) {
         return { status: "idle", action: "final_verification_submission_unvalidated" };
       }
+      if (generation.cleanup?.status !== "succeeded") {
+        return await this.advanceFinalVerificationCleanup(generation);
+      }
       if (generation.review?.status === "approved") {
         await this.runArchitect(
           { type: "completion_decision_required" },
@@ -767,6 +783,81 @@ export class BuildRuntime {
     return { status: "progressed", action: "final_verification_submitted" };
   }
 
+  private async advanceFinalVerificationCleanup(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): Promise<BuildStepResult> {
+    if (!this.finalVerificationCleanupDriver) {
+      throw new Error("Final verification cleanup requires an exact-owned cleanup driver.");
+    }
+    let cleanup = generation.cleanup;
+    if (!cleanup || cleanup.status === "failed") {
+      const attempt = (cleanup?.attempt ?? 0) + 1;
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.cleanup_started",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:cleanup:${attempt}:started`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt,
+        },
+      });
+      cleanup = this.projection().finalVerification?.current?.cleanup;
+    }
+    if (!cleanup || cleanup.status !== "started") {
+      throw new Error("Final verification cleanup start was not durably recorded.");
+    }
+    try {
+      const result = await this.finalVerificationCleanupDriver.cleanup({
+        runId: this.runId,
+        generationId: generation.generationId,
+        taskId: generation.taskId,
+        targetRevision: generation.targetRevision,
+        attempt: cleanup.attempt,
+      });
+      if (!this.isCurrentGeneration(generation)) {
+        return { status: "progressed", action: "final_verification_invalidated" };
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.cleanup_succeeded",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:cleanup:${cleanup.attempt}:succeeded`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt: cleanup.attempt,
+          ...(result.diagnosticsPath ? { diagnosticsPath: result.diagnosticsPath } : {}),
+        },
+      });
+      return { status: "progressed", action: "final_verification_cleanup_succeeded" };
+    } catch (error) {
+      if (!this.isCurrentGeneration(generation)) {
+        return { status: "progressed", action: "final_verification_invalidated" };
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.cleanup_failed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:cleanup:${cleanup.attempt}:failed`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt: cleanup.attempt,
+          error: boundedCleanupError(error),
+        },
+      });
+      return { status: "progressed", action: "final_verification_cleanup_failed" };
+    }
+  }
+
   private isCurrentGeneration(
     generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
   ): boolean {
@@ -907,4 +998,11 @@ function emptyProjection(runId: string): SchedulerProjection {
     },
     lastSequence: 0,
   };
+}
+
+function boundedCleanupError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s]+/gi, "$1=[REDACTED]")
+    .slice(0, 4_096) || "Final verification cleanup failed.";
 }

@@ -67,6 +67,9 @@ export type SchedulerEventType =
   | "final_verification.generation_created"
   | "final_verification.check_completed"
   | "final_verification.submitted"
+  | "final_verification.cleanup_started"
+  | "final_verification.cleanup_succeeded"
+  | "final_verification.cleanup_failed"
   | "final_verification.review_requested"
   | "final_verification.review_decided"
   | "final_verification.repairs_planned";
@@ -223,8 +226,21 @@ export interface FinalVerificationGenerationProjection {
   completedChecks?: FinalVerificationCompletedCheckProjection[];
   submission?: FinalVerificationSubmissionReference;
   submissionResult?: FinalVerificationSubmission;
+  cleanup?: FinalVerificationCleanupProjection;
   review?: FinalVerificationReviewReference;
   repairTaskIds?: string[];
+}
+
+export interface FinalVerificationCleanupProjection {
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  attempt: number;
+  status: "started" | "succeeded" | "failed";
+  startedAt: string;
+  finishedAt?: string;
+  diagnosticsPath?: string;
+  error?: string;
 }
 
 export interface FinalVerificationCompletedCheckProjection
@@ -403,6 +419,17 @@ export function buildCompletionReadiness(
         issues.push(`Submitted final-verification category ${planned.category} is incomplete or conflicts with persisted facts.`);
       }
     }
+  }
+
+  const cleanup = current.cleanup;
+  if (
+    !cleanup || cleanup.status !== "succeeded" ||
+    cleanup.generationId !== current.generationId ||
+    cleanup.taskId !== current.taskId ||
+    cleanup.targetRevision !== current.targetRevision ||
+    !cleanup.finishedAt
+  ) {
+    issues.push("Current final-verification owned cleanup has not durably succeeded.");
   }
 
   const review = current.review;
@@ -933,6 +960,21 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner may submit final verification.");
       }
       recordFinalVerificationSubmission(next, event.payload);
+      break;
+    }
+    case "final_verification.cleanup_started": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may start final verification cleanup.");
+      recordFinalVerificationCleanup(next, event.payload, "started", event.occurredAt);
+      break;
+    }
+    case "final_verification.cleanup_succeeded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may complete final verification cleanup.");
+      recordFinalVerificationCleanup(next, event.payload, "succeeded", event.occurredAt);
+      break;
+    }
+    case "final_verification.cleanup_failed": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may fail final verification cleanup.");
+      recordFinalVerificationCleanup(next, event.payload, "failed", event.occurredAt);
       break;
     }
     case "final_verification.review_requested": {
@@ -1749,6 +1791,9 @@ function recordFinalVerificationReviewRequest(
   const current = requireCurrentFinalVerification(projection, payload);
   const review = parseFinalVerificationReview(payload, "requested");
   assertFinalVerificationBinding(current, review);
+  if (current.cleanup?.status !== "succeeded") {
+    throw new Error("Final verification review requires durable owned cleanup success.");
+  }
   if (!current.submission || current.submission.submissionId !== review.submissionId) {
     throw new Error("Final verification review must reference the current submission.");
   }
@@ -1761,6 +1806,66 @@ function recordFinalVerificationReviewRequest(
     ...projection.tasks[current.taskId],
     verificationReviewId: review.reviewId,
   };
+}
+
+function recordFinalVerificationCleanup(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+  status: FinalVerificationCleanupProjection["status"],
+  occurredAt: string,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  if (!current.submission || !current.submissionResult) {
+    throw new Error("Final verification cleanup requires a validated durable submission.");
+  }
+  const attempt = requiredNumber(payload, "attempt");
+  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new Error("Final verification cleanup attempt is invalid.");
+  const identity = {
+    generationId: requiredString(payload, "generationId"),
+    taskId: requiredString(payload, "taskId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    attempt,
+  };
+  assertFinalVerificationBinding(current, identity);
+  const existing = current.cleanup;
+  if (status === "started") {
+    if (existing?.status === "succeeded") throw new Error("Final verification cleanup already succeeded.");
+    if (existing?.status === "started") {
+      if (existing.attempt === attempt) return;
+      throw new Error("Final verification cleanup already has an active attempt.");
+    }
+    if (existing && attempt !== existing.attempt + 1) {
+      throw new Error("Final verification cleanup retry attempt is not sequential.");
+    }
+    if (!existing && attempt !== 1) throw new Error("Initial final verification cleanup attempt must be one.");
+    current.cleanup = { ...identity, attempt, status, startedAt: occurredAt };
+    return;
+  }
+  if (!existing || existing.status !== "started" || existing.attempt !== attempt) {
+    if (existing?.status === status && existing.attempt === attempt) {
+      const incomingDetail = status === "succeeded"
+        ? (typeof payload.diagnosticsPath === "string" && payload.diagnosticsPath.trim()
+            ? payload.diagnosticsPath.slice(0, 4_096) : undefined)
+        : requiredString(payload, "error").slice(0, 4_096);
+      const existingDetail = status === "succeeded" ? existing.diagnosticsPath : existing.error;
+      if (incomingDetail === existingDetail) return;
+      throw new Error(`Final verification cleanup ${status} conflicts with its durable result.`);
+    }
+    throw new Error(`Final verification cleanup ${status} requires its exact started attempt.`);
+  }
+  if (status === "succeeded") {
+    current.cleanup = {
+      ...existing,
+      status,
+      finishedAt: occurredAt,
+      ...(typeof payload.diagnosticsPath === "string" && payload.diagnosticsPath.trim()
+        ? { diagnosticsPath: payload.diagnosticsPath.slice(0, 4_096) }
+        : {}),
+    };
+  } else {
+    const error = requiredString(payload, "error").slice(0, 4_096);
+    current.cleanup = { ...existing, status, finishedAt: occurredAt, error };
+  }
 }
 
 function recordFinalVerificationReviewDecision(
@@ -2223,6 +2328,7 @@ function cloneFinalVerificationGeneration(
     ...(generation.submissionResult
       ? { submissionResult: cloneJson(generation.submissionResult) }
       : {}),
+    ...(generation.cleanup ? { cleanup: { ...generation.cleanup } } : {}),
     ...(generation.review
       ? {
           review: {

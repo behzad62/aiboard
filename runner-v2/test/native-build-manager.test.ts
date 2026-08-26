@@ -37,6 +37,95 @@ const spec: NativeBuildSpec = {
   idempotencyKey: "build-spec:run_1",
 };
 
+test("explicit pause quiesces exact run resources without invoking workspace cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-pause-quiesce-"));
+  const calls: string[] = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+    const projection = fakeRuntime("run_1").projection();
+    const runtime = {
+      ...fakeRuntime("run_1"),
+      pause: () => { projection.status = "paused"; calls.push("pause"); return projection; },
+      projection: () => projection,
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs,
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => { calls.push("quiesce"); },
+          cleanup: async () => { calls.push("cleanup"); return {}; },
+        },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    await manager.pause("run_1", "user pause", "pause-one");
+    assert.deepEqual(calls, ["pause", "quiesce"]);
+  } finally { await manager?.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("startup recovery quiesces active run resources without removing verification state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recovery-quiesce-"));
+  let workspacePresent = true;
+  const calls: string[] = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+    specs.save(spec);
+    manager = new NativeBuildManager({
+      specs,
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime: fakeRuntime("run_1"),
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => { calls.push("quiesce"); },
+          cleanup: async () => { workspacePresent = false; calls.push("cleanup"); return {}; },
+        },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.recover();
+    assert.deepEqual(calls, ["quiesce"]);
+    assert.equal(workspacePresent, true);
+  } finally { await manager?.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("autonomous pump error durably pauses then quiesces exact run resources", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-error-quiesce-"));
+  const calls: string[] = [];
+  const errors: unknown[] = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    const projection = fakeRuntime("run_1").projection();
+    const runtime = {
+      ...fakeRuntime("run_1"), projection: () => projection,
+      runUntilBlocked: async () => { throw new Error("pump failed"); },
+      pause: () => { projection.status = "paused"; calls.push("pause"); return projection; },
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpError: (_runId, error) => errors.push(error),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => { calls.push("quiesce"); }, cleanup: async () => ({}),
+        },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec); manager.activate("run_1"); await manager.awaitIdle("run_1");
+    assert.deepEqual(calls, ["pause", "quiesce"]);
+    assert.equal(errors.length, 1);
+  } finally { await manager?.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("native Build manager recreates persisted runtimes and closes resources", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-"));
   const database = join(root, "builds.sqlite");
@@ -1755,6 +1844,12 @@ function requestedHandoffProjection(
             evidenceIds: [],
             submittedAt: "2026-07-14T00:00:02.000Z",
             green: true,
+          },
+          cleanup: {
+            generationId, taskId, targetRevision: revision, attempt: 1,
+            status: "succeeded",
+            startedAt: "2026-07-14T00:00:02.100Z",
+            finishedAt: "2026-07-14T00:00:02.200Z",
           },
           review: {
             reviewId,

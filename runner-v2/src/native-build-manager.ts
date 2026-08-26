@@ -17,7 +17,7 @@ import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
 } from "./integration-manager.js";
-import type { OwnedFinalVerificationCleanup } from "./final-verification-cleanup.js";
+import type { FinalVerificationCleanupController } from "./final-verification-cleanup.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
@@ -28,7 +28,7 @@ export interface NativeBuildRuntimeHandle {
   compact(): void | Promise<void>;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
   /** Constructed cleanup primitive; lifecycle wiring is owned by the P2.6 manager packet. */
-  finalVerificationCleanup?: OwnedFinalVerificationCleanup;
+  finalVerificationCleanup?: FinalVerificationCleanupController;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
 }
@@ -65,14 +65,21 @@ export class NativeBuildManager implements BuildControlPlane {
   async recover(): Promise<void> {
     const active: string[] = [];
     const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
+    const quiesceFailed = new Set<string>();
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
         const handle = await this.ensureRuntime(spec);
+        try {
+          await handle.finalVerificationCleanup?.quiesceRun();
+        } catch (error) {
+          quiesceFailed.add(spec.runId);
+          this.options.onPumpError?.(spec.runId, error);
+        }
         const status = handle.runtime.projection().status;
-        if (status === "completed") {
+        if (status === "completed" && !quiesceFailed.has(spec.runId)) {
           settled.push([spec.runId, handle]);
         }
-        if (this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
+        if (!quiesceFailed.has(spec.runId) && this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
       }
     });
     const compactAndCleanup = async () => {
@@ -194,9 +201,11 @@ export class NativeBuildManager implements BuildControlPlane {
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
     const handle = this.require(runId);
-    return await this.withRuntimeActivity(async () =>
-      handle.runtime.pause(reason, idempotencyKey)
-    );
+    return await this.withRuntimeActivity(async () => {
+      const projection = handle.runtime.pause(reason, idempotencyKey);
+      await handle.finalVerificationCleanup?.quiesceRun();
+      return projection;
+    });
   }
 
   async resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
@@ -379,6 +388,7 @@ export class NativeBuildManager implements BuildControlPlane {
             "no_mechanical_progress",
             `autonomous-idle:${projection.lastSequence}`
           );
+          await handle.finalVerificationCleanup?.quiesceRun();
         }
         result = { status: "paused", action: "no_mechanical_progress" };
       }
@@ -398,7 +408,12 @@ export class NativeBuildManager implements BuildControlPlane {
           `autonomous-error:${projection.lastSequence}`
         );
       }
-      this.options.onPumpError?.(runId, error);
+      let reported = error;
+      try { await handle.finalVerificationCleanup?.quiesceRun(); }
+      catch (quiesceError) {
+        reported = new AggregateError([error, quiesceError], `Build ${runId} failed and could not quiesce owned resources.`);
+      }
+      this.options.onPumpError?.(runId, reported);
       this.options.onPumpResult?.(runId, {
         status: "paused",
         action: "autonomous_pump_error",
@@ -423,8 +438,20 @@ export class NativeBuildManager implements BuildControlPlane {
         handle,
         await execute()
       );
+      if (finalized.result.status === "paused") {
+        await handle.finalVerificationCleanup?.quiesceRun();
+      }
       result = finalized.result;
       compaction = finalized.compaction;
+    } catch (error) {
+      try { await handle.finalVerificationCleanup?.quiesceRun(); }
+      catch (quiesceError) {
+        throw new AggregateError(
+          [error, quiesceError],
+          `Build ${runId} failed and could not quiesce owned resources.`,
+        );
+      }
+      throw error;
     } finally {
       releaseActivity();
       if (compaction) await compaction;

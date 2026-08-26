@@ -1133,3 +1133,77 @@ passed (normal LF-to-CRLF warnings only)
 
 P2.6A primitives are complete. Durable lifecycle wiring, handoff blocking,
 client/UI projection, repair routing, and Playwright E2E remain deferred.
+
+## P2.6B1 durable cleanup lifecycle
+
+Replaced the P2.6A per-process `completed` shortcut with mandatory
+generation/task/target identity and durable per-generation cleanup receipts.
+Receipts live beneath the run-owned audit root, survive restart, conflict on a
+foreign identity, and allow the crash window after physical removal but before
+the scheduler success event to converge without a second deletion. A later
+generation always owns a distinct receipt and cleans its newly created
+workspace. `quiesceRun()` stops only authenticated run-owned process trees and
+closes only exact-run browser sessions without touching diagnostics or the
+verification workspace.
+
+Added durable `cleanup_started`, `cleanup_succeeded`, and `cleanup_failed`
+scheduler events and current/history projection state. The reducer enforces
+runner authority, validated submission precondition, exact current identity,
+sequential attempts, legal transitions, semantic idempotency, bounded failure
+detail/archive reference, and conflicting/stale rejection. Invalidation clones
+cleanup state into history but never lets it authorize a fresh generation.
+
+BuildRuntime now starts cleanup after the validated green submission, invokes
+the factory-owned cleanup driver, and durably records success or bounded,
+secret-redacted failure. Started/failed states safely reconcile on resume and
+restart. Architect review is unavailable until exact current cleanup succeeds.
+The shared completion predicate also requires that success, so raw completion,
+typed completion, handoff request, physical handoff selection, control, and
+supervisor paths remain fail-closed.
+
+NativeBuildManager quiesces exact-run resources on explicit pause, startup
+recovery, autonomous no-progress pause, pump error, and paused public execution
+results. Quiesce never invokes verification-workspace cleanup. Failures flow
+through the existing pump error boundary and prevent automatic recovery
+activation; no PID/port fallback was introduced.
+
+### P2.6B1 red-first and fault evidence
+
+- The first execution test went red when a green submission entered Architect
+  review directly (`final_verification_review_required` no typed action) instead
+  of recording cleanup.
+- Pause/recovery tests went red with actual calls `[pause]` instead of
+  `[pause, quiesce]`, and `[]` instead of `[quiesce]`.
+- Cleanup failure/restart tests prove durable redacted failure, no review, and
+  sequential attempt-2 success after SQLite reopen.
+- Raw forged success without validated submission/start and stale cleanup after
+  integration invalidation reject mechanically.
+- Reopened receipt and durable-start replay cover cleanup crash windows; a
+  later generation still removes its own workspace.
+
+Fault-only mutations were restored after proving red:
+
+- Removing cleanup from `buildCompletionReadiness` made the raw terminal matrix
+  fail because `run.completed` accepted missing cleanup success.
+- Reintroducing the old per-run completed boolean made the later-generation
+  test fail because generation 2's workspace remained present.
+
+### P2.6B1 current validation
+
+```text
+Affected final-verification/build/runtime/factory/manager/recovery/process/browser set:
+109 tests, 109 passed, 0 failed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+Targeted ESLint
+passed with no warnings
+
+git diff --check
+passed (normal LF-to-CRLF warnings only)
+```
+
+P2.6B1 durable cleanup lifecycle is complete. Non-green-to-repair cleanup
+bridging, client/UI projection, broader audit export, and Playwright E2E remain
+deferred to later P2.6 packets.

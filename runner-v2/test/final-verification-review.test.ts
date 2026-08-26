@@ -102,7 +102,7 @@ test("mechanically non-green or unvalidated submission cannot be approved", asyn
     const result = await invokeReview(tools, approvedReview(), "non-green-review");
     assert.equal(result.isError, true);
     assert.match(result.error?.message ?? "", /green|submission|mechanical/i);
-    assert.equal(projection(fixture.store).finalVerification?.current?.review?.status, "requested");
+    assert.equal(projection(fixture.store).finalVerification?.current?.review, undefined);
   } finally {
     fixture.close();
   }
@@ -423,7 +423,16 @@ function appendBase(
       }),
     },
   });
-  if (options.reviewRequested !== false) {
+  if (!options.nonGreenCategory) {
+    for (const [type, suffix] of [["final_verification.cleanup_started", "started"], ["final_verification.cleanup_succeeded", "succeeded"]] as const) {
+      store.append({
+        runId: RUN_ID, type, occurredAt: "2026-08-26T00:00:09.500Z",
+        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: `cleanup-${suffix}`,
+        payload: { taskId: TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1 },
+      });
+    }
+  }
+  if (options.reviewRequested !== false && !options.nonGreenCategory) {
     store.append({
       runId: RUN_ID,
       type: "final_verification.review_requested",

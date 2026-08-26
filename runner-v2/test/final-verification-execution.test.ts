@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   BuildRuntime,
   type FinalVerificationCheckDriver,
+  type FinalVerificationCleanupDriver,
 } from "../src/build-runtime.js";
 import type {
   FinalVerificationCategory,
@@ -27,10 +28,14 @@ test("restart reuses completed checks and executes only pending categories befor
   const calls: FinalVerificationCategory[] = [];
   let workerCalls = 0;
   const driver = checkDriver(calls);
+  const cleanupCalls: string[] = [];
+  const cleanupDriver: FinalVerificationCleanupDriver = {
+    cleanup: async (input) => { cleanupCalls.push(input.generationId); return {}; },
+  };
   try {
     let runtime = buildRuntime(fixture.store, fixture.evidence, driver, () => {
       workerCalls += 1;
-    });
+    }, cleanupDriver);
     assert.deepEqual(await runtime.step(), {
       status: "progressed",
       action: "final_verification_check_completed",
@@ -47,7 +52,7 @@ test("restart reuses completed checks and executes only pending categories befor
     });
     runtime = buildRuntime(fixture.store, fixture.evidence, driver, () => {
       workerCalls += 1;
-    });
+    }, cleanupDriver);
     await runtime.step();
     await runtime.step();
     await runtime.step();
@@ -73,6 +78,12 @@ test("restart reuses completed checks and executes only pending categories befor
       1,
     );
 
+    assert.deepEqual(await runtime.step(), {
+      status: "progressed",
+      action: "final_verification_cleanup_succeeded",
+    });
+    assert.deepEqual(cleanupCalls, [GENERATION_ID]);
+    assert.equal(runtime.projection().finalVerification?.current?.cleanup?.status, "succeeded");
     await assert.rejects(
       () => runtime.step(),
       /final_verification_review_required.*typed action/i,
@@ -112,6 +123,40 @@ test("a non-green check is persisted once and stops the generation before submis
     fixture.store.close();
     fixture.evidence.close();
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("durable cleanup failure blocks review and restart retries the exact generation", async () => {
+  const fixture = createFixture();
+  const categories: FinalVerificationCategory[] = [];
+  let cleanupCalls = 0;
+  const cleanupDriver: FinalVerificationCleanupDriver = {
+    cleanup: async () => {
+      cleanupCalls += 1;
+      if (cleanupCalls === 1) throw new Error("cleanup token=secret-value failed");
+      return {};
+    },
+  };
+  try {
+    let runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver(categories), undefined, cleanupDriver);
+    for (let index = 0; index < 5; index += 1) await runtime.step();
+    assert.equal((await runtime.step()).action, "final_verification_cleanup_failed");
+    let current = runtime.projection().finalVerification?.current;
+    assert.equal(current?.cleanup?.status, "failed");
+    assert.match(current?.cleanup?.error ?? "", /token=\[REDACTED\]/);
+    assert.equal(current?.review, undefined);
+
+    fixture.store.close();
+    fixture.store = new SqliteSchedulerStore(fixture.database, { evidenceStore: fixture.evidence });
+    runtime = buildRuntime(fixture.store, fixture.evidence, checkDriver(categories), undefined, cleanupDriver);
+    assert.equal((await runtime.step()).action, "final_verification_cleanup_succeeded");
+    current = runtime.projection().finalVerification?.current;
+    assert.equal(current?.cleanup?.status, "succeeded");
+    assert.equal(current?.cleanup?.attempt, 2);
+    assert.equal(current?.review, undefined);
+    assert.equal(cleanupCalls, 2);
+  } finally {
+    fixture.store.close(); fixture.evidence.close(); rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
@@ -165,12 +210,14 @@ function buildRuntime(
   evidenceStore: SqliteEvidenceStore,
   finalVerificationDriver: FinalVerificationCheckDriver,
   onWorker = () => undefined,
+  finalVerificationCleanupDriver?: FinalVerificationCleanupDriver,
 ) {
   return new BuildRuntime({
     runId: RUN_ID,
     store,
     evidenceStore,
     finalVerificationDriver,
+    finalVerificationCleanupDriver,
     workerDriver: {
       run: async () => {
         onWorker();

@@ -55,6 +55,9 @@ test("raw terminal events require the exact current approved verification projec
     ["green complete submission", (projection) => {
       delete projection.finalVerification!.current!.submissionResult;
     }],
+    ["durable cleanup success", (projection) => {
+      delete projection.finalVerification!.current!.cleanup;
+    }],
     ["all completed categories", (projection) => {
       projection.finalVerification!.current!.completedChecks!.pop();
     }],
@@ -471,6 +474,15 @@ function validProjection(): SchedulerProjection {
           submittedAt: "2026-08-26T00:00:02.000Z",
           green: true,
         },
+        cleanup: {
+          generationId: GENERATION_ID,
+          taskId: FINAL_TASK_ID,
+          targetRevision: REVISION,
+          attempt: 1,
+          status: "succeeded",
+          startedAt: "2026-08-26T00:00:02.100Z",
+          finishedAt: "2026-08-26T00:00:02.200Z",
+        },
         review: {
           reviewId: REVIEW_ID,
           submissionId: SUBMISSION_ID,
@@ -649,6 +661,22 @@ function createStoreFixture(ready: boolean): StoreFixture {
       attempt: 1,
       submissionResult,
     },
+  });
+  fixture.store.append({
+    runId: RUN_ID,
+    type: "final_verification.cleanup_started",
+    occurredAt: "2026-08-26T00:00:09.100Z",
+    actor: { role: "runner", id: "runtime" },
+    idempotencyKey: "cleanup-start",
+    payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION, attempt: 1 },
+  });
+  fixture.store.append({
+    runId: RUN_ID,
+    type: "final_verification.cleanup_succeeded",
+    occurredAt: "2026-08-26T00:00:09.200Z",
+    actor: { role: "runner", id: "runtime" },
+    idempotencyKey: "cleanup-success",
+    payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION, attempt: 1 },
   });
   fixture.store.append({
     runId: RUN_ID,

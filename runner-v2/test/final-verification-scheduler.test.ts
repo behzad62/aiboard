@@ -87,13 +87,13 @@ test("same final verification generation is idempotent and conflicting current g
 test("submission and review references must stay bound to the current generation", () => {
   const fixture = createFixture();
   try {
-    fixture.store.append(event(fixture.runId, "final_verification.submitted", "verification:submission:one", {
-      taskId: fixture.taskId,
-      generationId: GENERATION_ONE,
-      targetRevision: REVISION_ONE,
-      attempt: 1,
-      submissionId: "submission-one",
-    }));
+    assert.throws(
+      () => fixture.store.append(event(fixture.runId, "final_verification.cleanup_succeeded", "verification:cleanup:forged", {
+        taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE, attempt: 1,
+      })),
+      /validated|submission|started/i,
+    );
+    appendValidatedSubmission(fixture, "submission-one", "one");
     fixture.store.append(event(fixture.runId, "final_verification.review_requested", "verification:review:request", {
       taskId: fixture.taskId,
       generationId: GENERATION_ONE,
@@ -161,13 +161,7 @@ test("integration revision advancement invalidates current verification and surv
   const fixture = createFixture();
   const database = join(fixture.root, "scheduler.sqlite");
   try {
-    fixture.store.append(event(fixture.runId, "final_verification.submitted", "verification:submission:history", {
-      taskId: fixture.taskId,
-      generationId: GENERATION_ONE,
-      targetRevision: REVISION_ONE,
-      attempt: 1,
-      submissionId: "submission-history",
-    }));
+    appendValidatedSubmission(fixture, "submission-history", "history");
     fixture.store.append(event(fixture.runId, "final_verification.review_requested", "verification:review:history", {
       taskId: fixture.taskId,
       generationId: GENERATION_ONE,
@@ -194,29 +188,19 @@ test("integration revision advancement invalidates current verification and surv
     assert.equal(stale.integrationRevision, REVISION_TWO);
     assert.equal(stale.finalVerification?.current, undefined);
     assert.equal(stale.finalVerification?.history.length, 1);
-    assert.deepEqual(stale.finalVerification?.history[0], {
-      taskId: fixture.taskId,
-      generationId: GENERATION_ONE,
-      targetRevision: REVISION_ONE,
-      planVersion: 1,
-      plan: PLAN,
-      state: "invalidated",
-      invalidatedByRevision: REVISION_TWO,
-      submission: {
-        submissionId: "submission-history",
-        generationId: GENERATION_ONE,
-        targetRevision: REVISION_ONE,
-        attempt: 1,
-      },
-      review: {
-        reviewId: "review-history",
-        submissionId: "submission-history",
-        generationId: GENERATION_ONE,
-        targetRevision: REVISION_ONE,
-        attempt: 1,
-        status: "approved",
-      },
-    });
+    const history = stale.finalVerification?.history[0];
+    assert.equal(history?.generationId, GENERATION_ONE);
+    assert.equal(history?.state, "invalidated");
+    assert.equal(history?.invalidatedByRevision, REVISION_TWO);
+    assert.equal(history?.submission?.submissionId, "submission-history");
+    assert.equal(history?.cleanup?.status, "succeeded");
+    assert.equal(history?.review?.status, "approved");
+    assert.throws(
+      () => fixture.store.append(event(fixture.runId, "final_verification.cleanup_succeeded", "verification:cleanup:stale", {
+        taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE, attempt: 1,
+      })),
+      /current|stale|generation/i,
+    );
     assert.throws(
       () => fixture.store.append(event(fixture.runId, "final_verification.submitted", "verification:submission:stale", {
         taskId: fixture.taskId,
@@ -299,6 +283,33 @@ function createFixture(): Fixture {
   }));
   const projection = rebuildSchedulerProjection(store.readRun(runId));
   return { root, store, runId, taskId, generationEvent, projection };
+}
+
+function appendValidatedSubmission(fixture: Fixture, submissionId: string, key: string): void {
+  for (const check of PLAN.checks) {
+    fixture.store.append(event(fixture.runId, "final_verification.check_completed", `verification:${key}:check:${check.category}`, {
+      taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE,
+      attempt: 1, workspacePath: "C:/verification", startedAt: "2026-08-26T00:00:01.000Z",
+      finishedAt: "2026-08-26T00:00:02.000Z",
+      result: { ...check, green: true, evidenceIds: [], facts: [], issues: [] },
+    }));
+  }
+  fixture.store.append(event(fixture.runId, "final_verification.submitted", `verification:submission:${key}`, {
+    taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE,
+    attempt: 1, submissionId,
+    submissionResult: {
+      kind: "final_verification_submission", generationId: GENERATION_ONE, runId: fixture.runId,
+      taskId: fixture.taskId, attempt: 1, targetRevision: REVISION_ONE, plan: PLAN,
+      checks: PLAN.checks.map((check) => ({ ...check, green: true, evidenceIds: [], facts: [] })),
+      evidenceIds: [], submittedAt: "2026-08-26T00:00:03.000Z", green: true,
+    },
+  }));
+  fixture.store.append(event(fixture.runId, "final_verification.cleanup_started", `verification:${key}:cleanup:start`, {
+    taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE, attempt: 1,
+  }));
+  fixture.store.append(event(fixture.runId, "final_verification.cleanup_succeeded", `verification:${key}:cleanup:success`, {
+    taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE, attempt: 1,
+  }));
 }
 
 function generationEvent(overrides: Partial<{

@@ -238,10 +238,15 @@ test("integration revision invalidates repaired generation and fresh planning wa
 test("approved verification review never creates repair tasks", async () => {
   const fixture = createFixture({ reviewStatus: "approved" });
   try {
-    const runtime = buildRuntime(fixture, async () => {
-      assert.fail("approved verification must not request repair planning");
+    const runtime = buildRuntime(fixture, async (request) => {
+      assert.equal(request.reason.type, "completion_decision_required");
+      const result = await request.tools.invoke({
+        type: "tool_call", callId: "complete-approved", name: "complete_run",
+        arguments: { summary: "Approved verification is complete." },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "completion failed");
     });
-    assert.equal((await runtime.step()).action, "final_verification_approved");
+    assert.equal((await runtime.step()).action, "completion_decision_required");
     assert.equal(repairs(fixture.store).length, 0);
   } finally {
     fixture.close();
@@ -372,6 +377,8 @@ function seed(store: SqliteSchedulerStore, reviewStatus: "approved" | "repair_re
     store.append({ runId: RUN_ID, type: "final_verification.check_completed", occurredAt: `2026-08-26T00:00:0${index + 4}.000Z`, actor: { role: "runner", id: "runtime" }, idempotencyKey: `check:${check.category}`, payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1, workspacePath: "C:/verify", startedAt: "2026-08-26T00:00:04.000Z", finishedAt: "2026-08-26T00:00:05.000Z", result: { ...check, green: true, evidenceIds: [], facts: [], issues: [] } } });
   }
   store.append({ runId: RUN_ID, type: "final_verification.submitted", occurredAt: "2026-08-26T00:00:09.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "submission", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, submissionId: SUBMISSION_ID, attempt: 1, submissionResult: { kind: "final_verification_submission", generationId: GENERATION_ID, runId: RUN_ID, taskId: FINAL_TASK_ID, attempt: 1, targetRevision: REVISION_ONE, plan, checks: plan.checks.map((check) => ({ ...check, green: true, evidenceIds: [], facts: [] })), evidenceIds: [], submittedAt: "2026-08-26T00:00:09.000Z", green: true } } });
+  store.append({ runId: RUN_ID, type: "final_verification.cleanup_started", occurredAt: "2026-08-26T00:00:09.100Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "cleanup-start", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1 } });
+  store.append({ runId: RUN_ID, type: "final_verification.cleanup_succeeded", occurredAt: "2026-08-26T00:00:09.200Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "cleanup-success", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1 } });
   store.append({ runId: RUN_ID, type: "final_verification.review_requested", occurredAt: "2026-08-26T00:00:10.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "review-request", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, submissionId: SUBMISSION_ID, reviewId: REVIEW_ID, attempt: 1 } });
   const failed = reviewStatus === "repair_required" ? ["tests", "browser"] : [];
   store.append({ runId: RUN_ID, type: "final_verification.review_decided", occurredAt: "2026-08-26T00:00:11.000Z", actor: { role: "architect", id: "architect" }, idempotencyKey: "review-decision", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, submissionId: SUBMISSION_ID, reviewId: REVIEW_ID, attempt: 1, decision: reviewStatus, summary: reviewStatus === "repair_required" ? "Tests and browser behavior need targeted repairs." : "All verification evidence supports approval.", categoryReviews: plan.checks.map((check) => ({ category: check.category, verdict: failed.includes(check.category) ? "repair_required" : "approved", rationale: `Persisted ${check.category} facts were semantically reviewed.`, evidenceIds: [] })) } });
