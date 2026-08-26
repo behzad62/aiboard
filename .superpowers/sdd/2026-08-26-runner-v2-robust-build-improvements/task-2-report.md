@@ -12,11 +12,11 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current reviewed implementation head before this report update: `8fbb1178`
-- Current reviewed bundle revision: `f07c2593`
+- Current reviewed implementation head before this report update: `7f276396`
+- Current reviewed bundle revision: `afc003c0`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
   review-repair commits through fail-closed browser-policy profile validation
-  and the quote-safe recursively encoded structured-text redaction correction.
+  and the bounded raw JSON-string-content escape-layer redaction correction.
 - Historical-note convention: statements in the packet-era sections below that
   say a later packet was "locked," "deferred," or "remained with the
   controller" describe that packet's boundary at the time. They are not the
@@ -2161,5 +2161,103 @@ passed
 
 Commit `f07c2593` records the deterministic Runner V2 and WorkBench bundles
 generated from `8fbb1178`. Node policy remains maintained LTS lines 22/24 with
+the capability floor and no exact Node patch pin. This correction records
+current implementation evidence and does not declare the P2 phase outcome.
+
+## P2 raw escaped-fragment redaction re-review correction
+
+### Correction: raw JSON-string-content escape layers could remain opaque
+
+The `8fbb1178` section correctly reports recursively redacting complete JSON
+string literals, but its encoded-text coverage claim did not extend to raw
+diagnostic fragments such as `payload={\"access_token\":\"value\"}`. Those
+backslash-quoted tokens are JSON string *content* rather than a complete JSON
+string literal. Odd-backslash quotes were deliberately skipped by both quote
+automata, while the generic container parser could not parse the raw escaped
+fragment, leaving the credential value visible. The same gap reached durable
+diagnostics, receipt-first recovery repair, and observability loading because
+all three correctly share this redactor.
+
+Commit `7f276396` adds one bounded raw JSON-string-content layer decoder. It is
+activated only when an escaped token is classified by the shared
+`isSensitiveKey`, so unrelated escaped diagnostic strings and documented
+`secretary`/`tokenizer` false positives retain their existing representation.
+The decoder splits only at truly unescaped quote boundaries, decodes maximal
+JSON-string-content segments with backslash-parity awareness, recursively
+applies the existing structural redactor, and re-encodes only changed content.
+This preserves complete JSON validity, existing valid encoded-string behavior,
+single-quote wrappers, determinable surrounding diagnostic text, and
+idempotence. Malformed authorized content that cannot be decoded is replaced
+fail-closed. The existing eight-level text recursion cap and 64-step bounded
+deep inspection remain in force; malformed brace prefixes do not consume a
+global security discovery budget because activation is sensitive-key-directed.
+
+The direct regressions cover one-layer raw escapes, single-quote wrapping,
+object/array/nested/argv/multiple-key forms, even and odd backslash layers,
+unmatched quote prefixes, a sensitive fragment after 65 malformed braces, and
+indeterminate malformed authorized content. Diagnostics persistence, exact
+legacy unsafe archive -> deleted workspace -> cleanup receipt -> restart
+repair, and the bounded observability loader cover the same raw fragment
+family durably.
+
+RED, self-review repair, mutation, restore, and current gate evidence:
+
+```text
+pre-fix focused redaction/cleanup/observability gate
+33 tests, 23 passed, 10 failed
+- all seven new direct raw escaped-fragment guards failed
+- diagnostics persistence, receipt-first restart repair, and observability
+  loader retained their raw escaped secret values
+
+first implementation self-review gate
+33 tests, 31 passed, 2 failed
+- activation on every backslash-quoted token re-encoded an unrelated safely
+  parseable diagnostic and failed to preserve one existing surrounding-text
+  contract
+- activation was narrowed to escaped tokens classified by isSensitiveKey
+
+fault mutation bypassing the raw escape-layer redaction pass
+7 tests, 0 passed, 7 failed
+
+restored direct raw escaped-fragment guards
+7 tests, 7 passed, 0 failed
+
+restored focused redaction/cleanup/observability gate
+33 tests, 33 passed, 0 failed
+
+Node.js 22.13.0 scoped direct, diagnostics, observability, and recovery guards
+10 tests, 10 passed, 0 failed
+
+combined final-verification plus redaction gate
+136 tests, 136 passed, 0 failed
+
+npm run test:runner-v2
+541 tests, 541 passed, 0 failed
+all 11 chained client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed; exit 0
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+
+targeted ESLint, full lint, git diff --check, and fix-only diff inspection
+passed
+```
+
+Commit `afc003c0` records the deterministic Runner V2 and WorkBench bundles
+generated from `7f276396`. Node policy remains maintained LTS lines 22/24 with
 the capability floor and no exact Node patch pin. This correction records
 current implementation evidence and does not declare the P2 phase outcome.
