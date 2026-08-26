@@ -24,6 +24,23 @@ export interface FinalVerificationBrowserPolicyEvaluation {
   policyViolations: string[];
 }
 
+const POLICY_KEYS = new Set([
+  "consoleErrors",
+  "pageErrors",
+  "failedNetworkEvents",
+  "allowedConsoleErrorPatterns",
+  "allowedPageErrorPatterns",
+  "allowedNetworkFailurePatterns",
+]);
+const FAILURE_MODE_KEYS = ["consoleErrors", "pageErrors", "failedNetworkEvents"] as const;
+const ALLOWLIST_KEYS = [
+  "allowedConsoleErrorPatterns",
+  "allowedPageErrorPatterns",
+  "allowedNetworkFailurePatterns",
+] as const;
+const MAXIMUM_ALLOWLIST_PATTERNS = 32;
+const MAXIMUM_ALLOWLIST_PATTERN_LENGTH = 256;
+
 export function captureFinalVerificationBrowserFailures(events: {
   console: readonly BrowserConsoleEvent[];
   network: readonly BrowserNetworkEvent[];
@@ -42,7 +59,7 @@ export function evaluateFinalVerificationBrowserPolicy(
   captured: FinalVerificationCapturedBrowserFailures,
   policy: FinalVerificationBrowserPolicy,
 ): FinalVerificationBrowserPolicyEvaluation {
-  validatePolicy(policy);
+  assertFinalVerificationBrowserPolicy(policy);
   const consoleErrors = captured.consoleErrors.map((event) => {
     const validated = validateConsoleEvent(event);
     if (!isConsoleError(validated)) throw new Error("Final verification browser consoleErrors contains a non-console-error event.");
@@ -82,6 +99,33 @@ export function evaluateFinalVerificationBrowserPolicy(
     }
   }
   return { consoleErrors, pageErrors, failedNetworkEvents, policyViolations };
+}
+
+/** Exact schema guard used before profile clone/digest and during evaluation. */
+export function assertFinalVerificationBrowserPolicy(
+  policy: unknown,
+): asserts policy is FinalVerificationBrowserPolicy {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new Error("Final verification browser policy is invalid.");
+  }
+  const value = policy as Record<string, unknown>;
+  if (Object.keys(value).some((key) => !POLICY_KEYS.has(key))) {
+    throw new Error("Final verification browser policy contains an unsupported field.");
+  }
+  for (const key of FAILURE_MODE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(value, key) && value[key] !== "fail" && value[key] !== "allow") {
+      throw new Error("Final verification browser policy mode is invalid.");
+    }
+  }
+  for (const key of ALLOWLIST_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    const patterns = value[key];
+    if (!Array.isArray(patterns) || patterns.length > MAXIMUM_ALLOWLIST_PATTERNS ||
+      patterns.some((pattern) => typeof pattern !== "string" || !pattern.trim() ||
+        pattern.length > MAXIMUM_ALLOWLIST_PATTERN_LENGTH)) {
+      throw new Error("Final verification browser policy allowlist is invalid.");
+    }
+  }
 }
 
 function isConsoleError(event: BrowserConsoleEvent): boolean {
@@ -135,27 +179,6 @@ function validateNetworkEvent(event: unknown): BrowserNetworkEvent {
     ...(value.status !== undefined ? { status: value.status as number } : {}),
     ...(value.failure !== undefined ? { failure: value.failure as string } : {}),
   };
-}
-
-function validatePolicy(policy: FinalVerificationBrowserPolicy): void {
-  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
-    throw new Error("Final verification browser policy is invalid.");
-  }
-  for (const value of [policy.consoleErrors, policy.pageErrors, policy.failedNetworkEvents]) {
-    if (value !== undefined && value !== "fail" && value !== "allow") {
-      throw new Error("Final verification browser policy is invalid.");
-    }
-  }
-  for (const patterns of [
-    policy.allowedConsoleErrorPatterns,
-    policy.allowedPageErrorPatterns,
-    policy.allowedNetworkFailurePatterns,
-  ]) {
-    if (patterns !== undefined && (!Array.isArray(patterns) || patterns.length > 32 ||
-      patterns.some((pattern) => typeof pattern !== "string" || !pattern.trim() || pattern.length > 256))) {
-      throw new Error("Final verification browser policy allowlist is invalid.");
-    }
-  }
 }
 
 function matchesPattern(value: string, patterns: readonly string[] | undefined): boolean {

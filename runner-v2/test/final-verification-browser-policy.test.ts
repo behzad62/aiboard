@@ -85,6 +85,23 @@ test("direct semantics rejects malformed captured browser events and inconsisten
   }
 });
 
+test("direct semantics rejects malformed browser policy modes, allowlists, and unknown fields", () => {
+  for (const policy of [
+    { consoleErrors: "ignore" },
+    { allowedConsoleErrorPatterns: "known console" },
+    { allowedPageErrorPatterns: ["ok", 42] },
+    { allowedNetworkFailurePatterns: Array.from({ length: 33 }, () => "bounded") },
+    { allowedConsoleErrorPatterns: [""] },
+    { allowedConsoleErrorPatterns: ["x".repeat(257)] },
+    { unexpectedPolicy: "allow" },
+  ]) {
+    assert.throws(
+      () => assertFinalVerificationCheckSemantics(semanticInput(browserEvents(), policy)),
+      /browser policy|allowlist|invalid/i,
+    );
+  }
+});
+
 function semanticInput(
   events: FinalVerificationBrowserEventsFact,
   policy: Record<string, unknown> = {},

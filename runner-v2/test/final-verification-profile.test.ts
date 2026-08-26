@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +8,13 @@ import { createServer } from "node:net";
 import test from "node:test";
 
 import { createArchitectTools } from "../src/architect-tools.js";
+import type { FinalVerificationBrowserPolicy } from "../src/final-verification-browser-policy.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { IntegrationManager } from "../src/integration-manager.js";
 import {
+  assertFinalVerificationExecutionProfile,
+  cloneFinalVerificationExecutionProfile,
+  finalVerificationProfileDigest,
   FinalVerificationProfileAuthority,
 } from "../src/final-verification-profile.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
@@ -231,6 +236,89 @@ test("durable execution profile is idempotent and rejects append and replay tamp
     store.close();
     await fixture.close();
   }
+});
+
+test("browser policy shape is rejected before profile clone can normalize malformed allowlists", () => {
+  const revision = "b".repeat(40);
+  const valid = browserProfile(revision, {
+    consoleErrors: "fail",
+    pageErrors: "allow",
+    failedNetworkEvents: "fail",
+    allowedConsoleErrorPatterns: ["expected console noise"],
+    allowedPageErrorPatterns: [],
+    allowedNetworkFailurePatterns: ["expected endpoint"],
+  });
+  assert.doesNotThrow(() => assertFinalVerificationExecutionProfile(valid, revision));
+  const clone = cloneFinalVerificationExecutionProfile(valid);
+  assert.deepEqual(clone.browser?.policy, valid.browser?.policy);
+  assert.notEqual(clone.browser?.policy.allowedConsoleErrorPatterns, valid.browser?.policy.allowedConsoleErrorPatterns);
+
+  for (const policy of [
+    { allowedConsoleErrorPatterns: "e" },
+    { allowedConsoleErrorPatterns: { 0: "e" } },
+    { allowedConsoleErrorPatterns: ["ok", 42] },
+    { allowedConsoleErrorPatterns: Array.from({ length: 33 }, () => "bounded") },
+    { allowedConsoleErrorPatterns: [""] },
+    { allowedConsoleErrorPatterns: ["x".repeat(257)] },
+    { consoleErrors: "ignore" },
+    { allowedUnexpectedErrors: ["unknown"] },
+  ]) {
+    const malformed = browserProfile(revision, policy as never);
+    assert.throws(
+      () => assertFinalVerificationExecutionProfile(malformed, revision),
+      /browser policy|allowlist|browser profile/i,
+    );
+    assert.throws(
+      () => cloneFinalVerificationExecutionProfile(malformed),
+      /browser policy|allowlist|browser profile/i,
+    );
+  }
+});
+
+test("runner-owned profile authority rejects malformed browser policy at append and replay", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-verification-policy-authority-"));
+  const state = join(root, "state");
+  const revision = "b".repeat(40);
+  mkdirSync(state, { recursive: true });
+
+  for (const mode of ["append", "replay"] as const) {
+    const runId = `profile-policy-${mode}`;
+    const valid = browserProfile(revision, { allowedConsoleErrorPatterns: ["e"] });
+    writeProfileArchive(state, runId, valid);
+    const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId });
+    const database = join(root, `${mode}.sqlite`);
+    const store = new SqliteSchedulerStore(database, {
+      validateExecutionProfile: (input) => authority.validate(input.profile, input.targetRevision),
+    });
+    try {
+      seedPlanningState(store, runId, revision);
+      if (mode === "append") {
+        const malformed = browserProfile(revision, { allowedConsoleErrorPatterns: "e" } as never);
+        assert.throws(
+          () => store.append(generationEvent(runId, revision, malformed)),
+          /browser policy|allowlist/i,
+        );
+      } else {
+        store.append(generationEvent(runId, revision, valid));
+        const raw = new DatabaseSync(database);
+        const row = raw.prepare(
+          "SELECT payload_json FROM scheduler_events WHERE event_type = 'final_verification.generation_created'",
+        ).get() as { payload_json: string };
+        const payload = JSON.parse(row.payload_json) as {
+          executionProfile: { browser: { policy: Record<string, unknown> } };
+        };
+        payload.executionProfile.browser.policy.allowedConsoleErrorPatterns = "e";
+        raw.prepare(
+          "UPDATE scheduler_events SET payload_json = ? WHERE event_type = 'final_verification.generation_created'",
+        ).run(JSON.stringify(payload));
+        raw.close();
+        assert.throws(() => store.readRun(runId), /browser policy|allowlist/i);
+      }
+    } finally {
+      store.close();
+    }
+  }
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("exact-revision package-manager inspection binds npm, pnpm, and yarn provisioning argv", async () => {
@@ -559,6 +647,46 @@ function emptyProfile(targetRevision: string) {
     detectedSignals: [],
     commands: {},
   };
+}
+
+function browserProfile(targetRevision: string, policy: FinalVerificationBrowserPolicy) {
+  return {
+    version: 1 as const,
+    targetRevision,
+    inspectedPaths: ["package.json"],
+    detectedSignals: [{ category: "browser" as const, source: "fixture", detail: "browser" }],
+    commands: {},
+    browser: {
+      label: "browser",
+      url: "http://127.0.0.1:4173/",
+      policy,
+    },
+  };
+}
+
+function writeProfileArchive(
+  stateDirectory: string,
+  runId: string,
+  profile: ReturnType<typeof browserProfile>,
+): void {
+  const digest = finalVerificationProfileDigest(runId, profile);
+  const runSegment = createHash("sha256").update(runId).digest("hex").slice(0, 32);
+  const directory = join(
+    stateDirectory,
+    "builds",
+    runSegment,
+    "audit",
+    "final-verification-profiles",
+  );
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, `${digest}.json`), `${JSON.stringify({
+    version: 1,
+    kind: "final-verification-execution-profile",
+    runId,
+    targetRevision: profile.targetRevision,
+    digest,
+    profile,
+  }, null, 2)}\n`);
 }
 
 function generationEvent(runId: string, revision: string, executionProfile: unknown) {

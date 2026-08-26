@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { FinalVerificationDetectedSignal } from "./final-verification-contracts.js";
+import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
   FinalVerificationBrowserInput,
   FinalVerificationCommand,
@@ -323,7 +324,10 @@ export function assertFinalVerificationExecutionProfile(
     throw new Error("Final verification port lease profile is invalid.");
   }
   if (profile.runtimeSmoke !== undefined && !validSmoke(profile.runtimeSmoke)) throw new Error("Final verification runtime smoke profile is invalid.");
-  if (profile.browser !== undefined && !validBrowser(profile.browser)) throw new Error("Final verification browser profile is invalid.");
+  if (profile.browser !== undefined) {
+    if (!validBrowser(profile.browser)) throw new Error("Final verification browser profile is invalid.");
+    assertFinalVerificationBrowserPolicy(profile.browser.policy);
+  }
   const detected = new Set(profile.detectedSignals.map((signal) => signal.category));
   if (detected.has("build") !== Boolean(profile.commands.build?.length)) throw new Error("Build signal and exact commands disagree.");
   if (detected.has("tests") !== Boolean(profile.commands.tests?.length)) throw new Error("Test signal and exact commands disagree.");
@@ -548,7 +552,7 @@ function validBrowser(value: unknown): value is FinalVerificationBrowserInput {
   if (typeof browser.label !== "string" || !browser.label.trim() || typeof browser.url !== "string") return false;
   try { const url = new URL(browser.url); if (url.protocol !== "http:" && url.protocol !== "https:") return false; }
   catch { return false; }
-  return Boolean(browser.policy && typeof browser.policy === "object" && !Array.isArray(browser.policy)) &&
+  return browser.policy !== undefined &&
     (browser.server === undefined || validSmoke(browser.server));
 }
 function validProvisioning(value: unknown): value is FinalVerificationDependencyProvisioning {
