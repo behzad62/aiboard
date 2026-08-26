@@ -275,51 +275,56 @@ test("browser policy shape is rejected before profile clone can normalize malfor
   }
 });
 
-test("runner-owned profile authority rejects malformed browser policy at append and replay", () => {
+test("runner-owned profile authority rejects malformed browser policy at append", () => {
+  assertMalformedPolicyRejectedByAuthority("append");
+});
+
+test("runner-owned profile authority rejects malformed browser policy during replay", () => {
+  assertMalformedPolicyRejectedByAuthority("replay");
+});
+
+function assertMalformedPolicyRejectedByAuthority(mode: "append" | "replay"): void {
   const root = mkdtempSync(join(tmpdir(), "aiboard-verification-policy-authority-"));
   const state = join(root, "state");
   const revision = "b".repeat(40);
   mkdirSync(state, { recursive: true });
-
-  for (const mode of ["append", "replay"] as const) {
-    const runId = `profile-policy-${mode}`;
-    const valid = browserProfile(revision, { allowedConsoleErrorPatterns: ["e"] });
-    writeProfileArchive(state, runId, valid);
-    const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId });
-    const database = join(root, `${mode}.sqlite`);
-    const store = new SqliteSchedulerStore(database, {
-      validateExecutionProfile: (input) => authority.validate(input.profile, input.targetRevision),
-    });
-    try {
-      seedPlanningState(store, runId, revision);
-      if (mode === "append") {
-        const malformed = browserProfile(revision, { allowedConsoleErrorPatterns: "e" } as never);
-        assert.throws(
-          () => store.append(generationEvent(runId, revision, malformed)),
-          /browser policy|allowlist/i,
-        );
-      } else {
-        store.append(generationEvent(runId, revision, valid));
-        const raw = new DatabaseSync(database);
-        const row = raw.prepare(
-          "SELECT payload_json FROM scheduler_events WHERE event_type = 'final_verification.generation_created'",
-        ).get() as { payload_json: string };
-        const payload = JSON.parse(row.payload_json) as {
-          executionProfile: { browser: { policy: Record<string, unknown> } };
-        };
-        payload.executionProfile.browser.policy.allowedConsoleErrorPatterns = "e";
-        raw.prepare(
-          "UPDATE scheduler_events SET payload_json = ? WHERE event_type = 'final_verification.generation_created'",
-        ).run(JSON.stringify(payload));
-        raw.close();
-        assert.throws(() => store.readRun(runId), /browser policy|allowlist/i);
-      }
-    } finally {
-      store.close();
+  const runId = `profile-policy-${mode}`;
+  const valid = browserProfile(revision, { allowedConsoleErrorPatterns: ["e"] });
+  writeProfileArchive(state, runId, valid);
+  const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId });
+  const database = join(root, `${mode}.sqlite`);
+  const store = new SqliteSchedulerStore(database, {
+    validateExecutionProfile: (input) => authority.validate(input.profile, input.targetRevision),
+  });
+  try {
+    seedPlanningState(store, runId, revision);
+    if (mode === "append") {
+      const malformed = browserProfile(revision, { allowedConsoleErrorPatterns: "e" } as never);
+      assert.throws(
+        () => store.append(generationEvent(runId, revision, malformed)),
+        /browser policy|allowlist/i,
+      );
+    } else {
+      store.append(generationEvent(runId, revision, valid));
+      const raw = new DatabaseSync(database);
+      const row = raw.prepare(
+        "SELECT payload_json FROM scheduler_events WHERE event_type = 'final_verification.generation_created'",
+      ).get() as { payload_json: string };
+      const payload = JSON.parse(row.payload_json) as {
+        executionProfile: { browser: { policy: Record<string, unknown> } };
+      };
+      payload.executionProfile.browser.policy.allowedConsoleErrorPatterns = "e";
+      raw.prepare(
+        "UPDATE scheduler_events SET payload_json = ? WHERE event_type = 'final_verification.generation_created'",
+      ).run(JSON.stringify(payload));
+      raw.close();
+      assert.throws(() => store.readRun(runId), /browser policy|allowlist/i);
     }
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
   }
-  rmSync(root, { recursive: true, force: true });
-});
+}
 
 test("exact-revision package-manager inspection binds npm, pnpm, and yarn provisioning argv", async () => {
   for (const fixtureCase of [
