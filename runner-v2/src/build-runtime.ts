@@ -32,6 +32,7 @@ import {
 } from "./task-scheduler.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
+import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 
 export type ArchitectActionReason =
   | { type: "plan_required" }
@@ -107,6 +108,7 @@ export interface FinalVerificationCheckDriverInput {
   attempt: number;
   plan: FinalVerificationPlan;
   category: FinalVerificationCategory;
+  executionProfile?: FinalVerificationExecutionProfile;
   signal?: AbortSignal;
 }
 
@@ -156,6 +158,7 @@ export interface BuildRuntimeOptions {
   evidenceStore?: EvidenceStore;
   finalVerificationDriver?: FinalVerificationCheckDriver;
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
+  finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
 }
 
 export interface BuildStepResult {
@@ -179,6 +182,7 @@ export class BuildRuntime {
   private readonly evidenceStore?: EvidenceStore;
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
+  private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -197,6 +201,7 @@ export class BuildRuntime {
     this.evidenceStore = options.evidenceStore;
     this.finalVerificationDriver = options.finalVerificationDriver;
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
+    this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -747,6 +752,7 @@ export class BuildRuntime {
           attempt: 1,
           plan: generation.plan,
           category: pending.category,
+          ...(generation.executionProfile ? { executionProfile: generation.executionProfile } : {}),
           signal: this.activeLifecycleSignal(),
         });
       } catch (error) {
@@ -965,6 +971,9 @@ export class BuildRuntime {
         reason.type === "final_verification_review_required",
       finalVerificationRepairPlanAvailable:
         reason.type === "final_verification_repair_plan_required",
+      ...(this.finalVerificationProfileFor
+        ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
+        : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {
       tools.register(tool);

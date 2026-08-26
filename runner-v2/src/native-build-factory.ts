@@ -29,6 +29,7 @@ import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime } from "./final-verification-runtime.js";
+import { inspectFinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
@@ -178,7 +179,7 @@ export class NativeBuildFactory {
     });
     await integrationManager.initialize();
     const verificationWorkspace = new VerificationWorkspaceManager({
-      repositoryRoot: this.options.projectRoot,
+      repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       integrationManager,
@@ -253,6 +254,7 @@ export class NativeBuildFactory {
       evidenceStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
+      canonicalProjectRoot: integrationManager.path,
       objective: spec.objective,
       runPolicy: spec.runPolicy,
       ...(spec.benchmark
@@ -308,7 +310,19 @@ export class NativeBuildFactory {
           browserBackend: this.browserBackend,
         });
         const result = await verification.runCategory(
-          { plan: input.plan, signal: input.signal },
+          {
+            plan: input.plan,
+            ...(input.executionProfile?.commands
+              ? { commands: input.executionProfile.commands }
+              : {}),
+            ...(input.executionProfile?.runtimeSmoke
+              ? { runtimeSmoke: input.executionProfile.runtimeSmoke }
+              : {}),
+            ...(input.executionProfile?.browser
+              ? { browser: input.executionProfile.browser }
+              : {}),
+            signal: input.signal,
+          },
           input.category,
         );
         return {
@@ -330,6 +344,11 @@ export class NativeBuildFactory {
       finalVerificationCleanupDriver: {
         cleanup: async (input) => await finalVerificationCleanup.cleanup(input),
       },
+      finalVerificationProfileFor: async (targetRevision) =>
+        await inspectFinalVerificationExecutionProfile({
+          repositoryRoot: integrationManager.path,
+          targetRevision,
+        }),
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {

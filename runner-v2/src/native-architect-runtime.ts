@@ -82,6 +82,7 @@ export interface NativeArchitectRuntimeOptions {
   evidenceStore: EvidenceStore;
   projectId: string;
   projectRoot: string;
+  canonicalProjectRoot?: string;
   objective: string;
   budgetLedger?: BudgetLedger;
   contextLimits?: ContextLimits;
@@ -284,7 +285,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         workspacePath: architectInspectionWorkspace(
           request.reason,
           projection,
-          this.options.projectRoot
+          this.options.projectRoot,
+          this.options.canonicalProjectRoot,
         ),
       },
       initialMessages: messages,
@@ -534,10 +536,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
 export function architectInspectionWorkspace(
   reason: ArchitectActionReason,
   projection: ReturnType<typeof rebuildSchedulerProjection>,
-  projectRoot: string
+  projectRoot: string,
+  canonicalProjectRoot?: string,
 ): string {
-  if (reason.type !== "review_required") return projectRoot;
-  return projection.tasks[reason.taskId]?.workspacePath?.trim() || projectRoot;
+  if (reason.type === "review_required") {
+    return projection.tasks[reason.taskId]?.workspacePath?.trim() || projectRoot;
+  }
+  if (
+    reason.type === "final_verification_plan_required" ||
+    reason.type === "final_verification_review_required" ||
+    reason.type === "final_verification_repair_plan_required"
+  ) {
+    return canonicalProjectRoot?.trim() || projectRoot;
+  }
+  return projectRoot;
 }
 
 export function prioritizedArchitectCapabilities(

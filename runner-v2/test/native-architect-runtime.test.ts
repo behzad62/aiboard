@@ -154,6 +154,15 @@ test("Architect reviews inspect the submitted attempt workspace instead of the p
     architectInspectionWorkspace({ type: "plan_required" }, projection, "C:/project"),
     "C:/project"
   );
+  assert.equal(
+    architectInspectionWorkspace(
+      { type: "final_verification_plan_required", integrationRevision: "a".repeat(40) },
+      projection,
+      "C:/project",
+      "C:/runner/integration/run",
+    ),
+    "C:/runner/integration/run",
+  );
 });
 
 test("Architect provider failure pauses for user-selected handoff before planning", async () => {

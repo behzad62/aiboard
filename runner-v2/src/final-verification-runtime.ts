@@ -104,6 +104,8 @@ export interface FinalVerificationBrowserInput {
   height?: number;
   timeoutMs?: number;
   policy: FinalVerificationBrowserPolicy;
+  /** Optional runner-owned server spec used only for this browser check. */
+  server?: FinalVerificationRuntimeSmokeInput;
 }
 
 export interface FinalVerificationBrowserBackend {
@@ -815,6 +817,34 @@ export class FinalVerificationRuntime {
     const sessionId = `${this.runId}:${this.taskId}`;
     const startedAt = this.clock();
     const startState = await repositoryState(input.workspace.path);
+    let serverObservation: FinalVerificationManagedProcessObservation | undefined;
+    if (browserInput.server) {
+      if (!this.managedProcess) {
+        input.base.issues.push("browser server requires the owned managed-process service.");
+      } else {
+        try {
+          serverObservation = await this.managedProcess.start({
+            executable: browserInput.server.executable,
+            args: [...browserInput.server.args],
+            cwd: input.workspace.path,
+          });
+          const readiness = await this.waitForRuntimeReadiness({
+            smoke: browserInput.server,
+            observation: serverObservation,
+            signal: input.signal,
+          });
+          serverObservation = readiness.observation;
+          if (readiness.issue) input.base.issues.push(`browser server ${readiness.issue}`);
+          if (readiness.timedOut) input.base.issues.push("browser server timed out before readiness.");
+          if (readiness.cancelled) input.base.issues.push("browser server startup was cancelled.");
+          if (!readiness.ready && !readiness.issue && !readiness.timedOut && !readiness.cancelled) {
+            input.base.issues.push("browser server did not become ready.");
+          }
+        } catch (error) {
+          input.base.issues.push(`browser server could not start: ${asError(error).message}.`);
+        }
+      }
+    }
     const timeoutMs = Math.min(
       browserInput.timeoutMs ?? this.defaultTimeoutMs,
       this.maximumTimeoutMs,
@@ -952,6 +982,13 @@ export class FinalVerificationRuntime {
         await browser.close();
       } catch (error) {
         input.base.issues.push(`browser ${browserInput.label} session cleanup failed: ${asError(error).message}.`);
+      }
+      if (serverObservation && this.managedProcess) {
+        try {
+          await this.managedProcess.stop(serverObservation.processId);
+        } catch (error) {
+          input.base.issues.push(`browser server cleanup failed: ${asError(error).message}.`);
+        }
       }
     }
 
@@ -1581,6 +1618,12 @@ function validateBrowserInput(
       typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > 256
     ))) {
       throw new Error(`${name} must contain at most 32 non-empty strings of at most 256 characters.`);
+    }
+  }
+  if (input.server !== undefined) {
+    validateRuntimeSmoke(input.server, maximumTimeoutMs);
+    if (input.server.endpoint !== input.url) {
+      throw new Error("browser server endpoint must match the browser URL.");
     }
   }
 }

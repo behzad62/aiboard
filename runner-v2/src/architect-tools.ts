@@ -33,6 +33,10 @@ import {
   type FinalVerificationPlan,
   type FinalVerificationCategory,
 } from "./final-verification-contracts.js";
+import {
+  cloneFinalVerificationExecutionProfile,
+  type FinalVerificationExecutionProfile,
+} from "./final-verification-profile.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -43,6 +47,7 @@ export interface ArchitectToolsOptions {
   finalVerificationReviewAvailable?: boolean;
   finalVerificationRepairPlanAvailable?: boolean;
   evidenceStore?: EvidenceStore;
+  finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
 }
 
 interface PlanTaskInput {
@@ -139,7 +144,7 @@ export function createArchitectTools(
     upgradeAcceptanceContractTool(options.store, clock),
   ];
   const planning = options.finalVerificationPlanAvailable
-    ? [...core, planFinalVerificationTool(options.store, clock)]
+    ? [...core, planFinalVerificationTool(options.store, clock, options.finalVerificationProfileFor)]
     : core;
   const verification = options.finalVerificationReviewAvailable
     ? [...planning, reviewFinalVerificationTool(
@@ -620,6 +625,7 @@ function sameSemanticReview(
 function planFinalVerificationTool(
   store: SchedulerStore,
   clock: () => string,
+  profileFor?: ArchitectToolsOptions["finalVerificationProfileFor"],
 ): NativeTool<PlanFinalVerificationInput> {
   return lifecycleTool({
     name: "plan_final_verification",
@@ -653,6 +659,28 @@ function planFinalVerificationTool(
           "Final verification requires a canonical integration revision.",
         );
       }
+      let executionProfile: FinalVerificationExecutionProfile | undefined;
+      if (profileFor) {
+        try {
+          executionProfile = cloneFinalVerificationExecutionProfile(
+            await profileFor(projection.integrationRevision),
+          );
+        } catch (error) {
+          return errorOutput(
+            "final_verification_profile_unavailable",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        const authoritativeValidation = validateFinalVerificationPlan(input.plan, {
+          detectedSignals: executionProfile.detectedSignals,
+        });
+        if (!authoritativeValidation.valid) {
+          return errorOutput(
+            "final_verification_plan_conflicts_with_repository",
+            authoritativeValidation.issues.join(" "),
+          );
+        }
+      }
       const revisionKey = shortHash(projection.integrationRevision);
       const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
       return appendEvent(store, {
@@ -667,6 +695,7 @@ function planFinalVerificationTool(
           targetRevision: projection.integrationRevision,
           planVersion,
           plan: input.plan,
+          ...(executionProfile ? { executionProfile } : {}),
         },
       }, {
         type: "architect_action",
