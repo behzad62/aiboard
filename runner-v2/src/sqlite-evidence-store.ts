@@ -31,27 +31,31 @@ export class SqliteEvidenceStore implements EvidenceStore {
   constructor(databasePath: string) {
     mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
-    this.database.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS evidence_records (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        evidence_id TEXT NOT NULL UNIQUE,
-        run_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
-        actor_json TEXT NOT NULL,
-        fact_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL,
-        UNIQUE(run_id, idempotency_key)
-      );
-      CREATE INDEX IF NOT EXISTS idx_evidence_run_task
-      ON evidence_records(run_id, task_id, sequence);
-    `);
-    const columns = this.database
-      .prepare("PRAGMA table_info(evidence_records)")
-      .all() as Array<{ name?: unknown }>;
-    if (!columns.some((column) => column.name === "attempt")) {
-      this.database.exec("ALTER TABLE evidence_records ADD COLUMN attempt INTEGER");
+    try {
+      this.database.exec(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS evidence_records (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          evidence_id TEXT NOT NULL UNIQUE,
+          run_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          actor_json TEXT NOT NULL,
+          fact_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          UNIQUE(run_id, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_evidence_run_task
+        ON evidence_records(run_id, task_id, sequence);
+      `);
+      this.migrateAttemptColumn();
+    } catch (error) {
+      try {
+        this.database.close();
+      } catch {
+        // The migration fault may already have closed the handle.
+      }
+      throw error;
     }
   }
 
@@ -177,6 +181,31 @@ export class SqliteEvidenceStore implements EvidenceStore {
 
   close(): void {
     this.database.close();
+  }
+
+  private migrateAttemptColumn(): void {
+    const columns = this.database
+      .prepare("PRAGMA table_info(evidence_records)")
+      .all() as Array<{ name?: unknown }>;
+    if (columns.some((column) => column.name === "attempt")) return;
+
+    let transactionStarted = false;
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      transactionStarted = true;
+      this.database.exec("ALTER TABLE evidence_records ADD COLUMN attempt INTEGER");
+      this.database.exec("COMMIT");
+      transactionStarted = false;
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          this.database.exec("ROLLBACK");
+        } catch {
+          // Preserve the original migration failure if the handle is closed.
+        }
+      }
+      throw error;
+    }
   }
 }
 

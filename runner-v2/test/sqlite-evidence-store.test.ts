@@ -83,6 +83,84 @@ test("raw pre-P1 evidence WAL fixtures migrate and preserve rows through exact l
   }
 });
 
+test("raw pre-P1 evidence migration rolls back after failure before commit and recovers", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-evidence-pre-p1-rollback-"));
+  const database = join(root, "evidence.sqlite");
+  const runId = "run_raw_rollback";
+  const taskId = "task_raw_rollback";
+  const fixture = createRawEvidenceFixture(database, runId, taskId);
+  let rawClosed = false;
+  try {
+    assert.equal(existsSync(`${database}-wal`), true);
+    const originalExec = DatabaseSync.prototype.exec;
+    DatabaseSync.prototype.exec = function (this: DatabaseSync, sql: string): void {
+      if (sql.trim() === "ALTER TABLE evidence_records ADD COLUMN attempt INTEGER") {
+        originalExec.call(this, sql);
+        this.close();
+        throw new Error("injected evidence migration failure");
+      }
+      originalExec.call(this, sql);
+    };
+    try {
+      assert.throws(
+        () => new SqliteEvidenceStore(database),
+        /injected evidence migration failure/,
+      );
+    } finally {
+      DatabaseSync.prototype.exec = originalExec;
+    }
+
+    fixture.raw.close();
+    rawClosed = true;
+    const afterFailure = new DatabaseSync(database);
+    try {
+      assert.equal(
+        hasAttemptColumn(afterFailure),
+        false,
+        "failed migration must leave the legacy schema unchanged",
+      );
+      const preserved = afterFailure
+        .prepare("SELECT evidence_id FROM evidence_records ORDER BY sequence")
+        .all() as Array<{ evidence_id?: unknown }>;
+      assert.deepEqual(preserved.map((row) => row.evidence_id), fixture.rows.map((row) => row.id));
+    } finally {
+      afterFailure.close();
+    }
+
+    const recovered = new SqliteEvidenceStore(database);
+    try {
+      assert.deepEqual(
+        recovered.list({ runId, taskId }).map((row) => row.id),
+        fixture.rows.map((row) => row.id),
+      );
+      assert.deepEqual(
+        recovered.list({ runId, taskId }).map((row) => row.attempt),
+        [undefined, undefined],
+      );
+    } finally {
+      recovered.close();
+    }
+    const migratedSchema = new DatabaseSync(database);
+    try {
+      assert.equal(hasAttemptColumn(migratedSchema), true);
+    } finally {
+      migratedSchema.close();
+    }
+    const reopened = new SqliteEvidenceStore(database);
+    try {
+      assert.deepEqual(
+        reopened.list({ runId, taskId }).map((row) => row.id),
+        fixture.rows.map((row) => row.id),
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    if (!rawClosed) fixture.raw.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function createRawEvidenceFixture(
   database: string,
   runId: string,
