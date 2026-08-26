@@ -1054,6 +1054,38 @@ function DiscussionPageInner() {
             title: task.objective,
             status: nativeBuildTaskStatus(task.status),
             worker: task.assignedWorkerId,
+            acceptanceCriteria: task.acceptanceCriteria?.map((criterion) => {
+              const evidence = task.criterionEvidenceLinks?.find(
+                (link) => link.criterionId === criterion.id
+              );
+              const verdict = projection.reviews[task.id]?.criterionVerdicts?.find(
+                (candidate) => candidate.criterionId === criterion.id
+              );
+              return {
+                id: criterion.id,
+                text: criterion.text,
+                ...(evidence
+                  ? {
+                      evidence: {
+                        evidenceId: evidence.evidenceId,
+                        artifactHashes: [...evidence.artifactHashes],
+                      },
+                    }
+                  : {}),
+                ...(verdict
+                  ? {
+                      verdict: {
+                        verdict: verdict.verdict,
+                        rationale: verdict.rationale,
+                        evidenceIds: [...verdict.evidenceIds],
+                        ...(verdict.artifactHashes
+                          ? { artifactHashes: [...verdict.artifactHashes] }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              };
+            }),
           }))
         );
         setBuildUsage(nativeBuildUsageWindow(usage, run.createdAt));
@@ -2087,6 +2119,7 @@ function DiscussionPageInner() {
           files={writtenFiles}
           commands={commandRuns}
           folderName={discussion.projectFolderName}
+          acceptanceContractStatus={nativeProjection?.acceptanceContractStatus}
         />
       )}
 

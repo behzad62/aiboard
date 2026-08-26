@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 import {
   filterRunnerObservability,
+  runnerAcceptanceContractSummary,
   runnerBuildControlSummary,
   runnerEvidenceDiagnosticDetail,
   runnerNextCooldownExpiry,
@@ -49,6 +50,20 @@ const projection = {
       attempt: 1,
       changeSetId: "change_1",
       integrationRevision: "abc123",
+      acceptanceCriteria: [
+        { id: "behavior", text: "The feature works." },
+        { id: "inspection", text: "The inspection evidence is recorded." },
+      ],
+      acceptanceCriteriaVersion: 1,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_tests_passed",
+        artifactHashes: ["c".repeat(64)],
+      }, {
+        criterionId: "inspection",
+        evidenceId: "evidence_tests_passed",
+        artifactHashes: ["c".repeat(64)],
+      }],
     },
   },
   guidance: {
@@ -63,7 +78,26 @@ const projection = {
       answer: "Preserve the public interface.",
     },
   },
-  reviews: {},
+  reviews: {
+    T1: {
+      taskId: "T1",
+      status: "approved",
+      summary: "Accepted.",
+      evidenceArtifactHashes: ["c".repeat(64)],
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_tests_passed",
+        artifactHashes: ["c".repeat(64)],
+      }],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "satisfied",
+        rationale: "The evidence supports the requested behavior.",
+        evidenceIds: ["evidence_tests_passed"],
+        artifactHashes: ["c".repeat(64)],
+      }],
+    },
+  },
   runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
   projectHandoff: {
     status: "requested",
@@ -78,6 +112,42 @@ const control = runnerBuildControlSummary(projection);
 assert.equal(control.guidance[0].question, "Which API shape?");
 assert.equal(control.integration[0].revision, "abc123");
 assert.equal(control.branch, "aiboard/run/integration");
+const acceptance = runnerAcceptanceContractSummary(projection);
+assert.equal(acceptance.status, "current");
+assert.equal(acceptance.planRevision, 2);
+assert.deepEqual(acceptance.tasks, [{
+  taskId: "T1",
+  title: "Implement feature",
+  version: 1,
+  criteria: [{
+    id: "behavior",
+    text: "The feature works.",
+    evidence: {
+      status: "submitted",
+      evidenceIds: ["evidence_tests_passed"],
+      artifactHashes: ["c".repeat(64)],
+    },
+    verdict: {
+      status: "satisfied",
+      rationale: "The evidence supports the requested behavior.",
+      evidenceIds: ["evidence_tests_passed"],
+      artifactHashes: ["c".repeat(64)],
+    },
+  }, {
+    id: "inspection",
+    text: "The inspection evidence is recorded.",
+    evidence: {
+      status: "submitted",
+      evidenceIds: ["evidence_tests_passed"],
+      artifactHashes: ["c".repeat(64)],
+    },
+    verdict: {
+      status: "not_reviewed",
+      evidenceIds: [],
+      artifactHashes: [],
+    },
+  }],
+}]);
 
 const observability = {
   runId: "run_1",
@@ -472,6 +542,10 @@ for (const copy of [
   "Build activity",
   "Progress",
   "Verification",
+  "Acceptance contract",
+  "Evidence submitted",
+  "Architect verdict",
+  "Evidence is mechanical; Architect verdict is semantic.",
   "Problems requiring attention",
   "<details",
 ]) {

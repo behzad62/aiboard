@@ -18,6 +18,22 @@ export interface BuildTaskView {
   title: string;
   status: "planned" | "in_progress" | "review" | "fixing" | "done" | "failed";
   worker?: string;
+  acceptanceCriteria?: BuildTaskCriterionView[];
+}
+
+export interface BuildTaskCriterionView {
+  id: string;
+  text: string;
+  evidence?: {
+    evidenceId: string;
+    artifactHashes: string[];
+  };
+  verdict?: {
+    verdict: "satisfied" | "unsatisfied";
+    rationale: string;
+    evidenceIds: string[];
+    artifactHashes?: string[];
+  };
 }
 
 export interface WrittenFileView {
@@ -58,11 +74,16 @@ export function BuildTaskBoard({
   files,
   commands = [],
   folderName,
+  acceptanceContractStatus,
 }: {
   tasks: BuildTaskView[];
   files: WrittenFileView[];
   commands?: CommandRunView[];
   folderName?: string | null;
+  acceptanceContractStatus?:
+    | "current"
+    | "acceptance_contract_upgrade_required"
+    | "legacy_completed";
 }) {
   if (tasks.length === 0 && files.length === 0 && commands.length === 0)
     return null;
@@ -104,6 +125,13 @@ export function BuildTaskBoard({
         </p>
       )}
 
+      {acceptanceContractStatus === "acceptance_contract_upgrade_required" && (
+        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          Acceptance criteria need an Architect upgrade before this legacy run
+          can submit or review work.
+        </p>
+      )}
+
       {tasks.length > 0 && (
         <ul className="mt-4 space-y-2">
           {tasks.map((task) => {
@@ -120,6 +148,57 @@ export function BuildTaskBoard({
                   </p>
                   {task.worker && (
                     <p className="text-xs text-muted-foreground">{task.worker}</p>
+                  )}
+                  {task.acceptanceCriteria && task.acceptanceCriteria.length > 0 && (
+                    <details className="mt-2 rounded-md border bg-muted/10 px-2.5 py-1.5">
+                      <summary className="cursor-pointer list-none text-xs font-medium marker:hidden">
+                        Acceptance criteria ({task.acceptanceCriteria.length})
+                      </summary>
+                      <ul className="mt-2 space-y-2 border-t pt-2">
+                        {task.acceptanceCriteria.map((criterion) => (
+                          <li key={criterion.id} className="space-y-1.5 text-xs">
+                            <p className="leading-relaxed">
+                              <span className="font-mono text-[0.68rem] text-muted-foreground">
+                                {criterion.id}
+                              </span>{" "}
+                              {criterion.text}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Badge
+                                variant={criterion.evidence ? "success" : "secondary"}
+                                className="text-[0.65rem]"
+                              >
+                                {criterion.evidence
+                                  ? `Evidence submitted · ${criterion.evidence.evidenceId}`
+                                  : "Evidence not submitted"}
+                              </Badge>
+                              <Badge
+                                variant={
+                                  criterion.verdict?.verdict === "satisfied"
+                                    ? "success"
+                                    : criterion.verdict?.verdict === "unsatisfied"
+                                      ? "destructive"
+                                      : "secondary"
+                                }
+                                className="text-[0.65rem]"
+                              >
+                                Architect verdict: {criterion.verdict
+                                  ? criterion.verdict.verdict === "satisfied" ? "Satisfied" : "Unsatisfied"
+                                  : "Not reviewed"}
+                              </Badge>
+                            </div>
+                            {criterion.verdict?.rationale && (
+                              <p className="leading-relaxed text-muted-foreground">
+                                {criterion.verdict.rationale}
+                              </p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 border-t pt-2 text-[0.68rem] text-muted-foreground">
+                        Evidence is mechanical; Architect verdict is semantic.
+                      </p>
+                    </details>
                   )}
                 </div>
                 <Badge variant={meta.variant} className="shrink-0 gap-1">

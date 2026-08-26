@@ -87,6 +87,18 @@ export interface ReviewProjection {
   criterionVerdicts?: CriterionReviewVerdict[];
 }
 
+export interface AcceptanceContractAuditProjection {
+  status: NonNullable<SchedulerProjection["acceptanceContractStatus"]>;
+  planRevision: number;
+  tasks: Record<string, {
+    acceptanceCriteria: AcceptanceCriterion[];
+    acceptanceCriteriaVersion?: number;
+    criterionEvidenceLinks: CriterionEvidenceLink[];
+    criterionVerdicts: CriterionReviewVerdict[];
+    reviewStatus?: ReviewProjection["status"];
+  }>;
+}
+
 export interface ProviderHealthProjection {
   providerId: string;
   status: "healthy" | "cooldown";
@@ -174,6 +186,46 @@ export function rebuildSchedulerProjection(
   let projection: SchedulerProjection | undefined;
   for (const event of events) projection = reduceSchedulerEvent(projection, event);
   return projection!;
+}
+
+export function acceptanceContractAuditProjection(
+  projection: SchedulerProjection
+): AcceptanceContractAuditProjection {
+  return {
+    status: projection.acceptanceContractStatus ?? "current",
+    planRevision: projection.planRevision,
+    tasks: Object.fromEntries(
+      Object.values(projection.tasks).map((task) => {
+        const review = projection.reviews[task.id];
+        return [task.id, {
+          acceptanceCriteria: (task.acceptanceCriteria ?? []).map((criterion) => ({
+            id: criterion.id,
+            text: criterion.text,
+          })),
+          ...(task.acceptanceCriteriaVersion !== undefined
+            ? { acceptanceCriteriaVersion: task.acceptanceCriteriaVersion }
+            : {}),
+          criterionEvidenceLinks: (task.criterionEvidenceLinks ?? []).map((link) => ({
+            criterionId: link.criterionId,
+            evidenceId: link.evidenceId,
+            artifactHashes: [...link.artifactHashes],
+            ...(link.taskId !== undefined ? { taskId: link.taskId } : {}),
+            ...(link.attempt !== undefined ? { attempt: link.attempt } : {}),
+          })),
+          criterionVerdicts: (review?.criterionVerdicts ?? []).map((verdict) => ({
+            criterionId: verdict.criterionId,
+            verdict: verdict.verdict,
+            rationale: verdict.rationale,
+            evidenceIds: [...verdict.evidenceIds],
+            ...(verdict.artifactHashes
+              ? { artifactHashes: [...verdict.artifactHashes] }
+              : {}),
+          })),
+          ...(review ? { reviewStatus: review.status } : {}),
+        }];
+      })
+    ),
+  };
 }
 
 export function reduceSchedulerEvent(

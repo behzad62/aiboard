@@ -594,6 +594,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
         dependencies: [],
         status: "planned" as const,
         requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+        acceptanceCriteriaVersion: 1,
         attempt: 0,
       },
     },
@@ -869,6 +871,22 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
     assert.equal((audit.usage as { models: unknown[] }).models.length, 1);
     assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
+    assert.deepEqual(audit.acceptanceContract, {
+      status: "current",
+      planRevision: 1,
+      tasks: {
+        task_a: {
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+          acceptanceCriteriaVersion: 1,
+          criterionEvidenceLinks: [],
+          criterionVerdicts: [],
+        },
+      },
+    });
+    assert.deepEqual(
+      (audit.build as { tasks: { task_a: { acceptanceCriteria: unknown } } }).tasks.task_a.acceptanceCriteria,
+      (audit.acceptanceContract as { tasks: { task_a: { acceptanceCriteria: unknown } } }).tasks.task_a.acceptanceCriteria
+    );
     assert.equal((audit.runEvents as unknown[]).length, 3);
     assert.deepEqual(audit.buildEvents, []);
     assert.equal(JSON.stringify(audit).includes("provider-secret"), false);

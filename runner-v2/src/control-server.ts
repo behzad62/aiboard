@@ -12,7 +12,10 @@ import type {
   RunEvent,
 } from "./contracts.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
-import type { ProjectHandoffChoice } from "./scheduler-store.js";
+import {
+  acceptanceContractAuditProjection,
+  type ProjectHandoffChoice,
+} from "./scheduler-store.js";
 import {
   assertBuildRunPolicyLimits,
   type NativeBuildSpec,
@@ -456,12 +459,14 @@ export class ControlServer {
         request.method === "GET"
       ) {
         const builds = this.requireBuilds();
+        const build = builds.projection(runId);
         const observability = await builds.observability(runId);
         const usage = builds.usage(runId);
         sendJson(response, 200, {
           protocolVersion: 2,
           run: this.supervisor.getRun(runId),
-          build: builds.projection(runId),
+          build,
+          acceptanceContract: acceptanceContractAuditProjection(build),
           usage,
           observability,
           runEvents: this.supervisor.events(runId),

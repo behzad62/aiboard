@@ -25,6 +25,7 @@ import type {
   NativeBuildObservability,
   NativeBuildProjection,
 } from "@/lib/client/runner-v2";
+import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -112,6 +113,98 @@ export function runnerBuildControlSummary(projection: NativeBuildProjection | nu
 
 type UserFacingVerificationStatus = "passed" | "failed" | "recorded";
 
+export type RunnerAcceptanceEvidenceStatus = "submitted" | "not_submitted";
+export type RunnerAcceptanceVerdictStatus =
+  | "satisfied"
+  | "unsatisfied"
+  | "not_reviewed";
+
+export interface RunnerAcceptanceCriterionSummary {
+  id: string;
+  text: string;
+  evidence: {
+    status: RunnerAcceptanceEvidenceStatus;
+    evidenceIds: string[];
+    artifactHashes: string[];
+  };
+  verdict: {
+    status: RunnerAcceptanceVerdictStatus;
+    rationale?: string;
+    evidenceIds: string[];
+    artifactHashes: string[];
+  };
+}
+
+export interface RunnerAcceptanceTaskSummary {
+  taskId: string;
+  title: string;
+  version?: number;
+  criteria: RunnerAcceptanceCriterionSummary[];
+}
+
+export interface RunnerAcceptanceContractSummary {
+  status: NonNullable<NativeBuildProjection["acceptanceContractStatus"]>;
+  planRevision: number;
+  tasks: RunnerAcceptanceTaskSummary[];
+}
+
+export function runnerAcceptanceContractSummary(
+  projection: NativeBuildProjection | null
+): RunnerAcceptanceContractSummary {
+  if (!projection) {
+    return { status: "current", planRevision: 0, tasks: [] };
+  }
+  const contract = projectNativeAcceptanceContract(projection);
+  return {
+    status: contract.status,
+    planRevision: contract.planRevision,
+    tasks: Object.values(projection.tasks).map((task) => {
+      const projectedTask = contract.tasks[task.id];
+      const linksByCriterion = new Map<string, typeof task.criterionEvidenceLinks>();
+      for (const link of task.criterionEvidenceLinks ?? []) {
+        const links = linksByCriterion.get(link.criterionId) ?? [];
+        links.push(link);
+        linksByCriterion.set(link.criterionId, links);
+      }
+      const verdictsByCriterion = new Map(
+        (projectedTask?.criterionVerdicts ?? []).map((verdict) => [verdict.criterionId, verdict])
+      );
+      return {
+        taskId: task.id,
+        title: task.objective,
+        ...(task.acceptanceCriteriaVersion !== undefined
+          ? { version: task.acceptanceCriteriaVersion }
+          : {}),
+        criteria: (task.acceptanceCriteria ?? []).map((criterion) => {
+          const links = linksByCriterion.get(criterion.id) ?? [];
+          const verdict = verdictsByCriterion.get(criterion.id);
+          return {
+            id: criterion.id,
+            text: criterion.text,
+            evidence: {
+              status: links.length > 0 ? "submitted" : "not_submitted",
+              evidenceIds: links.map((link) => link.evidenceId),
+              artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
+            },
+            verdict: verdict
+              ? {
+                  status: verdict.verdict,
+                  rationale: verdict.rationale,
+                  evidenceIds: [...verdict.evidenceIds],
+                  artifactHashes: [...(verdict.artifactHashes ?? [])],
+                }
+              : {
+                  status: "not_reviewed",
+                  evidenceIds: [],
+                  artifactHashes: [],
+                },
+          };
+        }),
+      };
+    }),
+  };
+}
+
 export function runnerVerificationTone(
   verification: ReadonlyArray<{ status: UserFacingVerificationStatus }>
 ): "error" | "success" | "progress" {
@@ -197,6 +290,12 @@ export function runnerEvidenceDiagnosticDetail(fact: NativeBuildEvidenceFact): s
 
 function lifecycleLabel(projection: NativeBuildProjection | null): string {
   if (!projection) return "Waiting for build activity";
+  if (projection.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
+    return "Acceptance criteria upgrade required";
+  }
+  if (projection.acceptanceContractStatus === "legacy_completed") {
+    return "Legacy build complete";
+  }
   if (projection.projectHandoff?.status === "requested") {
     return "Ready for your decision";
   }
@@ -307,6 +406,13 @@ export function runnerUserFacingObservability(
     });
 
   const problems: UserFacingProblem[] = [];
+  if (projection?.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
+    problems.push({
+      key: "acceptance-contract:upgrade",
+      title: "Acceptance criteria need an Architect upgrade",
+      detail: "This legacy run cannot submit or review work until every non-cancelled task has criteria.",
+    });
+  }
   const currentWorkerIds = new Set(
     tasks
       .filter((task) => ACTIVE_WORKER_TASK_STATUSES.has(task.status))
@@ -438,6 +544,7 @@ export function RunnerV2ObservabilityPanel({
   const integrationRevision = snapshot.git.integrationRevision || control.revision;
   const visibleCommits = snapshot.git.commits.filter(matches);
   const view = runnerUserFacingObservability(snapshot, projection ?? null, clock);
+  const acceptance = runnerAcceptanceContractSummary(projection ?? null);
   return (
     <section aria-labelledby="runner-activity-title" className="overflow-hidden rounded-lg border bg-card shadow-sm">
       <div className="border-b px-4 py-4 sm:px-5">
@@ -481,6 +588,68 @@ export function RunnerV2ObservabilityPanel({
             <p className="mt-3 text-xs text-muted-foreground">Tasks will appear when the build plan is ready.</p>
           )}
         </UserSection>
+
+        {(acceptance.tasks.length > 0 || acceptance.status !== "current") && (
+          <UserSection
+            title="Acceptance contract"
+            icon={<ShieldCheck className="h-4 w-4" />}
+            accent={acceptance.status === "acceptance_contract_upgrade_required" ? "warning" : "progress"}
+          >
+            <p className="mb-3 text-[0.7rem] leading-relaxed text-muted-foreground">
+              Evidence is mechanical; Architect verdict is semantic.
+            </p>
+            {acceptance.status === "acceptance_contract_upgrade_required" && (
+              <p className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs">
+                The Architect must upgrade criteria before this legacy run can submit or review work.
+              </p>
+            )}
+            {acceptance.tasks.length > 0 ? (
+              <ul className="space-y-3">
+                {acceptance.tasks.map((task) => (
+                  <li key={task.taskId} className="rounded-md border bg-muted/10 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-xs font-medium">
+                        <span className="font-mono text-[0.68rem] text-muted-foreground">{task.taskId}</span>{" "}
+                        {task.title}
+                      </p>
+                      {task.version !== undefined && (
+                        <Badge variant="secondary" className="shrink-0 text-[0.65rem]">v{task.version}</Badge>
+                      )}
+                    </div>
+                    <ul className="mt-2 space-y-2 border-t pt-2">
+                      {task.criteria.map((criterion) => (
+                        <li key={criterion.id} className="space-y-1.5 text-xs">
+                          <p className="leading-relaxed">
+                            <span className="font-mono text-[0.68rem] text-muted-foreground">{criterion.id}</span>{" "}
+                            {criterion.text}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant={criterion.evidence.status === "submitted" ? "success" : "secondary"} className="text-[0.65rem]">
+                              {criterion.evidence.status === "submitted"
+                                ? `Evidence submitted${criterion.evidence.evidenceIds.length > 0 ? ` · ${criterion.evidence.evidenceIds.join(", ")}` : ""}`
+                                : "Evidence not submitted"}
+                            </Badge>
+                            <Badge
+                              variant={criterion.verdict.status === "satisfied" ? "success" : criterion.verdict.status === "unsatisfied" ? "destructive" : "secondary"}
+                              className="text-[0.65rem]"
+                            >
+                              Architect verdict: {criterion.verdict.status === "satisfied" ? "Satisfied" : criterion.verdict.status === "unsatisfied" ? "Unsatisfied" : "Not reviewed"}
+                            </Badge>
+                          </div>
+                          {criterion.verdict.rationale && (
+                            <p className="leading-relaxed text-muted-foreground">{criterion.verdict.rationale}</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-muted-foreground">No acceptance criteria are recorded for this run.</p>
+            )}
+          </UserSection>
+        )}
 
         <UserSection
           title="Verification"

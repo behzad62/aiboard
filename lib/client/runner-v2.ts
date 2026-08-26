@@ -85,12 +85,41 @@ export interface NativeBuildTask {
   dependencies: string[];
   status: string;
   requiredCapabilities: string[];
+  acceptanceCriteria?: NativeAcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  criterionEvidenceLinks?: NativeCriterionEvidenceLink[];
   attempt: number;
   assignedWorkerId?: string;
   changeSetId?: string;
   failureReason?: string;
   integrationRevision?: string;
   conflictPaths?: string[];
+}
+
+export type NativeAcceptanceContractStatus =
+  | "current"
+  | "acceptance_contract_upgrade_required"
+  | "legacy_completed";
+
+export interface NativeAcceptanceCriterion {
+  id: string;
+  text: string;
+}
+
+export interface NativeCriterionEvidenceLink {
+  criterionId: string;
+  evidenceId: string;
+  artifactHashes: string[];
+  taskId?: string;
+  attempt?: number;
+}
+
+export interface NativeCriterionReviewVerdict {
+  criterionId: string;
+  verdict: "satisfied" | "unsatisfied";
+  rationale: string;
+  evidenceIds: string[];
+  artifactHashes?: string[];
 }
 
 export interface NativeGuidanceProjection {
@@ -112,6 +141,8 @@ export interface NativeReviewProjection {
   status: "requested" | "approved" | "rejected";
   summary?: string;
   evidenceArtifactHashes: string[];
+  criterionEvidenceLinks?: NativeCriterionEvidenceLink[];
+  criterionVerdicts?: NativeCriterionReviewVerdict[];
 }
 
 export interface NativeBuildProjection {
@@ -123,6 +154,8 @@ export interface NativeBuildProjection {
   };
   runPolicy?: BuildRunPolicy;
   planRevision: number;
+  acceptanceContractStatus?: NativeAcceptanceContractStatus;
+  acceptanceUpgradeRequiredEventRecorded?: boolean;
   tasks: Record<string, NativeBuildTask>;
   guidance: Record<string, NativeGuidanceProjection>;
   reviews: Record<string, NativeReviewProjection>;
@@ -150,6 +183,20 @@ export interface NativeBuildProjection {
   };
   integrationRevision?: string;
   lastSequence: number;
+}
+
+export interface NativeAcceptanceContractTaskProjection {
+  acceptanceCriteria: NativeAcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  criterionEvidenceLinks: NativeCriterionEvidenceLink[];
+  criterionVerdicts: NativeCriterionReviewVerdict[];
+  reviewStatus?: NativeReviewProjection["status"];
+}
+
+export interface NativeAcceptanceContractProjection {
+  status: NativeAcceptanceContractStatus;
+  planRevision: number;
+  tasks: Record<string, NativeAcceptanceContractTaskProjection>;
 }
 
 export type NativeProjectHandoffChoice =
@@ -413,10 +460,60 @@ export interface NativeBuildAuditExport {
   protocolVersion: 2;
   run: NativeRunProjection;
   build: NativeBuildProjection;
+  acceptanceContract: NativeAcceptanceContractProjection;
   usage: NativeBuildUsageProjection;
   observability: NativeBuildObservability;
   runEvents: Array<Record<string, unknown>>;
   buildEvents: NativeBuildEvent[];
+}
+
+/**
+ * Projects the scheduler-owned acceptance contract into a stable client/audit
+ * shape. Evidence links and Architect verdicts remain separate fields: the
+ * presence of evidence never becomes a semantic verdict in this projection.
+ */
+export function projectNativeAcceptanceContract(
+  projection: Pick<
+    NativeBuildProjection,
+    "planRevision" | "tasks" | "reviews" | "acceptanceContractStatus"
+  >
+): NativeAcceptanceContractProjection {
+  const tasks = Object.fromEntries(
+    Object.values(projection.tasks).map((task) => {
+      const review = projection.reviews[task.id];
+      return [task.id, {
+        acceptanceCriteria: (task.acceptanceCriteria ?? []).map((criterion) => ({
+          id: criterion.id,
+          text: criterion.text,
+        })),
+        ...(task.acceptanceCriteriaVersion !== undefined
+          ? { acceptanceCriteriaVersion: task.acceptanceCriteriaVersion }
+          : {}),
+        criterionEvidenceLinks: (task.criterionEvidenceLinks ?? []).map((link) => ({
+          criterionId: link.criterionId,
+          evidenceId: link.evidenceId,
+          artifactHashes: [...link.artifactHashes],
+          ...(link.taskId !== undefined ? { taskId: link.taskId } : {}),
+          ...(link.attempt !== undefined ? { attempt: link.attempt } : {}),
+        })),
+        criterionVerdicts: (review?.criterionVerdicts ?? []).map((verdict) => ({
+          criterionId: verdict.criterionId,
+          verdict: verdict.verdict,
+          rationale: verdict.rationale,
+          evidenceIds: [...verdict.evidenceIds],
+          ...(verdict.artifactHashes
+            ? { artifactHashes: [...verdict.artifactHashes] }
+            : {}),
+        })),
+        ...(review ? { reviewStatus: review.status } : {}),
+      } satisfies NativeAcceptanceContractTaskProjection];
+    })
+  ) as Record<string, NativeAcceptanceContractTaskProjection>;
+  return {
+    status: projection.acceptanceContractStatus ?? "current",
+    planRevision: projection.planRevision,
+    tasks,
+  };
 }
 
 export interface NativeBuildStepResult {

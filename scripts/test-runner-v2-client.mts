@@ -8,10 +8,12 @@ import {
   getNativeBuildTranscript,
   getNativeBuildUsage,
   getNativeBuildObservability,
+  projectNativeAcceptanceContract,
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
   type NativeRunnerConnection,
+  type NativeBuildProjection,
 } from "../lib/client/runner-v2";
 import {
   nativeBuildProvisioningRunId,
@@ -137,9 +139,44 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
     return Response.json({
       protocolVersion: 2,
       run: { runId: "run_1" },
-      build: { runId: "run_1" },
+      build: {
+        runId: "run_1",
+        tasks: {
+          task_a: {
+            acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+            criterionEvidenceLinks: [{
+              criterionId: "behavior",
+              evidenceId: "evidence_behavior",
+              artifactHashes: ["a".repeat(64)],
+            }],
+          },
+        },
+      },
       usage: { effective: { modelCalls: 9 } },
       observability: { runId: "run_1", toolCallCount: 1 },
+      acceptanceContract: {
+        status: "current",
+        planRevision: 1,
+        tasks: {
+          task_a: {
+            acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+            acceptanceCriteriaVersion: 1,
+            criterionEvidenceLinks: [{
+              criterionId: "behavior",
+              evidenceId: "evidence_behavior",
+              artifactHashes: ["a".repeat(64)],
+            }],
+            criterionVerdicts: [{
+              criterionId: "behavior",
+              verdict: "satisfied",
+              rationale: "The evidence supports the behavior.",
+              evidenceIds: ["evidence_behavior"],
+              artifactHashes: ["a".repeat(64)],
+            }],
+            reviewStatus: "approved",
+          },
+        },
+      },
       runEvents: [{ sequence: 1 }],
       buildEvents: [{ sequence: 1 }],
     });
@@ -217,6 +254,51 @@ const audit = await getNativeBuildAudit(
 );
 assert.equal(audit.protocolVersion, 2);
 assert.equal(audit.runEvents.length, 1);
+assert.equal(audit.acceptanceContract.tasks.task_a.acceptanceCriteria[0].text, "The behavior works.");
+assert.equal(audit.acceptanceContract.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
+assert.equal(audit.acceptanceContract.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+
+const clientProjection = projectNativeAcceptanceContract({
+  runId: "run_1",
+  status: "running",
+  planRevision: 1,
+  tasks: {
+    task_a: {
+      id: "task_a",
+      objective: "Implement A",
+      dependencies: [],
+      status: "submitted",
+      requiredCapabilities: ["code"],
+      acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+      acceptanceCriteriaVersion: 1,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_behavior",
+        artifactHashes: ["a".repeat(64)],
+      }],
+      attempt: 1,
+    },
+  },
+  guidance: {},
+  reviews: {
+    task_a: {
+      taskId: "task_a",
+      status: "approved",
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "satisfied",
+        rationale: "The evidence supports the behavior.",
+        evidenceIds: ["evidence_behavior"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    },
+  },
+  runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+  lastSequence: 3,
+} satisfies NativeBuildProjection);
+assert.equal(clientProjection.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+assert.equal(clientProjection.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
 
 const attachmentCalls: string[] = [];
 const attachmentFetch: typeof fetch = async (input) => {
