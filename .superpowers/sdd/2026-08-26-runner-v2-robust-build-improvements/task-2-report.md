@@ -6,7 +6,8 @@
 - Branch: `codex/runner-v2-robust-build`
 - P2 entry revision: `000f54e1`
 - P2.1 implementation revision: `3dcb0cc1`
-- Scope completed: P2.1 only. P2.2 and later packets were not started.
+- P2.2 implementation revision: this packet commit (reported at handoff)
+- Scope completed: P2.1 and P2.2 only. P2.3 and later packets were not started.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -110,3 +111,76 @@ Production/test commit: `3dcb0cc1 runner-v2: add final verification contracts`.
 
 The report is the only remaining packet documentation change. P2.2+ remain
 locked for the controller.
+
+## P2.2 disposable verification workspace
+
+Added `runner-v2/src/verification-workspace.ts` and focused tests in
+`runner-v2/test/verification-workspace.test.ts`. The manager creates one
+detached Git worktree below Runner state, pins it to the exact supplied
+`IntegrationManager.revision`, and records run/path/repository/target and
+canonical checkout revisions in ownership metadata. Git commands are passed as
+argument arrays through the existing non-shell Git runner, so Windows paths,
+spaces, punctuation, and long run IDs remain single arguments.
+
+Creation and recovery mechanically validate state/worktree containment,
+symlink/path escapes, exact Git worktree association, detached ownership,
+target revision, clean verification state, and an unchanged clean canonical
+checkout. Existing non-empty or partially recorded directories are refused;
+valid metadata deterministically reopens the same workspace. Cleanup removes
+only the exact owned verification worktree and metadata, prunes Git's stale
+worktree record, and does not update or delete integration refs/history.
+
+### P2.2 TDD and prove-red evidence
+
+The focused tests were added before the production module and initially ran
+red at the P2.1 head because the module was absent:
+
+```text
+npx tsx --test runner-v2/test/verification-workspace.test.ts
+ERR_MODULE_NOT_FOUND: Cannot find module .../runner-v2/src/verification-workspace.js
+```
+
+After implementation and the small test-fixture correction, the focused suite
+passed 5/5. The target-revision guard was then temporarily removed; the suite
+went red 4 pass/1 fail with `Missing expected rejection` for the wrong-revision
+case. The guard was restored and the suite returned to 5/5 green.
+
+The state/workspace containment guards were temporarily removed together; the
+suite went red 4 pass/1 fail because the path-inside-checkout case received a
+canonical-mutation failure instead of the required containment rejection. Both
+guards were restored and the suite returned to 5/5 green. No bypass or weaker
+assertion remains in the packet.
+
+### P2.2 validation evidence
+
+```text
+npx tsx --test runner-v2/test/verification-workspace.test.ts
+5 tests, 5 passed, 0 failed
+
+npx tsx --test runner-v2/test/verification-workspace.test.ts runner-v2/test/integration-manager.test.ts runner-v2/test/workspace-manager.test.ts
+51 tests, 51 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/verification-workspace.ts runner-v2/test/verification-workspace.test.ts
+passed
+
+git diff --check
+passed
+```
+
+### P2.2 requirement audit
+
+| P2.2 requirement | Evidence | Result |
+|---|---|---|
+| Exact IntegrationManager revision is recorded and validated | Detached-worktree HEAD and metadata target revision assertions; wrong-revision recovery test and fault proof | Complete |
+| Workspace is runner-owned and outside project checkout | State/workspace containment checks; path-with-spaces fixture; symlink/path-escape test | Complete |
+| Git argv is exact and shell-free | Existing `runGit` argv runner; command-capture assertion for `worktree add --detach` | Complete |
+| Windows paths/spaces and long IDs are safe | Fixture uses `user checkout`, `runner state & data`, punctuation, and an 80-character run ID | Complete |
+| Dirty or mutated canonical checkout is refused | Canonical dirty test and before/after revision/status guard | Complete |
+| Unexpected existing directories and symlinks are refused | Existing-directory, symlink, and ownership metadata checks | Complete |
+| Valid workspace reopens deterministically | Reopen and fresh-manager create deep-equality assertions | Complete |
+| Cleanup is scoped to owned verification state | Cleanup test preserves integration path/revision/history and canonical checkout | Complete |
+
+P2.3 runtime/scheduler work remains locked for the controller.
