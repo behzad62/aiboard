@@ -944,3 +944,169 @@ Production/test commit: `e527bcef runner-v2: require worker identity for criteri
 R2 remains the next separately bounded repair. The tracked worktree is clean
 after the documentation commit, with only ignored SDD artifacts permitted;
 `progress.md` was not edited and P2 remains untouched.
+
+## Review fix round 2 — R2 authoritative evidence replay
+
+This bounded packet completes the round-2 R2 repair. It makes evidence
+validation fail closed at the SQLite scheduler append and read/replay
+boundaries, adds raw-database adversarial reopen coverage, and updates only
+affected acceptance fixtures. R1 was already complete in `e527bcef`; P2 was
+not started.
+
+### Reproduction before edits
+
+The reviewer’s durable replay probe was reproduced from HEAD `41b9b8d7` by
+adding a raw SQLite fixture that inserted a current criterion submission with
+`evidenceId: evidence_missing_on_reopen`, while the real evidence store was
+empty. The focused test was run before the scheduler-store change:
+
+```text
+npx tsx --test --test-name-pattern "raw scheduler replay rejects missing evidence" runner-v2/test/scheduler-store.test.ts
+1 test
+0 passed
+1 failed
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+  at runner-v2/test/scheduler-store.test.ts:355:12
+```
+
+The companion append-boundary regression was also red before the guard:
+
+```text
+npx tsx --test --test-name-pattern "append fails closed when acceptance evidence lacks" runner-v2/test/scheduler-store.test.ts
+1 test
+0 passed
+1 failed
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+```
+
+The raw fixture uses `DatabaseSync` SQL rather than a current store
+constructor: it creates the legacy-shaped `scheduler_events` table and index,
+enables WAL with `wal_autocheckpoint = 0`, inserts fixed event IDs and exact
+sequences, and keeps the raw connection open so the real `scheduler.sqlite-wal`
+sidecar is present. It seeds one missing-evidence run and one valid run backed
+by an exact immutable record in `SqliteEvidenceStore`.
+
+### Repair
+
+- `SqliteSchedulerStore.readRun` now loads the complete ordered run, validates
+  and reduces every event in sequence, then returns only the requested
+  `afterSequence` suffix. Earlier events are therefore available to establish
+  the current task attempt, criterion version, and assigned worker before a
+  later acceptance event is validated.
+- `SqliteSchedulerStore.append` replays prior events through the same
+  validator before checking idempotency or reducing the new event. Every
+  current acceptance submission, review request, and review decision requires
+  an authoritative evidence store; omitting it fails closed before durable
+  insertion. Non-acceptance legacy runs remain deterministic and readable.
+- Validation continues to resolve exact immutable evidence IDs through
+  `EvidenceStore.getByIds`, with run/task scoping and the existing current
+  attempt, assigned-worker/descendant, and artifact-hash checks. No oldest-page
+  listing is used.
+- Raw reopen regressions now reject missing evidence and foreign owner, task,
+  attempt, and artifact references before a submitted projection can be
+  returned. A valid exact-ID submission reopens twice with an unchanged event
+  sequence and `submitted` projection. A raw valid submission followed by an
+  invalid review artifact hash fails before a reviewed projection is returned.
+- The existing native factory was verified to pass the shared
+  `SqliteEvidenceStore` into `SqliteSchedulerStore`. A direct no-store append
+  and raw no-store reopen control prove that accidental omission cannot accept
+  current evidence events.
+- Existing retry/build/scheduler/guidance fixtures were updated only to wire
+  real evidence records and assigned worker IDs required by the fail-closed
+  boundary. The R3 projection behavior itself was not changed; its close/reopen
+  history assertions remain green.
+
+### Post-repair checks
+
+Focused scheduler evidence controls:
+
+```text
+npx tsx --test --test-name-pattern "raw scheduler replay rejects missing|append fails closed|raw scheduler replay rejects foreign|raw scheduler replay rejects review" runner-v2/test/scheduler-store.test.ts
+4/4 passed
+
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+22/22 passed
+
+npx tsx --test runner-v2/test/sqlite-evidence-store.test.ts
+2/2 passed
+
+npx tsx --test runner-v2/test/sqlite-event-store.test.ts
+3/3 passed
+
+npx tsx --test runner-v2/test/task-scheduler.test.ts
+3/3 passed
+
+npx tsx --test runner-v2/test/build-runtime.test.ts
+16/16 passed
+
+npx tsx --test runner-v2/test/guidance-review.test.ts
+13/13 passed
+
+npx tsx --test runner-v2/test/recovery-smoke.test.ts
+1/1 passed
+
+npx tsx --test runner-v2/test/control-server.test.ts
+8/8 passed
+
+npx tsx --test runner-v2/test/evidence-tools.test.ts
+6/6 passed
+
+npx tsx --test runner-v2/test/native-build-initialization.test.ts
+1/1 passed
+```
+
+Static and exit checks:
+
+```text
+npm run typecheck:runner-v2
+passed
+
+npm run lint
+passed
+
+npm run test:runner-v2 --silent
+394/394 Runner V2 tests passed; all client/policy/UI/pause/model-usage/
+live-state/transcript/files/stats/observability scripts passed
+
+git diff --check
+passed
+```
+
+### Required fault-only red proof
+
+After implementation, only the read-time replay validation call was
+fault-disabled by removing `replaySchedulerEvents(events, this.evidenceStore)`
+from `readRun`. The raw no-store reopen control then went red:
+
+```text
+npx tsx --test --test-name-pattern "raw scheduler replay rejects missing evidence" runner-v2/test/scheduler-store.test.ts
+1 test
+0 passed
+1 failed
+AssertionError [ERR_ASSERTION]: Missing expected exception.
+  at runner-v2/test/scheduler-store.test.ts:356:14
+```
+
+Restoring only that call returned the focused test to 1/1, and the complete
+R2 scheduler/adversarial set to 22/22. The same validator path covers the
+foreign-owner/task/attempt/hash and review-hash reopen controls, so no
+additional production bypass was introduced for those cases.
+
+### Repair-cycle accounting
+
+The R2 packet used one governed repair cycle. The initial missing-evidence
+replay and no-store append probes were red before the production change. The
+first broad affected run exposed only stale test fixtures that had begun
+using current criterion contracts without wiring the authoritative evidence
+store or assigned worker IDs; those fixtures were repaired in the same
+bounded packet. No identical root cause reached the three-cycle
+reclassification point or the five-cycle cap. No tests or controls were
+weakened.
+
+### Packet status
+
+Production/test commit: `edfa3483 runner-v2: revalidate evidence on scheduler replay`.
+
+R2 is complete: no R2 finding remains unconfirmed or unresolved. The tracked
+worktree was clean before this report update; `progress.md` was not edited,
+and P2 remains untouched. The report update is committed separately below.
