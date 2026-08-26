@@ -12,11 +12,11 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current reviewed implementation and bundle head before this report update:
-  `0ba25595`
+- Current reviewed implementation head before this report update: `c2bb5f8b`
+- Current reviewed bundle revision: `98d7340c`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
-  review-repair commits through authoritative browser policy and comprehensive
-  structural credential redaction.
+  review-repair commits through fail-closed browser-policy profile validation
+  and structured JSON diagnostic redaction.
 - Historical-note convention: statements in the packet-era sections below that
   say a later packet was "locked," "deferred," or "remained with the
   controller" describe that packet's boundary at the time. They are not the
@@ -1844,3 +1844,130 @@ generated from the reviewed source. Node policy remains the maintained 22/24
 LTS ranges with the required `node:sqlite` capability floor and no exact Node
 24 patch pin. This section is current implementation evidence and does not
 declare the P2 phase outcome.
+
+## P2 follow-up re-review corrections
+
+### Correction: browser policy was not fail-closed before profile cloning
+
+The `6b180f8d` correction made runtime and durable semantics share one policy
+evaluator, and `3e9db443` made the execution-profile archive authoritative, but
+the profile envelope still only checked that `browser.policy` was an object.
+For example, `allowedConsoleErrorPatterns: "e"` passed profile validation;
+`cloneBrowser` spread that string into `["e"]`, and the normalized value could
+match a legitimately archived profile. The earlier statements that the exact
+persisted policy was validated at every durable boundary were therefore too
+broad.
+
+Commit `09ffd77b` exports one pure exact policy-schema assertion from the
+shared browser-policy module and invokes it from execution-profile validation
+before clone, digest, archive lookup, scheduler append, or replay. It permits
+only the three `fail`/`allow` modes and the three known allowlist keys. Each
+allowlist must be an array of no more than 32 nonempty strings, each at most
+256 characters; unsupported fields and malformed values reject. Exact arrays,
+allowlisted failures, and normal redirects remain valid.
+
+The append and replay proof was subsequently split into independently failing
+tests in commit `c2bb5f8b`, so an append failure cannot mask the replay branch.
+
+RED, mutation, and restore evidence:
+
+```text
+initial focused run: 16/19 passed, 3 failed
+- direct malformed/unknown policy semantics failed
+- direct profile/clone reproduction failed
+- runner-owned authority accepted malformed append after clone normalization
+
+fault mutation disabling the profile schema call:
+direct clone + append cases: 0/2 passed
+independent replay-only case: 0/1 passed
+
+restored direct clone/append/replay cases: 3/3 passed
+affected profile/policy/semantics/integrity/submission: 37/37 passed
+```
+
+### Correction: structural redaction did not cover JSON encoded as text
+
+The `d34ee668` correction covered structural object keys and ordinary
+assignments, but its claim of comprehensive diagnostic text coverage was too
+broad. Complete JSON strings such as
+`{"access_token":"JSON_ACCESS_SECRET","clientSecret":"JSON_CLIENT_SECRET"}`
+and quoted JSON properties embedded in ordinary logs bypassed assignment
+matching and leaked into new archives, observability responses, and repaired
+legacy archives.
+
+Commit `82e24f58` adds bounded structured JSON text handling before URL,
+assignment, and bearer redaction. Complete JSON object/array containers are
+parsed, passed through the existing key/argv/value redactor, and serialized as
+valid JSON. A separate exact quoted-property pass handles safely determinable
+JSON fragments embedded in ordinary diagnostics, including escaped string and
+non-string values. JSON recursion is capped at eight encoded levels, object
+depth/item/text limits are preserved, and container discovery attempts are
+bounded. Invalid ordinary text, `secretary`, and `tokenizer` remain visible;
+URL credentials/query keys, bearer values, maximum text length, and idempotence
+remain covered.
+
+The archive regressions exercise both newly written diagnostics/logs and the
+exact legacy sequence: unsafe archive persisted, workspace deleted, owned
+receipt present, synchronous receipt validation rejected, restart repaired the
+archive without the workspace, receipt validation succeeded, and repeated
+cleanup remained idempotent.
+
+RED, mutation, and restore evidence:
+
+```text
+initial affected run: 12/17 passed, 5 failed
+- complete/nested/array JSON text leaked
+- embedded quoted JSON properties leaked
+- new diagnostics archive logs leaked
+- observability loader leaked
+- receipt-first legacy archive repair leaked
+
+fault mutation disabling structured JSON containers: 1/2 passed
+  (JSON argv array secret leaked)
+fault mutation disabling embedded quoted properties: 0/1 passed
+
+restored direct/cleanup/observability tests: 17/17 passed
+restored affected set including durable execution: 25/25 passed
+```
+
+### Current post-correction validation
+
+```text
+Node.js 22.13.0 scoped new/expanded regressions
+8 tests, 8 passed, 0 failed
+
+combined final-verification plus structural-redaction gate
+120 tests, 120 passed, 0 failed
+
+npm run test:runner-v2
+525 tests, 525 passed, 0 failed
+all 11 chained client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed; exit 0
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+```
+
+An exploratory attempt to run the entire profile file through the ephemeral
+`npx node@22.13.0` runtime passed 18/19; its pnpm provisioning fixture could not
+run because that ephemeral Node package does not include an available Corepack
+pnpm CLI. This was an environment-availability result, not a product assertion
+failure. The eight new/expanded Node 22 regressions were then selected directly
+and passed 8/8. Commit `98d7340c` records the deterministic reviewed bundles.
+Node policy remains maintained LTS lines 22/24 with the capability floor and no
+exact Node patch pin. This section corrects prior claims and records evidence;
+it does not declare the P2 phase outcome.
