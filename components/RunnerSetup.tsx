@@ -92,7 +92,7 @@ export function RunnerSetup({
       <p className="text-sm text-muted-foreground">
         The durable native agent kernel owns Git worktrees, tools, checkpoints,
         provider failover, and recovery. It requires Git and a maintained Node.js
-        LTS release (${NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}); missing
+        LTS release ({NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}); missing
         prerequisites stop before any model call.
       </p>
       <Button asChild type="button" size="sm">

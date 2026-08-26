@@ -19,6 +19,11 @@ assert.equal(packageJson.scripts.prebuild, "npm run publish-downloads");
 assert.equal("copy-runner" in packageJson.scripts, false);
 assert.doesNotMatch(runnerSetup, /@\/lib\/client\/runner["']/);
 assert.match(runnerSetup, /NATIVE_RUNNER_NODE_POLICY_DESCRIPTION/);
+assert.doesNotMatch(
+  runnerSetup,
+  /LTS release \(\$\{NATIVE_RUNNER_NODE_POLICY_DESCRIPTION\}/,
+  "Runner setup must render the Node policy expression without a stray dollar sign"
+);
 assert.doesNotMatch(runnerSetup, /24\.18\.0/);
 const runnerDownloadLink = /<(?:a|Link)\b(?=[^>]*\bhref=["']\/aiboard-runner-v2\.zip["'])(?=[^>]*\bdownload(?:\s|=|>))[^>]*>/s;
 assert.deepEqual(
