@@ -229,12 +229,14 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
                   objective: "Draft the public API",
                   dependencies: [],
                   requiredCapabilities: ["code"],
+                  acceptanceCriteria: [{ id: "api", text: "The public API is drafted." }],
                 },
                 {
                   id: "task_b",
                   objective: "Document the public API",
                   dependencies: ["task_a"],
                   requiredCapabilities: ["code"],
+                  acceptanceCriteria: [{ id: "docs", text: "The public API is documented." }],
                 },
               ],
             });
@@ -1014,12 +1016,14 @@ class ScriptedArchitect implements ArchitectRuntimeDriver {
             objective: "Implement A",
             dependencies: [],
             requiredCapabilities: ["code"],
+            acceptanceCriteria: [{ id: "a", text: "Task A is implemented." }],
           },
           {
             id: "task_b",
             objective: "Implement B",
             dependencies: [],
             requiredCapabilities: ["code"],
+            acceptanceCriteria: [{ id: "b", text: "Task B is implemented." }],
           },
         ],
       });

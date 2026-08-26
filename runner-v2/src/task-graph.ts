@@ -4,6 +4,7 @@ import type {
   TaskGraphValidation,
   TaskStatus,
 } from "./task-contracts.js";
+import { validateAcceptanceCriteria } from "./acceptance-contracts.js";
 
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   planned: ["assigned", "cancelled"],
@@ -22,7 +23,8 @@ const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
 };
 
 export function validateTaskGraph(
-  tasks: readonly BuildTask[]
+  tasks: readonly BuildTask[],
+  options: { requireAcceptanceCriteria?: boolean } = {}
 ): TaskGraphValidation {
   const issues: TaskGraphIssue[] = [];
   const counts = new Map<string, number>();
@@ -38,6 +40,30 @@ export function validateTaskGraph(
   }
 
   const ids = new Set(tasks.map((task) => task.id));
+  const strictCriteria = options.requireAcceptanceCriteria === true ||
+    tasks.some((task) => task.acceptanceCriteria !== undefined);
+  if (strictCriteria) {
+    for (const task of tasks) {
+      if (!task.acceptanceCriteria) {
+        issues.push({
+          code: "missing_acceptance_criteria",
+          taskId: task.id,
+          message: `Task ${task.id} requires at least one acceptance criterion.`,
+        });
+        continue;
+      }
+      const criteria = validateAcceptanceCriteria(task.acceptanceCriteria);
+      for (const issue of criteria.issues) {
+        issues.push({
+          code: issue.toLowerCase().includes("duplicate")
+            ? "duplicate_acceptance_criterion_id"
+            : "invalid_acceptance_criterion",
+          taskId: task.id,
+          message: `Task ${task.id}: ${issue}`,
+        });
+      }
+    }
+  }
   const missing = new Set<string>();
   for (const task of tasks) {
     for (const dependency of task.dependencies) {
@@ -89,7 +115,17 @@ export function applyTaskTransition(
       `Task ${task.id} cannot transition from ${task.status} to ${status}.`
     );
   }
-  return { ...task, ...patch, status };
+  if (Object.hasOwn(patch, "acceptanceCriteria")) {
+    throw new Error("Acceptance criteria cannot mutate through a task transition.");
+  }
+  return {
+    ...task,
+    ...patch,
+    ...(task.acceptanceCriteria
+      ? { acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+    status,
+  };
 }
 
 function findCycle(byId: ReadonlyMap<string, BuildTask>): string[] | null {

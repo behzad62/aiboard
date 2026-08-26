@@ -16,6 +16,10 @@ import type {
   PlanReconciliation,
   PlanTaskUpdate,
 } from "./task-contracts.js";
+import {
+  validateAcceptanceCriteria,
+  type AcceptanceCriterion,
+} from "./acceptance-contracts.js";
 import { validateTaskGraph } from "./task-graph.js";
 
 export interface ArchitectToolsOptions {
@@ -30,6 +34,7 @@ interface PlanTaskInput {
   objective: string;
   dependencies: string[];
   requiredCapabilities: string[];
+  acceptanceCriteria: AcceptanceCriterion[];
 }
 
 interface PlanTasksInput {
@@ -43,6 +48,7 @@ interface ReviseTaskInput {
   objective?: string;
   dependencies?: string[];
   requiredCapabilities?: string[];
+  acceptanceCriteria?: AcceptanceCriterion[];
 }
 
 interface AnswerGuidanceInput {
@@ -137,10 +143,12 @@ function planTasksTool(
         ...task,
         dependencies: [...task.dependencies],
         requiredCapabilities: [...task.requiredCapabilities],
+        acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+        acceptanceCriteriaVersion: 1,
         status: "planned",
         attempt: 0,
       }));
-      const validation = validateTaskGraph(tasks);
+      const validation = validateTaskGraph(tasks, { requireAcceptanceCriteria: true });
       if (!validation.valid) {
         return errorOutput(
           "invalid_task_graph",
@@ -185,6 +193,7 @@ function reviseTaskTool(
         objective: { type: "string", minLength: 1 },
         dependencies: { type: "array", items: { type: "string" } },
         requiredCapabilities: { type: "array", items: { type: "string" } },
+        acceptanceCriteria: { type: "array", minItems: 1, items: criterionSchema() },
       },
       required: ["taskId", "revision"],
       additionalProperties: false,
@@ -198,6 +207,9 @@ function reviseTaskTool(
         ...(input.dependencies ? { dependencies: [...input.dependencies] } : {}),
         ...(input.requiredCapabilities
           ? { requiredCapabilities: [...input.requiredCapabilities] }
+          : {}),
+        ...(input.acceptanceCriteria
+          ? { acceptanceCriteria: input.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
           : {}),
       };
       return appendEvent(store, {
@@ -401,12 +413,14 @@ function validatePlan(input: unknown): ValidationResult<PlanTasksInput> {
       if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
       const dependencies = stringList(candidate.dependencies);
       const capabilities = stringList(candidate.requiredCapabilities);
-      if (!dependencies || !capabilities) return null;
+      const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+      if (!dependencies || !capabilities || !acceptanceCriteria) return null;
       tasks.push({
         id: candidate.id,
         objective: candidate.objective,
         dependencies,
         requiredCapabilities: capabilities,
+        acceptanceCriteria,
       });
     }
     return { revision: value.revision, tasks };
@@ -419,14 +433,23 @@ function validateRevision(input: unknown): ValidationResult<ReviseTaskInput> {
     const objective = value.objective === undefined ? undefined : nonEmpty(value.objective) ? value.objective : null;
     const dependencies = value.dependencies === undefined ? undefined : stringList(value.dependencies);
     const capabilities = value.requiredCapabilities === undefined ? undefined : stringList(value.requiredCapabilities);
-    if (objective === null || dependencies === null || capabilities === null) return null;
-    if (objective === undefined && dependencies === undefined && capabilities === undefined) return null;
+    const acceptanceCriteria = value.acceptanceCriteria === undefined
+      ? undefined
+      : parseAcceptanceCriteria(value.acceptanceCriteria);
+    if (objective === null || dependencies === null || capabilities === null || acceptanceCriteria === null) return null;
+    if (
+      objective === undefined &&
+      dependencies === undefined &&
+      capabilities === undefined &&
+      acceptanceCriteria === undefined
+    ) return null;
     return {
       taskId: value.taskId,
       revision: value.revision,
       ...(objective !== undefined ? { objective } : {}),
       ...(dependencies !== undefined ? { dependencies } : {}),
       ...(capabilities !== undefined ? { requiredCapabilities: capabilities } : {}),
+      ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
     };
   }, "taskId, revision, and at least one valid revision field are required");
 }
@@ -481,13 +504,17 @@ function parsePlanReconciliation(
     const capabilities = candidate.requiredCapabilities === undefined
       ? undefined
       : stringList(candidate.requiredCapabilities);
-    if (objective === null || dependencies === null || capabilities === null) return null;
+    const acceptanceCriteria = candidate.acceptanceCriteria === undefined
+      ? undefined
+      : parseAcceptanceCriteria(candidate.acceptanceCriteria);
+    if (objective === null || dependencies === null || capabilities === null || acceptanceCriteria === null) return null;
     taskUpdates.push({
       taskId: candidate.taskId,
       action: candidate.action,
       ...(objective !== undefined ? { objective } : {}),
       ...(dependencies !== undefined ? { dependencies } : {}),
       ...(capabilities !== undefined ? { requiredCapabilities: capabilities } : {}),
+      ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
     });
   }
   return {
@@ -549,8 +576,9 @@ function taskSchema(): Record<string, unknown> {
       objective: { type: "string", minLength: 1 },
       dependencies: { type: "array", items: { type: "string" } },
       requiredCapabilities: { type: "array", items: { type: "string" } },
+      acceptanceCriteria: { type: "array", minItems: 1, items: criterionSchema() },
     },
-    required: ["id", "objective", "dependencies", "requiredCapabilities"],
+    required: ["id", "objective", "dependencies", "requiredCapabilities", "acceptanceCriteria"],
     additionalProperties: false,
   };
 }
@@ -568,9 +596,30 @@ function planReconciliationSchema(): Record<string, unknown> {
         objective: { type: "string", minLength: 1 },
         dependencies: { type: "array", items: { type: "string" } },
         requiredCapabilities: { type: "array", items: { type: "string" } },
+        acceptanceCriteria: { type: "array", minItems: 1, items: criterionSchema() },
       }, ["taskId", "action"]),
     },
   }, ["revision", "summary", "taskUpdates"]);
+}
+
+function criterionSchema(): Record<string, unknown> {
+  return objectSchema({
+    id: { type: "string", minLength: 1 },
+    text: { type: "string", minLength: 1 },
+  }, ["id", "text"]);
+}
+
+function parseAcceptanceCriteria(value: unknown): AcceptanceCriterion[] | null {
+  if (!Array.isArray(value)) return null;
+  const criteria: AcceptanceCriterion[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.text)) {
+      return null;
+    }
+    criteria.push({ id: candidate.id, text: candidate.text });
+  }
+  const validation = validateAcceptanceCriteria(criteria);
+  return validation.valid ? criteria : null;
 }
 
 function objectSchema(

@@ -1,3 +1,5 @@
+import type { AcceptanceCriterion } from "./acceptance-contracts.js";
+
 export type TaskStatus =
   | "planned"
   | "assigned"
@@ -19,6 +21,10 @@ export interface BuildTask {
   dependencies: string[];
   status: TaskStatus;
   requiredCapabilities: string[];
+  /** Immutable for an active attempt; absent only on legacy pre-P1 plans. */
+  acceptanceCriteria?: AcceptanceCriterion[];
+  /** Monotonically versions the criterion set across plan revisions. */
+  acceptanceCriteriaVersion?: number;
   attempt: number;
   /** Architect-granted mechanical ceiling after revising an exhausted failure. */
   attemptLimit?: number;
@@ -44,6 +50,7 @@ export interface PlanTaskUpdate {
   objective?: string;
   dependencies?: string[];
   requiredCapabilities?: string[];
+  acceptanceCriteria?: AcceptanceCriterion[];
 }
 
 export interface PlanReconciliation {
@@ -55,7 +62,10 @@ export interface PlanReconciliation {
 export type TaskGraphIssueCode =
   | "duplicate_task_id"
   | "missing_dependency"
-  | "dependency_cycle";
+  | "dependency_cycle"
+  | "missing_acceptance_criteria"
+  | "invalid_acceptance_criterion"
+  | "duplicate_acceptance_criterion_id";
 
 export interface TaskGraphIssue {
   code: TaskGraphIssueCode;

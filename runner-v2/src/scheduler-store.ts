@@ -249,7 +249,7 @@ export function reduceSchedulerEvent(
         );
       }
       next.planRevision = requiredNumber(event.payload, "revision");
-      next.tasks = Object.fromEntries(tasks.map((task) => [task.id, { ...task }]));
+      next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
       break;
     }
     case "plan.reconciled": {
@@ -278,18 +278,36 @@ export function reduceSchedulerEvent(
         task.status === "failed" ||
         task.status === "rejected" ||
         (task.status === "planned" && task.attempt > 0);
+      const criteriaChanged = Object.hasOwn(patch, "acceptanceCriteria");
       const revised: BuildTask = grantsFreshAttempt
         ? {
             ...task,
             ...patch,
             id: task.id,
+            ...(criteriaChanged && Array.isArray(patch.acceptanceCriteria)
+              ? {
+                  acceptanceCriteria: patch.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+                  acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1,
+                }
+              : {}),
             status: "planned",
             attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
             assignedWorkerId: undefined,
             changeSetId: undefined,
             failureReason: undefined,
           }
-        : { ...task, ...patch, id: task.id, status: task.status };
+        : {
+            ...task,
+            ...patch,
+            id: task.id,
+            ...(criteriaChanged && Array.isArray(patch.acceptanceCriteria)
+              ? {
+                  acceptanceCriteria: patch.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+                  acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1,
+                }
+              : {}),
+            status: task.status,
+          };
       const candidate = Object.values({ ...next.tasks, [taskId]: revised });
       const validation = validateTaskGraph(candidate);
       if (!validation.valid) {
@@ -697,6 +715,9 @@ function parsePlanTaskUpdate(value: unknown, index: number): PlanTaskUpdate {
   if (objective !== undefined && (typeof objective !== "string" || !objective.trim())) {
     throw new Error(`Plan task update ${index} objective is invalid.`);
   }
+  const acceptanceCriteria = payload.acceptanceCriteria === undefined
+    ? undefined
+    : parseAcceptanceCriteria(payload.acceptanceCriteria, `Plan task update ${index}`);
   return {
     taskId: requiredString(payload, "taskId"),
     action,
@@ -707,7 +728,41 @@ function parsePlanTaskUpdate(value: unknown, index: number): PlanTaskUpdate {
     ...(optionalStrings("requiredCapabilities") !== undefined
       ? { requiredCapabilities: optionalStrings("requiredCapabilities") }
       : {}),
+    ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
   };
+}
+
+function parseAcceptanceCriteria(
+  value: unknown,
+  context: string
+): NonNullable<BuildTask["acceptanceCriteria"]> {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${context} acceptanceCriteria must contain at least one criterion.`);
+  }
+  const criteria = value.map((candidate, index) => {
+    const record = candidate as Record<string, unknown>;
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      Array.isArray(candidate) ||
+      typeof record.id !== "string" ||
+      !record.id.trim() ||
+      typeof record.text !== "string" ||
+      !record.text.trim()
+    ) {
+      throw new Error(`${context} acceptance criterion ${index} is invalid.`);
+    }
+    const criterion = candidate as { id: string; text: string };
+    return { id: criterion.id, text: criterion.text };
+  });
+  const ids = new Set<string>();
+  for (const criterion of criteria) {
+    if (ids.has(criterion.id)) {
+      throw new Error(`${context} acceptanceCriteria repeats criterion ${criterion.id}.`);
+    }
+    ids.add(criterion.id);
+  }
+  return criteria;
 }
 
 function applyPlanReconciliation(
@@ -728,7 +783,7 @@ function applyPlanReconciliation(
   }
 
   const candidateTasks = Object.fromEntries(
-    Object.entries(projection.tasks).map(([taskId, task]) => [taskId, { ...task }])
+    Object.entries(projection.tasks).map(([taskId, task]) => [taskId, cloneBuildTask(task)])
   );
   for (const update of reconciliation.taskUpdates) {
     const task = candidateTasks[update.taskId];
@@ -765,7 +820,11 @@ function applyPlanReconciliation(
       ...(update.requiredCapabilities !== undefined
         ? { requiredCapabilities: [...update.requiredCapabilities] }
         : {}),
+      ...(update.acceptanceCriteria !== undefined
+        ? { acceptanceCriteria: update.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+        : {}),
     };
+    const criteriaChanged = update.acceptanceCriteria !== undefined;
     const grantsFreshAttempt =
       task.status === "failed" ||
       task.status === "rejected" ||
@@ -774,13 +833,22 @@ function applyPlanReconciliation(
       ? {
           ...task,
           ...patch,
+          ...(criteriaChanged
+            ? { acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1 }
+            : {}),
           status: "planned",
           attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
           assignedWorkerId: undefined,
           changeSetId: undefined,
           failureReason: undefined,
         }
-      : { ...task, ...patch };
+      : {
+          ...task,
+          ...patch,
+          ...(criteriaChanged
+            ? { acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1 }
+            : {}),
+        };
   }
 
   const tasks = Object.values(candidateTasks);
@@ -828,7 +896,7 @@ function planProjection(
   return {
     ...emptySchedulerProjection(event),
     planRevision: requiredNumber(event.payload, "revision"),
-    tasks: Object.fromEntries(tasks.map((task) => [task.id, { ...task }])),
+    tasks: Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)])),
   };
 }
 
@@ -859,6 +927,17 @@ function stringArray(payload: Record<string, unknown>, key: string): string[] {
     throw new Error(`Missing ${key}.`);
   }
   return [...value] as string[];
+}
+
+function cloneBuildTask(task: BuildTask): BuildTask {
+  return {
+    ...task,
+    dependencies: [...task.dependencies],
+    requiredCapabilities: [...task.requiredCapabilities],
+    ...(task.acceptanceCriteria
+      ? { acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+  };
 }
 
 function requiredString(payload: Record<string, unknown>, key: string): string {

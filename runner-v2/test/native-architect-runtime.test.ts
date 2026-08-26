@@ -140,8 +140,9 @@ test("Architect provider failure pauses for user-selected handoff before plannin
             tasks: [{
               id: "task_a",
               objective: "Implement the stable API",
-              dependencies: [],
-              requiredCapabilities: ["code"],
+               dependencies: [],
+               requiredCapabilities: ["code"],
+               acceptanceCriteria: [{ id: "api", text: "The stable API is implemented." }],
             }],
           },
         }],
@@ -451,8 +452,9 @@ test("resumed Architect action receives a fresh mechanical reminder", async () =
             tasks: [{
               id: "task_a",
               objective: "Implement the feature",
-              dependencies: [],
-              requiredCapabilities: ["code"],
+               dependencies: [],
+               requiredCapabilities: ["code"],
+               acceptanceCriteria: [{ id: "feature", text: "The feature is implemented." }],
             }],
           },
         }],

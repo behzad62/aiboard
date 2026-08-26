@@ -83,6 +83,7 @@ test("architect lifecycle changes require typed tool calls, not completion prose
           objective: "Use any prose, including 'invalid plan', without interpretation",
           dependencies: [],
           requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "behavior", text: "The planned behavior is implemented." }],
         },
       ],
     });
@@ -92,12 +93,84 @@ test("architect lifecycle changes require typed tool calls, not completion prose
     const invalid = await invoke(registry, architectContext(), "plan_tasks", {
       revision: 2,
       tasks: [
-        { id: "dup", objective: "one", dependencies: [], requiredCapabilities: [] },
-        { id: "dup", objective: "two", dependencies: [], requiredCapabilities: [] },
+        {
+          id: "dup",
+          objective: "one",
+          dependencies: [],
+          requiredCapabilities: [],
+          acceptanceCriteria: [{ id: "one", text: "One behavior." }],
+        },
+        {
+          id: "dup",
+          objective: "two",
+          dependencies: [],
+          requiredCapabilities: [],
+          acceptanceCriteria: [{ id: "two", text: "Two behavior." }],
+        },
       ],
     });
     assert.equal(invalid.isError, true);
     assert.match(invalid.error?.message ?? "", /duplicate_task_id/);
+  });
+});
+
+test("plan_tasks persists a versioned criterion set and rejects incomplete criteria", async () => {
+  await withStore(async (store) => {
+    const registry = new ToolRegistry();
+    for (const tool of createArchitectTools({ store, clock: now })) registry.register(tool);
+    const missing = await invoke(registry, architectContext(), "plan_tasks", {
+      revision: 1,
+      tasks: [{
+        id: "task_a",
+        objective: "Implement the requested behavior",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [],
+      }],
+    });
+    assert.equal(missing.isError, true);
+    assert.match((missing.error?.issues ?? []).join(" "), /acceptance|criterion|valid tasks/i);
+
+    const planned = await invoke(registry, architectContext(), "plan_tasks", {
+      revision: 1,
+      tasks: [{
+        id: "task_a",
+        objective: "Implement the requested behavior",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+      }],
+    });
+    assert.equal(planned.isError, false);
+    const initial = projection(store).tasks.task_a;
+    assert.deepEqual(initial.acceptanceCriteria, [{ id: "behavior", text: "The behavior works." }]);
+    assert.equal(initial.acceptanceCriteriaVersion, 1);
+
+    const assigned = await invoke(registry, architectContext(), "revise_task", {
+      taskId: "task_a",
+      revision: 2,
+      acceptanceCriteria: [{ id: "revised", text: "The revised behavior works." }],
+    });
+    assert.equal(assigned.isError, false);
+    const revised = projection(store).tasks.task_a;
+    assert.deepEqual(revised.acceptanceCriteria, [{ id: "revised", text: "The revised behavior works." }]);
+    assert.equal(revised.acceptanceCriteriaVersion, 2);
+
+    store.append({
+      runId: "run_1",
+      type: "task.transitioned",
+      occurredAt: now(),
+      actor: { role: "runner", id: "scheduler" },
+      idempotencyKey: "task_a:assigned",
+      payload: { taskId: "task_a", status: "assigned", patch: { attempt: 1 } },
+    });
+    const activeRevision = await invoke(registry, architectContext(), "revise_task", {
+      taskId: "task_a",
+      revision: 3,
+      acceptanceCriteria: [{ id: "active", text: "Must not mutate while active." }],
+    });
+    assert.equal(activeRevision.isError, true);
+    assert.match(activeRevision.error?.message ?? "", /planned, failed, or rejected|active attempt/i);
   });
 });
 

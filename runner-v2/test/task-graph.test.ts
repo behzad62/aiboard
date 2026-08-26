@@ -43,6 +43,34 @@ test("validator reports only duplicate, missing, and cyclic mechanics", () => {
   );
 });
 
+test("new task plans require non-empty unique acceptance criteria", () => {
+  const missing = validateTaskGraph(
+    [task("missing")],
+    { requireAcceptanceCriteria: true }
+  );
+  assert.equal(missing.valid, false);
+  assert.equal(
+    missing.issues.some((issue) => issue.code === "missing_acceptance_criteria"),
+    true
+  );
+
+  const duplicate = validateTaskGraph(
+    [{
+      ...task("duplicate"),
+      acceptanceCriteria: [
+        { id: "same", text: "One meaning." },
+        { id: "same", text: "Another meaning." },
+      ],
+    }],
+    { requireAcceptanceCriteria: true }
+  );
+  assert.equal(duplicate.valid, false);
+  assert.equal(
+    duplicate.issues.some((issue) => issue.code === "duplicate_acceptance_criterion_id"),
+    true
+  );
+});
+
 test("task transitions are explicit and illegal jumps do not mutate", () => {
   const planned = task("task_1");
   const assigned = applyTaskTransition(planned, "assigned");
