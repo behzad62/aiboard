@@ -1207,3 +1207,85 @@ passed (normal LF-to-CRLF warnings only)
 P2.6B1 durable cleanup lifecycle is complete. Non-green-to-repair cleanup
 bridging, client/UI projection, broader audit export, and Playwright E2E remain
 deferred to later P2.6 packets.
+
+## P2.6B2 mechanical failure to durable repair work
+
+Closed the non-green idle gap. The runner now derives and appends exactly one
+deterministic `final_verification.failure_reported` event from the exact current
+generation, task, revision, attempt, persisted failed categories, issue/fact
+references, and evidence IDs. A mechanical failure cannot create a green
+submission or review. Raw forged/stale reports and raw review approval fail in
+the scheduler reducer.
+
+BuildRuntime routes the failed generation through the P2.6B1 exact-owned
+cleanup driver with the completed failed checks, evidence references, and
+bounded issue diagnostics. Scheduler cleanup success for a mechanical failure
+requires a durable diagnostics path; failed cleanup is redacted, blocks repair
+planning, and retries sequentially after restart without duplicating the
+failure report. Failure and diagnostics remain in invalidated history.
+
+Verification repair provenance is now a discriminated source:
+`semantic_review` binds the submission/review IDs, while `mechanical_failure`
+binds the failure, issue, and fact IDs without inventing review artifacts. The
+typed Architect repair tool and reducer independently require the exact current
+source, cleaned failure, revision, category/evidence coverage, and valid
+acceptance criteria. Every failed category is covered exactly once and the
+created tasks are ordinary worker-schedulable `verification_repair` tasks.
+Pre-discriminator semantic repair events replay into the new provenance shape.
+
+Integrating the ordinary repair invalidates the failed generation. Fresh final
+verification planning remains behind the existing all-ordinary-tasks-terminal
+gate, creates one new generation at the new integration revision, and cannot
+reuse old failure, diagnostic, or repair provenance as authority.
+
+### P2.6B2 TDD and fault evidence
+
+- The first restart-spanning end-to-end test failed 0/1 at the known branch:
+  actual `final_verification_non_green`, expected
+  `final_verification_failure_reported`.
+- The fixture uses an actual child Node test command exiting 7, then drives:
+  persisted non-green fact, deterministic failure report, restart, diagnostic
+  cleanup, restart, typed Architect mechanical repair, and worker eligibility.
+- A cleanup diagnostics guard was proven red 0/1: raw cleanup success without a
+  diagnostics path raised `Missing expected exception`; the restored reducer
+  rejects it.
+- Runtime-boundary fixtures map timeout, cancellation, browser console/network
+  policy failure, and missing required evidence into durable failure reports.
+- Restart checkpoints before and after the failure report and cleanup retain
+  exactly one failure event and retry only the sequential cleanup attempt.
+- Raw forged/stale failure, raw review approval, and forged mechanical repair
+  provenance reject atomically.
+
+Mandated fault mutations were restored after proving red:
+
+- Reintroducing the old idle-on-non-green return made the end-to-end test fail
+  0/1: actual `final_verification_non_green`, expected
+  `final_verification_failure_reported`.
+- Removing exact mechanical failure identity validation made the raw provenance
+  guard fail 0/1 with `Missing expected exception`.
+
+### P2.6B2 validation evidence
+
+```text
+Focused execution and repair suites:
+19 tests, 19 passed, 0 failed
+
+Affected execution/cleanup/repair/review/completion/scheduler/Architect/
+build-runtime/task scheduler/task graph/integration/factory/manager/recovery:
+134 tests, 134 passed, 0 failed
+
+Existing real FinalVerificationRuntime/browser failure mappings:
+9 tests, 9 passed, 0 failed
+
+npx tsc --noEmit -p runner-v2/tsconfig.json
+passed
+
+Targeted ESLint
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+P2.6B2 is complete. Client/UI projection, broader audit export, and Playwright
+E2E remain deferred to later P2.6 packets.

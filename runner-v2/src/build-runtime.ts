@@ -10,7 +10,10 @@ import type {
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import {
+  deriveFinalVerificationFailure,
+  rebuildSchedulerProjection,
+} from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type {
@@ -51,9 +54,10 @@ export type ArchitectActionReason =
       type: "final_verification_repair_plan_required";
       finalVerificationTaskId: string;
       generationId: string;
-      submissionId: string;
-      reviewId: string;
       targetRevision: string;
+      source:
+        | { type: "semantic_review"; submissionId: string; reviewId: string }
+        | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
       failedCategories: string[];
       evidenceIds: string[];
     }
@@ -123,6 +127,14 @@ export interface FinalVerificationCleanupDriver {
     taskId: string;
     targetRevision: string;
     attempt: number;
+    failed?: {
+      generationId: string;
+      taskId: string;
+      targetRevision: string;
+      checks: readonly unknown[];
+      evidenceReferences: readonly string[];
+      logs?: readonly string[];
+    };
   }): Promise<{ diagnosticsPath?: string }>;
 }
 
@@ -613,9 +625,12 @@ export class BuildRuntime {
           type: "final_verification_repair_plan_required",
           finalVerificationTaskId: generation.taskId,
           generationId: generation.generationId,
-          submissionId: generation.submission.submissionId,
-          reviewId: generation.review.reviewId,
           targetRevision: generation.targetRevision,
+          source: {
+            type: "semantic_review",
+            submissionId: generation.submission.submissionId,
+            reviewId: generation.review.reviewId,
+          },
           failedCategories: [...decision.failedCategories],
           evidenceIds: [...new Set(decision.categoryReviews.flatMap(
             (review) => review.verdict === "repair_required" ? review.evidenceIds : [],
@@ -674,7 +689,43 @@ export class BuildRuntime {
       return this.afterArchitect("final_verification_review_required");
     }
     if (generation.completedChecks?.some((check) => !check.green)) {
-      return { status: "idle", action: "final_verification_non_green" };
+      if (!generation.failure) {
+        const failure = deriveFinalVerificationFailure(generation, 1);
+        this.store.append({
+          runId: this.runId,
+          type: "final_verification.failure_reported",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `${generation.generationId}:failure:${failure.failureId}`,
+          payload: failure,
+        });
+        return { status: "progressed", action: "final_verification_failure_reported" };
+      }
+      if (generation.cleanup?.status !== "succeeded") {
+        return await this.advanceFinalVerificationCleanup(generation);
+      }
+      if (generation.repairTaskIds?.length) return undefined;
+      await this.runArchitect({
+        type: "final_verification_repair_plan_required",
+        finalVerificationTaskId: generation.taskId,
+        generationId: generation.generationId,
+        targetRevision: generation.targetRevision,
+        source: {
+          type: "mechanical_failure",
+          failureId: generation.failure.failureId,
+          issueIds: [...generation.failure.issueIds],
+          factIds: [...generation.failure.factIds],
+        },
+        failedCategories: [...generation.failure.failedCategories],
+        evidenceIds: [...generation.failure.evidenceIds],
+      }, this.projection());
+      const repaired = this.projection().finalVerification?.current;
+      if (repaired?.generationId !== generation.generationId || !repaired.repairTaskIds?.length) {
+        throw new Error(
+          "Architect returned from final_verification_repair_plan_required without a typed action.",
+        );
+      }
+      return this.afterArchitect("final_verification_repair_plan_required");
     }
     const pending = generation.plan.checks.find(
       (planned) => !generation.completedChecks?.some(
@@ -817,6 +868,18 @@ export class BuildRuntime {
         taskId: generation.taskId,
         targetRevision: generation.targetRevision,
         attempt: cleanup.attempt,
+        ...(generation.failure ? {
+          failed: {
+            generationId: generation.generationId,
+            taskId: generation.taskId,
+            targetRevision: generation.targetRevision,
+            checks: [...(generation.completedChecks ?? [])],
+            evidenceReferences: [...generation.failure.evidenceIds],
+            logs: (generation.completedChecks ?? [])
+              .filter((check) => !check.green)
+              .flatMap((check) => check.issues),
+          },
+        } : {}),
       });
       if (!this.isCurrentGeneration(generation)) {
         return { status: "progressed", action: "final_verification_invalidated" };

@@ -8,7 +8,7 @@ import type { ToolCallBlock } from "../src/agent-contracts.js";
 import { createArchitectTools } from "../src/architect-tools.js";
 import { BuildRuntime, type ArchitectActionRequest } from "../src/build-runtime.js";
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
-import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
+import { deriveFinalVerificationFailure, rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { TaskScheduler } from "../src/task-scheduler.js";
@@ -32,8 +32,11 @@ test("repair-required review mandates a typed Architect repair plan and prose ca
       if (request.reason.type === "final_verification_repair_plan_required") {
         assert.equal(request.reason.finalVerificationTaskId, FINAL_TASK_ID);
         assert.equal(request.reason.generationId, GENERATION_ID);
-        assert.equal(request.reason.submissionId, SUBMISSION_ID);
-        assert.equal(request.reason.reviewId, REVIEW_ID);
+        assert.deepEqual(request.reason.source, {
+          type: "semantic_review",
+          submissionId: SUBMISSION_ID,
+          reviewId: REVIEW_ID,
+        });
         assert.equal(request.reason.targetRevision, REVISION_ONE);
         assert.deepEqual(request.reason.failedCategories, ["tests", "browser"]);
         assert.deepEqual(request.reason.evidenceIds, []);
@@ -149,6 +152,36 @@ test("repair tasks and provenance deduplicate across scheduler reopen", async ()
   }
 });
 
+test("pre-discriminator semantic repair events replay into semantic provenance", () => {
+  const fixture = createFixture();
+  try {
+    const input = validRepairPlan();
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "final_verification.repairs_planned",
+      occurredAt: "2026-08-26T00:12:00.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "legacy-semantic-repair-event",
+      payload: {
+        finalVerificationTaskId: FINAL_TASK_ID,
+        taskId: FINAL_TASK_ID,
+        generationId: GENERATION_ID,
+        submissionId: SUBMISSION_ID,
+        reviewId: REVIEW_ID,
+        targetRevision: REVISION_ONE,
+        revision: 2,
+        tasks: input.tasks,
+      },
+    });
+    assert.equal(
+      projection(fixture.store).tasks["repair-tests"]?.verificationRepair?.source.type,
+      "semantic_review",
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 test("ordinary task transitions cannot rewrite verification repair provenance", async () => {
   const fixture = createFixture();
   try {
@@ -170,11 +203,10 @@ test("ordinary task transitions cannot rewrite verification repair provenance", 
           verificationRepair: {
             sourceGenerationId: "forged-generation",
             finalVerificationTaskId: FINAL_TASK_ID,
-            submissionId: SUBMISSION_ID,
-            reviewId: REVIEW_ID,
             targetRevision: REVISION_ONE,
             categories: ["tests"],
             evidenceIds: [],
+            source: { type: "semantic_review", submissionId: SUBMISSION_ID, reviewId: REVIEW_ID },
           },
         },
       },
@@ -253,6 +285,99 @@ test("approved verification review never creates repair tasks", async () => {
   }
 });
 
+test("integrating a mechanically sourced repair preserves failure history and unlocks one fresh generation", async () => {
+  const fixture = createMechanicalFixture();
+  try {
+    const failure = current(fixture.store)!.failure!;
+    const input = {
+      finalVerificationTaskId: FINAL_TASK_ID,
+      generationId: GENERATION_ID,
+      targetRevision: REVISION_ONE,
+      source: {
+        type: "mechanical_failure" as const,
+        failureId: failure.failureId,
+        issueIds: [...failure.issueIds],
+        factIds: [...failure.factIds],
+      },
+      tasks: [{
+        id: "repair-build-mechanical",
+        objective: "Repair the mechanically failing build command.",
+        categories: ["build" as const],
+        evidenceIds: [...failure.evidenceIds],
+        dependencies: ["implementation-one"],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "build-green", text: "The exact build check passes." }],
+      }],
+    };
+    const planned = await invokeRepairs(repairTools(fixture), input, "mechanical-repair");
+    assert.equal(planned.isError, false, planned.error?.message ?? "mechanical plan failed");
+    integrateRepair(fixture, "repair-build-mechanical", REVISION_TWO);
+    assert.equal(current(fixture.store), undefined);
+    const history = projection(fixture.store).finalVerification?.history.at(-1);
+    assert.equal(history?.failure?.failureId, failure.failureId);
+    assert.equal(
+      projection(fixture.store).tasks["repair-build-mechanical"]?.verificationRepair?.source.type,
+      "mechanical_failure",
+    );
+
+    const runtime = buildRuntime(fixture, async (request) => {
+      assert.equal(request.reason.type, "final_verification_plan_required");
+      const result = await request.tools.invoke({
+        type: "tool_call",
+        callId: "fresh-after-mechanical-repair",
+        name: "plan_final_verification",
+        arguments: { plan: finalPlan() },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "fresh plan failed");
+    });
+    assert.equal((await runtime.step()).action, "final_verification_plan_required");
+    assert.equal(current(fixture.store)?.targetRevision, REVISION_TWO);
+    assert.notEqual(current(fixture.store)?.generationId, GENERATION_ID);
+    assert.equal(projection(fixture.store).finalVerification?.history.length, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("raw mechanical repair provenance must match the exact durable failure", () => {
+  const fixture = createMechanicalFixture();
+  try {
+    const failure = current(fixture.store)!.failure!;
+    assert.throws(() => fixture.store.append({
+      runId: RUN_ID,
+      type: "final_verification.repairs_planned",
+      occurredAt: "2026-08-26T00:20:00.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "forged-mechanical-repair",
+      payload: {
+        finalVerificationTaskId: FINAL_TASK_ID,
+        taskId: FINAL_TASK_ID,
+        generationId: GENERATION_ID,
+        targetRevision: REVISION_ONE,
+        revision: 2,
+        source: {
+          type: "mechanical_failure",
+          failureId: "forged-failure",
+          issueIds: [...failure.issueIds],
+          factIds: [...failure.factIds],
+        },
+        tasks: [{
+          id: "forged-repair",
+          objective: "Forge a repair source.",
+          categories: ["build"],
+          evidenceIds: [],
+          dependencies: ["implementation-one"],
+          requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "forged", text: "Forged repair passes." }],
+        }],
+      },
+    }), /durable failure|mechanical repairs/i);
+    assert.equal(projection(fixture.store).tasks["forged-repair"], undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
 function buildRuntime(
   fixture: Fixture,
   run: (request: ArchitectActionRequest) => Promise<void>,
@@ -283,7 +408,7 @@ function repairTools(fixture: Fixture) {
 
 async function invokeRepairs(
   tools: ToolRegistry,
-  input: ReturnType<typeof validRepairPlan>,
+  input: Record<string, unknown>,
   callId: string,
 ) {
   const call: ToolCallBlock = {
@@ -303,9 +428,8 @@ function validRepairPlan() {
   return {
     finalVerificationTaskId: FINAL_TASK_ID,
     generationId: GENERATION_ID,
-    submissionId: SUBMISSION_ID,
-    reviewId: REVIEW_ID,
     targetRevision: REVISION_ONE,
+    source: { type: "semantic_review" as const, submissionId: SUBMISSION_ID, reviewId: REVIEW_ID },
     tasks: [
       {
         id: "repair-tests",
@@ -359,6 +483,32 @@ function createFixture(options: { reviewStatus?: "approved" | "repair_required" 
     },
   };
   seed(fixture.store, options.reviewStatus ?? "repair_required");
+  return fixture;
+}
+
+function createMechanicalFixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), "runner-v2 final verification mechanical repair "));
+  const database = join(root, "scheduler.sqlite");
+  const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const fixture: Fixture = {
+    root,
+    database,
+    evidence,
+    store: new SqliteSchedulerStore(database, { evidenceStore: evidence }),
+    close() {
+      this.store.close(); this.evidence.close(); rmSync(this.root, { recursive: true, force: true });
+    },
+  };
+  const plan = finalPlan();
+  fixture.store.append({ runId: RUN_ID, type: "run.initialized", occurredAt: "2026-08-26T00:00:00.000Z", actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: {} });
+  fixture.store.append({ runId: RUN_ID, type: "plan.created", occurredAt: "2026-08-26T00:00:01.000Z", actor: { role: "architect", id: "architect" }, idempotencyKey: "plan", payload: { revision: 1, tasks: [{ id: "implementation-one", objective: "Implement feature", dependencies: [], status: "integrated", requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "done", text: "Feature implemented." }], acceptanceCriteriaVersion: 1, attempt: 1 }] } });
+  fixture.store.append({ runId: RUN_ID, type: "integration.revision_advanced", occurredAt: "2026-08-26T00:00:02.000Z", actor: { role: "runner", id: "integration" }, idempotencyKey: "rev-one", payload: { integrationRevision: REVISION_ONE } });
+  fixture.store.append({ runId: RUN_ID, type: "final_verification.generation_created", occurredAt: "2026-08-26T00:00:03.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "generation", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, planVersion: 1, plan } });
+  fixture.store.append({ runId: RUN_ID, type: "final_verification.check_completed", occurredAt: "2026-08-26T00:00:04.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "check:build", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1, workspacePath: "C:/verify", startedAt: "2026-08-26T00:00:03.000Z", finishedAt: "2026-08-26T00:00:04.000Z", result: { ...plan.checks[0], green: false, evidenceIds: [], facts: [], issues: ["build exited non-zero"] } } });
+  const failure = deriveFinalVerificationFailure(current(fixture.store)!, 1);
+  fixture.store.append({ runId: RUN_ID, type: "final_verification.failure_reported", occurredAt: "2026-08-26T00:00:05.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "failure", payload: { ...failure } });
+  fixture.store.append({ runId: RUN_ID, type: "final_verification.cleanup_started", occurredAt: "2026-08-26T00:00:06.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "cleanup-start", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1 } });
+  fixture.store.append({ runId: RUN_ID, type: "final_verification.cleanup_succeeded", occurredAt: "2026-08-26T00:00:07.000Z", actor: { role: "runner", id: "runtime" }, idempotencyKey: "cleanup-success", payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: REVISION_ONE, attempt: 1, diagnosticsPath: "C:/diagnostics/failure.json" } });
   return fixture;
 }
 

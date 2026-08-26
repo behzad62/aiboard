@@ -71,8 +71,7 @@ export function validateTaskGraph(
         !task.verificationRepair ||
         !task.verificationRepair.sourceGenerationId.trim() ||
         !task.verificationRepair.finalVerificationTaskId.trim() ||
-        !task.verificationRepair.submissionId.trim() ||
-        !task.verificationRepair.reviewId.trim() ||
+        !validVerificationRepairSource(task.verificationRepair.source) ||
         !task.verificationRepair.targetRevision.trim() ||
         task.verificationRepair.categories.length === 0 ||
         new Set(task.verificationRepair.categories).size !== task.verificationRepair.categories.length
@@ -250,6 +249,20 @@ export function applyTaskTransition(
       : {}),
     status,
   };
+}
+
+function validVerificationRepairSource(
+  source: import("./task-contracts.js").VerificationRepairProvenance["source"],
+): boolean {
+  if (source.type === "semantic_review") {
+    return Boolean(source.submissionId.trim() && source.reviewId.trim());
+  }
+  return Boolean(
+    source.failureId.trim() &&
+    source.issueIds.length > 0 &&
+    new Set(source.issueIds).size === source.issueIds.length &&
+    new Set(source.factIds).size === source.factIds.length
+  );
 }
 
 function findCycle(byId: ReadonlyMap<string, BuildTask>): string[] | null {

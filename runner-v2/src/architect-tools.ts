@@ -121,9 +121,10 @@ interface VerificationRepairTaskInput {
 interface PlanVerificationRepairsInput {
   finalVerificationTaskId: string;
   generationId: string;
-  submissionId: string;
-  reviewId: string;
   targetRevision: string;
+  source:
+    | { type: "semantic_review"; submissionId: string; reviewId: string }
+    | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
   tasks: VerificationRepairTaskInput[];
 }
 
@@ -174,9 +175,15 @@ function planVerificationRepairsTool(
     schema: objectSchema({
       finalVerificationTaskId: { type: "string", minLength: 1 },
       generationId: { type: "string", minLength: 1 },
-      submissionId: { type: "string", minLength: 1 },
-      reviewId: { type: "string", minLength: 1 },
       targetRevision: { type: "string", minLength: 1 },
+      source: objectSchema({
+        type: { type: "string", enum: ["semantic_review", "mechanical_failure"] },
+        submissionId: { type: "string", minLength: 1 },
+        reviewId: { type: "string", minLength: 1 },
+        failureId: { type: "string", minLength: 1 },
+        issueIds: { type: "array", items: { type: "string", minLength: 1 } },
+        factIds: { type: "array", items: { type: "string", minLength: 1 } },
+      }, ["type"]),
       tasks: {
         type: "array",
         minItems: 1,
@@ -202,8 +209,7 @@ function planVerificationRepairsTool(
         ]),
       },
     }, [
-      "finalVerificationTaskId", "generationId", "submissionId", "reviewId",
-      "targetRevision", "tasks",
+      "finalVerificationTaskId", "generationId", "targetRevision", "source", "tasks",
     ]),
     validate: validateVerificationRepairPlan,
     execute: async (input, context) => {
@@ -213,18 +219,15 @@ function planVerificationRepairsTool(
       const current = projection.finalVerification?.current;
       if (
         !current ||
-        current.review?.status !== "repair_required" ||
-        !current.review.decision ||
         current.taskId !== input.finalVerificationTaskId ||
         current.generationId !== input.generationId ||
-        current.submission?.submissionId !== input.submissionId ||
-        current.review.reviewId !== input.reviewId ||
         current.targetRevision !== input.targetRevision ||
-        projection.integrationRevision !== input.targetRevision
+        projection.integrationRevision !== input.targetRevision ||
+        !repairSourceMatchesCurrent(current, input.source)
       ) {
         return errorOutput(
           "stale_verification_repair_plan",
-          "Verification repairs must reference the current repair-required generation, review, submission, and revision.",
+          "Verification repairs must reference the current durable mechanical failure or repair-required semantic review.",
         );
       }
       if (current.repairTaskIds) {
@@ -254,9 +257,8 @@ function planVerificationRepairsTool(
           finalVerificationTaskId: input.finalVerificationTaskId,
           taskId: input.finalVerificationTaskId,
           generationId: input.generationId,
-          submissionId: input.submissionId,
-          reviewId: input.reviewId,
           targetRevision: input.targetRevision,
+          source: input.source,
           revision: projection.planRevision + 1,
           tasks: input.tasks.map((task) => ({
             ...task,
@@ -283,11 +285,30 @@ function validateVerificationRepairPlan(
     if (
       !nonEmpty(value.finalVerificationTaskId) ||
       !nonEmpty(value.generationId) ||
-      !nonEmpty(value.submissionId) ||
-      !nonEmpty(value.reviewId) ||
       !nonEmpty(value.targetRevision) ||
+      !isRecord(value.source) ||
       !Array.isArray(value.tasks) || value.tasks.length === 0
     ) return null;
+    const source = value.source.type === "semantic_review" &&
+      nonEmpty(value.source.submissionId) && nonEmpty(value.source.reviewId)
+      ? {
+          type: "semantic_review" as const,
+          submissionId: value.source.submissionId,
+          reviewId: value.source.reviewId,
+        }
+      : value.source.type === "mechanical_failure" &&
+          nonEmpty(value.source.failureId) &&
+          stringList(value.source.issueIds)?.length &&
+          stringList(value.source.factIds)
+        ? {
+            type: "mechanical_failure" as const,
+            failureId: value.source.failureId,
+            issueIds: stringList(value.source.issueIds)!,
+            factIds: stringList(value.source.factIds)!,
+          }
+        : null;
+    if (!source || new Set(source.type === "mechanical_failure" ? source.issueIds : []).size !==
+      (source.type === "mechanical_failure" ? source.issueIds.length : 0)) return null;
     const tasks: VerificationRepairTaskInput[] = [];
     for (const candidate of value.tasks) {
       if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
@@ -317,12 +338,30 @@ function validateVerificationRepairPlan(
     return {
       finalVerificationTaskId: value.finalVerificationTaskId,
       generationId: value.generationId,
-      submissionId: value.submissionId,
-      reviewId: value.reviewId,
       targetRevision: value.targetRevision,
+      source,
       tasks: tasks.sort((left, right) => left.id.localeCompare(right.id)),
     };
   }, "current repair provenance and at least one valid scoped repair task are required");
+}
+
+function repairSourceMatchesCurrent(
+  current: import("./scheduler-store.js").FinalVerificationGenerationProjection,
+  source: PlanVerificationRepairsInput["source"],
+): boolean {
+  if (source.type === "semantic_review") {
+    return current.review?.status === "repair_required" &&
+      Boolean(current.review.decision) &&
+      current.submission?.submissionId === source.submissionId &&
+      current.review.reviewId === source.reviewId;
+  }
+  return Boolean(
+    current.failure &&
+    current.cleanup?.status === "succeeded" &&
+    current.failure.failureId === source.failureId &&
+    JSON.stringify(current.failure.issueIds) === JSON.stringify(source.issueIds) &&
+    JSON.stringify(current.failure.factIds) === JSON.stringify(source.factIds)
+  );
 }
 
 function repairPlanMatches(

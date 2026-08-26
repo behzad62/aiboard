@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   isFinalVerificationTask,
   type BuildTask,
@@ -66,6 +68,7 @@ export type SchedulerEventType =
   | "integration.revision_advanced"
   | "final_verification.generation_created"
   | "final_verification.check_completed"
+  | "final_verification.failure_reported"
   | "final_verification.submitted"
   | "final_verification.cleanup_started"
   | "final_verification.cleanup_succeeded"
@@ -224,11 +227,59 @@ export interface FinalVerificationGenerationProjection {
   state: "current" | "invalidated";
   invalidatedByRevision?: string;
   completedChecks?: FinalVerificationCompletedCheckProjection[];
+  failure?: FinalVerificationFailureProjection;
   submission?: FinalVerificationSubmissionReference;
   submissionResult?: FinalVerificationSubmission;
   cleanup?: FinalVerificationCleanupProjection;
   review?: FinalVerificationReviewReference;
   repairTaskIds?: string[];
+}
+
+export interface FinalVerificationFailureProjection {
+  failureId: string;
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  attempt: number;
+  failedCategories: FinalVerificationCategory[];
+  issueIds: string[];
+  factIds: string[];
+  evidenceIds: string[];
+  reportedAt: string;
+}
+
+export function deriveFinalVerificationFailure(
+  generation: FinalVerificationGenerationProjection,
+  attempt: number,
+): Omit<FinalVerificationFailureProjection, "reportedAt"> {
+  const failed = (generation.completedChecks ?? []).filter((check) => !check.green);
+  const failedCategories = failed.map((check) => check.category);
+  const issueIds = failed.flatMap((check) => {
+    const issues = check.issues.length > 0
+      ? check.issues
+      : [`${check.category} is mechanically non-green without issue detail.`];
+    return issues.map(
+      (issue, index) => failureReference("issue", check.category, index, issue),
+    );
+  });
+  const factIds = failed.flatMap((check) => check.facts.map(
+    (fact, index) => failureReference("fact", check.category, index, canonicalJson(fact)),
+  ));
+  const evidenceIds = [...new Set(failed.flatMap((check) => check.evidenceIds))].sort();
+  const identity = {
+    generationId: generation.generationId,
+    taskId: generation.taskId,
+    targetRevision: generation.targetRevision,
+    attempt,
+    failedCategories,
+    issueIds,
+    factIds,
+    evidenceIds,
+  };
+  return {
+    failureId: `final-verification-failure:${createHash("sha256").update(canonicalJson(identity)).digest("hex")}`,
+    ...identity,
+  };
 }
 
 export interface FinalVerificationCleanupProjection {
@@ -953,6 +1004,13 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner may complete a final verification check.");
       }
       recordFinalVerificationCheck(next, event.payload);
+      break;
+    }
+    case "final_verification.failure_reported": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may report a final verification failure.");
+      }
+      recordFinalVerificationFailure(next, event.payload, event.occurredAt);
       break;
     }
     case "final_verification.submitted": {
@@ -1815,8 +1873,8 @@ function recordFinalVerificationCleanup(
   occurredAt: string,
 ): void {
   const current = requireCurrentFinalVerification(projection, payload);
-  if (!current.submission || !current.submissionResult) {
-    throw new Error("Final verification cleanup requires a validated durable submission.");
+  if ((!current.submission || !current.submissionResult) && !current.failure) {
+    throw new Error("Final verification cleanup requires a validated submission or durable mechanical failure.");
   }
   const attempt = requiredNumber(payload, "attempt");
   if (!Number.isSafeInteger(attempt) || attempt < 1) throw new Error("Final verification cleanup attempt is invalid.");
@@ -1854,6 +1912,12 @@ function recordFinalVerificationCleanup(
     throw new Error(`Final verification cleanup ${status} requires its exact started attempt.`);
   }
   if (status === "succeeded") {
+    if (
+      current.failure &&
+      (typeof payload.diagnosticsPath !== "string" || !payload.diagnosticsPath.trim())
+    ) {
+      throw new Error("Mechanically failed final verification cleanup requires durable diagnostics.");
+    }
     current.cleanup = {
       ...existing,
       status,
@@ -1866,6 +1930,41 @@ function recordFinalVerificationCleanup(
     const error = requiredString(payload, "error").slice(0, 4_096);
     current.cleanup = { ...existing, status, finishedAt: occurredAt, error };
   }
+}
+
+function recordFinalVerificationFailure(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+  occurredAt: string,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  if (current.submission || current.review) {
+    throw new Error("A mechanically failed final verification cannot have a submission or review.");
+  }
+  const attempt = requiredNumber(payload, "attempt");
+  const expected = deriveFinalVerificationFailure(current, attempt);
+  if (expected.failedCategories.length === 0) {
+    throw new Error("Final verification failure requires a persisted non-green check.");
+  }
+  const incoming = {
+    failureId: requiredString(payload, "failureId"),
+    generationId: requiredString(payload, "generationId"),
+    taskId: requiredString(payload, "taskId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    attempt,
+    failedCategories: stringArray(payload, "failedCategories"),
+    issueIds: stringArray(payload, "issueIds"),
+    factIds: stringArray(payload, "factIds"),
+    evidenceIds: stringArray(payload, "evidenceIds"),
+  };
+  if (!sameValue(incoming, expected)) {
+    throw new Error("Final verification failure report conflicts with persisted mechanical facts.");
+  }
+  if (current.failure) {
+    if (sameValue({ ...current.failure, reportedAt: undefined }, { ...expected, reportedAt: undefined })) return;
+    throw new Error("Final verification generation already has a conflicting failure report.");
+  }
+  current.failure = { ...expected, reportedAt: occurredAt };
 }
 
 function recordFinalVerificationReviewDecision(
@@ -1901,6 +2000,43 @@ function recordFinalVerificationReviewDecision(
   if (decisionProjection) current.review.decision = decisionProjection;
 }
 
+function parseVerificationRepairSource(
+  payload: Record<string, unknown>,
+  current: FinalVerificationGenerationProjection,
+): import("./task-contracts.js").VerificationRepairProvenance["source"] {
+  const type = requiredString(payload, "type");
+  if (type === "semantic_review") {
+    const source = {
+      type,
+      submissionId: requiredString(payload, "submissionId"),
+      reviewId: requiredString(payload, "reviewId"),
+    } as const;
+    if (
+      current.review?.status !== "repair_required" ||
+      !current.review.decision ||
+      current.submission?.submissionId !== source.submissionId ||
+      current.review.reviewId !== source.reviewId
+    ) throw new Error("Semantic repairs require the current repair-required review.");
+    return source;
+  }
+  if (type === "mechanical_failure") {
+    const source = {
+      type,
+      failureId: requiredString(payload, "failureId"),
+      issueIds: stringArray(payload, "issueIds"),
+      factIds: stringArray(payload, "factIds"),
+    } as const;
+    if (
+      !current.failure || current.cleanup?.status !== "succeeded" ||
+      source.failureId !== current.failure.failureId ||
+      !sameValue(source.issueIds, current.failure.issueIds) ||
+      !sameValue(source.factIds, current.failure.factIds)
+    ) throw new Error("Mechanical repairs require the current cleaned durable failure.");
+    return source;
+  }
+  throw new Error("Final verification repair source is invalid.");
+}
+
 function createFinalVerificationRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
@@ -1909,17 +2045,14 @@ function createFinalVerificationRepairTasks(
     ...payload,
     taskId: payload.finalVerificationTaskId,
   });
-  if (
-    current.review?.status !== "repair_required" ||
-    !current.review.decision ||
-    !current.submission ||
-    current.review.reviewId !== requiredString(payload, "reviewId") ||
-    current.submission.submissionId !== requiredString(payload, "submissionId")
-  ) {
-    throw new Error("Final verification repairs require the current repair-required review.");
-  }
-  const review = current.review;
-  const submission = current.submission;
+  const sourcePayload = isRecord(payload.source)
+    ? payload.source
+    : {
+        type: "semantic_review",
+        submissionId: payload.submissionId,
+        reviewId: payload.reviewId,
+      };
+  const source = parseVerificationRepairSource(sourcePayload, current);
   const revision = requiredNumber(payload, "revision");
   if (revision !== projection.planRevision + 1) {
     throw new Error("Final verification repair plan revision is stale.");
@@ -1927,7 +2060,10 @@ function createFinalVerificationRepairTasks(
   if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
     throw new Error("Final verification repairs require at least one task.");
   }
-  const failed = new Set(review.decision!.failedCategories);
+  const failedCategories = source.type === "semantic_review"
+    ? current.review!.decision!.failedCategories
+    : current.failure!.failedCategories;
+  const failed = new Set(failedCategories);
   const assigned = new Set<FinalVerificationCategory>();
   const tasks = payload.tasks.map((candidate) => {
     if (!isRecord(candidate)) throw new Error("Final verification repair task is invalid.");
@@ -1948,11 +2084,15 @@ function createFinalVerificationRepairTasks(
       throw new Error(`Repair task acceptance criteria are invalid: ${criteriaValidation.issues.join(" ")}`);
     }
     const evidenceIds = stringArray(candidate, "evidenceIds");
-    const expectedEvidence = [...new Set(categories.flatMap((category) =>
-      review.decision!.categoryReviews.find(
-        (review) => review.category === category,
-      )?.evidenceIds ?? []
-    ))].sort();
+    const expectedEvidence = source.type === "semantic_review"
+      ? [...new Set(categories.flatMap((category) =>
+          current.review!.decision!.categoryReviews.find(
+            (review) => review.category === category,
+          )?.evidenceIds ?? []
+        ))].sort()
+      : [...new Set(categories.flatMap((category) =>
+          current.completedChecks?.find((check) => check.category === category)?.evidenceIds ?? []
+        ))].sort();
     if (!sameValue([...evidenceIds].sort(), expectedEvidence)) {
       throw new Error("Repair task cites missing or unknown final-verification evidence.");
     }
@@ -1969,11 +2109,10 @@ function createFinalVerificationRepairTasks(
       verificationRepair: {
         sourceGenerationId: current.generationId,
         finalVerificationTaskId: current.taskId,
-        submissionId: submission.submissionId,
-        reviewId: review.reviewId,
         targetRevision: current.targetRevision,
         categories: [...categories],
         evidenceIds: [...evidenceIds],
+        source,
       },
     } satisfies BuildTask;
   });
@@ -2322,6 +2461,7 @@ function cloneFinalVerificationGeneration(
     ...(generation.completedChecks
       ? { completedChecks: generation.completedChecks.map(cloneFinalVerificationCompletedCheck) }
       : {}),
+    ...(generation.failure ? { failure: cloneJson(generation.failure) } : {}),
     ...(generation.submission
       ? { submission: { ...generation.submission } }
       : {}),
@@ -2406,6 +2546,17 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function failureReference(
+  kind: "issue" | "fact",
+  category: FinalVerificationCategory,
+  index: number,
+  value: string,
+): string {
+  return `${kind}:${createHash("sha256")
+    .update(`${category}\0${index}\0${value}`)
+    .digest("hex")}`;
 }
 
 function parsePlanReconciliation(value: unknown): PlanReconciliation {

@@ -27,11 +27,12 @@ export type BuildTaskKind = "implementation" | "verification_repair" | "final_ve
 export interface VerificationRepairProvenance {
   sourceGenerationId: string;
   finalVerificationTaskId: string;
-  submissionId: string;
-  reviewId: string;
   targetRevision: string;
   categories: FinalVerificationCategory[];
   evidenceIds: string[];
+  source:
+    | { type: "semantic_review"; submissionId: string; reviewId: string }
+    | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
 }
 
 export interface BuildTask {
