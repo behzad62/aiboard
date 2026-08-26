@@ -111,10 +111,14 @@ assert.equal(
   "unknown",
 );
 
-assert.equal(supportsNativeRunnerNodeVersion("24.18.0"), true);
+assert.equal(supportsNativeRunnerNodeVersion("22.13.0"), true);
+assert.equal(supportsNativeRunnerNodeVersion("22.18.0"), true);
+assert.equal(supportsNativeRunnerNodeVersion("24.0.0"), true);
 assert.equal(supportsNativeRunnerNodeVersion("24.20.0"), true);
-assert.equal(supportsNativeRunnerNodeVersion("25.0.0"), true);
-assert.equal(supportsNativeRunnerNodeVersion("24.17.9"), false);
+assert.equal(supportsNativeRunnerNodeVersion("22.12.9"), false);
+assert.equal(supportsNativeRunnerNodeVersion("23.0.0"), false);
+assert.equal(supportsNativeRunnerNodeVersion("25.0.0"), false);
+assert.equal(supportsNativeRunnerNodeVersion("26.0.0"), false);
 assert.equal(supportsNativeRunnerNodeVersion("invalid"), false);
 
 console.log("PASS native Build policy");

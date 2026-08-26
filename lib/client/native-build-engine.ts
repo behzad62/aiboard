@@ -38,7 +38,7 @@ import {
 } from "./discussion-live-state";
 import {
   effectiveNativeBuildPolicy,
-  MINIMUM_NATIVE_RUNNER_NODE_VERSION,
+  NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   nativeProviderBillingBasis,
   supportsNativeRunnerNodeVersion,
 } from "./native-build-policy";
@@ -129,7 +129,7 @@ export async function runNativeBuildDiscussion(
   const health = await getNativeRunnerHealth(connection);
   if (!supportsNativeRunnerNodeVersion(health.nodeVersion)) {
     throw new Error(
-      `Runner V2 requires Node.js ${MINIMUM_NATIVE_RUNNER_NODE_VERSION} or newer; connected runner uses ${health.nodeVersion}.`
+      `Runner V2 supports ${NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}; connected runner uses ${health.nodeVersion}.`
     );
   }
   let runId = discussion.nativeBuildRunId

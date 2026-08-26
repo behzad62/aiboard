@@ -35,7 +35,7 @@ AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript
 - `lib/client/legacy-build-engine.benchmark.ts` exists only for certified WorkBench benchmark compatibility. Product Build mode must never import it.
 - `lib/orchestrator/engine.ts` is otherwise legacy server code, but its `OrchestratorEvent` type remains live.
 
-Runner V2 requires exactly Node.js 24.18.0 and Git. Git absence stops before model calls. Verifiers record mechanical facts and never decide completeness. The Architect is semantic authority. Final project handoff always pauses for a user choice, including under Full access.
+Runner V2 requires a maintained Node.js LTS release (22.x or 24.x; Node 22.x must provide unflagged `node:sqlite` support from 22.13.0 onward) and Git. Git absence stops before model calls. Verifiers record mechanical facts and never decide completeness. The Architect is semantic authority. Final project handoff always pauses for a user choice, including under Full access.
 
 ### Providers
 

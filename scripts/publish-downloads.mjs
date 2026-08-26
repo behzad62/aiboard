@@ -81,7 +81,7 @@ function nativeRunnerPackageJson() {
     private: true,
     license: rootPackage.license,
     type: "module",
-    engines: { node: ">=24.18.0" },
+    engines: { node: ">=22.13.0 <23 || >=24.0.0 <25" },
     scripts: {
       start: "tsx src/cli.ts --",
       "setup:browser": "playwright install chromium",
@@ -100,7 +100,7 @@ Runner V2 is the native process required by AI Board Build mode.
 
 ## Prerequisites
 
-- Node.js 24.18.0 or newer
+- Node.js 22.x or 24.x (Node 22.x requires 22.13.0 or newer for unflagged \`node:sqlite\` support)
 - Git installed and available on PATH
 
 ## Install and start
@@ -186,7 +186,7 @@ This bundle includes the Bench Runner and its managed Runner V2 source.
 
 ## Prerequisites
 
-- Node.js 24.18.0
+- Node.js 22.x or 24.x (Node 22.x requires 22.13.0 or newer for unflagged \`node:sqlite\` support)
 - Git installed and available on PATH
 
 ## Install and start
