@@ -22,6 +22,7 @@ import { ToolRegistry } from "./tool-registry.js";
 
 export type ArchitectActionReason =
   | { type: "plan_required" }
+  | { type: "acceptance_contract_upgrade_required" }
   | { type: "guidance_required"; requestId: string; taskId: string }
   | { type: "review_required"; taskId: string; changeSetId: string }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
@@ -280,6 +281,38 @@ export class BuildRuntime {
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
     if (projection.status === "paused") return { status: "paused" };
+    if (
+      projection.acceptanceContractStatus ===
+      "acceptance_contract_upgrade_required"
+    ) {
+      if (
+        !events.some((event) => event.type === "acceptance_contract.upgrade_required")
+      ) {
+        this.store.append({
+          runId: this.runId,
+          type: "acceptance_contract.upgrade_required",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: "acceptance-contract-upgrade-required",
+          payload: {
+            taskIds: Object.values(projection.tasks)
+              .filter(
+                (task) =>
+                  task.status !== "cancelled" &&
+                  task.acceptanceCriteria === undefined
+              )
+              .map((task) => task.id)
+              .sort(),
+          },
+        });
+        projection = this.projection();
+      }
+      await this.runArchitect(
+        { type: "acceptance_contract_upgrade_required" },
+        projection
+      );
+      return this.afterArchitect("acceptance_contract_upgrade_required");
+    }
     if (projection.planRevision === 0) {
       await this.runArchitect({ type: "plan_required" }, projection);
       return this.afterArchitect("plan_required");
@@ -556,6 +589,8 @@ function emptyProjection(runId: string): SchedulerProjection {
   return {
     runId,
     status: "running",
+    acceptanceContractStatus: "current",
+    acceptanceUpgradeRequiredEventRecorded: false,
     planRevision: 0,
     tasks: {},
     guidance: {},

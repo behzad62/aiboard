@@ -55,6 +55,14 @@ interface ReviseTaskInput {
   acceptanceCriteria?: AcceptanceCriterion[];
 }
 
+interface AcceptanceContractUpgradeInput {
+  revision: number;
+  criteriaByTask: Array<{
+    taskId: string;
+    acceptanceCriteria: AcceptanceCriterion[];
+  }>;
+}
+
 interface AnswerGuidanceInput {
   requestId: string;
   expectedVersion: number;
@@ -81,6 +89,7 @@ export function createArchitectTools(
     planTasksTool(options.store, clock),
     reviseTaskTool(options.store, clock),
     answerGuidanceTool(options.store, clock),
+    upgradeAcceptanceContractTool(options.store, clock),
   ];
   if (options.runPolicy === "plan_only") {
     return options.planOnlyCompletionAvailable
@@ -94,6 +103,54 @@ export function createArchitectTools(
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
+}
+
+function upgradeAcceptanceContractTool(
+  store: SchedulerStore,
+  clock: () => string
+): NativeTool<AcceptanceContractUpgradeInput> {
+  return lifecycleTool({
+    name: "upgrade_acceptance_contract",
+    description: "Record structured acceptance criteria for every non-cancelled task in a legacy in-flight run",
+    schema: objectSchema({
+      revision: { type: "integer", minimum: 1 },
+      criteriaByTask: {
+        type: "array",
+        minItems: 1,
+        items: objectSchema({
+          taskId: { type: "string", minLength: 1 },
+          acceptanceCriteria: {
+            type: "array",
+            minItems: 1,
+            items: criterionSchema(),
+          },
+        }, ["taskId", "acceptanceCriteria"]),
+      },
+    }, ["revision", "criteriaByTask"]),
+    validate: validateAcceptanceContractUpgrade,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "acceptance_contract.upgraded",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `acceptance-contract-upgrade:${input.revision}`,
+        payload: {
+          revision: input.revision,
+          criteriaByTask: input.criteriaByTask.map((entry) => ({
+            taskId: entry.taskId,
+            acceptanceCriteria: entry.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+          })),
+        },
+      }, {
+        type: "architect_action",
+        action: "acceptance_contract_upgraded",
+        referenceId: String(input.revision),
+      });
+    },
+  });
 }
 
 function reconcilePlanTool(
@@ -299,9 +356,17 @@ function reviewTaskTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
-      const task = rebuildSchedulerProjection(
-        store.readRun(context.runId)
-      ).tasks[input.taskId];
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      if (
+        projection.acceptanceContractStatus ===
+        "acceptance_contract_upgrade_required"
+      ) {
+        return errorOutput(
+          "acceptance_contract_upgrade_required",
+          "Task review is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+        );
+      }
+      const task = projection.tasks[input.taskId];
       if (!task) return errorOutput("unknown_task", `Unknown task ${input.taskId}.`);
       if (task.acceptanceCriteria) {
         if (!input.criterionVerdicts) {
@@ -446,6 +511,16 @@ function completeRunTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      if (
+        projection.acceptanceContractStatus ===
+        "acceptance_contract_upgrade_required"
+      ) {
+        return errorOutput(
+          "acceptance_contract_upgrade_required",
+          "Run completion is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+        );
+      }
       return appendEvent(store, {
         runId: context.runId,
         type: "project.handoff_requested",
@@ -528,6 +603,25 @@ function validateRevision(input: unknown): ValidationResult<ReviseTaskInput> {
       ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
     };
   }, "taskId, revision, and at least one valid revision field are required");
+}
+
+function validateAcceptanceContractUpgrade(
+  input: unknown
+): ValidationResult<AcceptanceContractUpgradeInput> {
+  return validateObject(input, (value) => {
+    if (!positiveInteger(value.revision) || !Array.isArray(value.criteriaByTask)) {
+      return null;
+    }
+    const criteriaByTask: AcceptanceContractUpgradeInput["criteriaByTask"] = [];
+    for (const candidate of value.criteriaByTask) {
+      if (!isRecord(candidate) || !nonEmpty(candidate.taskId)) return null;
+      const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+      if (!acceptanceCriteria) return null;
+      criteriaByTask.push({ taskId: candidate.taskId, acceptanceCriteria });
+    }
+    if (criteriaByTask.length === 0) return null;
+    return { revision: value.revision, criteriaByTask };
+  }, "revision and criteria for every non-cancelled task are required");
 }
 
 function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {

@@ -14,6 +14,7 @@ import {
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import {
   TaskScheduler,
   type WorkerAssignment,
@@ -44,8 +45,30 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       },
     ],
   });
-  const workers = new ScriptedWorkers(router);
   const architect = new ScriptedArchitect();
+  const evidenceStore = new SqliteEvidenceStore(":memory:");
+  const evidenceHash = "e".repeat(64);
+  const evidenceByTask = new Map<string, string>();
+  for (const taskId of ["task_a", "task_b"]) {
+    const evidence = evidenceStore.record({
+      runId: "run_1",
+      taskId,
+      actor: { role: "worker", id: `worker_${taskId}` },
+      fact: {
+        kind: "browser_screenshot",
+        label: `${taskId} evidence`,
+        capturedAt: "2026-07-12T00:00:00.000Z",
+        screenshotArtifactHash: evidenceHash,
+        mediaType: "image/png",
+        byteLength: 10,
+      },
+      createdAt: "2026-07-12T00:00:00.000Z",
+      idempotencyKey: `evidence:${taskId}`,
+      attempt: 1,
+    });
+    evidenceByTask.set(taskId, evidence.id);
+  }
+  const workers = new ScriptedWorkers(router, evidenceByTask);
   const integration = new ScriptedIntegration();
   try {
     for (let restart = 0; restart < 20; restart += 1) {
@@ -59,6 +82,7 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
         maxConcurrency: 2,
         workspaceFor: async (task) => `C:/work/${task.id}`,
         clock: () => "2026-07-12T00:00:00.000Z",
+        evidenceStore,
       });
       const step = await runtime.step();
       const projection = runtime.projection();
@@ -78,6 +102,7 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       integrationDriver: integration,
       maxConcurrency: 2,
       workspaceFor: async (task) => `C:/work/${task.id}`,
+      evidenceStore,
     });
     const projection = recovered.projection();
     assert.equal(projection.status, "paused");
@@ -113,7 +138,8 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     });
     recoveredStore.close();
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
   }
 });
 
@@ -204,7 +230,12 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
           if (request.reason.type === "plan_required") {
             assert.deepEqual(
               request.tools.definitions().map((tool) => tool.name).sort(),
-              ["answer_guidance", "plan_tasks", "revise_task"]
+              [
+                "answer_guidance",
+                "plan_tasks",
+                "revise_task",
+                "upgrade_acceptance_contract",
+              ]
             );
             for (const name of [
               "complete_run",
@@ -248,7 +279,13 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
           });
           assert.deepEqual(
             request.tools.definitions().map((tool) => tool.name).sort(),
-            ["answer_guidance", "complete_run", "plan_tasks", "revise_task"]
+            [
+              "answer_guidance",
+              "complete_run",
+              "plan_tasks",
+              "revise_task",
+              "upgrade_acceptance_contract",
+            ]
           );
           for (const name of ["review_task", "request_integration"]) {
             callSequence += 1;
@@ -354,6 +391,29 @@ test("legacy scheduler logs configure their migrated policy once before stepping
     });
     const architectDriver: ArchitectRuntimeDriver = {
       run: async (request) => {
+        if (request.reason.type === "acceptance_contract_upgrade_required") {
+          const upgrade = await request.tools.invoke({
+            type: "tool_call",
+            callId: "upgrade_recovered_plan",
+            name: "upgrade_acceptance_contract",
+            arguments: {
+              revision: 2,
+              criteriaByTask: [{
+                taskId: "task_1",
+                acceptanceCriteria: [{
+                  id: "preserved",
+                  text: "The recovered plan remains inspectable.",
+                }],
+              }],
+            },
+          }, request.context);
+          assert.equal(
+            upgrade.isError,
+            false,
+            upgrade.error?.message ?? "Recovered plan upgrade failed"
+          );
+          return;
+        }
         assert.deepEqual(request.reason, {
           type: "completion_decision_required",
           runPolicy: "plan_only",
@@ -387,10 +447,17 @@ test("legacy scheduler logs configure their migrated policy once before stepping
     };
     let runtime = new BuildRuntime({ ...runtimeOptions, store });
     assert.equal(runtime.projection().runPolicy, "plan_only");
+    assert.equal((await runtime.step()).status, "progressed");
     assert.equal((await runtime.step()).status, "paused");
     assert.deepEqual(
       runtime.events().map((event) => event.type),
-      ["plan.created", "run.policy_configured", "project.handoff_requested"]
+      [
+        "plan.created",
+        "run.policy_configured",
+        "acceptance_contract.upgrade_required",
+        "acceptance_contract.upgraded",
+        "project.handoff_requested",
+      ]
     );
     store.close();
 
@@ -641,6 +708,7 @@ test("an idempotently repeated worker pause remains paused instead of becoming i
           dependencies: [],
           status: "running",
           requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "work", text: "The work is completed." }],
           attempt: 1,
           assignedWorkerId: "worker_task_a_1",
           workspacePath: "C:/work/task_a",
@@ -686,6 +754,7 @@ test("exhausted failed tasks return to the Architect for revision instead of dea
           dependencies: [],
           status: "failed",
           requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "work", text: "The revised approach is used." }],
           attempt: 2,
           failureReason: "model_ended_without_lifecycle",
         }],
@@ -749,6 +818,7 @@ test("exhausted rejected tasks return to the Architect instead of pausing in pla
           dependencies: [],
           status: "rejected",
           requiredCapabilities: ["browser-acceptance"],
+          acceptanceCriteria: [{ id: "evidence", text: "Acceptance evidence is collected." }],
           attempt: 2,
         }],
       },
@@ -816,6 +886,7 @@ test("legacy exhausted planned checkpoints recover through Architect revision", 
           dependencies: [],
           status: "planned",
           requiredCapabilities: ["browser-acceptance"],
+          acceptanceCriteria: [{ id: "evidence", text: "Acceptance evidence is collected." }],
           attempt: 2,
         }],
       },
@@ -884,6 +955,7 @@ test("exhausted stale tasks can be cancelled and rewired without a third worker 
             dependencies: [],
             status: "integrated",
             requiredCapabilities: ["code"],
+            acceptanceCriteria: [{ id: "baseline", text: "The baseline is inspected." }],
             attempt: 1,
           },
           {
@@ -892,6 +964,7 @@ test("exhausted stale tasks can be cancelled and rewired without a third worker 
             dependencies: ["task_a"],
             status: "planned",
             requiredCapabilities: ["code"],
+            acceptanceCriteria: [{ id: "stale", text: "The stale change is not required." }],
             attempt: 2,
           },
           {
@@ -900,6 +973,7 @@ test("exhausted stale tasks can be cancelled and rewired without a third worker 
             dependencies: ["task_b"],
             status: "planned",
             requiredCapabilities: ["code"],
+            acceptanceCriteria: [{ id: "successor", text: "The useful implementation continues." }],
             attempt: 0,
           },
         ],
@@ -962,7 +1036,10 @@ class ScriptedWorkers implements WorkerRuntimeDriver {
   readonly callsByTask: Record<string, number> = { task_a: 0, task_b: 0 };
   providerFailures = 0;
 
-  constructor(private readonly router: RuntimeRouter) {}
+  constructor(
+    private readonly router: RuntimeRouter,
+    private readonly evidenceByTask: ReadonlyMap<string, string>
+  ) {}
 
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
     this.callsByTask[assignment.task.id] += 1;
@@ -985,7 +1062,7 @@ class ScriptedWorkers implements WorkerRuntimeDriver {
       assert.equal(routed.status, "assigned");
       assert.equal(routed.runtime.runtimeId, "fallback:code");
       this.providerFailures += 1;
-      return { type: "submitted", changeSetId: "changeset_a" };
+      return this.submitted("task_a", "changeset_a", assignment.attempt);
     }
     if (this.callsByTask.task_b === 1) {
       return {
@@ -996,7 +1073,25 @@ class ScriptedWorkers implements WorkerRuntimeDriver {
         evidenceSequence: 7,
       };
     }
-    return { type: "submitted", changeSetId: "changeset_b" };
+    return this.submitted("task_b", "changeset_b", assignment.attempt);
+  }
+
+  private submitted(
+    taskId: string,
+    changeSetId: string,
+    attempt: number
+  ): WorkerOutcome {
+    return {
+      type: "submitted",
+      changeSetId,
+      criterionEvidenceLinks: [{
+        criterionId: taskId === "task_a" ? "a" : "b",
+        evidenceId: this.evidenceByTask.get(taskId) ?? "missing-evidence",
+        artifactHashes: ["e".repeat(64)],
+        taskId,
+        attempt,
+      }],
+    };
   }
 }
 
@@ -1039,11 +1134,23 @@ class ScriptedArchitect implements ArchitectRuntimeDriver {
       return;
     }
     if (request.reason.type === "review_required") {
+      const task = request.projection.tasks[request.reason.taskId];
+      const links = task.criterionEvidenceLinks ?? [];
       await this.invoke(request, "review_task", {
         taskId: request.reason.taskId,
         decision: "approved",
         summary: "Task intent is satisfied.",
-        evidenceArtifactHashes: [],
+        evidenceArtifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
+        criterionVerdicts: (task.acceptanceCriteria ?? []).map((criterion) => {
+          const link = links.find((candidate) => candidate.criterionId === criterion.id);
+          return {
+            criterionId: criterion.id,
+            verdict: "satisfied",
+            rationale: "The worker evidence supports this criterion.",
+            evidenceIds: link ? [link.evidenceId] : [],
+            artifactHashes: link?.artifactHashes,
+          };
+        }),
       });
       return;
     }

@@ -103,7 +103,8 @@ export async function runWorkerTask(
   options: RunWorkerTaskOptions
 ): Promise<WorkerTaskResult> {
   const clock = options.clock ?? (() => new Date().toISOString());
-  const taskContract = schedulerTask(options);
+  const schedulerProjection = schedulerState(options);
+  const taskContract = schedulerProjection?.tasks[options.taskId];
   const acceptanceCriteria = options.acceptanceCriteria ?? taskContract?.acceptanceCriteria;
   const attempt = options.attempt ?? taskContract?.attempt;
   let messages = [...options.initialMessages];
@@ -263,6 +264,14 @@ export async function runWorkerTask(
     unresolvedConcerns,
     criterionEvidenceLinks,
   }) => {
+    if (
+      schedulerState(options)?.acceptanceContractStatus ===
+      "acceptance_contract_upgrade_required"
+    ) {
+      throw new Error(
+        "Task submission is blocked until the Architect upgrades the acceptance contract."
+      );
+    }
     const evidenceRecords = options.evidenceStore?.list({
       runId: options.runId,
       taskId: options.taskId,
@@ -456,11 +465,11 @@ function evidenceArtifactHashes(
   ];
 }
 
-function schedulerTask(options: RunWorkerTaskOptions) {
+function schedulerState(options: RunWorkerTaskOptions) {
   if (!options.schedulerStore) return undefined;
   const events = options.schedulerStore.readRun(options.runId);
   if (events.length === 0) return undefined;
-  return rebuildSchedulerProjection(events).tasks[options.taskId];
+  return rebuildSchedulerProjection(events);
 }
 
 function changeSetFromMessages(

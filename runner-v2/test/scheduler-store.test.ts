@@ -183,6 +183,144 @@ test("scheduler events recover exact task and blocking-guidance state", () => {
   }
 });
 
+test("legacy active runs require exactly one acceptance-contract upgrade before submission", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-acceptance-upgrade-"));
+  const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
+  try {
+    store.append(event("run_legacy_upgrade", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_legacy",
+        objective: "Preserve an old task",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        attempt: 0,
+      }],
+    }));
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun("run_legacy_upgrade")).acceptanceContractStatus,
+      "acceptance_contract_upgrade_required"
+    );
+    store.append({
+      runId: "run_legacy_upgrade",
+      type: "acceptance_contract.upgrade_required" as NewSchedulerEvent["type"],
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_legacy"] },
+    });
+    const duplicate = store.append({
+      runId: "run_legacy_upgrade",
+      type: "acceptance_contract.upgrade_required" as NewSchedulerEvent["type"],
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_legacy"] },
+    });
+    assert.equal(duplicate.sequence, 2);
+    assert.throws(
+      () => store.append({
+        runId: "run_legacy_upgrade",
+        type: "acceptance_contract.upgrade_required" as NewSchedulerEvent["type"],
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "acceptance-contract-upgrade-required-duplicate",
+        payload: { taskIds: ["task_legacy"] },
+      }),
+      /already recorded|upgrade gate/i
+    );
+    assert.equal(store.readRun("run_legacy_upgrade").length, 2);
+    store.append(event("run_legacy_upgrade", "task.transitioned", "assign:1", {
+      taskId: "task_legacy",
+      status: "assigned",
+      patch: { attempt: 1 },
+    }));
+    store.append(event("run_legacy_upgrade", "task.transitioned", "run:1", {
+      taskId: "task_legacy",
+      status: "running",
+      patch: {},
+    }));
+    assert.throws(
+      () => store.append(event("run_legacy_upgrade", "task.transitioned", "submit:1", {
+        taskId: "task_legacy",
+        status: "submitted",
+        patch: { changeSetId: "changeset_legacy" },
+      })),
+      /acceptance_contract_upgrade_required|upgrade/i
+    );
+
+    assert.throws(
+      () => store.append({
+        runId: "run_legacy_upgrade",
+        type: "acceptance_contract.upgraded" as NewSchedulerEvent["type"],
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "acceptance-contract-upgraded",
+        payload: {
+          revision: 2,
+          criteriaByTask: [{ taskId: "task_legacy", acceptanceCriteria: [] }],
+        },
+      }),
+      /criterion|invalid|upgrade/i
+    );
+    assert.equal(store.readRun("run_legacy_upgrade").length, 4);
+
+    store.close();
+    store = new SqliteSchedulerStore(database);
+    store.append({
+      runId: "run_legacy_upgrade",
+      type: "acceptance_contract.upgraded" as NewSchedulerEvent["type"],
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: "task_legacy",
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+        }],
+      },
+    });
+    const upgraded = rebuildSchedulerProjection(store.readRun("run_legacy_upgrade"));
+    assert.equal(upgraded.acceptanceContractStatus, "current");
+    assert.deepEqual(upgraded.tasks.task_legacy.acceptanceCriteria, [
+      { id: "behavior", text: "The behavior is implemented." },
+    ]);
+    assert.equal(upgraded.tasks.task_legacy.acceptanceCriteriaVersion, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("completed legacy scheduler runs remain replayable and inspectable", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-legacy-completed-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append(event("run_legacy_completed", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [task("task_done", "integrated", [])],
+    }));
+    store.append({
+      runId: "run_legacy_completed",
+      type: "run.completed",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "run-completed",
+      payload: {},
+    });
+    const projection = rebuildSchedulerProjection(store.readRun("run_legacy_completed"));
+    assert.equal(projection.status, "completed");
+    assert.equal(projection.acceptanceContractStatus, "legacy_completed");
+    assert.equal(projection.tasks.task_done.objective, "Objective task_done");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("corrupt scheduler payload identifies the event", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-corrupt-"));
   const database = join(root, "scheduler.sqlite");

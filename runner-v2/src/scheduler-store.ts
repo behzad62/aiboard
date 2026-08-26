@@ -8,6 +8,8 @@ import type { NativeBuildRunPolicy } from "./build-spec.js";
 import {
   validateCriterionEvidenceLinks,
   validateCriterionReviewVerdicts,
+  validateAcceptanceCriteria,
+  type AcceptanceCriterion,
   type CriterionEvidenceLink,
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
@@ -45,7 +47,9 @@ export type SchedulerEventType =
   | "worker.runtime_assigned"
   | "architect.runtime_assigned"
   | "architect.handoff_required"
-  | "architect.handoff_selected";
+  | "architect.handoff_selected"
+  | "acceptance_contract.upgrade_required"
+  | "acceptance_contract.upgraded";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -134,6 +138,15 @@ export interface SchedulerProjection {
   runId: string;
   runPolicy?: NativeBuildRunPolicy;
   status: "running" | "paused" | "completed";
+  /**
+   * Legacy plans remain readable, but an active plan without criteria must
+   * pass through one append-only Architect upgrade before it can proceed.
+   */
+  acceptanceContractStatus?:
+    | "current"
+    | "acceptance_contract_upgrade_required"
+    | "legacy_completed";
+  acceptanceUpgradeRequiredEventRecorded?: boolean;
   pauseReason?: {
     reason: string;
     taskId?: string;
@@ -258,6 +271,44 @@ export function reduceSchedulerEvent(
       }
       next.planRevision = requiredNumber(event.payload, "revision");
       next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
+      next.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
+      break;
+    }
+    case "acceptance_contract.upgrade_required": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may require an acceptance-contract upgrade.");
+      }
+      if (next.status === "completed" || next.acceptanceContractStatus === "legacy_completed") {
+        throw new Error("A completed legacy run cannot be upgraded in place.");
+      }
+      if (next.acceptanceUpgradeRequiredEventRecorded) {
+        throw new Error("An acceptance-contract upgrade gate was already recorded.");
+      }
+      const taskIds = stringArray(event.payload, "taskIds");
+      const requiredTaskIds = missingAcceptanceCriteriaTaskIds(next.tasks);
+      if (requiredTaskIds.length === 0) {
+        throw new Error("No acceptance-contract upgrade is required for this run.");
+      }
+      if (
+        new Set(taskIds).size !== taskIds.length ||
+        !sameStringSet(taskIds, requiredTaskIds)
+      ) {
+        throw new Error(
+          "Acceptance-contract upgrade gate must identify every non-cancelled legacy task exactly once."
+        );
+      }
+      next.acceptanceContractStatus = "acceptance_contract_upgrade_required";
+      next.acceptanceUpgradeRequiredEventRecorded = true;
+      break;
+    }
+    case "acceptance_contract.upgraded": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may upgrade an acceptance contract.");
+      }
+      applyAcceptanceContractUpgrade(
+        next,
+        parseAcceptanceContractUpgrade(event.payload)
+      );
       break;
     }
     case "plan.reconciled": {
@@ -327,6 +378,11 @@ export function reduceSchedulerEvent(
         );
       }
       next.tasks[taskId] = revised;
+      if (next.acceptanceContractStatus !== "legacy_completed") {
+        next.acceptanceContractStatus = acceptanceContractStatusForTasks(
+          Object.values(next.tasks)
+        );
+      }
       const revision = requiredNumber(event.payload, "revision");
       if (revision !== current.planRevision + 1) {
         throw new Error(
@@ -342,6 +398,14 @@ export function reduceSchedulerEvent(
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
       assertTransitionAuthority(status, event.actor.role);
+      if (
+        status === "submitted" &&
+        current.acceptanceContractStatus === "acceptance_contract_upgrade_required"
+      ) {
+        throw new Error(
+          "Task submission is blocked until the Architect upgrades the acceptance contract."
+        );
+      }
       const transitionPatch =
         (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
       if (status === "submitted" && task.acceptanceCriteria) {
@@ -465,6 +529,13 @@ export function reduceSchedulerEvent(
       break;
     }
     case "review.requested": {
+      if (
+        current.acceptanceContractStatus === "acceptance_contract_upgrade_required"
+      ) {
+        throw new Error(
+          "Task review is blocked until the Architect upgrades the acceptance contract."
+        );
+      }
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
@@ -500,6 +571,13 @@ export function reduceSchedulerEvent(
       break;
     }
     case "review.decided": {
+      if (
+        current.acceptanceContractStatus === "acceptance_contract_upgrade_required"
+      ) {
+        throw new Error(
+          "Task review is blocked until the Architect upgrades the acceptance contract."
+        );
+      }
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may decide a review.");
       }
@@ -595,6 +673,9 @@ export function reduceSchedulerEvent(
         throw new Error("Only the Architect may complete a scheduler run.");
       }
       next.status = "completed";
+      if (current.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
+        next.acceptanceContractStatus = "legacy_completed";
+      }
       delete next.pauseReason;
       break;
     case "project.handoff_requested": {
@@ -658,6 +739,9 @@ export function reduceSchedulerEvent(
         ...(typeof projectRevision === "string" ? { projectRevision } : {}),
       };
       next.status = "completed";
+      if (current.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
+        next.acceptanceContractStatus = "legacy_completed";
+      }
       delete next.pauseReason;
       break;
     }
@@ -967,12 +1051,188 @@ function applyPlanReconciliation(
 
   projection.tasks = candidateTasks;
   projection.planRevision = reconciliation.revision;
+  if (projection.acceptanceContractStatus !== "legacy_completed") {
+    projection.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
+  }
+}
+
+interface AcceptanceContractUpgrade {
+  revision: number;
+  criteriaByTask: Array<{
+    taskId: string;
+    acceptanceCriteria: AcceptanceCriterion[];
+  }>;
+}
+
+function parseAcceptanceContractUpgrade(
+  payload: Record<string, unknown>
+): AcceptanceContractUpgrade {
+  const revision = requiredNumber(payload, "revision");
+  const rawEntries = payload.criteriaByTask;
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    throw new Error("Acceptance-contract upgrade requires criteriaByTask.");
+  }
+  const criteriaByTask = rawEntries.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new Error(`Acceptance-contract upgrade entry ${index} is invalid.`);
+    }
+    const value = entry as Record<string, unknown>;
+    return {
+      taskId: requiredString(value, "taskId"),
+      acceptanceCriteria: parseAcceptanceCriteria(
+        value.acceptanceCriteria,
+        `Acceptance-contract upgrade entry ${index}`
+      ),
+    };
+  });
+  return { revision, criteriaByTask };
+}
+
+function applyAcceptanceContractUpgrade(
+  projection: SchedulerProjection,
+  upgrade: AcceptanceContractUpgrade
+): void {
+  if (projection.status === "completed" || projection.acceptanceContractStatus === "legacy_completed") {
+    throw new Error("A completed legacy run cannot be upgraded in place.");
+  }
+  if (projection.acceptanceContractStatus !== "acceptance_contract_upgrade_required") {
+    throw new Error("An acceptance-contract upgrade is not required for this run.");
+  }
+  if (!projection.acceptanceUpgradeRequiredEventRecorded) {
+    throw new Error("Acceptance-contract upgrade requires a recorded upgrade gate.");
+  }
+  if (upgrade.revision !== projection.planRevision + 1) {
+    throw new Error(
+      `Acceptance-contract upgrade must advance plan revision ${projection.planRevision} by one.`
+    );
+  }
+  const activeTasks = Object.values(projection.tasks).filter(
+    (task) => task.status !== "cancelled"
+  );
+  const expectedTaskIds = activeTasks.map((task) => task.id).sort();
+  const seenTaskIds = new Set<string>();
+  for (const entry of upgrade.criteriaByTask) {
+    if (seenTaskIds.has(entry.taskId)) {
+      throw new Error(`Acceptance-contract upgrade repeats task ${entry.taskId}.`);
+    }
+    seenTaskIds.add(entry.taskId);
+    if (!projection.tasks[entry.taskId] || projection.tasks[entry.taskId].status === "cancelled") {
+      throw new Error(
+        `Acceptance-contract upgrade references unknown or cancelled task ${entry.taskId}.`
+      );
+    }
+  }
+  const receivedTaskIds = [...seenTaskIds].sort();
+  if (
+    receivedTaskIds.length !== expectedTaskIds.length ||
+    receivedTaskIds.some((taskId, index) => taskId !== expectedTaskIds[index])
+  ) {
+    throw new Error(
+      "Acceptance-contract upgrade must provide criteria for every non-cancelled task exactly once."
+    );
+  }
+
+  const candidateTasks = Object.fromEntries(
+    activeTasks.map((task) => {
+      const entry = upgrade.criteriaByTask.find((candidate) => candidate.taskId === task.id)!;
+      const criteriaValidation = validateAcceptanceCriteria(entry.acceptanceCriteria);
+      if (!criteriaValidation.valid) {
+        throw new Error(
+          `Acceptance-contract upgrade has invalid criteria for task ${task.id}: ${criteriaValidation.issues.join(" ")}`
+        );
+      }
+      const wasLegacy = task.acceptanceCriteria === undefined;
+      const criterionIdsChanged =
+        !task.acceptanceCriteria ||
+        task.acceptanceCriteria.length !== entry.acceptanceCriteria.length ||
+        task.acceptanceCriteria.some(
+          (criterion, index) =>
+            criterion.id !== entry.acceptanceCriteria[index]?.id ||
+            criterion.text !== entry.acceptanceCriteria[index]?.text
+        );
+      const requiresFreshAttempt =
+        (wasLegacy || criterionIdsChanged) &&
+        (task.status === "submitted" ||
+          task.status === "architect_review" ||
+          task.status === "approved" ||
+          task.status === "integrating" ||
+          task.status === "integration_resolution");
+      return [
+        task.id,
+        cloneBuildTask({
+          ...task,
+          acceptanceCriteria: entry.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+          acceptanceCriteriaVersion: wasLegacy
+            ? 1
+            : criterionIdsChanged
+              ? (task.acceptanceCriteriaVersion ?? 0) + 1
+              : task.acceptanceCriteriaVersion ?? 1,
+          ...(wasLegacy || criterionIdsChanged
+            ? { criterionEvidenceLinks: undefined }
+            : {}),
+          ...(requiresFreshAttempt
+            ? {
+                status: "planned",
+                attemptLimit: Math.max(task.attemptLimit ?? 0, task.attempt + 1),
+                assignedWorkerId: undefined,
+                changeSetId: undefined,
+                guidanceRequestId: undefined,
+                failureReason: undefined,
+              }
+            : {}),
+        }),
+      ];
+    })
+  );
+  for (const task of Object.values(projection.tasks)) {
+    if (task.status === "cancelled") candidateTasks[task.id] = cloneBuildTask(task);
+  }
+  const validation = validateTaskGraph(Object.values(candidateTasks), {
+    requireAcceptanceCriteria: true,
+  });
+  if (!validation.valid) {
+    throw new Error(
+      `Acceptance-contract upgrade has mechanical issues: ${validation.issues
+        .map((issue) => issue.code)
+        .join(", ")}.`
+    );
+  }
+  projection.tasks = candidateTasks;
+  projection.planRevision = upgrade.revision;
+  projection.acceptanceContractStatus = "current";
+}
+
+function missingAcceptanceCriteriaTaskIds(
+  tasks: Record<string, BuildTask>
+): string[] {
+  return Object.values(tasks)
+    .filter((task) => task.status !== "cancelled" && task.acceptanceCriteria === undefined)
+    .map((task) => task.id)
+    .sort();
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const expected = new Set(right);
+  return left.every((value) => expected.has(value));
+}
+
+function acceptanceContractStatusForTasks(
+  tasks: readonly BuildTask[]
+): SchedulerProjection["acceptanceContractStatus"] {
+  return missingAcceptanceCriteriaTaskIds(
+    Object.fromEntries(tasks.map((task) => [task.id, task]))
+  ).length > 0
+    ? "acceptance_contract_upgrade_required"
+    : "current";
 }
 
 function emptySchedulerProjection(event: SchedulerEvent): SchedulerProjection {
   return {
     runId: event.runId,
     status: "running",
+    acceptanceContractStatus: "current",
+    acceptanceUpgradeRequiredEventRecorded: false,
     planRevision: 0,
     tasks: {},
     guidance: {},
@@ -990,6 +1250,7 @@ function planProjection(
     ...emptySchedulerProjection(event),
     planRevision: requiredNumber(event.payload, "revision"),
     tasks: Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)])),
+    acceptanceContractStatus: acceptanceContractStatusForTasks(tasks),
   };
 }
 

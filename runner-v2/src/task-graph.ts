@@ -44,6 +44,7 @@ export function validateTaskGraph(
     tasks.some((task) => task.acceptanceCriteria !== undefined);
   if (strictCriteria) {
     for (const task of tasks) {
+      if (task.status === "cancelled") continue;
       if (!task.acceptanceCriteria) {
         issues.push({
           code: "missing_acceptance_criteria",

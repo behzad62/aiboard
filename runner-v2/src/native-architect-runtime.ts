@@ -153,6 +153,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
           "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
           "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
+          "When a legacy in-flight run requires an acceptance-contract upgrade, record criteria for every non-cancelled task with upgrade_acceptance_contract before reviewing or completing work.",
         ].join("\n"),
       },
     ];

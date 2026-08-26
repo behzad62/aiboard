@@ -110,6 +110,10 @@ export class TaskScheduler {
     try {
       let projection = this.projection();
       if (projection.status !== "running") return;
+      if (
+        projection.acceptanceContractStatus ===
+        "acceptance_contract_upgrade_required"
+      ) return;
 
       for (const task of Object.values(projection.tasks)) {
         if (this.active.size >= this.maxConcurrency) break;
