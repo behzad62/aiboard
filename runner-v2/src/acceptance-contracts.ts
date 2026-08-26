@@ -47,8 +47,7 @@ export interface CriterionEvidenceValidationOptions {
   actorRole?: EvidenceRecord["actor"]["role"];
 }
 
-export interface CriterionReviewValidationOptions
-  extends CriterionEvidenceValidationOptions {}
+export type CriterionReviewValidationOptions = CriterionEvidenceValidationOptions;
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -382,7 +381,7 @@ function result(input: {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
