@@ -95,6 +95,7 @@ export type AgentLifecycleSignal =
         | "review_decided"
         | "integration_requested"
         | "acceptance_contract_upgraded"
+        | "final_verification_planned"
         | "run_completed";
       referenceId?: string;
     };

@@ -152,6 +152,8 @@ export function buildArchitectContext(
           tasks: input.projection.tasks,
           guidance: input.projection.guidance,
           reviews: input.projection.reviews,
+          integrationRevision: input.projection.integrationRevision,
+          finalVerification: input.projection.finalVerification ?? null,
         },
         null,
         2

@@ -22,7 +22,7 @@ import {
   type WorkerRuntimeDriver,
 } from "../src/task-scheduler.js";
 
-test("build runtime plans, guides, reviews, integrates, and completes across restarts", async () => {
+test("build runtime plans final verification after ordinary integration across restarts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-"));
   const database = join(root, "scheduler.sqlite");
   const health = new ProviderHealthRegistry({ clock: () => 1_000 });
@@ -46,6 +46,7 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     ],
   });
   const architect = new ScriptedArchitect();
+  let recoveredStore: SqliteSchedulerStore | undefined;
   const evidenceStore = new SqliteEvidenceStore(":memory:");
   const evidenceHash = "e".repeat(64);
   const evidenceByTask = new Map<string, string>();
@@ -87,13 +88,13 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       const step = await runtime.step();
       const projection = runtime.projection();
       store.close();
-      if (projection.projectHandoff?.status === "requested") {
-        assert.equal(step.status, "paused");
+      if (projection.finalVerification?.current) {
+        assert.equal(step.status, "progressed");
         break;
       }
     }
 
-    const recoveredStore = new SqliteSchedulerStore(database, { evidenceStore });
+    recoveredStore = new SqliteSchedulerStore(database, { evidenceStore });
     const recovered = new BuildRuntime({
       runId: "run_1",
       store: recoveredStore,
@@ -105,11 +106,18 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
       evidenceStore,
     });
     const projection = recovered.projection();
-    assert.equal(projection.status, "paused");
-    assert.equal(projection.projectHandoff?.status, "requested");
+    assert.equal(projection.status, "running");
+    assert.equal(projection.projectHandoff, undefined);
+    assert.equal(projection.finalVerification?.current?.targetRevision, "revision_task_b");
     assert.deepEqual(
-      Object.values(projection.tasks).map((task) => task.status),
+      Object.values(projection.tasks)
+        .filter((task) => task.kind !== "final_verification")
+        .map((task) => task.status),
       ["integrated", "integrated"]
+    );
+    assert.equal(
+      projection.tasks[projection.finalVerification!.current!.taskId].status,
+      "planned"
     );
     assert.equal(workers.providerFailures, 1);
     assert.equal(workers.callsByTask.task_a, 1, "provider failover stays inside one attempt");
@@ -117,27 +125,9 @@ test("build runtime plans, guides, reviews, integrates, and completes across res
     assert.deepEqual(integration.calls.sort(), ["task_a", "task_b"]);
     assert.equal(new Set(integration.calls).size, integration.calls.length);
     assert.equal(architect.planCalls, 1);
-    assert.equal(architect.completeCalls, 1);
-    const selected = recovered.selectProjectHandoff(
-      "apply_to_project",
-      {
-        integrationRevision: "revision_task_b",
-        integrationBranch: "aiboard/integration/run_1",
-        appliedToProject: true,
-        projectRevision: "project_revision",
-      },
-      "handoff:apply",
-      { role: "runner", id: "native-build-manager" }
-    );
-    assert.equal(selected.status, "completed");
-    assert.equal(selected.projectHandoff?.choice, "apply_to_project");
-    assert.equal(selected.projectHandoff?.projectRevision, "project_revision");
-    assert.deepEqual(recovered.events().at(-1)?.actor, {
-      role: "runner",
-      id: "native-build-manager",
-    });
-    recoveredStore.close();
+    assert.equal(architect.completeCalls, 0);
   } finally {
+    recoveredStore?.close();
     evidenceStore.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
   }
@@ -1157,6 +1147,22 @@ class ScriptedArchitect implements ArchitectRuntimeDriver {
     if (request.reason.type === "integration_approval_required") {
       await this.invoke(request, "request_integration", {
         taskId: request.reason.taskId,
+      });
+      return;
+    }
+    if (request.reason.type === "final_verification_plan_required") {
+      await this.invoke(request, "plan_final_verification", {
+        plan: {
+          checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({
+            category,
+            status: "not_applicable",
+            rationale: `No ${category} fixture is configured.`,
+            repositoryInspection: {
+              paths: ["package.json"],
+              summary: `No ${category} fixture is configured.`,
+            },
+          })),
+        },
       });
       return;
     }

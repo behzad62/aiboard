@@ -24,12 +24,20 @@ import {
 } from "./acceptance-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { validateTaskGraph } from "./task-graph.js";
+import {
+  FINAL_VERIFICATION_CATEGORIES,
+  finalVerificationPlanSchema,
+  planFinalVerification,
+  validateFinalVerificationPlan,
+  type FinalVerificationPlan,
+} from "./final-verification-contracts.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
   clock?: () => string;
   runPolicy?: NativeBuildRunPolicy;
   planOnlyCompletionAvailable?: boolean;
+  finalVerificationPlanAvailable?: boolean;
   evidenceStore?: EvidenceStore;
 }
 
@@ -80,6 +88,7 @@ interface ReviewTaskInput {
 
 interface TaskIdInput { taskId: string }
 interface CompleteRunInput { summary: string }
+interface PlanFinalVerificationInput { plan: FinalVerificationPlan }
 
 export function createArchitectTools(
   options: ArchitectToolsOptions
@@ -91,18 +100,88 @@ export function createArchitectTools(
     answerGuidanceTool(options.store, clock),
     upgradeAcceptanceContractTool(options.store, clock),
   ];
+  const planning = options.finalVerificationPlanAvailable
+    ? [...core, planFinalVerificationTool(options.store, clock)]
+    : core;
   if (options.runPolicy === "plan_only") {
     return options.planOnlyCompletionAvailable
-      ? [...core, completeRunTool(options.store, clock, "plan_only")]
-      : core;
+      ? [...planning, completeRunTool(options.store, clock, "plan_only")]
+      : planning;
   }
   return [
-    ...core,
+    ...planning,
     reconcilePlanTool(options.store, clock),
     reviewTaskTool(options.store, clock, options.evidenceStore),
     requestIntegrationTool(options.store, clock),
     completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
   ];
+}
+
+function planFinalVerificationTool(
+  store: SchedulerStore,
+  clock: () => string,
+): NativeTool<PlanFinalVerificationInput> {
+  return lifecycleTool({
+    name: "plan_final_verification",
+    description: "Create the kernel-owned final-verification generation for the current canonical integration revision",
+    schema: objectSchema({ plan: finalVerificationPlanSchema() }, ["plan"]),
+    validate: (input) => validateObject(input, (value) => {
+      const validation = validateFinalVerificationPlan(value.plan);
+      if (!validation.valid) return null;
+      return { plan: canonicalFinalVerificationPlan(planFinalVerification(value.plan)) };
+    }, "plan must explicitly and validly represent build, tests, runtime_smoke, and browser"),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const implementationTasks = Object.values(projection.tasks).filter(
+        (task) => task.kind !== "final_verification",
+      );
+      if (
+        implementationTasks.some(
+          (task) => task.status !== "integrated" && task.status !== "cancelled",
+        )
+      ) {
+        return errorOutput(
+          "implementation_tasks_not_terminal",
+          "Final verification cannot be planned until every implementation task is integrated or cancelled.",
+        );
+      }
+      if (!projection.integrationRevision) {
+        return errorOutput(
+          "integration_revision_required",
+          "Final verification requires a canonical integration revision.",
+        );
+      }
+      const revisionKey = shortHash(projection.integrationRevision);
+      const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "final_verification.generation_created",
+        occurredAt: clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `final-verification-plan:${projection.integrationRevision}`,
+        payload: {
+          taskId: `final-verification-${revisionKey}`,
+          generationId: `final-verification-generation-${revisionKey}`,
+          targetRevision: projection.integrationRevision,
+          planVersion,
+          plan: input.plan,
+        },
+      }, {
+        type: "architect_action",
+        action: "final_verification_planned",
+        referenceId: projection.integrationRevision,
+      });
+    },
+  });
+}
+
+function canonicalFinalVerificationPlan(plan: FinalVerificationPlan): FinalVerificationPlan {
+  const checks = new Map(plan.checks.map((check) => [check.category, check]));
+  return {
+    checks: FINAL_VERIFICATION_CATEGORIES.map((category) => checks.get(category)!),
+  };
 }
 
 function upgradeAcceptanceContractTool(

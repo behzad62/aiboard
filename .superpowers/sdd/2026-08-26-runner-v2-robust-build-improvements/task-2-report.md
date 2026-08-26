@@ -11,8 +11,9 @@
 - P2.3B1a implementation revision: `8867112a`
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
-- P2.4A implementation revision: this packet commit (reported at handoff)
-- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, P2.3B1b, P2.3B2, and P2.4A only. P2.4B/P2.5/P2.6 remain locked.
+- P2.4A implementation revision: `16c2024f`
+- P2.4B1a implementation revision: this packet commit (reported at handoff)
+- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, P2.3B1b, P2.3B2, P2.4A, and P2.4B1a only. Final-verification execution/review, repair routing, P2.5, and P2.6 remain locked.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -550,3 +551,103 @@ passed (normal Git LF-to-CRLF warnings only)
 P2.4A implementation/test commit is recorded in the execution metadata above
 after the final clean-state verification. P2.4B, P2.5, and P2.6 remain
 intentionally deferred for the controller.
+
+## P2.4B1a Architect final-verification orchestration
+
+Added the Architect planning/orchestration boundary for the current canonical
+integration revision. Once every ordinary implementation task is integrated or
+cancelled and the projection has an `integrationRevision`, `BuildRuntime`
+requests the typed `final_verification_plan_required` Architect action instead
+of offering completion. Only that reason exposes the lifecycle
+`plan_final_verification` tool. The tool validates and canonicalizes the exact
+P2.1 four-category plan, rechecks terminal implementation state and the current
+revision, and appends the existing P2.4A runner-owned generation event.
+
+Generation and task identities are deterministic revision hashes. The
+revision-scoped idempotency key and P2.4A reducer make reordered but semantically
+identical plans one durable generation while rejecting a conflicting plan for
+the same current revision. Architect context now includes both the canonical
+integration revision and explicit final-verification state, and the native
+Architect prompt directs the model to inspect the repository and use the typed
+tool. The new lifecycle action is represented in both agent protocol unions.
+
+The orchestration boundary verifies that the expected current generation was
+actually created; a model no-op, prose, or unrelated scheduler activity cannot
+advance this action. The P2.4A final task remains `planned` and excluded from
+ordinary worker scheduling. This packet does not execute
+`FinalVerificationRuntime`, submit or review results, create repair tasks, or
+change `complete_run` mechanics.
+
+### P2.4B1a TDD and prove-red evidence
+
+The adopted focused test seed was run before production changes at clean HEAD
+`16c2024f` and failed 0/4 as expected:
+
+```text
+npx tsx --test runner-v2/test/final-verification-orchestration.test.ts
+4 tests, 0 passed, 4 failed
+completion_decision_required !== final_verification_plan_required
+Tool plan_final_verification is not registered.
+```
+
+After minimal implementation and one context-state assertion, the focused file
+passed 5/5. Three independent fault-only injections were then made and restored:
+
+- Disabling the current-generation conflict reducer and making plan
+  idempotency plan-specific caused the singleton/conflict test to fail with
+  `false !== true` because a conflicting plan was accepted.
+- Disabling both the generic Architect no-action sequence check and the
+  final-verification-specific generation check caused the prose/no-op test to
+  fail with `Missing expected rejection`.
+- Removing final-verification filtering from `readyTaskIds` caused the worker
+  exclusion test to fail when the scheduler attempted the forbidden kernel-task
+  transition.
+
+Only each injected fault was restored. Every same named test returned green,
+and the final focused file passed 5/5.
+
+### P2.4B1a validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-orchestration.test.ts runner-v2/test/final-verification-scheduler.test.ts runner-v2/test/build-runtime.test.ts runner-v2/test/native-architect-runtime.test.ts runner-v2/test/task-scheduler.test.ts runner-v2/test/scheduler-store.test.ts
+57 tests, 57 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/agent-contracts.ts runner-v2/src/agent-loop.ts runner-v2/src/agent-prompts.ts runner-v2/src/architect-tools.ts runner-v2/src/build-runtime.ts runner-v2/src/native-architect-runtime.ts runner-v2/test/build-runtime.test.ts runner-v2/test/final-verification-orchestration.test.ts
+passed with no warnings
+
+npm run test:runner-v2
+431 tests, 431 passed, 0 failed
+all chained client, policy, UI, live-state, transcript, files, stats, and observability checks passed
+
+git diff --check
+passed (normal Git LF-to-CRLF warnings only)
+```
+
+The first broad Runner invocation produced one unchanged P2.3B1a managed-
+process timing failure (`exited_unknown` versus `stopped`) after 430/431 tests.
+The exact failed test then passed 1/1, its full file passed 4/4, and the complete
+Runner/client gate was rerun from scratch and passed 431/431 plus every chained
+script. No P2.3 code or test was changed.
+
+### P2.4B1a requirement audit
+
+| P2.4B1a requirement | Evidence | Result |
+|---|---|---|
+| Terminal ordinary work routes to typed planning | Build-runtime reason/tool test and restart integration test | Complete |
+| Canonical integration revision is the target | Reason, tool recheck, deterministic payload, projection and context assertions | Complete |
+| Exact P2.1 four-category plan validation | P2.1 validator/schema reuse and focused tool invocation | Complete |
+| Exactly one P2.4A generation/task | Semantic reorder replay, one-event/one-task assertions, conflict fault proof | Complete |
+| Prose/no-op cannot advance verification | Specific generation postcondition plus generic lifecycle sequence guard and fault proof | Complete |
+| Same semantic call is idempotent; conflicts reject | Canonical category ordering, revision idempotency key, P2.4A reducer, focused conflict test | Complete |
+| Final task stays out of ordinary workers | Scheduler no-driver-call assertion and `readyTaskIds` fault proof | Complete |
+| Architect prompt/context exposes the planning state | Canonical revision, explicit generation state, and typed-tool prompt wiring | Complete |
+| Later P2 work remains out of scope | No runtime execution, submission/review, repair, or completion-gate changes | Complete |
+
+## Packet status
+
+P2.4B1a implementation/test/report commit is recorded in the execution metadata
+after the final clean-state verification. Final-verification execution/review,
+repair routing, P2.5, and P2.6 remain intentionally deferred.

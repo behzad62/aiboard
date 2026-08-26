@@ -28,6 +28,10 @@ export type ArchitectActionReason =
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
   | { type: "completion_decision_required"; runPolicy?: "plan_only" }
   | {
+      type: "final_verification_plan_required";
+      integrationRevision: string;
+    }
+  | {
       type: "task_failure_resolution_required";
       taskId: string;
       attempt: number;
@@ -453,6 +457,29 @@ export class BuildRuntime {
 
     projection = this.projection();
     const tasks = Object.values(projection.tasks);
+    const implementationTasks = tasks.filter(
+      (task) => task.kind !== "final_verification"
+    );
+    const implementationTasksTerminal = implementationTasks.every(
+      (task) => task.status === "integrated" || task.status === "cancelled"
+    );
+    if (
+      implementationTasksTerminal &&
+      projection.integrationRevision &&
+      !projection.finalVerification?.current
+    ) {
+      await this.runArchitect({
+        type: "final_verification_plan_required",
+        integrationRevision: projection.integrationRevision,
+      }, projection);
+      const planned = this.projection().finalVerification?.current;
+      if (!planned || planned.targetRevision !== projection.integrationRevision) {
+        throw new Error(
+          "Architect returned from final_verification_plan_required without a typed action."
+        );
+      }
+      return this.afterArchitect("final_verification_plan_required");
+    }
     if (
       tasks.every(
         (task) => task.status === "integrated" || task.status === "cancelled"
@@ -505,6 +532,8 @@ export class BuildRuntime {
         this.runPolicy === "plan_only" &&
         reason.type === "completion_decision_required" &&
         projection.planRevision > 0,
+      finalVerificationPlanAvailable:
+        reason.type === "final_verification_plan_required",
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {
       tools.register(tool);
