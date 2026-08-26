@@ -632,3 +632,94 @@ Test commit: `f2147e1a runner-v2: prove raw evidence migration`.
 R6C remains responsible for an injected failure after the migration step,
 transaction rollback, constructor cleanup, and subsequent recovery. The
 tracked worktree was clean after this packet.
+
+## Review fix round 1 — R6 subpacket C atomic evidence migration recovery
+
+This bounded subpacket completes the R6 evidence migration proof only. R7 and
+P2 were not touched.
+
+### Reproduction before edits
+
+The raw pre-P1 evidence fixture was extended with a deterministic test-only
+fault: the test temporarily wraps `DatabaseSync.prototype.exec`, runs the real
+`ALTER TABLE evidence_records ADD COLUMN attempt INTEGER`, closes that test
+connection, and throws before the store can commit. The wrapper is restored in
+the test before any recovery operation; no production bypass or runtime fault
+hook is exposed.
+
+Against HEAD `65a8ec19`, before the production change, the focused rollback
+test was red with the migration already committed despite the injected failure:
+
+```text
+npx tsx --test --test-name-pattern "rolls back after failure" runner-v2/test/sqlite-evidence-store.test.ts
+1 test, 0 passed, 1 failed
+AssertionError [ERR_ASSERTION]: failed migration must leave the legacy schema unchanged
+true !== false
+  at runner-v2/test/sqlite-evidence-store.test.ts:117:14
+```
+
+### Repair
+
+- The conditional `attempt` column migration now runs inside
+  `BEGIN IMMEDIATE`/`COMMIT`, with rollback on every failure.
+- Constructor initialization is wrapped so a failed migration closes its
+  database handle; an already-closed injected handle is tolerated while the
+  original migration error is preserved.
+- After rollback, the raw legacy schema has no partial `attempt` column and
+  both evidence rows remain readable in their original order. A subsequent
+  store open performs the complete migration, preserves nullable legacy
+  defaults and exact rows, and a second open is idempotent.
+
+### Post-repair checks
+
+```text
+npx tsx --test --test-name-pattern "rolls back after failure" runner-v2/test/sqlite-evidence-store.test.ts
+1/1 passed
+
+npx tsx --test runner-v2/test/sqlite-evidence-store.test.ts
+2/2 passed
+
+npx tsx --test runner-v2/test/evidence-tools.test.ts
+6/6 passed
+
+npx tsx --test runner-v2/test/scheduler-store.test.ts
+15/15 passed
+
+npx tsx --test runner-v2/test/recovery-smoke.test.ts
+1/1 passed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/sqlite-evidence-store.ts runner-v2/test/sqlite-evidence-store.test.ts
+passed
+
+git diff --check
+passed (only normal CRLF normalization warnings from Git)
+```
+
+### Required fault-only red proof
+
+After the transactional repair, only the migration transaction guard was
+fault-disabled by replacing `BEGIN IMMEDIATE` with an impossible condition.
+The same injected-failure test returned the expected red result:
+
+```text
+npx tsx --test --test-name-pattern "rolls back after failure" runner-v2/test/sqlite-evidence-store.test.ts
+1 test, 0 passed, 1 failed
+AssertionError [ERR_ASSERTION]: failed migration must leave the legacy schema unchanged
+true !== false
+```
+
+Restoring only `BEGIN IMMEDIATE` returned the rollback test to 1/1 and the
+affected suites above to green. No test or production control was weakened;
+the fault injector is test-local and is not a production constructor option.
+The R6C repair cycle remained below governed reclassification and five-cycle
+thresholds.
+
+### Packet status
+
+Production/test commit: `fc091650 runner-v2: make evidence migration atomic`.
+
+R6 is complete. The tracked worktree was clean after this packet, with no R7
+or P2 work started.
