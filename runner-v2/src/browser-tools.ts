@@ -15,6 +15,7 @@ export interface BrowserConsoleEvent {
   type: string;
   text: string;
   occurredAt: string;
+  source?: "console" | "pageerror";
 }
 
 export interface BrowserNetworkEvent {
@@ -279,6 +280,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
         type: message.type(),
         text: message.text(),
         occurredAt: new Date().toISOString(),
+        source: "console",
       });
     });
     session.page.on("pageerror", (error) => {
@@ -286,6 +288,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
         type: "error",
         text: error.stack || error.message,
         occurredAt: new Date().toISOString(),
+        source: "pageerror",
       });
     });
     session.page.on("response", (response) => {

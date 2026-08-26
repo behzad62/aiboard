@@ -8,8 +8,9 @@
 - P2.1 implementation revision: `3dcb0cc1`
 - P2.2 implementation revision: `97f52add`
 - P2.3A implementation revision: `b82a1a3a`
-- P2.3B1a implementation revision: this packet commit (reported at handoff)
-- Scope completed: P2.1, P2.2, P2.3A, and P2.3B1a only. P2.3B2 and later packets were not started.
+- P2.3B1a implementation revision: `8867112a`
+- P2.3B1b implementation revision: this packet commit (reported at handoff)
+- Scope completed: P2.1, P2.2, P2.3A, P2.3B1a, and P2.3B1b only. P2.3B2 submit-tool and later packets were not started.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -186,8 +187,9 @@ passed
 | Cleanup is scoped to owned verification state | Cleanup test preserves integration path/revision/history and canonical checkout | Complete |
 
 P2.3B runtime_smoke/browser and submit-tool work, plus P2.4+ scheduler/completion
-work, remain locked for the controller. (The B1a runtime_smoke slice below is
-the sole exception in this packet; browser and submit-tool work remain deferred.)
+work, remain locked for the controller. (The B1a runtime_smoke and B1b browser
+slices below are the sole exceptions in this packet; submit-tool work remains
+deferred.)
 
 ## P2.3B1a runtime-smoke verification
 
@@ -252,7 +254,71 @@ passed (normal Git LF-to-CRLF warning only)
 | Non-green unhealthy/timeout/cancel outcomes | Focused result assertions and readiness guard fault proof | Complete |
 | No canonical checkout mutation or ChangeSet | Shared P2.3A workspace/revision checks remain green; no ChangeSet surface added | Complete |
 
-P2.3B2 browser and submit-tool work remains intentionally deferred.
+P2.3B2 submit-tool work remains intentionally deferred.
+
+## P2.3B1b browser verification
+
+Extended `FinalVerificationRuntime` with an owned browser-session seam that
+uses the existing browser backend/session API. Required browser checks now
+capture the exact requested/observed URL, bounded DOM snapshot, screenshot, and
+console/network event artifacts, all tied to the disposable workspace's
+target revision and immutable start/end repository facts. Console errors, page
+errors, failed response/request events, and unallowlisted policy violations
+remain mechanical non-green outcomes. The browser session is closed from a
+`finally` path after success, missing evidence, policy failure, navigation
+failure, timeout, and cancellation; no ChangeSet or semantic completion
+decision is introduced.
+
+### P2.3B1b TDD and prove-red evidence
+
+The focused browser test was added before the browser runtime implementation
+and first ran red against the existing command/runtime surface:
+
+```text
+npx tsx --test runner-v2/test/final-verification-browser.test.ts
+4 tests, 0 passed, 4 failed
+TypeError: this.runBrowserCheck is not a function / browser category unsupported
+```
+
+After the browser session/fact implementation, the focused suite passed 4/4.
+Three fault-only injections were then performed independently. Removing the
+missing-screenshot guard produced 3 pass/1 fail with the expected missing-
+screenshot assertion. Disabling browser policy evaluation produced 3 pass/1
+fail because the policy case became green. Removing the `finally` close call
+produced 0 pass/4 fail because every close counter remained zero. Each guard
+was restored immediately and the focused suite returned to 4/4 green.
+
+### P2.3B1b validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-browser.test.ts
+4 tests, 4 passed, 0 failed
+
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts runner-v2/test/final-verification-runtime-b1.test.ts
+8 tests, 8 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed
+
+npx eslint runner-v2/src/final-verification-runtime.ts runner-v2/src/browser-tools.ts runner-v2/test/final-verification-runtime.test.ts runner-v2/test/final-verification-runtime-b1.test.ts runner-v2/test/final-verification-browser.test.ts
+passed with no warnings
+
+git diff --check
+passed (normal Git LF-to-CRLF warning only)
+```
+
+### P2.3B1b requirement audit
+
+| P2.3B1b requirement | Evidence | Result |
+|---|---|---|
+| Exact URL, DOM, screenshot, and event facts | Complete-facts test and three dedicated ArtifactStore hashes | Complete |
+| Target-revision binding and no canonical mutation | Browser facts carry target/start/end revision; shared workspace guard remains green | Complete |
+| Console/page/network policy enforcement | Unallowed console and failed-network test; explicit allow/fail policy and bounded allowlists | Complete |
+| Missing required evidence is non-green | Missing screenshot test and evidence-count guard | Complete |
+| Close owned session on every exit | Thrown/cancelled navigation test plus `finally` close fault proof | Complete |
+| No ChangeSet or semantic completion authority | Runtime only records facts/check status; no ChangeSet or completion surface added | Complete |
+
+P2.3B2 submit-tool work and P2.4+ remain intentionally deferred.
 
 ## P2.3A command verification runtime
 
@@ -313,8 +379,8 @@ npx tsx --test runner-v2/test/final-verification-runtime.test.ts runner-v2/test/
 ```
 
 The affected process/evidence/workspace regression set passed 83/83 tests
-(including integration and workspace-manager coverage); no P2.3B2 browser or
-submit-tool, or P2.4 surface, was started in this packet.
+(including integration and workspace-manager coverage); no P2.3B2 submit-tool
+or P2.4 surface was started in this packet.
 
 ### P2.3A requirement audit
 
@@ -329,5 +395,5 @@ submit-tool, or P2.4 surface, was started in this packet.
 
 ## Packet status
 
-P2.3A and P2.3B1a are complete in the implementation commits recorded above.
-P2.3B2 browser/submit-tool work and P2.4+ remain intentionally deferred.
+P2.3A, P2.3B1a, and P2.3B1b are complete in the implementation commits
+recorded above. P2.3B2 submit-tool work and P2.4+ remain intentionally deferred.

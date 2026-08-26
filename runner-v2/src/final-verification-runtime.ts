@@ -2,6 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import type {
+  BrowserConsoleEvent,
+  BrowserNetworkEvent,
+} from "./browser-tools.js";
 import type { ManagedProcessService, ManagedProcessSnapshot } from "./managed-process.js";
 import {
   planFinalVerification,
@@ -10,7 +14,13 @@ import {
   type FinalVerificationRepositoryInspection,
   type FinalVerificationStatus,
 } from "./final-verification-contracts.js";
-import type { CommandEvidenceFact, EvidenceStore } from "./evidence-store.js";
+import type {
+  BrowserEventsEvidenceFact,
+  BrowserScreenshotEvidenceFact,
+  BrowserSnapshotEvidenceFact,
+  CommandEvidenceFact,
+  EvidenceStore,
+} from "./evidence-store.js";
 import { runGit } from "./git-command.js";
 import type {
   VerificationWorkspace,
@@ -75,6 +85,43 @@ export interface FinalVerificationRuntimeSmokeInput {
   releasePort?: (endpoint?: string) => void | Promise<void>;
 }
 
+export type FinalVerificationBrowserFailurePolicy = "fail" | "allow";
+
+export interface FinalVerificationBrowserPolicy {
+  consoleErrors?: FinalVerificationBrowserFailurePolicy;
+  pageErrors?: FinalVerificationBrowserFailurePolicy;
+  failedNetworkEvents?: FinalVerificationBrowserFailurePolicy;
+  allowedConsoleErrorPatterns?: readonly string[];
+  allowedPageErrorPatterns?: readonly string[];
+  allowedNetworkFailurePatterns?: readonly string[];
+}
+
+export interface FinalVerificationBrowserInput {
+  label: string;
+  url: string;
+  width?: number;
+  height?: number;
+  timeoutMs?: number;
+  policy: FinalVerificationBrowserPolicy;
+}
+
+export interface FinalVerificationBrowserBackend {
+  open(sessionId: string, input: { url: string; width: number; height: number }): Promise<{ url: string; title: string }>;
+  snapshot(sessionId: string): Promise<{ url: string; title: string; text: string; html: string }>;
+  screenshot(sessionId: string): Promise<Buffer>;
+  events(sessionId: string): Promise<{ console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] }>;
+  close(sessionId: string): Promise<void>;
+}
+
+/** Narrow session seam used by final verification and easy to test in isolation. */
+export interface FinalVerificationBrowserSession {
+  open(input: { url: string; width: number; height: number }): Promise<{ url: string; title: string }>;
+  snapshot(): Promise<{ url: string; title: string; text: string; html: string }>;
+  screenshot(): Promise<Buffer>;
+  events(): Promise<{ console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] }>;
+  close(): Promise<void>;
+}
+
 export type FinalVerificationRevisionSource =
   | string
   | (() => string | Promise<string>);
@@ -92,6 +139,9 @@ export interface FinalVerificationRuntimeOptions {
   currentIntegrationRevision?: FinalVerificationRevisionSource;
   managedProcess?: FinalVerificationManagedProcess;
   managedProcessService?: ManagedProcessService;
+  browserSession?: FinalVerificationBrowserSession;
+  browserBackend?: FinalVerificationBrowserBackend;
+  maximumDomBytes?: number;
   maxOutputBytes?: number;
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
@@ -101,6 +151,7 @@ export interface FinalVerificationRunInput {
   plan: unknown;
   commands?: Partial<Record<FinalVerificationCategory, readonly FinalVerificationCommand[]>>;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
+  browser?: FinalVerificationBrowserInput;
   signal?: AbortSignal;
 }
 
@@ -120,10 +171,54 @@ export interface FinalVerificationCommandFact extends CommandEvidenceFact {
   cleanupRequested?: boolean;
 }
 
+export interface FinalVerificationBrowserSnapshotFact extends BrowserSnapshotEvidenceFact {
+  category: "browser";
+  sessionId: string;
+  startedAt: string;
+  finishedAt: string;
+  targetRevision: string;
+  startState: FinalVerificationRepositoryState;
+  endState: FinalVerificationRepositoryState;
+}
+
+export interface FinalVerificationBrowserScreenshotFact extends BrowserScreenshotEvidenceFact {
+  category: "browser";
+  sessionId: string;
+  url: string;
+  startedAt: string;
+  finishedAt: string;
+  targetRevision: string;
+  startState: FinalVerificationRepositoryState;
+  endState: FinalVerificationRepositoryState;
+}
+
+export interface FinalVerificationBrowserEventsFact extends BrowserEventsEvidenceFact {
+  category: "browser";
+  sessionId: string;
+  url: string;
+  startedAt: string;
+  finishedAt: string;
+  targetRevision: string;
+  startState: FinalVerificationRepositoryState;
+  endState: FinalVerificationRepositoryState;
+  consoleErrors: BrowserConsoleEvent[];
+  pageErrors: BrowserConsoleEvent[];
+  failedNetworkEvents: BrowserNetworkEvent[];
+  policyViolations: string[];
+  timedOut: boolean;
+  cancelled: boolean;
+}
+
+export type FinalVerificationFact =
+  | FinalVerificationCommandFact
+  | FinalVerificationBrowserSnapshotFact
+  | FinalVerificationBrowserScreenshotFact
+  | FinalVerificationBrowserEventsFact;
+
 export interface FinalVerificationEvidence {
   id: string;
   category: FinalVerificationCategory;
-  fact: FinalVerificationCommandFact;
+  fact: FinalVerificationFact;
 }
 
 export interface FinalVerificationCheckResult {
@@ -133,7 +228,7 @@ export interface FinalVerificationCheckResult {
   rationale?: string;
   repositoryInspection?: FinalVerificationRepositoryInspection;
   evidenceIds: string[];
-  facts: readonly FinalVerificationCommandFact[];
+  facts: readonly FinalVerificationFact[];
   issues: string[];
 }
 
@@ -155,7 +250,7 @@ interface MutableVerificationCheck {
   rationale?: string;
   repositoryInspection?: FinalVerificationRepositoryInspection;
   evidenceIds: string[];
-  facts: FinalVerificationCommandFact[];
+  facts: FinalVerificationFact[];
   issues: string[];
 }
 
@@ -193,9 +288,11 @@ export class FinalVerificationRuntime {
   private readonly clock: () => string;
   private readonly integrationRevision?: FinalVerificationRevisionSource;
   private readonly managedProcess?: FinalVerificationManagedProcess;
+  private readonly browserSession?: FinalVerificationBrowserSession;
   private readonly maxOutputBytes: number;
   private readonly defaultTimeoutMs: number;
   private readonly maximumTimeoutMs: number;
+  private readonly maximumDomBytes: number;
   private runOrdinal = 0;
 
   constructor(options: FinalVerificationRuntimeOptions) {
@@ -222,6 +319,9 @@ export class FinalVerificationRuntime {
           this.taskId,
           this.actor,
         )
+        : undefined);
+    this.browserSession = options.browserSession ?? (options.browserBackend
+      ? new BrowserBackendSessionAdapter(options.browserBackend, `${this.runId}:${this.taskId}`)
       : undefined);
     this.maxOutputBytes = positiveInteger(
       options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
@@ -234,6 +334,10 @@ export class FinalVerificationRuntime {
     this.maximumTimeoutMs = positiveInteger(
       options.maximumTimeoutMs ?? DEFAULT_MAXIMUM_TIMEOUT_MS,
       "maximumTimeoutMs",
+    );
+    this.maximumDomBytes = positiveInteger(
+      options.maximumDomBytes ?? 8 * 1024 * 1024,
+      "maximumDomBytes",
     );
     if (this.defaultTimeoutMs > this.maximumTimeoutMs) {
       throw new Error("defaultTimeoutMs cannot exceed maximumTimeoutMs.");
@@ -259,6 +363,7 @@ export class FinalVerificationRuntime {
           check,
           commands: input.commands?.[check.category],
           runtimeSmoke: input.runtimeSmoke,
+          browser: input.browser,
           workspace,
           generationId,
           runOrdinal,
@@ -302,6 +407,7 @@ export class FinalVerificationRuntime {
     check: FinalVerificationCheck;
     commands: readonly FinalVerificationCommand[] | undefined;
     runtimeSmoke: FinalVerificationRuntimeSmokeInput | undefined;
+    browser: FinalVerificationBrowserInput | undefined;
     workspace: VerificationWorkspace;
     generationId: string;
     runOrdinal: number;
@@ -316,7 +422,7 @@ export class FinalVerificationRuntime {
         ? { repositoryInspection: cloneInspection(check.repositoryInspection) }
         : {}),
       evidenceIds: [] as string[],
-      facts: [] as FinalVerificationCommandFact[],
+      facts: [] as FinalVerificationFact[],
       issues: [] as string[],
     };
     if (check.status === "not_applicable") {
@@ -330,6 +436,16 @@ export class FinalVerificationRuntime {
       return await this.runRuntimeSmokeCheck({
         base,
         input: input.runtimeSmoke,
+        workspace: input.workspace,
+        generationId: input.generationId,
+        runOrdinal: input.runOrdinal,
+        signal: input.signal,
+      });
+    }
+    if (check.category === "browser") {
+      return await this.runBrowserCheck({
+        base,
+        input: input.browser,
         workspace: input.workspace,
         generationId: input.generationId,
         runOrdinal: input.runOrdinal,
@@ -598,6 +714,282 @@ export class FinalVerificationRuntime {
     };
   }
 
+  private async runBrowserCheck(input: {
+    base: MutableVerificationCheck;
+    input: FinalVerificationBrowserInput | undefined;
+    workspace: VerificationWorkspace;
+    generationId: string;
+    runOrdinal: number;
+    signal?: AbortSignal;
+  }): Promise<FinalVerificationCheckResult> {
+    const browserInput = input.input;
+    if (!browserInput) {
+      input.base.issues.push("Required browser check has no browser navigation input.");
+      return { ...input.base, green: false };
+    }
+    if (!this.browserSession) {
+      input.base.issues.push("Required browser check has no owned browser session.");
+      return { ...input.base, green: false };
+    }
+    validateBrowserInput(browserInput, this.maximumTimeoutMs);
+
+    const browser = this.browserSession;
+    const sessionId = `${this.runId}:${this.taskId}`;
+    const startedAt = this.clock();
+    const startState = await repositoryState(input.workspace.path);
+    const timeoutMs = Math.min(
+      browserInput.timeoutMs ?? this.defaultTimeoutMs,
+      this.maximumTimeoutMs,
+    );
+    const deadline = Date.now() + timeoutMs;
+    let timedOut = false;
+    let cancelled = false;
+    let navigation: { url: string; title: string } | undefined;
+    let snapshot: { url: string; title: string; text: string; html: string } | undefined;
+    let screenshot: Buffer | undefined;
+    let events: { console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] } | undefined;
+    let snapshotArtifact: { hash: string } | undefined;
+    let screenshotArtifact: { hash: string } | undefined;
+    let eventsArtifact: { hash: string } | undefined;
+    let policyViolations: string[] = [];
+
+    const operation = async <T>(
+      label: string,
+      callback: () => Promise<T>,
+    ): Promise<T | undefined> => {
+      if (timedOut || cancelled) return undefined;
+      if (input.signal?.aborted) {
+        cancelled = true;
+        return undefined;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        timedOut = true;
+        input.base.issues.push(`browser ${browserInput.label} timed out during ${label}.`);
+        return undefined;
+      }
+      const result = await raceWithAbortAndTimeout(
+        Promise.resolve().then(callback),
+        input.signal,
+        remainingMs,
+      );
+      if (result.kind === "cancelled") {
+        cancelled = true;
+        return undefined;
+      }
+      if (result.kind === "timeout") {
+        timedOut = true;
+        input.base.issues.push(`browser ${browserInput.label} timed out during ${label}.`);
+        return undefined;
+      }
+      if (result.kind === "error") {
+        input.base.issues.push(`browser ${browserInput.label} ${label} failed: ${asError(result.error).message}.`);
+        return undefined;
+      }
+      return result.value;
+    };
+
+    try {
+      navigation = await operation("navigation", () => browser.open({
+        url: browserInput.url,
+        width: browserInput.width ?? 1280,
+        height: browserInput.height ?? 720,
+      }));
+      if (navigation) {
+        snapshot = await operation("DOM snapshot", () => browser.snapshot());
+        if (snapshot) {
+          if (typeof snapshot.html !== "string" || snapshot.html.length === 0) {
+            input.base.issues.push(`browser ${browserInput.label} is missing DOM snapshot evidence.`);
+          } else {
+            const encoded = Buffer.from(snapshot.html);
+            const bytes = encoded.subarray(0, this.maximumDomBytes);
+            try {
+              snapshotArtifact = await this.artifacts.put(
+                bytes,
+                "text/html",
+                `Browser verification DOM ${browserInput.label}`,
+              );
+            } catch (error) {
+              input.base.issues.push(
+                `browser ${browserInput.label} DOM snapshot artifact failed: ${asError(error).message}.`,
+              );
+            }
+          }
+        } else if (!timedOut && !cancelled) {
+          input.base.issues.push(`browser ${browserInput.label} is missing DOM snapshot evidence.`);
+        }
+
+        screenshot = await operation("screenshot", () => browser.screenshot());
+        if (screenshot !== undefined) {
+          if (!Buffer.isBuffer(screenshot) || screenshot.byteLength === 0) {
+            input.base.issues.push(`browser ${browserInput.label} is missing screenshot evidence.`);
+            screenshot = undefined;
+          } else {
+            try {
+              screenshotArtifact = await this.artifacts.put(
+                screenshot,
+                "image/png",
+                `Browser verification screenshot ${browserInput.label}`,
+              );
+            } catch (error) {
+              input.base.issues.push(
+                `browser ${browserInput.label} screenshot artifact failed: ${asError(error).message}.`,
+              );
+            }
+          }
+        } else if (!timedOut && !cancelled) {
+          input.base.issues.push(`browser ${browserInput.label} is missing screenshot evidence.`);
+        }
+
+        events = await operation("browser events", () => browser.events());
+        if (!events || !Array.isArray(events.console) || !Array.isArray(events.network)) {
+          if (!timedOut && !cancelled) {
+            input.base.issues.push(`browser ${browserInput.label} is missing browser events evidence.`);
+          }
+          events = undefined;
+        } else {
+          events = {
+            console: events.console.map((event) => ({ ...event })),
+            network: events.network.map((event) => ({ ...event })),
+          };
+          policyViolations = browserPolicyViolations(events, browserInput.policy);
+          for (const violation of policyViolations) {
+            input.base.issues.push(`browser ${browserInput.label} policy violation: ${violation}`);
+          }
+          try {
+            eventsArtifact = await this.artifacts.put(
+              Buffer.from(JSON.stringify(events)),
+              "application/json",
+              `Browser verification events ${browserInput.label}`,
+            );
+          } catch (error) {
+            input.base.issues.push(
+              `browser ${browserInput.label} events artifact failed: ${asError(error).message}.`,
+            );
+          }
+        }
+      }
+    } finally {
+      try {
+        await browser.close();
+      } catch (error) {
+        input.base.issues.push(`browser ${browserInput.label} session cleanup failed: ${asError(error).message}.`);
+      }
+    }
+
+    const finishedAt = this.clock();
+    const endState = await repositoryState(input.workspace.path);
+    if (input.signal?.aborted && !cancelled) cancelled = true;
+    if (cancelled) input.base.issues.push(`browser ${browserInput.label} navigation was cancelled.`);
+    if (timedOut) input.base.issues.push(`browser ${browserInput.label} verification timed out.`);
+    if (startState.revision !== input.workspace.targetRevision) {
+      input.base.issues.push(
+        `browser ${browserInput.label} started at revision ${startState.revision}, ` +
+          `not target revision ${input.workspace.targetRevision}.`,
+      );
+    }
+    if (endState.revision !== input.workspace.targetRevision) {
+      input.base.issues.push(
+        `browser ${browserInput.label} changed the verification revision from ` +
+          `${input.workspace.targetRevision} to ${endState.revision}.`,
+      );
+    }
+    if (endState.status !== startState.status) {
+      input.base.issues.push(`browser ${browserInput.label} changed files in the verification workspace.`);
+    }
+
+    const observedUrl = snapshot?.url ?? navigation?.url ?? browserInput.url;
+    const observedTitle = snapshot?.title ?? navigation?.title ?? "";
+    const facts: FinalVerificationFact[] = [];
+    if (snapshot && snapshotArtifact) {
+      const encoded = Buffer.from(snapshot.html);
+      facts.push({
+        kind: "browser_snapshot",
+        category: "browser",
+        label: browserInput.label,
+        url: observedUrl,
+        title: observedTitle,
+        capturedAt: finishedAt,
+        htmlArtifactHash: snapshotArtifact.hash,
+        htmlBytes: encoded.byteLength,
+        truncated: encoded.byteLength > this.maximumDomBytes,
+        sessionId,
+        startedAt,
+        finishedAt,
+        targetRevision: input.workspace.targetRevision,
+        startState,
+        endState,
+      });
+    }
+    if (screenshot && screenshotArtifact) {
+      facts.push({
+        kind: "browser_screenshot",
+        category: "browser",
+        label: browserInput.label,
+        capturedAt: finishedAt,
+        screenshotArtifactHash: screenshotArtifact.hash,
+        mediaType: "image/png",
+        byteLength: screenshot.byteLength,
+        sessionId,
+        url: observedUrl,
+        startedAt,
+        finishedAt,
+        targetRevision: input.workspace.targetRevision,
+        startState,
+        endState,
+      });
+    }
+    if (events && eventsArtifact) {
+      const consoleErrors = events.console.filter(isConsoleError);
+      const pageErrors = events.console.filter(isPageError);
+      const failedNetworkEvents = events.network.filter(isFailedNetworkEvent);
+      facts.push({
+        kind: "browser_events",
+        category: "browser",
+        label: browserInput.label,
+        capturedAt: finishedAt,
+        eventsArtifactHash: eventsArtifact.hash,
+        consoleEventCount: events.console.length,
+        consoleErrorCount: consoleErrors.length,
+        networkEventCount: events.network.length,
+        networkFailureCount: failedNetworkEvents.length,
+        sessionId,
+        url: observedUrl,
+        startedAt,
+        finishedAt,
+        targetRevision: input.workspace.targetRevision,
+        startState,
+        endState,
+        consoleErrors,
+        pageErrors,
+        failedNetworkEvents,
+        policyViolations: [...policyViolations],
+        timedOut,
+        cancelled,
+      });
+    }
+    input.base.facts.push(...facts);
+    for (const [index, fact] of facts.entries()) {
+      const evidenceId = this.recordEvidence(
+        fact,
+        input.generationId,
+        "browser",
+        index,
+        finishedAt,
+        input.runOrdinal,
+      );
+      if (evidenceId) input.base.evidenceIds.push(evidenceId);
+      else input.base.issues.push(`browser ${browserInput.label} evidence ${fact.kind} has no durable record.`);
+    }
+    if (facts.length !== 3) {
+      input.base.issues.push(`browser ${browserInput.label} is missing required evidence artifacts.`);
+    }
+    return {
+      ...input.base,
+      green: input.base.issues.length === 0 && input.base.evidenceIds.length === input.base.facts.length,
+    };
+  }
+
   private async waitForRuntimeReadiness(input: {
     smoke: FinalVerificationRuntimeSmokeInput;
     observation: FinalVerificationManagedProcessObservation;
@@ -691,7 +1083,7 @@ export class FinalVerificationRuntime {
   }
 
   private recordEvidence(
-    fact: FinalVerificationCommandFact,
+    fact: FinalVerificationFact,
     generationId: string,
     category: FinalVerificationCategory,
     index: number,
@@ -898,7 +1290,7 @@ function freezeCheck(check: FinalVerificationCheckResult): FinalVerificationChec
   return Object.freeze({
     ...check,
     evidenceIds: Object.freeze([...check.evidenceIds]),
-    facts: Object.freeze(check.facts.map((fact) => Object.freeze({ ...fact, args: Object.freeze([...fact.args]) }))),
+    facts: Object.freeze(check.facts.map(freezeFact)),
     ...(check.repositoryInspection
       ? {
           repositoryInspection: Object.freeze({
@@ -912,6 +1304,33 @@ function freezeCheck(check: FinalVerificationCheckResult): FinalVerificationChec
       : {}),
     issues: Object.freeze([...check.issues]),
   }) as unknown as FinalVerificationCheckResult;
+}
+
+function freezeFact(fact: FinalVerificationFact): FinalVerificationFact {
+  const state = {
+    startState: Object.freeze({ ...fact.startState }),
+    endState: Object.freeze({ ...fact.endState }),
+  };
+  if (fact.kind === "command") {
+    return Object.freeze({
+      ...fact,
+      ...state,
+      args: Object.freeze([...fact.args]),
+    }) as unknown as FinalVerificationCommandFact;
+  }
+  if (fact.kind === "browser_events") {
+    return Object.freeze({
+      ...fact,
+      ...state,
+      consoleErrors: Object.freeze(fact.consoleErrors.map((event) => Object.freeze({ ...event }))),
+      pageErrors: Object.freeze(fact.pageErrors.map((event) => Object.freeze({ ...event }))),
+      failedNetworkEvents: Object.freeze(fact.failedNetworkEvents.map((event) => Object.freeze({ ...event }))),
+      policyViolations: Object.freeze([...fact.policyViolations]),
+    }) as unknown as FinalVerificationBrowserEventsFact;
+  }
+  return Object.freeze({ ...fact, ...state }) as unknown as
+    | FinalVerificationBrowserSnapshotFact
+    | FinalVerificationBrowserScreenshotFact;
 }
 
 function cloneInspection(
@@ -950,6 +1369,118 @@ async function endpointIsHealthy(endpoint: string | undefined, expectedStatus = 
     return response.status === expectedStatus;
   } catch {
     return false;
+  }
+}
+
+function isConsoleError(event: BrowserConsoleEvent): boolean {
+  const source = browserConsoleSource(event);
+  return source !== "pageerror" && event.type === "error";
+}
+
+function isPageError(event: BrowserConsoleEvent): boolean {
+  return browserConsoleSource(event) === "pageerror" || event.type === "pageerror";
+}
+
+function isFailedNetworkEvent(event: BrowserNetworkEvent): boolean {
+  return Boolean(event.failure) || (event.status !== undefined && event.status >= 400);
+}
+
+function browserConsoleSource(event: BrowserConsoleEvent): "console" | "pageerror" | undefined {
+  const source = (event as BrowserConsoleEvent & { source?: unknown }).source;
+  return source === "console" || source === "pageerror" ? source : undefined;
+}
+
+function browserPolicyViolations(
+  events: { console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] },
+  policy: FinalVerificationBrowserPolicy,
+): string[] {
+  const violations: string[] = [];
+  const consoleErrors = events.console.filter(isConsoleError);
+  const pageErrors = events.console.filter(isPageError);
+  const failedNetworkEvents = events.network.filter(isFailedNetworkEvent);
+  if ((policy.consoleErrors ?? "fail") === "fail") {
+    for (const event of consoleErrors) {
+      if (!matchesBrowserPattern(event.text, policy.allowedConsoleErrorPatterns)) {
+        violations.push(`unallowed console error: ${event.text}`);
+      }
+    }
+  }
+  if ((policy.pageErrors ?? "fail") === "fail") {
+    for (const event of pageErrors) {
+      if (!matchesBrowserPattern(event.text, policy.allowedPageErrorPatterns)) {
+        violations.push(`unallowed page error: ${event.text}`);
+      }
+    }
+  }
+  if ((policy.failedNetworkEvents ?? "fail") === "fail") {
+    for (const event of failedNetworkEvents) {
+      const description = `${event.method} ${event.url} ${event.status ?? ""} ${event.failure ?? ""}`.trim();
+      if (!matchesBrowserPattern(description, policy.allowedNetworkFailurePatterns)) {
+        violations.push(`unallowed network failure: ${description}`);
+      }
+    }
+  }
+  return violations;
+}
+
+function matchesBrowserPattern(value: string, patterns: readonly string[] | undefined): boolean {
+  return patterns?.some((pattern) => value.includes(pattern)) ?? false;
+}
+
+function validateBrowserInput(
+  input: FinalVerificationBrowserInput,
+  maximumTimeoutMs: number,
+): void {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("browser input must be an object.");
+  }
+  if (typeof input.label !== "string" || input.label.trim().length === 0 || input.label.length > 256) {
+    throw new Error("browser label must be a non-empty string of at most 256 characters.");
+  }
+  if (typeof input.url !== "string" || input.url.length === 0 || input.url.length > 2_048) {
+    throw new Error("browser URL must be a non-empty string of at most 2048 characters.");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(input.url);
+  } catch {
+    throw new Error("browser URL must be an HTTP(S) URL.");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("browser URL must be an HTTP(S) URL.");
+  }
+  for (const [value, name] of [
+    [input.width, "browser width"],
+    [input.height, "browser height"],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 320 || value > 4_096)) {
+      throw new Error(`${name} must be an integer from 320 to 4096.`);
+    }
+  }
+  validateTimeout(input.timeoutMs, maximumTimeoutMs, "browser timeoutMs");
+  if (typeof input.policy !== "object" || input.policy === null || Array.isArray(input.policy)) {
+    throw new Error("browser policy is required.");
+  }
+  for (const [value, name] of [
+    [input.policy.consoleErrors, "browser consoleErrors policy"],
+    [input.policy.pageErrors, "browser pageErrors policy"],
+    [input.policy.failedNetworkEvents, "browser failedNetworkEvents policy"],
+  ] as const) {
+    if (value !== undefined && value !== "fail" && value !== "allow") {
+      throw new Error(`${name} must be fail or allow.`);
+    }
+  }
+  for (const [patterns, name] of [
+    [input.policy.allowedConsoleErrorPatterns, "browser console error allowlist"],
+    [input.policy.allowedPageErrorPatterns, "browser page error allowlist"],
+    [input.policy.allowedNetworkFailurePatterns, "browser network failure allowlist"],
+  ] as const) {
+    if (patterns === undefined) continue;
+    if (!Array.isArray(patterns) || patterns.length > 32 || patterns.some((pattern) => (
+      typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > 256
+    ))) {
+      throw new Error(`${name} must contain at most 32 non-empty strings of at most 256 characters.`);
+    }
   }
 }
 
@@ -1105,5 +1636,32 @@ class ManagedProcessServiceAdapter implements FinalVerificationManagedProcess {
       sessionId: this.sessionId,
       actor: { ...this.actor },
     };
+  }
+}
+
+class BrowserBackendSessionAdapter implements FinalVerificationBrowserSession {
+  constructor(
+    private readonly backend: FinalVerificationBrowserBackend,
+    private readonly sessionId: string,
+  ) {}
+
+  async open(input: { url: string; width: number; height: number }): Promise<{ url: string; title: string }> {
+    return await this.backend.open(this.sessionId, input);
+  }
+
+  async snapshot(): Promise<{ url: string; title: string; text: string; html: string }> {
+    return await this.backend.snapshot(this.sessionId);
+  }
+
+  async screenshot(): Promise<Buffer> {
+    return await this.backend.screenshot(this.sessionId);
+  }
+
+  async events(): Promise<{ console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] }> {
+    return await this.backend.events(this.sessionId);
+  }
+
+  async close(): Promise<void> {
+    await this.backend.close(this.sessionId);
   }
 }
