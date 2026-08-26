@@ -6,8 +6,9 @@
 - Branch: `codex/runner-v2-robust-build`
 - P2 entry revision: `000f54e1`
 - P2.1 implementation revision: `3dcb0cc1`
-- P2.2 implementation revision: this packet commit (reported at handoff)
-- Scope completed: P2.1 and P2.2 only. P2.3 and later packets were not started.
+- P2.2 implementation revision: `97f52add`
+- P2.3A implementation revision: packet commit (reported at handoff)
+- Scope completed: P2.1, P2.2, and P2.3A only. P2.3B and later packets were not started.
 - `progress.md` was read and not edited.
 
 ## Packet result
@@ -183,4 +184,83 @@ passed
 | Valid workspace reopens deterministically | Reopen and fresh-manager create deep-equality assertions | Complete |
 | Cleanup is scoped to owned verification state | Cleanup test preserves integration path/revision/history and canonical checkout | Complete |
 
-P2.3 runtime/scheduler work remains locked for the controller.
+P2.3B runtime_smoke/browser and submit-tool work, plus P2.4+ scheduler/completion
+work, remain locked for the controller.
+
+## P2.3A command verification runtime
+
+Added `runner-v2/src/final-verification-runtime.ts` and focused coverage in
+`runner-v2/test/final-verification-runtime.test.ts`. The runtime validates the
+P2.1 plan at its boundary, reopens/creates the P2.2 workspace, rejects a stale
+current integration revision, and runs only build/test commands as exact
+executable-plus-argument arrays with a fixed disposable-workspace cwd and no
+shell interpolation. Each command captures immutable stdout/stderr artifacts,
+timestamps, target/start/end revisions, exit/signal, timeout, cancellation, and
+durable EvidenceStore IDs. It never creates a ChangeSet or writes to the
+canonical integration checkout; verification-generated files remain confined
+to the disposable worktree.
+
+### P2.3A TDD and prove-red evidence
+
+The focused runtime test was added before the production module and initially
+ran red at `97f52add`:
+
+```text
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts
+ERR_MODULE_NOT_FOUND: Cannot find module .../runner-v2/src/final-verification-runtime.js
+```
+
+After implementation and fixture-race corrections (canonical checkout line
+ending normalization and cancellation waiting for the descendant marker), the
+focused suite passed 4/4:
+
+```text
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts
+4 tests, 4 passed, 0 failed
+```
+
+Three fault-only injections were then performed independently. Removing the
+non-zero exit guard produced 3 pass/1 fail (`true !== false` on the required
+non-zero result). Removing the current-integration-revision guard produced
+3 pass/1 fail (`Missing expected rejection` for the stale-revision case).
+Removing the cancellation-state assignment produced 3 pass/1 fail (`false !==
+true` for the cancellation fact). Each guard was restored immediately, and the
+focused suite returned to 4/4 green after every restoration. The process-tree
+case also proved that cancellation terminates the descendant and leaves no
+late marker output.
+
+### P2.3A validation evidence
+
+```text
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts
+4/4 passed
+
+npm run typecheck (from runner-v2)
+passed
+
+npx eslint runner-v2/src/final-verification-runtime.ts runner-v2/test/final-verification-runtime.test.ts
+passed with no warnings
+
+npx tsx --test runner-v2/test/final-verification-runtime.test.ts runner-v2/test/process-tools.test.ts runner-v2/test/managed-process.test.ts runner-v2/test/evidence-tools.test.ts runner-v2/test/sqlite-evidence-store.test.ts runner-v2/test/verification-workspace.test.ts runner-v2/test/workspace-manager.test.ts runner-v2/test/integration-manager.test.ts
+83/83 passed
+```
+
+The affected process/evidence/workspace regression set passed 83/83 tests
+(including integration and workspace-manager coverage); no P2.3B or P2.4
+surface was started in this packet.
+
+### P2.3A requirement audit
+
+| P2.3A requirement | Evidence | Result |
+|---|---|---|
+| Exact executable/argv command execution with fixed cwd and no shell | Success test uses shell metacharacter arguments and checks captured argv/cwd | Complete |
+| Pinned target and stale revision rejection | Target/start/end revision assertions and stale integration test | Complete |
+| Immutable stdout/stderr artifacts and EvidenceStore IDs | Artifact byte assertions and SQLite record/ID assertions | Complete |
+| Non-zero, timeout, and cancellation are non-green | Failure test plus non-zero/timeout/cancellation fault proofs | Complete |
+| Process-tree cancellation cleanup | Descendant PID/late-output test and cancellation fault proof | Complete |
+| No ChangeSet or canonical checkout mutation | Explicit `changeSet` absence and integration revision/status assertions | Complete |
+
+## Packet status
+
+P2.3A is complete in the implementation commit recorded above. P2.3B
+runtime_smoke/browser and submit-tool work remains intentionally deferred.

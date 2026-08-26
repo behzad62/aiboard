@@ -1,0 +1,415 @@
+import assert from "node:assert/strict";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { ArtifactStore } from "../src/artifact-store.js";
+import { captureGitBaseline } from "../src/git-baseline.js";
+import { runGit } from "../src/git-command.js";
+import { IntegrationManager } from "../src/integration-manager.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import {
+  FinalVerificationRuntime,
+  type FinalVerificationPlan,
+} from "../src/final-verification-runtime.js";
+import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+
+test("runs build and test commands in the pinned workspace and records immutable evidence", async () => {
+  const fixture = await createFixture("success");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    taskId: "final-verification",
+    integrationRevision: () => fixture.integration.revision,
+  });
+  try {
+    const projectBefore = await projectState(fixture.project);
+    const run = await runtime.run({
+      plan: buildTestPlan(),
+      commands: {
+        build: [{
+          label: "build command",
+          executable: process.execPath,
+          args: [
+            "-e",
+            "const fs=require('node:fs'); fs.writeFileSync('generated-by-build.txt', 'temporary\\n'); process.stdout.write(process.argv[1]); process.stderr.write(process.argv[2]);",
+            "stdout ; & spaces",
+            "stderr ; & spaces",
+          ],
+        }],
+        tests: [{
+          label: "test command",
+          executable: process.execPath,
+          args: ["-e", "process.stdout.write('tests passed')"],
+        }],
+      },
+    });
+
+    assert.equal(run.green, true);
+    assert.equal(run.targetRevision, fixture.integration.revision);
+    assert.equal(run.checks.length, 4);
+    assert.deepEqual(
+      run.checks.map((check) => [check.category, check.status, check.green]),
+      [
+        ["build", "required", true],
+        ["tests", "required", true],
+        ["runtime_smoke", "not_applicable", true],
+        ["browser", "not_applicable", true],
+      ],
+    );
+    const buildFact = commandFacts(run.checks[0])[0];
+    assert.equal(buildFact.executable, process.execPath);
+    assert.deepEqual(buildFact.args, [
+      "-e",
+      "const fs=require('node:fs'); fs.writeFileSync('generated-by-build.txt', 'temporary\\n'); process.stdout.write(process.argv[1]); process.stderr.write(process.argv[2]);",
+      "stdout ; & spaces",
+      "stderr ; & spaces",
+    ]);
+    assert.equal(buildFact.cwd, run.workspacePath);
+    assert.equal(buildFact.targetRevision, fixture.integration.revision);
+    assert.equal(buildFact.startState.revision, fixture.integration.revision);
+    assert.equal(buildFact.endState.revision, fixture.integration.revision);
+    assert.match(buildFact.startedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(buildFact.finishedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(
+      (await artifacts.get(buildFact.stdoutArtifactHash)).toString(),
+      "stdout ; & spaces",
+    );
+    assert.equal(
+      (await artifacts.get(buildFact.stderrArtifactHash)).toString(),
+      "stderr ; & spaces",
+    );
+    assert.equal(existsSync(join(run.workspacePath, "generated-by-build.txt")), true);
+    assert.equal("changeSet" in run, false);
+
+    const records = evidence.list({ runId: fixture.runId, taskId: "final-verification" });
+    assert.equal(records.length, 2);
+    assert.deepEqual(
+      records.map((record) => record.id),
+      run.checks.flatMap((check) => check.evidenceIds),
+    );
+    assert.equal(new Set(records.map((record) => record.id)).size, records.length);
+    assert.equal(fixture.integration.revision, run.targetRevision);
+    assert.deepEqual(await projectState(fixture.project), projectBefore);
+    assert.equal(
+      readFileSync(join(fixture.integration.path, "README.md"), "utf8").replaceAll("\r\n", "\n"),
+      "baseline\n",
+    );
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("nonzero, timeout, and cancellation outcomes are mechanically non-green", async () => {
+  const fixture = await createFixture("failures");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    taskId: "final-verification",
+    integrationRevision: () => fixture.integration.revision,
+  });
+  try {
+    const failed = await runtime.run({
+      plan: buildOnlyPlan(),
+      commands: {
+        build: [{
+          label: "failing build",
+          executable: process.execPath,
+          args: ["-e", "process.stderr.write('failed'); process.exit(7)"],
+        }],
+      },
+    });
+    const failedFact = commandFacts(failed.checks[0])[0];
+    assert.equal(failed.green, false);
+    assert.equal(failed.checks[0].green, false);
+    assert.equal(failedFact.exitCode, 7);
+    assert.equal(failedFact.timedOut, false);
+    assert.equal(failedFact.cancelled, false);
+    assert.match(failed.checks[0].issues.join(" "), /non-zero|nonzero|exit/i);
+
+    const timedOut = await runtime.run({
+      plan: buildOnlyPlan(),
+      commands: {
+        build: [{
+          label: "timed build",
+          executable: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 5000)"],
+          timeoutMs: 100,
+        }],
+      },
+    });
+    const timedFact = commandFacts(timedOut.checks[0])[0];
+    assert.equal(timedOut.green, false);
+    assert.equal(timedFact.timedOut, true);
+    assert.equal(timedFact.cancelled, false);
+
+    const controller = new AbortController();
+    const cancelledPromise = runtime.run({
+      plan: buildOnlyPlan(),
+      signal: controller.signal,
+      commands: {
+        build: [{
+          label: "cancelled build",
+          executable: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 5000)"],
+        }],
+      },
+    });
+    setTimeout(() => controller.abort(), 100).unref();
+    const cancelled = await cancelledPromise;
+    const cancelledFact = commandFacts(cancelled.checks[0])[0];
+    assert.equal(cancelled.green, false);
+    assert.equal(cancelledFact.cancelled, true);
+    assert.equal(cancelledFact.timedOut, false);
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("cancellation terminates descendant processes and leaves no late process output", async () => {
+  const fixture = await createFixture("process-tree");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    runId: fixture.runId,
+    taskId: "final-verification",
+    integrationRevision: () => fixture.integration.revision,
+  });
+  const marker = "late-descendant-output.txt";
+  const childPid = "descendant.pid";
+  try {
+    await workspace.create();
+    const controller = new AbortController();
+    const childScript = "const fs=require('node:fs'); setTimeout(() => fs.writeFileSync(process.argv[1], 'late'), 1500);";
+    const launcherScript = [
+      "const fs=require('node:fs');",
+      "const {spawn}=require('node:child_process');",
+      `const child=spawn(${JSON.stringify(process.execPath)}, ['-e', ${JSON.stringify(childScript)}, process.argv[1]], {stdio:'ignore'});`,
+      "fs.writeFileSync(process.argv[2], String(child.pid));",
+      "setTimeout(() => {}, 10000);",
+    ].join(" ");
+    const promise = runtime.run({
+      plan: buildOnlyPlan(),
+      signal: controller.signal,
+      commands: {
+        build: [{
+          label: "tree build",
+          executable: process.execPath,
+          args: ["-e", launcherScript, marker, childPid],
+        }],
+      },
+    });
+    await waitFor(() => existsSync(join(workspace.path, childPid)), 5_000);
+    controller.abort();
+    const run = await promise;
+    const fact = commandFacts(run.checks[0])[0];
+    assert.equal(run.green, false);
+    assert.equal(fact.cancelled, true);
+    assert.equal(existsSync(join(run.workspacePath, childPid)), true);
+    await delay(1800);
+    assert.equal(existsSync(join(run.workspacePath, marker)), false);
+    rmSync(join(run.workspacePath, childPid), { force: true });
+  } finally {
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("rejects a workspace that is stale relative to the current integration revision", async () => {
+  const fixture = await createFixture("stale");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const currentRevision = async () =>
+    (await runGit({ cwd: fixture.integration.path, args: ["rev-parse", "HEAD"] })).stdout.trim();
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    runId: fixture.runId,
+    taskId: "final-verification",
+    integrationRevision: currentRevision,
+  });
+  try {
+    await workspace.create();
+    writeFileSync(join(fixture.integration.path, "advanced.txt"), "advanced\n");
+    await runGit({ cwd: fixture.integration.path, args: ["add", "advanced.txt"] });
+    await runGit({
+      cwd: fixture.integration.path,
+      args: ["commit", "-m", "Advance integration"],
+      env: {
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+    await assert.rejects(
+      () => runtime.run({ plan: buildOnlyPlan(), commands: { build: [] } }),
+      /stale|integration revision|target revision/i,
+    );
+  } finally {
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+function buildTestPlan(): FinalVerificationPlan {
+  return {
+    checks: [
+      { category: "build", status: "required" },
+      { category: "tests", status: "required" },
+      notApplicable("runtime_smoke", "No runtime command is present.", "package.json"),
+      notApplicable("browser", "No browser surface is present.", "package.json"),
+    ],
+  };
+}
+
+function buildOnlyPlan(): FinalVerificationPlan {
+  return {
+    checks: [
+      { category: "build", status: "required" },
+      notApplicable("tests", "No test command is configured.", "package.json"),
+      notApplicable("runtime_smoke", "No runtime command is present.", "package.json"),
+      notApplicable("browser", "No browser surface is present.", "package.json"),
+    ],
+  };
+}
+
+function notApplicable(
+  category: "runtime_smoke" | "browser" | "tests",
+  rationale: string,
+  path: string,
+) {
+  return {
+    category,
+    status: "not_applicable" as const,
+    rationale,
+    repositoryInspection: { paths: [path], summary: rationale },
+  };
+}
+
+function commandFacts(check: { facts: readonly { kind: string }[] }) {
+  const facts = check.facts.filter((fact) => fact.kind === "command");
+  assert.equal(facts.length, 1);
+  return [facts[0] as unknown as {
+    executable: string;
+    args: string[];
+    cwd: string;
+    targetRevision: string;
+    startState: { revision: string };
+    endState: { revision: string };
+    startedAt: string;
+    finishedAt: string;
+    stdoutArtifactHash: string;
+    stderrArtifactHash: string;
+    exitCode: number | null;
+    timedOut: boolean;
+    cancelled: boolean;
+  }];
+}
+
+interface Fixture {
+  root: string;
+  project: string;
+  state: string;
+  runId: string;
+  integration: IntegrationManager;
+}
+
+async function createFixture(name: string): Promise<Fixture> {
+  const root = mkdtempSync(join(tmpdir(), `aiboard-final-verification-${name}-`));
+  const project = join(root, "user checkout");
+  const state = join(root, "runner state & data");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(project, "README.md"), "baseline\n");
+  const runId = `run_final_${name}`;
+  const baseline = await captureGitBaseline({
+    projectPath: project,
+    stateDirectory: state,
+    runId,
+  });
+  const integration = new IntegrationManager({
+    repositoryRoot: project,
+    stateDirectory: state,
+    runId,
+    baselineRevision: baseline.revision,
+  });
+  await integration.initialize();
+  return { root, project, state, runId, integration };
+}
+
+async function closeFixture(fixture: Fixture): Promise<void> {
+  await fixture.integration.cleanup().catch(() => undefined);
+  await runGit({
+    cwd: fixture.project,
+    args: ["worktree", "prune", "--expire", "now"],
+    allowFailure: true,
+  }).catch(() => undefined);
+  rmSync(fixture.root, { recursive: true, force: true });
+}
+
+async function projectState(project: string): Promise<{ revision: string; status: string }> {
+  return {
+    revision: (await runGit({ cwd: project, args: ["rev-parse", "HEAD"] })).stdout.trim(),
+    status: (await runGit({
+      cwd: project,
+      args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    })).stdout,
+  };
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Condition was not met within ${timeoutMs} ms.`);
+    await delay(25);
+  }
+}
