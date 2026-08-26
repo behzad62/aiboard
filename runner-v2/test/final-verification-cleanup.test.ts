@@ -10,6 +10,7 @@ import { IntegrationManager } from "../src/integration-manager.js";
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
+  validateOwnedFinalVerificationCleanupReceipt,
 } from "../src/final-verification-cleanup.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
 
@@ -79,13 +80,17 @@ test("diagnostics redact structured keys, argv pairs, bearer values, and URL cre
 test("failed cleanup converges after a crash between workspace deletion and receipt persistence", async () => {
   const fixture = await createFixture("crash-after-workspace-delete");
   try {
-    await fixture.workspace.create();
+    const workspace = await fixture.workspace.create();
+    writeFileSync(join(workspace.path, "token=changed-path-secret.txt"), "failed\n");
     const diagnostics = new FinalVerificationDiagnosticsArchive({
       stateDirectory: fixture.state,
       runId: fixture.runId,
       workspaceManager: fixture.workspace,
     });
     const archivedPath = await diagnostics.persist(diagnosticsInput(fixture));
+    const archived = readFileSync(archivedPath, "utf8");
+    assert.doesNotMatch(archived, /changed-path-secret/);
+    assert.match(archived, /\[REDACTED\]/);
     await fixture.workspace.cleanup();
     const cleanup = new OwnedFinalVerificationCleanup({
       stateDirectory: fixture.state,
@@ -102,6 +107,82 @@ test("failed cleanup converges after a crash between workspace deletion and rece
       await cleanup.cleanup({ ...cleanupIdentity(fixture), failed: diagnosticsInput(fixture) }),
       result,
     );
+  } finally { await closeFixture(fixture); }
+});
+
+test("restart repairs a legacy unsafe diagnostics archive after its cleanup receipt was rejected", async () => {
+  const fixture = await createFixture("legacy-archive-repair");
+  try {
+    await fixture.workspace.create();
+    const diagnostics = new FinalVerificationDiagnosticsArchive({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      workspaceManager: fixture.workspace,
+    });
+    const archivedPath = await diagnostics.persist(diagnosticsInput(fixture));
+    const legacyArchive = JSON.parse(readFileSync(archivedPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(archivedPath, `${JSON.stringify({
+      ...legacyArchive,
+      changedPaths: [
+        "token=legacy-changed-path-secret.txt",
+        ...Array.from({ length: 205 }, (_, index) => `generated-${index}.txt`),
+      ],
+    }, null, 2)}\n`);
+
+    await fixture.workspace.cleanup();
+    const receiptDirectory = join(
+      fixture.state,
+      "builds",
+      safeSegment(fixture.runId),
+      "audit",
+      "final-verification-cleanup",
+    );
+    mkdirSync(receiptDirectory, { recursive: true });
+    writeFileSync(join(receiptDirectory, `${safeSegment("generation-1")}.json`), JSON.stringify({
+      version: 1,
+      kind: "final-verification-cleanup-receipt",
+      runId: fixture.runId,
+      generationId: "generation-1",
+      taskId: "final-verification-1",
+      targetRevision: fixture.integration.revision,
+      diagnosticsPath: archivedPath,
+    }));
+    const receiptIdentity = {
+      runId: fixture.runId,
+      ...cleanupIdentity(fixture),
+      diagnosticsPath: archivedPath,
+      requiresDiagnostics: true,
+    };
+    assert.throws(
+      () => validateOwnedFinalVerificationCleanupReceipt(fixture.state, receiptIdentity),
+      /unsafe|unbounded/i,
+    );
+
+    const restartedCleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      stopRun: async () => { throw new Error("receipt recovery must not quiesce twice"); },
+      closeBrowserRun: async () => { throw new Error("receipt recovery must not quiesce twice"); },
+      workspaceManager: fixture.workspace,
+      diagnostics: new FinalVerificationDiagnosticsArchive({
+        stateDirectory: fixture.state,
+        runId: fixture.runId,
+        workspaceManager: fixture.workspace,
+      }),
+    });
+    const cleanupInput = { ...cleanupIdentity(fixture), failed: diagnosticsInput(fixture) };
+    const recovered = await restartedCleanup.cleanup(cleanupInput);
+    assert.deepEqual(recovered, { diagnosticsPath: archivedPath });
+    assert.equal(existsSync(fixture.workspace.path), false);
+    const repairedText = readFileSync(archivedPath, "utf8");
+    assert.doesNotMatch(repairedText, /legacy-changed-path-secret/);
+    assert.match(repairedText, /\[REDACTED\]/);
+    const repaired = JSON.parse(repairedText) as { changedPaths: string[] };
+    assert.equal(repaired.changedPaths.length, 200);
+    assert.doesNotThrow(
+      () => validateOwnedFinalVerificationCleanupReceipt(fixture.state, receiptIdentity),
+    );
+    assert.deepEqual(await restartedCleanup.cleanup(cleanupInput), recovered);
   } finally { await closeFixture(fixture); }
 });
 

@@ -139,7 +139,7 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
       generationId: input.generationId,
       taskId: input.taskId,
       targetRevision: input.targetRevision,
-    });
+    }, { repairUnsafe: true });
     if (existing) {
       const expected = redactedDiagnosticsPayload(input);
       if (JSON.stringify(existing.checks) !== JSON.stringify(expected.checks) ||
@@ -156,7 +156,9 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
     const status = (await this.git(workspace.path, [
       "status", "--porcelain=v1", "-z", "--untracked-files=all",
     ])).stdout;
-    const changedPaths = parseStatusPaths(status).slice(0, MAX_ITEMS);
+    const changedPaths = parseStatusPaths(status)
+      .slice(0, MAX_ITEMS)
+      .map((path) => redactSensitiveText(path, MAX_TEXT_BYTES));
     const record = {
       version: 1,
       kind: "final-verification-diagnostics",
@@ -374,7 +376,7 @@ async function validateReceiptDiagnosticsPath(input: {
     generationId: input.input.generationId,
     taskId: input.input.taskId,
     targetRevision: input.input.targetRevision,
-  });
+  }, { repairUnsafe: true });
   if (!record) throw new Error("Cleanup receipt diagnostics archive is missing.");
   return expected;
 }
@@ -382,6 +384,7 @@ async function validateReceiptDiagnosticsPath(input: {
 async function readDiagnosticsArchive(
   path: string,
   identity: { runId: string; generationId: string; taskId: string; targetRevision: string },
+  options: { repairUnsafe?: boolean } = {},
 ): Promise<Record<string, unknown> | undefined> {
   try {
     const record = JSON.parse(await readFile(path, "utf8")) as unknown;
@@ -399,7 +402,17 @@ async function readDiagnosticsArchive(
       maximumTextLength: MAX_TEXT_BYTES,
     });
     if (JSON.stringify(redacted) !== JSON.stringify(value)) {
-      throw new Error("Final verification diagnostics archive contains unsafe or unbounded values.");
+      if (!options.repairUnsafe || !redacted || typeof redacted !== "object" || Array.isArray(redacted)) {
+        throw new Error("Final verification diagnostics archive contains unsafe or unbounded values.");
+      }
+      const repaired = redacted as Record<string, unknown>;
+      if (repaired.version !== 1 || repaired.kind !== "final-verification-diagnostics" ||
+        repaired.runId !== identity.runId || repaired.generationId !== identity.generationId ||
+        repaired.taskId !== identity.taskId || repaired.targetRevision !== identity.targetRevision) {
+        throw new Error("Final verification diagnostics archive repair conflicts with the requested identity.");
+      }
+      await writeOwnedJson(path, repaired);
+      return repaired;
     }
     return value;
   } catch (error) {
@@ -417,9 +430,12 @@ function sameCleanupIdentity(
     receipt.taskId === input.taskId && receipt.targetRevision === input.targetRevision;
 }
 async function writeReceipt(path: string, receipt: Record<string, unknown>): Promise<void> {
+  await writeOwnedJson(path, receipt);
+}
+async function writeOwnedJson(path: string, value: Record<string, unknown>): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   try { await rename(temporary, path); }
   finally { await rm(temporary, { force: true }).catch(() => undefined); }
 }
