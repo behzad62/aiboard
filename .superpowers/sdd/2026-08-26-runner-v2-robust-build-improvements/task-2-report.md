@@ -1510,3 +1510,199 @@ passed (normal Git LF-to-CRLF notices only)
 ```
 
 This section records review repairs only and does not claim phase completion.
+
+## P2 first-review repair commits (explicit evidence)
+
+### `8bfe0639` — cleanup recovery, redaction, and bounded retry
+
+This commit made failed verification cleanup recoverable and fail closed. It
+added structural redaction for nested secret keys, command argument pairs,
+authorization/bearer values, URL credentials/query values, and whitespace-form
+environment assignments; bounded diagnostics and observability loading; made a
+single autonomous cleanup failure return durable no-progress instead of hot
+looping; recovered the crash after diagnostics persistence and workspace
+deletion; and validated exact owned receipt path/identity/containment.
+
+RED evidence was the existing focused cleanup/execution set: the nested/argv/
+header/URL/env cases retained secrets, the autonomous cleanup failure repeated
+within one `runUntilBlocked` invocation instead of returning
+`final_verification_cleanup_failed`, and a forged receipt diagnostics path was
+accepted. Removing the restored receipt authority again made the forged-receipt
+case fail 0/1; restoring it returned the case green. Current exact revalidation:
+
+```text
+npx tsx --test runner-v2/test/final-verification-cleanup.test.ts runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-observability.test.ts
+21 tests, 21 passed, 0 failed
+```
+
+### `2a727bd5` — product-path execution-profile binding
+
+This commit bound exact build/test argv, runtime-smoke input, browser input, and
+runner-inspected category signals to the final-verification generation and
+threaded them through NativeBuildFactory, BuildRuntime, and
+FinalVerificationRuntime. Inspection uses clean canonical integration state,
+not Architect prose or the dirty user checkout. The production factory E2E
+proved all four categories while preserving a dirty user checkout.
+
+RED evidence: the new product E2E could not obtain all four exact runtime inputs
+through NativeBuildFactory; a real build/test/UI repository could be accepted
+as all-N/A from prose-supplied inspection; and a dirty user checkout blocked
+verification when used as inspection authority. Temporarily removing exact
+profile propagation restored the factory-path failure; restoring it returned
+the named factory test green. Current exact revalidation (the profile suite now
+also contains the later durable-authority and provisioning guards):
+
+```text
+npx tsx --test runner-v2/test/final-verification-profile.test.ts runner-v2/test/native-final-verification-factory.test.ts runner-v2/test/native-architect-runtime.test.ts
+21 tests, 21 passed, 0 failed
+```
+
+### `32216831` — event/evidence/artifact/receipt integrity
+
+This commit made scheduler append and replay validate fact schema, exact
+EvidenceStore correspondence, artifact existence/hash/length, production
+submission authority, and authentic cleanup receipts. It also closed the
+cancelled-repair and unstructured-review stranded states. The original RED and
+restored mutations are recorded in the preceding combined review section:
+malformed/mismatched facts 0/2, green-without-evidence accepted, deleted artifact
+accepted on replay, forged cleanup success accepted, and the two stranded-state
+transitions accepted. Every injected fault was restored. Current exact
+revalidation:
+
+```text
+npx tsx --test runner-v2/test/final-verification-integrity.test.ts runner-v2/test/final-verification-submission.test.ts runner-v2/test/final-verification-repair.test.ts runner-v2/test/final-verification-review.test.ts runner-v2/test/final-verification-completion.test.ts runner-v2/test/final-verification-scheduler.test.ts
+47 tests, 47 passed, 0 failed
+```
+
+## P2 second-review repair commits
+
+### `3e9db443` — durable runner-owned profile authority
+
+Execution profiles became mandatory for every non-plan-only generation,
+projection, runtime, submission, and completion path. A content-addressed
+Runner-owned archive binds run ID, exact integration revision, and complete
+profile content and survives restart/worktree retirement. Production SQLite
+append and replay fail closed without that authority and reject missing,
+tampered, replay-tampered, or stale profiles while accepting only the
+idempotent duplicate of the same inspected profile. Runner-owned detected
+signals reject false all-N/A plans.
+
+RED tests first showed raw missing and self-consistent uninspected profiles
+could create generations, profile bytes could be changed before replay, and a
+real signalled repository could be marked all-N/A. Disabling production
+`validateExecutionProfile` after the fix made the fail-closed test red; restoring
+the callback requirement returned it green. These cases are included in the
+current 21/21 profile/factory/Architect command above.
+
+### `0e842199` — one shared mechanical semantic validator
+
+One validator now binds every completed check and submission to the exact
+persisted profile, expected cardinality, executable/argv/label/requested URL,
+and full green semantics. Build/tests require exit zero with no signal, timeout,
+cancellation, truncation, or issues. Runtime requires readiness, endpoint,
+nonzero handling, and explicit successful owned-process cleanup. Browser binds
+requested URL while allowing normal redirects and requires snapshot,
+screenshot, events, and absence of timeout/cancellation/policy issues.
+
+RED chains with an alternate command and nonzero-but-green facts were accepted
+before the validator. A green runtime with absent/false cleanup success and a
+green fact carrying non-empty issues were also accepted. Removing the explicit
+runtime cleanup-success requirement made its named append/replay tests red;
+restoring it returned the final-verification affected set to 95/95 at the
+packet boundary. Current integrity/semantic revalidation is 47/47 above, and
+the current production-path set below is 38/38.
+
+### `ef0d339c` — exact dependency provisioning and owned ports
+
+Exact-revision inspection now detects `packageManager` plus lockfiles,
+conservatively supports npm/pnpm/yarn, fails closed on declaration/lock
+disagreement or unavailable managers, and persists shell-free install argv.
+Dependencies are provisioned inside the disposable workspace before project
+scripts, including lockfile/workspace cases with empty root dependency maps.
+Dynamic port reservations are generation/revision/lease-ID scoped, durable
+across restart, rotated after integration advancement, released by exact
+cleanup, and discarded when profile persistence, Architect planning, or
+scheduler append fails.
+
+Prove-red mutations and restoration:
+
+- removing provisioning made the real local-dependency NativeBuildFactory E2E
+  fail before build; restoration made it green;
+- accepting a mismatched package-manager lock made the exact conflict test red;
+- replacing reservations with a fixed port made the two-profile isolation test
+  red;
+- omitting returned-tool-error lease discard orphaned a port after mechanically
+  rejected generation append;
+- Windows dependency-tree cleanup initially failed with `Directory not empty`;
+  the scoped post-worktree-removal fallback restored the real E2E.
+
+Packet-boundary affected validation was 127/127. Current exact validation:
+
+```text
+npx tsx --test runner-v2/test/native-final-verification-factory.test.ts runner-v2/test/final-verification-runtime.test.ts runner-v2/test/final-verification-execution.test.ts runner-v2/test/final-verification-profile.test.ts runner-v2/test/final-verification-semantics.test.ts runner-v2/test/final-verification-cleanup.test.ts
+38 tests, 38 passed, 0 failed
+```
+
+### `72353566` — changed-path redaction and legacy archive repair
+
+New diagnostics writes redact and bound `changedPaths` before persistence.
+Receipt-first restart recovery now repairs only an exact-identity Runner-owned
+legacy archive atomically, without needing the deleted workspace; synchronous
+scheduler append/replay validation remains fail closed until repair completes.
+The regression reproduces: unsafe archive persisted, workspace deleted, receipt
+written, scheduler validation rejected, process restarted, archive sanitized,
+validation accepted, and cleanup repeated idempotently.
+
+```text
+Initial RED named regression: 0/1, unsafe or unbounded archive
+Fault mutation removing receipt repair hook: 0/1, same exact rejection
+Restored named regression: 1/1 passed
+Focused cleanup: 10/10 passed
+Affected cleanup/execution/recovery: 19/19 passed
+```
+
+The repaired durable JSON contains `[REDACTED]`, contains no injected
+`legacy-changed-path-secret`, and bounds `changedPaths` to 200 entries.
+
+### `0212ab07` and `6ca7409d` — current E2E/profile fixtures and bundles
+
+The affected Playwright gate initially passed 1/5; four legacy fixtures failed
+with `Final verification execution profile is required.` The restart case now
+uses `FinalVerificationProfileAuthority` for initial append and SQLite reopen
+and supplies the authoritative ArtifactStore. Direct runtime-mechanics cases
+carry exact matching profiles without weakening the production store boundary.
+The first migration pass passed 4/5; fixing the runtime/browser-only helper
+made the exact cancellation case 1/1 and the complete gate 5/5. The production
+build regenerated both tracked Runner ZIPs from current source.
+
+## Current phase-wide review-repair validation
+
+```text
+npm run test:runner-v2
+511 tests, 511 passed, 0 failed
+all chained client, policy, UI, pause, model-usage, live-state, transcript,
+files, stats, and observability scripts passed
+
+npm run typecheck:runner-v2
+passed
+
+npm run lint
+passed
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+git diff --check
+passed
+```
+
+The 511/511 full Runner run occurred after every production-source repair,
+including `72353566`. The only later source-controlled changes were the E2E
+fixture migration and deterministic published ZIP regeneration; their exact
+Playwright, lint, publication, and production-build gates are current. Node
+policy remains maintained LTS lines 22/24 with the capability floor and no
+exact `24.18.0` pin. This appendix records repair evidence and does not claim
+phase completion.
