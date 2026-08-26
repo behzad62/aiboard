@@ -232,6 +232,10 @@ test("redacts raw escaped fragments inside a single-quote wrapper", () => {
 test("redacts raw escaped object, array, argv, and multiple-key values", () => {
   const input = String.raw`payload=[{\"access_token\":\"RAW_OBJECT_SECRET\",\"clientSecret\":{\"value\":\"RAW_NESTED_SECRET\"}},[\"--private-key\",\"RAW_ARGV_SECRET\"],{\"refresh_token\":[\"RAW_ARRAY_SECRET\"]}] tail`;
   const redacted = redactSensitiveText(input);
+  assert.equal(
+    redacted,
+    String.raw`payload=[{\"access_token\":\"[REDACTED]\",\"clientSecret\":\"[REDACTED]\"},[\"--private-key\",\"[REDACTED]\"],{\"refresh_token\":\"[REDACTED]\"}] tail`,
+  );
   assert.doesNotMatch(redacted, /RAW_(?:OBJECT|NESTED|ARGV|ARRAY)_SECRET/);
   assert.match(redacted, /\[REDACTED\]/);
   assert.equal(redactSensitiveText(redacted), redacted);
@@ -246,6 +250,7 @@ test("redacts even and odd nested backslash escape layers", () => {
     const redacted = redactSensitiveText(input);
     assert.doesNotMatch(redacted, new RegExp(secret));
     assert.match(redacted, /\[REDACTED\]/);
+    assert.equal(redacted, input.replace(secret, "[REDACTED]"));
     assert.equal(redactSensitiveText(redacted), redacted);
   }
 });
@@ -271,5 +276,59 @@ test("an indeterminate malformed raw fragment fails closed", () => {
   const redacted = redactSensitiveText(input);
   assert.equal(redacted, "[REDACTED]");
   assert.doesNotMatch(redacted, /BROKEN_RAW_SECRET/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("decodes Unicode escapes in every raw credential key position", () => {
+  const variants = [
+    [String.raw`payload={\"access\u005f_token\":\"QWERTY123\"} tail`, "QWERTY123"],
+    [String.raw`payload={\"access_t\u006fken\":\"MAGENTA456\"} tail`, "MAGENTA456"],
+    [String.raw`payload={\"client\u0053ecret\":\"ORANGE789\"} tail`, "ORANGE789"],
+    [String.raw`payload={\"\u0061ccess_token\":\"VIOLET246\"} tail`, "VIOLET246"],
+  ] as const;
+  for (const [input, secret] of variants) {
+    const redacted = redactSensitiveText(input);
+    assert.doesNotMatch(redacted, new RegExp(secret));
+    assert.match(redacted, /\[REDACTED\]/);
+    assert.equal(redacted, input.replace(secret, "[REDACTED]"));
+    assert.equal(redactSensitiveText(redacted), redacted);
+  }
+});
+
+test("escaped key-like prose is not authority to erase malformed diagnostics", () => {
+  const input = String.raw`docs mention \"access_token\" and \q invalid`;
+  assert.equal(redactSensitiveText(input), input);
+});
+
+test("raw redaction preserves unmatched-quote context byte for byte", () => {
+  const input = String.raw`prefix "noise payload={\"access_token\":\"QWERTY\"} tail`;
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, String.raw`prefix "noise payload={\"access_token\":\"[REDACTED]\"} tail`);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("raw redaction preserves even-parity key and value wrappers exactly", () => {
+  const input = String.raw`prefix "noise payload={\\"access_token\\":\\"EVEN_CONTEXT_SECRET\\"} tail`;
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, String.raw`prefix "noise payload={\\"access_token\\":\\"[REDACTED]\\"} tail`);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("an invalid escape cannot make a malformed raw scalar look complete", () => {
+  const input = String.raw`payload={\"access_token\":true\qQWERTY123} tail`;
+  const redacted = redactSensitiveText(input);
+  assert.equal(redacted, "[REDACTED]");
+  assert.doesNotMatch(redacted, /QWERTY123/);
+  assert.equal(redactSensitiveText(redacted), redacted);
+});
+
+test("deep raw escape layers cannot bypass bounded credential inspection", () => {
+  let input = JSON.stringify({ access_token: "QWERTY123" });
+  for (let depth = 0; depth < 12; depth += 1) {
+    input = JSON.stringify(input).slice(1, -1);
+  }
+  const redacted = redactSensitiveText(input);
+  assert.doesNotMatch(redacted, /QWERTY123/);
+  assert.match(redacted, /\[REDACTED\]/);
   assert.equal(redactSensitiveText(redacted), redacted);
 });

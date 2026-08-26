@@ -51,7 +51,7 @@ function redactSensitiveTextInternal(
     ? redactJsonStringLiterals(redactedJson, limits, jsonTextDepth)
     : redactedJson;
   const redactedRawJson = jsonTextDepth < MAXIMUM_JSON_TEXT_DEPTH
-    ? redactRawJsonStringContent(redactedJsonStrings, limits, jsonTextDepth)
+    ? redactRawJsonStringContent(redactedJsonStrings)
     : redactedJsonStrings;
   const redactedJsonProperties = redactQuotedJsonProperties(redactedRawJson);
   const redactedUrls = redactedJsonProperties.replace(URL_VALUE, redactUrl);
@@ -286,100 +286,149 @@ function nestedJsonStringRequiresRedaction(value: string, limits: RedactionLimit
   return true;
 }
 
-function redactRawJsonStringContent(
-  value: string,
-  limits: RedactionLimits,
-  jsonTextDepth: number,
-): string {
-  if (!containsEscapedSensitiveKey(value)) return value;
-  const layer = decodeRawJsonStringContentLayer(value);
-  if (layer.status === "none") return value;
-  if (layer.status === "invalid") {
-    return REDACTED;
+function redactRawJsonStringContent(value: string): string {
+  try {
+    JSON.parse(value);
+    return value;
+  } catch {
+    // Raw JSON-string content is not itself a complete JSON value.
   }
-  let redacted = redactSensitiveTextInternal(layer.value, limits, jsonTextDepth + 1);
-  if (
-    redacted === layer.value
-    && jsonTextDepth + 1 >= MAXIMUM_JSON_TEXT_DEPTH
-    && nestedRawJsonStringContentRequiresRedaction(layer.value, limits)
-  ) redacted = REDACTED;
-  return redacted === layer.value
-    ? value
-    : JSON.stringify(redacted).slice(1, -1);
+  let output = "";
+  let copiedThrough = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "\\" || value[index - 1] === "\\") continue;
+    const candidate = decodeRawSensitiveKeyAt(value, index);
+    if (!candidate) continue;
+    let separatorEnd = candidate.end;
+    while (/\s/.test(value[separatorEnd] ?? "")) separatorEnd += 1;
+    const property = value[separatorEnd] === ":";
+    const argv = candidate.key.startsWith("-") && value[separatorEnd] === ",";
+    if (!property && !argv) {
+      index = candidate.end - 1;
+      continue;
+    }
+    separatorEnd += 1;
+    while (/\s/.test(value[separatorEnd] ?? "")) separatorEnd += 1;
+    const redacted = redactRawJsonValueAt(value, separatorEnd, candidate.depth);
+    if (!redacted) return REDACTED;
+    output += value.slice(copiedThrough, separatorEnd) + redacted.replacement;
+    copiedThrough = redacted.end;
+    index = redacted.end - 1;
+  }
+  return copiedThrough === 0 ? value : output + value.slice(copiedThrough);
 }
 
-type RawJsonStringContentLayer =
-  | { status: "none" }
-  | { status: "invalid" }
-  | { status: "decoded"; value: string };
+interface RawSensitiveKey {
+  key: string;
+  end: number;
+  depth: number;
+}
 
-function decodeRawJsonStringContentLayer(value: string): RawJsonStringContentLayer {
-  if (!value.includes("\\\"")) return { status: "none" };
+function decodeRawSensitiveKeyAt(value: string, start: number): RawSensitiveKey | undefined {
+  let openingQuote = start;
+  while (value[openingQuote] === "\\") openingQuote += 1;
+  if (value[openingQuote] !== '"') return undefined;
+  const maximumEnd = value.length;
+  let quoteInspections = 0;
+  for (let end = openingQuote + 1; end < maximumEnd; end += 1) {
+    if (value[end] !== '"') continue;
+    quoteInspections += 1;
+    if (quoteInspections > MAXIMUM_JSON_STRING_BOUND_INSPECTIONS) return undefined;
+    let decoded = value.slice(start, end + 1);
+    for (let depth = 1; depth <= MAXIMUM_JSON_STRING_BOUND_INSPECTIONS; depth += 1) {
+      const layer = decodeRawJsonStringContentLayer(decoded);
+      if (layer.invalid) break;
+      decoded = layer.value;
+      let key: unknown;
+      try { key = JSON.parse(decoded) as unknown; }
+      catch { continue; }
+      if (typeof key !== "string") break;
+      if (!isSensitiveKey(key)) break;
+      return { key, end: end + 1, depth };
+    }
+  }
+  return undefined;
+}
+
+interface DecodedRawLayer {
+  value: string;
+  sourceEnds: number[];
+  invalid: boolean;
+}
+
+function decodeRawJsonStringContentLayer(value: string): DecodedRawLayer {
   let output = "";
-  let segmentStart = 0;
-  let backslashRun = 0;
+  const sourceEnds = [0];
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index]!;
-    if (character === "\\") {
-      backslashRun += 1;
+    if (character !== "\\") {
+      if (character.charCodeAt(0) < 0x20) return { value: output, sourceEnds, invalid: true };
+      output += character;
+      sourceEnds.push(index + 1);
       continue;
     }
-    if (character !== '"') {
-      backslashRun = 0;
-      continue;
-    }
-    const escaped = backslashRun % 2 === 1;
-    backslashRun = 0;
-    if (escaped) continue;
-    const segment = decodeJsonStringContentSegment(value.slice(segmentStart, index));
-    if (segment === undefined) return { status: "invalid" };
-    output += segment + '"';
-    segmentStart = index + 1;
+    const escape = value[index + 1];
+    if (!escape) return { value: output, sourceEnds, invalid: true };
+    const escapeEnd = escape === "u" ? index + 6 : index + 2;
+    if (escapeEnd > value.length) return { value: output, sourceEnds, invalid: true };
+    const source = value.slice(index, escapeEnd);
+    let decoded: unknown;
+    try { decoded = JSON.parse(`"${source}"`) as unknown; }
+    catch { return { value: output, sourceEnds, invalid: true }; }
+    if (typeof decoded !== "string") return { value: output, sourceEnds, invalid: true };
+    output += decoded;
+    for (let offset = 0; offset < decoded.length; offset += 1) sourceEnds.push(escapeEnd);
+    index = escapeEnd - 1;
   }
-  const tail = decodeJsonStringContentSegment(value.slice(segmentStart));
-  return tail === undefined
-    ? { status: "invalid" }
-    : { status: "decoded", value: output + tail };
+  return { value: output, sourceEnds, invalid: false };
 }
 
-function decodeJsonStringContentSegment(value: string): string | undefined {
-  try {
-    const decoded = JSON.parse(`"${value}"`) as unknown;
-    return typeof decoded === "string" ? decoded : undefined;
-  } catch {
-    return undefined;
-  }
+interface DecodedRawValue {
+  value: string;
+  sourceEnds: number[];
+  truncatedByInvalidEscape: boolean;
 }
 
-function containsEscapedSensitiveKey(value: string): boolean {
-  const candidate = /(\\+)"([A-Za-z_][A-Za-z0-9_-]*)(\\+)"/g;
-  let match: RegExpExecArray | null;
-  while ((match = candidate.exec(value)) !== null) {
-    if (isSensitiveKey(match[2]!)) return true;
+function decodeRawJsonStringContentLayers(value: string, depth: number): DecodedRawValue {
+  let decoded = value;
+  let sourceEnds = Array.from({ length: value.length + 1 }, (_, index) => index);
+  let truncatedByInvalidEscape = false;
+  for (let currentDepth = 0; currentDepth < depth; currentDepth += 1) {
+    const layer = decodeRawJsonStringContentLayer(decoded);
+    truncatedByInvalidEscape ||= layer.invalid;
+    sourceEnds = layer.sourceEnds.map((sourceEnd) => sourceEnds[sourceEnd]!);
+    decoded = layer.value;
   }
-  return false;
+  return { value: decoded, sourceEnds, truncatedByInvalidEscape };
 }
 
-function nestedRawJsonStringContentRequiresRedaction(
+function redactRawJsonValueAt(
   value: string,
-  limits: RedactionLimits,
-): boolean {
-  let current = value;
-  for (let depth = 0; depth < MAXIMUM_JSON_STRING_BOUND_INSPECTIONS; depth += 1) {
-    const layer = decodeRawJsonStringContentLayer(current);
-    if (layer.status === "invalid") return containsEscapedSensitiveKey(current);
-    if (layer.status === "none") {
-      return redactSensitiveTextInternal(current, limits, MAXIMUM_JSON_TEXT_DEPTH) !== current;
-    }
-    const directlyRedacted = redactSensitiveTextInternal(
-      layer.value,
-      limits,
-      MAXIMUM_JSON_TEXT_DEPTH,
-    );
-    if (directlyRedacted !== layer.value) return true;
-    current = layer.value;
+  start: number,
+  depth: number,
+): { end: number; replacement: string } | undefined {
+  const decoded = decodeRawJsonStringContentLayers(value.slice(start), depth);
+  const valueEnd = jsonValueEnd(decoded.value, 0);
+  if (valueEnd === undefined) return undefined;
+  if (decoded.truncatedByInvalidEscape && valueEnd === decoded.value.length) return undefined;
+  const sourceEnd = decoded.sourceEnds[valueEnd];
+  if (sourceEnd === undefined) return undefined;
+  if (decoded.value[0] === '"') {
+    const contentStart = decoded.sourceEnds[1];
+    const contentEnd = decoded.sourceEnds[valueEnd - 1];
+    if (contentStart === undefined || contentEnd === undefined) return undefined;
+    return {
+      end: start + sourceEnd,
+      replacement: value.slice(start, start + contentStart)
+        + REDACTED
+        + value.slice(start + contentEnd, start + sourceEnd),
+    };
   }
-  return true;
+  let replacement = JSON.stringify(REDACTED);
+  for (let currentDepth = 0; currentDepth < depth; currentDepth += 1) {
+    replacement = JSON.stringify(replacement).slice(1, -1);
+  }
+  return { end: start + sourceEnd, replacement };
 }
 
 function jsonStringEnd(value: string, start: number): number | undefined {
