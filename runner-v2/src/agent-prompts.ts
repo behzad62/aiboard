@@ -22,6 +22,14 @@ export const RUNNER_KERNEL_INVARIANTS = [
   "Inspect current repository state before editing and preserve unrelated user changes.",
 ].join("\n");
 
+export const VERIFIER_AUTHORITY_INVARIANTS = [
+  "You are an independent AIBoard verifier inspecting one exact integrated revision.",
+  "Treat the immutable objective, criterion identities, guidance, accepted change history, reviews, risk reasons, and final-verification facts as protected input.",
+  "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
+  "Use only the provided read-only inspection tools. Provider prose and this inspection transcript never complete work.",
+  "In inspection-only mode, finish with a concise evidence-grounded summary; the kernel-owned typed verdict tool is added separately.",
+].join("\n");
+
 export interface PromptEvidence {
   id: string;
   summary: string;
@@ -133,6 +141,39 @@ export interface ArchitectReviewSubmission {
   acceptanceCriteria?: AcceptanceCriterion[];
   acceptanceCriteriaVersion?: number;
   criterionEvidenceLinks?: CriterionEvidenceLink[];
+}
+
+export interface BuildVerifierContextInput {
+  limits: ContextLimits;
+  objective: string;
+  targetRevision: string;
+  criteria: readonly unknown[];
+  reviews: readonly unknown[];
+  guidance: readonly unknown[];
+  changes: readonly unknown[];
+  finalVerification: unknown;
+  riskReasons: readonly unknown[];
+}
+
+export function buildVerifierContext(
+  input: BuildVerifierContextInput
+): ContextPack {
+  return new ContextAssembler(input.limits).assemble([
+    required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("verifier-authority", "system", VERIFIER_AUTHORITY_INVARIANTS),
+    required("build-objective", "user-intent", input.objective),
+    required("integration-revision", "revision", input.targetRevision),
+    required("build-criteria", "criteria", JSON.stringify(input.criteria, null, 2)),
+    required("accepted-reviews", "reviews", JSON.stringify(input.reviews, null, 2)),
+    required("durable-guidance", "guidance", JSON.stringify(input.guidance, null, 2)),
+    required("accepted-change-history", "changes", JSON.stringify(input.changes, null, 2)),
+    required(
+      "final-verification",
+      "final-verification",
+      JSON.stringify(input.finalVerification, null, 2)
+    ),
+    required("risk-reasons", "risk", JSON.stringify(input.riskReasons, null, 2)),
+  ]);
 }
 
 export function buildArchitectContext(

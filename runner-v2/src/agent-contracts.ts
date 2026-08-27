@@ -1,4 +1,4 @@
-export type AgentRole = "architect" | "worker" | "subagent";
+export type AgentRole = "architect" | "worker" | "subagent" | "verifier";
 
 export interface AgentActor {
   role: AgentRole;

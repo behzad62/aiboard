@@ -82,6 +82,7 @@ const ROLE_ORDER: Record<ModelCallRole, number> = {
   architect: 0,
   worker: 1,
   subagent: 2,
+  verifier: 3,
 };
 
 export function projectNativeModelUsage(

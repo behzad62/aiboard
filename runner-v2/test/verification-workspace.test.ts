@@ -81,6 +81,43 @@ test("creates a detached verification worktree at the exact integration revision
   }
 });
 
+test("independent verifier owns a clean workspace separate from final verification", async () => {
+  const fixture = await createFixture("independent-verifier");
+  const finalManager = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const verifierManager = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+    kind: "independent-verifier",
+  });
+  try {
+    const finalWorkspace = await finalManager.create();
+    writeFileSync(join(finalWorkspace.path, "generated-by-tests.txt"), "dirty\n");
+    const verifierWorkspace = await verifierManager.create();
+
+    assert.notEqual(verifierWorkspace.path, finalWorkspace.path);
+    assert.equal(existsSync(join(verifierWorkspace.path, "generated-by-tests.txt")), false);
+    assert.equal(
+      await gitText(verifierWorkspace.path, ["rev-parse", "HEAD"]),
+      fixture.integration.revision
+    );
+    const metadata = JSON.parse(
+      readFileSync(verifierWorkspace.metadataPath, "utf8")
+    ) as Record<string, unknown>;
+    assert.equal(metadata.kind, "independent-verifier");
+  } finally {
+    await verifierManager.cleanup().catch(() => undefined);
+    await finalManager.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
 test("reopens the same valid workspace and rejects dirty or wrong-revision workspaces", async () => {
   const fixture = await createFixture("reopen");
   const manager = new VerificationWorkspaceManager({

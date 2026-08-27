@@ -1,6 +1,6 @@
 export type BudgetReservationKind = "model" | "tool";
 
-export type ModelCallRole = "architect" | "worker" | "subagent";
+export type ModelCallRole = "architect" | "worker" | "subagent" | "verifier";
 
 export interface ModelCallAttribution {
   runtimeId: string;

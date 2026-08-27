@@ -16,6 +16,11 @@ import { parseWorktreeAssociations } from "./worktree-state.js";
 
 const VERIFICATION_WORKSPACE_VERSION = 1 as const;
 const VERIFICATION_WORKSPACE_KIND = "final-verification" as const;
+const INDEPENDENT_VERIFIER_WORKSPACE_KIND = "independent-verifier" as const;
+
+export type VerificationWorkspaceKind =
+  | typeof VERIFICATION_WORKSPACE_KIND
+  | typeof INDEPENDENT_VERIFIER_WORKSPACE_KIND;
 
 export interface VerificationWorkspaceManagerOptions {
   repositoryRoot: string;
@@ -27,6 +32,8 @@ export interface VerificationWorkspaceManagerOptions {
   integrationRevision?: string;
   /** Prefer reading the revision at create/reopen time when an IntegrationManager is available. */
   integrationManager?: { readonly revision: string };
+  /** Isolate independent verifier inspection from command/browser verification output. */
+  kind?: VerificationWorkspaceKind;
   execute?: GitRunner;
 }
 
@@ -43,7 +50,7 @@ export interface VerificationWorkspace {
 export interface VerificationWorkspaceMetadata
   extends Omit<VerificationWorkspace, "metadataPath"> {
   version: typeof VERIFICATION_WORKSPACE_VERSION;
-  kind: typeof VERIFICATION_WORKSPACE_KIND;
+  kind: VerificationWorkspaceKind;
 }
 
 interface CanonicalState {
@@ -66,6 +73,7 @@ export class VerificationWorkspaceManager {
   private readonly workspaceId: string;
   private readonly workspacePath: string;
   private readonly metadataFilePath: string;
+  private readonly workspaceKindValue: VerificationWorkspaceKind;
   private readonly targetRevision?: string;
   private readonly integrationRevision?: string;
   private readonly integrationManager?: { readonly revision: string };
@@ -75,7 +83,13 @@ export class VerificationWorkspaceManager {
   constructor(options: VerificationWorkspaceManagerOptions) {
     this.repositoryRoot = resolve(options.repositoryRoot);
     this.stateDirectory = resolve(options.stateDirectory);
-    this.workspaceRoot = resolve(this.stateDirectory, "verification-workspaces");
+    this.workspaceKindValue = options.kind ?? VERIFICATION_WORKSPACE_KIND;
+    this.workspaceRoot = resolve(
+      this.stateDirectory,
+      this.workspaceKindValue === VERIFICATION_WORKSPACE_KIND
+        ? "verification-workspaces"
+        : "verifier-workspaces"
+    );
     this.runId = options.runId;
     this.workspaceId = safeName(options.runId);
     this.workspacePath = resolve(this.workspaceRoot, this.workspaceId);
@@ -91,6 +105,10 @@ export class VerificationWorkspaceManager {
 
   get path(): string {
     return this.workspacePath;
+  }
+
+  get workspaceKind(): VerificationWorkspaceKind {
+    return this.workspaceKindValue;
   }
 
   get metadataPath(): string {
@@ -132,7 +150,7 @@ export class VerificationWorkspaceManager {
 
       const descriptor: VerificationWorkspaceMetadata = {
         version: VERIFICATION_WORKSPACE_VERSION,
-        kind: VERIFICATION_WORKSPACE_KIND,
+        kind: this.workspaceKindValue,
         runId: this.runId,
         workspaceId: this.workspaceId,
         path: this.workspacePath,
@@ -415,6 +433,7 @@ export class VerificationWorkspaceManager {
   ): Promise<void> {
     if (
       metadata.runId !== this.runId ||
+      metadata.kind !== this.workspaceKindValue ||
       metadata.workspaceId !== this.workspaceId ||
       !samePath(metadata.path, this.workspacePath) ||
       !samePath(metadata.repositoryRoot, this.repositoryRoot)
@@ -580,7 +599,8 @@ function isMetadata(value: unknown): value is VerificationWorkspaceMetadata {
   return (
     Object.keys(candidate).length === 8 &&
     candidate.version === VERIFICATION_WORKSPACE_VERSION &&
-    candidate.kind === VERIFICATION_WORKSPACE_KIND &&
+    (candidate.kind === VERIFICATION_WORKSPACE_KIND ||
+      candidate.kind === INDEPENDENT_VERIFIER_WORKSPACE_KIND) &&
     typeof candidate.runId === "string" &&
     typeof candidate.workspaceId === "string" &&
     typeof candidate.path === "string" &&

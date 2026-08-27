@@ -15,7 +15,7 @@ export interface PermissionRequest {
   sessionId: string;
   callId: string;
   toolName: string;
-  actor: { role: "architect" | "worker" | "subagent"; id: string };
+  actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
   permissionProfile: PermissionProfile;
   access: ToolAccessRequest;
   outsideWorkspace: boolean;
