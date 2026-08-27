@@ -2,6 +2,7 @@ import type {
   ProviderFailure,
   ProviderHealthRegistry,
 } from "./provider-health.js";
+import { canonicalModelIdentity } from "./verifier-contracts.js";
 
 export interface AgentRuntimeCandidate {
   runtimeId: string;
@@ -181,18 +182,20 @@ export class RuntimeRouter {
     if (!architect) {
       throw new Error(`Unknown Architect runtime ${input.architectRuntimeId}.`);
     }
-    const excludedModelIdentities = new Set([modelIdentity(architect)]);
+    const excludedModelIdentities = new Set([
+      canonicalModelIdentity(architect.modelId),
+    ]);
     for (const runtimeId of new Set(input.acceptedChangeAuthorRuntimeIds)) {
       const author = this.byId.get(runtimeId);
       if (!author) {
         throw new Error(`Unknown accepted change author runtime ${runtimeId}.`);
       }
-      excludedModelIdentities.add(modelIdentity(author));
+      excludedModelIdentities.add(canonicalModelIdentity(author.modelId));
     }
     const runtime = this.eligible(required).find(
       (candidate) =>
         allowedRuntimeIds.has(candidate.runtimeId) &&
-        !excludedModelIdentities.has(modelIdentity(candidate))
+        !excludedModelIdentities.has(canonicalModelIdentity(candidate.modelId))
     );
     return runtime
       ? { status: "assigned", runtime: cloneCandidate(runtime) }
@@ -253,14 +256,6 @@ function compareCandidates(
 
 function cloneCandidate(candidate: AgentRuntimeCandidate): AgentRuntimeCandidate {
   return { ...candidate, capabilities: [...candidate.capabilities] };
-}
-
-function modelIdentity(candidate: AgentRuntimeCandidate): string {
-  const qualifiedModelId = candidate.modelId
-    .trim()
-    .toLowerCase()
-    .replaceAll("\\", "/");
-  return qualifiedModelId.split("/").filter(Boolean).at(-1) ?? qualifiedModelId;
 }
 
 function unique(values: readonly string[]): string[] {

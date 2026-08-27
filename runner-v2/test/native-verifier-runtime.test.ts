@@ -9,6 +9,7 @@ import type {
   AgentModelRequest,
   ModelTurn,
 } from "../src/agent-contracts.js";
+import type { AgentLoopCheckpoint } from "../src/agent-loop.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { NativeVerifierRuntime } from "../src/native-verifier-runtime.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
@@ -18,6 +19,15 @@ import {
 } from "../src/runtime-router.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import type {
+  VerifierReviewProjection,
+  VerifierVerdictProjection,
+} from "../src/verifier-contracts.js";
+import type {
+  RequestVerifierReviewInput,
+  SubmitVerifierVerdictInput,
+  VerifierVerdictAuthority,
+} from "../src/verifier-verdict-authority.js";
 
 const TARGET_REVISION = "a".repeat(40);
 const OTHER_REVISION = "b".repeat(40);
@@ -184,19 +194,144 @@ test("verifier refuses a workspace whose revision differs from the requested int
   }
 });
 
+test("verifier submits one typed criterion-complete lifecycle verdict with kernel-bound identity", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("verdict", [{
+    blocks: [{
+      type: "tool_call",
+      callId: "verdict-1",
+      name: "submit_verifier_verdict",
+      arguments: {
+        criterionVerdicts: [{
+          taskId: "task_ui",
+          criterionId: "criterion_ui",
+          verdict: "satisfied",
+          rationale: "The exact revision satisfies the UI criterion.",
+          evidenceIds: ["evidence_ui"],
+        }],
+      },
+    }],
+    stopReason: "tool_calls",
+  }], TARGET_REVISION, authority);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_verdict"));
+    assert.equal(result.status, "verdict_submitted");
+    assert.equal(result.verdict.satisfied, true);
+    assert.equal(result.replayed, false);
+    assert.equal(authority.requests.length, 1);
+    assert.equal(authority.submissions.length, 1);
+    assert.equal(authority.requests[0]?.runtime.runtimeId, "google:verifier");
+    assert.deepEqual(
+      authority.requests[0]?.excludedModels.map((model) => model.modelIdentity),
+      ["architect", "author"],
+    );
+    assert.equal(authority.submissions[0]?.actor.id, "google:verifier");
+    assert.equal(authority.submissions[0]?.sessionId, result.sessionId);
+    assert.equal(authority.submissions[0]?.targetRevision, TARGET_REVISION);
+
+    const definition = fixture.model.requests[0]?.tools.find(
+      (tool) => tool.name === "submit_verifier_verdict",
+    );
+    assert.ok(definition);
+    assert.equal(definition.lifecycle, true);
+    assert.equal(definition.readOnly, true);
+    assert.equal(definition.effect, "none");
+    const schema = JSON.stringify(definition.inputSchema);
+    assert.doesNotMatch(schema, /runtimeId|providerId|modelId|modelIdentity|sessionId|targetRevision/);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("persisted verifier verdict resumes without a duplicate model call", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("verdict-replay", [], TARGET_REVISION, authority);
+  try {
+    authority.afterRequest = (review) => ({
+      ...review,
+      status: "submitted",
+      verdict: {
+        reviewId: review.reviewId,
+        targetRevision: review.targetRevision,
+        sessionId: review.runtime.sessionId,
+        satisfied: true,
+        criterionVerdicts: [{
+          taskId: "task_ui",
+          criterionId: "criterion_ui",
+          verdict: "satisfied",
+          rationale: "Already durably submitted before the interruption.",
+          evidenceIds: ["evidence_ui"],
+        }],
+        submittedAt: "2026-08-27T00:00:00.000Z",
+      },
+    });
+
+    const result = await fixture.runtime.inspect(verifierRequest("run_verdict_replay"));
+    assert.equal(result.status, "verdict_submitted");
+    assert.equal(result.replayed, true);
+    assert.equal(result.verdict.satisfied, true);
+    assert.equal(fixture.model.requests.length, 0);
+    assert.equal(authority.requests.length, 1);
+    assert.equal(authority.submissions.length, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("restart after a durable model response executes its pending verdict without another model call", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("verdict-pending", [{
+    blocks: [{
+      type: "tool_call",
+      callId: "verdict-pending-1",
+      name: "submit_verifier_verdict",
+      arguments: {
+        criterionVerdicts: [{
+          taskId: "task_ui",
+          criterionId: "criterion_ui",
+          verdict: "satisfied",
+          rationale: "The pending response contains the complete current verdict.",
+          evidenceIds: ["evidence_ui"],
+        }],
+      },
+    }],
+    stopReason: "tool_calls",
+  }], TARGET_REVISION, authority, true);
+  try {
+    const interrupted = await fixture.runtime.inspect(
+      verifierRequest("run_verdict_pending"),
+    );
+    assert.equal(interrupted.status, "suspended");
+    assert.equal(interrupted.reason, "checkpoint_error");
+    assert.equal(authority.submissions.length, 0);
+    assert.equal(fixture.model.requests.length, 1);
+
+    const resumed = await fixture.runtime.inspect(
+      verifierRequest("run_verdict_pending"),
+    );
+    assert.equal(resumed.status, "verdict_submitted");
+    assert.equal(resumed.verdict.satisfied, true);
+    assert.equal(authority.submissions.length, 1);
+    assert.equal(fixture.model.requests.length, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
 function createFixture(
   name: string,
   turns: ModelTurn[],
-  returnedRevision = TARGET_REVISION
+  returnedRevision = TARGET_REVISION,
+  verdictAuthority?: VerifierVerdictAuthority,
+  interruptAfterAssistantCheckpoint = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-native-verifier-${name}-`));
   const workspacePath = join(root, "workspace");
   mkdirSync(workspacePath);
   const artifacts = new ArtifactStore(join(root, "artifacts"));
-  const sessions = new SqliteAgentSessionStore(
-    join(root, "sessions.sqlite"),
-    artifacts
-  );
+  const sessions = interruptAfterAssistantCheckpoint
+    ? new InterruptingSessionStore(join(root, "sessions.sqlite"), artifacts)
+    : new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
   const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
   const model = new ScriptedModel(turns);
   const workspaceRequests: string[] = [];
@@ -234,6 +369,7 @@ function createFixture(
       artifacts,
       evidenceStore,
       workspaceManager,
+      ...(verdictAuthority ? { verdictAuthority } : {}),
       clock: () => "2026-08-27T00:00:00.000Z",
     }),
     close: () => {
@@ -242,6 +378,85 @@ function createFixture(
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+class InterruptingSessionStore extends SqliteAgentSessionStore {
+  private interrupt = true;
+
+  override async checkpoint(
+    sessionId: string,
+    checkpoint: AgentLoopCheckpoint,
+    occurredAt: string,
+  ): Promise<void> {
+    await super.checkpoint(sessionId, checkpoint, occurredAt);
+    const hasPendingVerdict = checkpoint.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some(
+          (block) =>
+            block.type === "tool_call" &&
+            block.name === "submit_verifier_verdict",
+        ),
+    ) && !checkpoint.messages.some(
+      (message) =>
+        message.role === "tool" &&
+        !Array.isArray(message.content) &&
+        typeof message.content === "object" &&
+        message.content.toolName === "submit_verifier_verdict",
+    );
+    if (this.interrupt && hasPendingVerdict) {
+      this.interrupt = false;
+      throw new Error("Injected interruption after durable verifier response.");
+    }
+  }
+}
+
+class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
+  readonly requests: RequestVerifierReviewInput[] = [];
+  readonly submissions: SubmitVerifierVerdictInput[] = [];
+  afterRequest?: (review: VerifierReviewProjection) => VerifierReviewProjection;
+  private current?: VerifierReviewProjection;
+
+  requestReview(input: RequestVerifierReviewInput): VerifierReviewProjection {
+    this.requests.push(structuredClone(input));
+    const requested: VerifierReviewProjection = {
+      reviewId: input.reviewId,
+      targetRevision: input.targetRevision,
+      finalVerificationGenerationId: input.finalVerificationGenerationId,
+      runtime: { ...input.runtime },
+      excludedModels: input.excludedModels.map((model) => ({ ...model })),
+      criteria: input.criteria.map((criterion) => ({ ...criterion })),
+      status: "requested",
+      requestedAt: input.occurredAt,
+    };
+    this.current = this.afterRequest?.(requested) ?? requested;
+    return structuredClone(this.current);
+  }
+
+  currentReview(): VerifierReviewProjection | undefined {
+    return this.current ? structuredClone(this.current) : undefined;
+  }
+
+  submitVerdict(input: SubmitVerifierVerdictInput): VerifierVerdictProjection {
+    this.submissions.push(structuredClone(input));
+    if (!this.current) throw new Error("No requested verifier review.");
+    const verdict: VerifierVerdictProjection = {
+      reviewId: input.reviewId,
+      targetRevision: input.targetRevision,
+      sessionId: input.sessionId,
+      satisfied: input.criterionVerdicts.every(
+        (criterion) => criterion.verdict === "satisfied",
+      ),
+      criterionVerdicts: input.criterionVerdicts.map((criterion) => ({
+        ...criterion,
+        evidenceIds: [...criterion.evidenceIds],
+      })),
+      submittedAt: input.occurredAt,
+    };
+    this.current = { ...this.current, status: "submitted", verdict };
+    return structuredClone(verdict);
+  }
 }
 
 function verifierRequest(runId: string) {

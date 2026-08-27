@@ -361,6 +361,7 @@ function requiresAuthoritativeEvidenceStore(
     event.type !== "task.transitioned" &&
     event.type !== "review.requested" &&
     event.type !== "review.decided" &&
+    event.type !== "verifier.verdict_submitted" &&
     event.type !== "final_verification.review_decided" &&
     event.type !== "final_verification.repairs_planned" &&
     event.type !== "final_verification.check_completed" &&
@@ -368,6 +369,7 @@ function requiresAuthoritativeEvidenceStore(
   ) {
     return false;
   }
+  if (event.type === "verifier.verdict_submitted") return true;
   if (event.type === "task.transitioned" && event.payload.status !== "submitted") {
     return false;
   }

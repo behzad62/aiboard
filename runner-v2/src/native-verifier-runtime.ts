@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type {
   AgentMessage,
   AgentModel,
+  NativeTool,
   ToolDefinition,
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
@@ -44,6 +45,14 @@ import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { VerificationWorkspace } from "./verification-workspace.js";
+import {
+  canonicalModelIdentity,
+  type VerifierExcludedModel,
+  type VerifierReviewProjection,
+  type VerifierVerdictProjection,
+} from "./verifier-contracts.js";
+import type { VerifierVerdictAuthority } from "./verifier-verdict-authority.js";
+import { createSubmitVerifierVerdictTool } from "./verifier-tools.js";
 
 const REVISION_PATTERN = /^[a-f0-9]{40,64}$/;
 const ARTIFACT_PATTERN = /^[a-f0-9]{64}$/;
@@ -114,6 +123,16 @@ export type NativeVerifierInspectionResult =
       readonly replayed: boolean;
     }
   | {
+      readonly status: "verdict_submitted";
+      readonly sessionId: string;
+      readonly runtimeId: string;
+      readonly targetRevision: string;
+      readonly reviewId: string;
+      readonly verdict: VerifierVerdictProjection;
+      readonly messages: readonly AgentMessage[];
+      readonly replayed: boolean;
+    }
+  | {
       readonly status: "unavailable";
       readonly reason:
         | "no_independent_healthy_capability_match"
@@ -151,6 +170,7 @@ export interface NativeVerifierRuntimeOptions {
   modelCostEstimators?: ReadonlyMap<string, ModelCostEstimator>;
   modelCostBases?: ReadonlyMap<string, ModelCostBasisSnapshot>;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
+  verdictAuthority?: VerifierVerdictAuthority;
   maxTurns?: number;
   clock?: () => string;
 }
@@ -225,12 +245,61 @@ export class NativeVerifierRuntime {
       request.runId,
       request.targetRevision,
       candidate.runtimeId,
-      context.digest
+      context.digest,
+      this.options.verdictAuthority ? "verdict" : "inspection",
     );
+    const excludedModels = this.options.verdictAuthority
+      ? verifierExcludedModels(
+          this.candidateById,
+          request.architectRuntimeId,
+          authorRuntimeIds,
+        )
+      : [];
+    const durableReview = this.options.verdictAuthority
+      ? this.options.verdictAuthority.requestReview({
+          runId: request.runId,
+          reviewId: verifierReviewId(
+            request.runId,
+            request.targetRevision,
+            request.finalVerification.generationId,
+            sessionId,
+          ),
+          targetRevision: request.targetRevision,
+          finalVerificationGenerationId:
+            request.finalVerification.generationId,
+          runtime: {
+            runtimeId: candidate.runtimeId,
+            providerId: candidate.providerId,
+            modelId: candidate.modelId,
+            modelIdentity: canonicalModelIdentity(candidate.modelId),
+            sessionId,
+          },
+          excludedModels,
+          criteria: request.criteria.map((item) => ({
+            taskId: item.taskId,
+            criterionId: item.criterion.id,
+          })),
+          occurredAt: this.clock(),
+        })
+      : undefined;
+    if (durableReview) {
+      assertBoundVerifierReview({
+        review: durableReview,
+        request,
+        candidate,
+        sessionId,
+        excludedModels,
+      });
+    }
     const systemMessage: AgentMessage = {
       id: "verifier-system",
       role: "system",
-      content: VERIFIER_AUTHORITY_INVARIANTS,
+      content: durableReview
+        ? [
+            VERIFIER_AUTHORITY_INVARIANTS,
+            "Inspect the exact revision, then finish by calling submit_verifier_verdict exactly once with every protected task/criterion pair, a satisfied or unsatisfied verdict, a non-empty rationale, and durable evidence IDs. The kernel derives the overall result.",
+          ].join("\n")
+        : VERIFIER_AUTHORITY_INVARIANTS,
     };
     const contextMessage: AgentMessage = {
       id: `verifier-context:${context.digest}`,
@@ -239,6 +308,7 @@ export class NativeVerifierRuntime {
     };
     let messages: AgentMessage[] = [systemMessage, contextMessage];
     const sessionEvents = this.options.sessions.events(sessionId);
+    let recoveredCompleted = false;
     if (sessionEvents.length === 0) {
       await this.options.sessions.create({
         sessionId,
@@ -256,18 +326,35 @@ export class NativeVerifierRuntime {
         throw new Error("Recovered verifier session identity does not match the request.");
       }
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
-      if (recovered.status === "completed") {
-        return inspectedResult(
-          sessionId,
-          candidate.runtimeId,
-          request.targetRevision,
-          messages,
-          true
-        );
-      }
+      recoveredCompleted = recovered.status === "completed";
       if (!messages.some((message) => message.id === contextMessage.id)) {
         messages.push(contextMessage);
       }
+    }
+
+    if (durableReview?.status === "submitted" && durableReview.verdict) {
+      this.options.sessions.complete(sessionId, this.clock());
+      return verdictSubmittedResult(
+        durableReview,
+        durableReview.verdict,
+        messages,
+        candidate.runtimeId,
+        true,
+      );
+    }
+    if (recoveredCompleted) {
+      if (durableReview) {
+        throw new Error(
+          "Completed verifier session has no durable typed verdict.",
+        );
+      }
+      return inspectedResult(
+        sessionId,
+        candidate.runtimeId,
+        request.targetRevision,
+        messages,
+        true,
+      );
     }
 
     const broker = createInspectionTools({
@@ -276,6 +363,19 @@ export class NativeVerifierRuntime {
       evidenceStore: this.options.evidenceStore,
       runId: request.runId,
       clock: this.clock,
+      ...(durableReview && this.options.verdictAuthority
+        ? {
+            lifecycleTool: createSubmitVerifierVerdictTool({
+              authority: this.options.verdictAuthority,
+              runId: request.runId,
+              reviewId: durableReview.reviewId,
+              targetRevision: durableReview.targetRevision,
+              runtimeId: candidate.runtimeId,
+              sessionId,
+              clock: this.clock,
+            }),
+          }
+        : {}),
       ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
     });
     const tools = this.options.budgetLedger
@@ -332,7 +432,34 @@ export class NativeVerifierRuntime {
       },
     });
 
+    if (result.status === "verifier_verdict_submitted") {
+      const submitted = this.options.verdictAuthority?.currentReview(
+        request.runId,
+      );
+      if (
+        !submitted?.verdict ||
+        submitted.status !== "submitted" ||
+        submitted.reviewId !== result.reviewId ||
+        submitted.runtime.runtimeId !== candidate.runtimeId ||
+        submitted.runtime.sessionId !== sessionId ||
+        submitted.targetRevision !== request.targetRevision
+      ) {
+        throw new Error(
+          "Verifier lifecycle returned before its exact typed verdict was durable.",
+        );
+      }
+      this.options.router.recordSuccess(candidate.runtimeId);
+      this.options.sessions.complete(sessionId, this.clock());
+      return verdictSubmittedResult(
+        submitted,
+        submitted.verdict,
+        result.messages,
+        candidate.runtimeId,
+        false,
+      );
+    }
     if (
+      !this.options.verdictAuthority &&
       result.status === "suspended" &&
       result.reason === "model_ended_without_lifecycle"
     ) {
@@ -406,6 +533,7 @@ function createInspectionTools(input: {
   runId: string;
   clock: () => string;
   ledger?: ToolInvocationLedger;
+  lifecycleTool?: NativeTool<unknown>;
 }): ToolBroker {
   const broker = new ToolBroker({
     permissionProfile: "guarded",
@@ -439,6 +567,7 @@ function createInspectionTools(input: {
     assertReadOnlyInspectionDefinition(tool.definition);
     broker.register(tool);
   }
+  if (input.lifecycleTool) broker.register(input.lifecycleTool);
   return broker;
 }
 
@@ -507,13 +636,101 @@ function verifierSessionId(
   runId: string,
   targetRevision: string,
   runtimeId: string,
-  contextDigest: string
+  contextDigest: string,
+  mode: "inspection" | "verdict",
 ): string {
   const digest = createHash("sha256")
-    .update(JSON.stringify([runId, targetRevision, runtimeId, contextDigest]))
+    .update(JSON.stringify([runId, targetRevision, runtimeId, contextDigest, mode]))
     .digest("hex")
     .slice(0, 24);
   return `verifier:${runId}:${digest}`;
+}
+
+function verifierReviewId(
+  runId: string,
+  targetRevision: string,
+  finalVerificationGenerationId: string,
+  sessionId: string,
+): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([
+      runId,
+      targetRevision,
+      finalVerificationGenerationId,
+      sessionId,
+    ]))
+    .digest("hex");
+  return `verifier-review:${digest}`;
+}
+
+function verifierExcludedModels(
+  candidates: ReadonlyMap<string, AgentRuntimeCandidate>,
+  architectRuntimeId: string,
+  authorRuntimeIds: readonly string[],
+): VerifierExcludedModel[] {
+  const architect = candidates.get(architectRuntimeId);
+  if (!architect) {
+    throw new Error(`Unknown Architect runtime ${architectRuntimeId}.`);
+  }
+  const excluded: VerifierExcludedModel[] = [{
+    source: "architect",
+    runtimeId: architect.runtimeId,
+    modelIdentity: canonicalModelIdentity(architect.modelId),
+  }];
+  for (const runtimeId of [...new Set(authorRuntimeIds)].sort()) {
+    const author = candidates.get(runtimeId);
+    if (!author) {
+      throw new Error(`Unknown accepted change author runtime ${runtimeId}.`);
+    }
+    excluded.push({
+      source: "accepted_change_author",
+      runtimeId: author.runtimeId,
+      modelIdentity: canonicalModelIdentity(author.modelId),
+    });
+  }
+  return excluded;
+}
+
+function assertBoundVerifierReview(input: {
+  review: VerifierReviewProjection;
+  request: NativeVerifierInspectionRequest;
+  candidate: AgentRuntimeCandidate;
+  sessionId: string;
+  excludedModels: readonly VerifierExcludedModel[];
+}): void {
+  const expectedCriteria = input.request.criteria
+    .map((item) => ({
+      taskId: item.taskId,
+      criterionId: item.criterion.id,
+    }))
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      left.criterionId.localeCompare(right.criterionId),
+    );
+  const actualCriteria = input.review.criteria
+    .map((criterion) => ({ ...criterion }))
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      left.criterionId.localeCompare(right.criterionId),
+    );
+  if (
+    input.review.targetRevision !== input.request.targetRevision ||
+    input.review.finalVerificationGenerationId !==
+      input.request.finalVerification.generationId ||
+    input.review.runtime.runtimeId !== input.candidate.runtimeId ||
+    input.review.runtime.providerId !== input.candidate.providerId ||
+    input.review.runtime.modelId !== input.candidate.modelId ||
+    input.review.runtime.modelIdentity !==
+      canonicalModelIdentity(input.candidate.modelId) ||
+    input.review.runtime.sessionId !== input.sessionId ||
+    JSON.stringify(actualCriteria) !== JSON.stringify(expectedCriteria) ||
+    JSON.stringify(input.review.excludedModels) !==
+      JSON.stringify(input.excludedModels)
+  ) {
+    throw new Error(
+      "Durable verifier review conflicts with its kernel-selected revision, identity, or criteria.",
+    );
+  }
 }
 
 function inspectedResult(
@@ -530,6 +747,25 @@ function inspectedResult(
     targetRevision,
     messages: [...messages],
     summary: finalAssistantText(messages),
+    replayed,
+  };
+}
+
+function verdictSubmittedResult(
+  review: VerifierReviewProjection,
+  verdict: VerifierVerdictProjection,
+  messages: readonly AgentMessage[],
+  runtimeId: string,
+  replayed: boolean,
+): NativeVerifierInspectionResult {
+  return {
+    status: "verdict_submitted",
+    sessionId: review.runtime.sessionId,
+    runtimeId,
+    targetRevision: review.targetRevision,
+    reviewId: review.reviewId,
+    verdict: structuredClone(verdict),
+    messages: [...messages],
     replayed,
   };
 }

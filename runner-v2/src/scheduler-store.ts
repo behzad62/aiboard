@@ -56,10 +56,21 @@ import {
   steeringReassignedWorkerId,
   workerSessionId,
 } from "./worker-identity.js";
+import {
+  assertExactVerifierCriteria,
+  cloneVerifierProjection,
+  cloneVerifierReview,
+  expectedVerifierCriteria,
+  parseVerifierReviewRequest,
+  parseVerifierVerdict,
+  sameVerifierReview,
+  type VerifierProjection,
+} from "./verifier-contracts.js";
 
 export type SchedulerActorRole =
   | "architect"
   | "worker"
+  | "verifier"
   | "runner"
   | "user";
 
@@ -110,7 +121,9 @@ export type SchedulerEventType =
   | "final_verification.cleanup_failed"
   | "final_verification.review_requested"
   | "final_verification.review_decided"
-  | "final_verification.repairs_planned";
+  | "final_verification.repairs_planned"
+  | "verifier.review_requested"
+  | "verifier.verdict_submitted";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -385,6 +398,7 @@ export interface SchedulerProjection {
   runtime: RuntimeProjection;
   integrationRevision?: string;
   finalVerification?: FinalVerificationProjection;
+  verifier?: VerifierProjection;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
   lastArchitectActionEvent?: {
@@ -937,6 +951,26 @@ export function validateSchedulerEvidenceEvent(
     }
     return;
   }
+  if (event.type === "verifier.verdict_submitted") {
+    if (!Array.isArray(event.payload.criterionVerdicts)) {
+      throw new Error("Verifier verdict requires criterion verdicts.");
+    }
+    const evidenceIds = event.payload.criterionVerdicts.flatMap((candidate) => {
+      if (!isRecord(candidate)) {
+        throw new Error("Verifier criterion verdict is invalid.");
+      }
+      return stringArray(candidate, "evidenceIds");
+    });
+    const uniqueEvidenceIds = [...new Set(evidenceIds)];
+    const records = evidenceStore.getByIds({
+      runId: event.runId,
+      ids: uniqueEvidenceIds,
+    });
+    if (records.length !== uniqueEvidenceIds.length) {
+      throw new Error("Verifier verdict cites missing or foreign evidence.");
+    }
+    return;
+  }
   if (event.type === "task.transitioned" && event.payload.status === "submitted") {
     const taskId = requiredString(event.payload, "taskId");
     const task = projection.tasks[taskId];
@@ -1329,6 +1363,12 @@ export function reduceSchedulerEvent(
   }
   assertPendingUserGuidanceAllowsEvent(current, event);
   assertOpenArchitectQuestionAllowsEvent(current, event);
+  if (
+    event.actor.role === "verifier" &&
+    event.type !== "verifier.verdict_submitted"
+  ) {
+    throw new Error("The verifier has no scheduler lifecycle authority.");
+  }
   const next: SchedulerProjection = {
     ...current,
     tasks: { ...current.tasks },
@@ -1345,6 +1385,9 @@ export function reduceSchedulerEvent(
     reviewHistory: cloneReviewHistory(current.reviewHistory),
     ...(current.finalVerification
       ? { finalVerification: cloneFinalVerificationProjection(current.finalVerification) }
+      : {}),
+    ...(current.verifier
+      ? { verifier: cloneVerifierProjection(current.verifier) }
       : {}),
     ...(current.projectHandoff
       ? {
@@ -1521,6 +1564,20 @@ export function reduceSchedulerEvent(
         throw new Error("Only the Architect may plan final verification repairs.");
       }
       createFinalVerificationRepairTasks(next, event.payload);
+      break;
+    }
+    case "verifier.review_requested": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may request an independent verifier review.");
+      }
+      recordVerifierReviewRequest(next, event.payload, event.occurredAt);
+      break;
+    }
+    case "verifier.verdict_submitted": {
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the selected verifier may submit a verifier verdict.");
+      }
+      recordVerifierVerdict(next, event, event.occurredAt);
       break;
     }
     case "task.revised": {
@@ -2755,6 +2812,133 @@ function recordFinalVerificationReviewDecision(
   }
   current.review.status = review.status;
   if (decisionProjection) current.review.decision = decisionProjection;
+}
+
+function recordVerifierReviewRequest(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+  occurredAt: string,
+): void {
+  if (projection.acceptanceContractStatus !== "current") {
+    throw new Error(
+      "Independent verifier review requires the current acceptance contract.",
+    );
+  }
+  const ordinaryTasks = Object.values(projection.tasks).filter(
+    (task) => task.status !== "cancelled" && !isFinalVerificationTask(task),
+  );
+  const missingCriteria = ordinaryTasks.find(
+    (task) => !task.acceptanceCriteria || task.acceptanceCriteria.length === 0,
+  );
+  if (missingCriteria) {
+    throw new Error(
+      `Independent verifier review requires criteria for task ${missingCriteria.id}.`,
+    );
+  }
+  const nonterminal = ordinaryTasks.find((task) => task.status !== "integrated");
+  if (nonterminal) {
+    throw new Error(
+      `Independent verifier review requires integrated task ${nonterminal.id}.`,
+    );
+  }
+  const finalVerification = projection.finalVerification?.current;
+  if (
+    !finalVerification ||
+    finalVerification.state !== "current" ||
+    finalVerification.targetRevision !== projection.integrationRevision ||
+    finalVerification.submissionResult?.green !== true ||
+    finalVerification.cleanup?.status !== "succeeded" ||
+    finalVerification.review?.status !== "approved" ||
+    finalVerification.review.decision?.decision !== "approved" ||
+    finalVerification.review.decision.failedCategories.length > 0
+  ) {
+    throw new Error(
+      "Independent verifier review requires current green final verification and structured Architect approval.",
+    );
+  }
+  const expectedCriteria = expectedVerifierCriteria(projection.tasks);
+  const review = parseVerifierReviewRequest(
+    payload,
+    expectedCriteria,
+    occurredAt,
+  );
+  if (
+    review.targetRevision !== projection.integrationRevision ||
+    review.targetRevision !== finalVerification.targetRevision ||
+    review.finalVerificationGenerationId !== finalVerification.generationId
+  ) {
+    throw new Error(
+      "Independent verifier review targets a stale final-verification revision or generation.",
+    );
+  }
+  const assignedArchitectRuntimeId = projection.runtime.architect.runtimeId;
+  const excludedArchitect = review.excludedModels.find(
+    (candidate) => candidate.source === "architect",
+  );
+  if (
+    assignedArchitectRuntimeId &&
+    excludedArchitect?.runtimeId !== assignedArchitectRuntimeId
+  ) {
+    throw new Error(
+      "Independent verifier review excludes the wrong Architect runtime identity.",
+    );
+  }
+  const current = projection.verifier?.current;
+  if (current) {
+    if (sameVerifierReview(current, review)) return;
+    throw new Error("A conflicting independent verifier review already exists.");
+  }
+  projection.verifier = {
+    current: cloneVerifierReview(review),
+    history: (projection.verifier?.history ?? []).map(cloneVerifierReview),
+  };
+}
+
+function recordVerifierVerdict(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+  occurredAt: string,
+): void {
+  const current = projection.verifier?.current;
+  if (!current) {
+    throw new Error("Verifier verdict requires a current requested review.");
+  }
+  if (
+    projection.integrationRevision !== current.targetRevision ||
+    projection.finalVerification?.current?.generationId !==
+      current.finalVerificationGenerationId ||
+    projection.finalVerification.current.targetRevision !== current.targetRevision
+  ) {
+    throw new Error("Verifier verdict is stale for the current integration revision.");
+  }
+  const ordinaryTasks = Object.values(projection.tasks).filter(
+    (task) => task.status !== "cancelled" && !isFinalVerificationTask(task),
+  );
+  const nonterminal = ordinaryTasks.find((task) => task.status !== "integrated");
+  if (nonterminal) {
+    throw new Error(
+      `Verifier verdict is stale because task ${nonterminal.id} is not integrated.`,
+    );
+  }
+  assertExactVerifierCriteria(
+    current.criteria,
+    expectedVerifierCriteria(projection.tasks),
+    "Current verifier review",
+  );
+  if (event.actor.id !== current.runtime.runtimeId) {
+    throw new Error("Verifier verdict actor does not match the selected runtime identity.");
+  }
+  const verdict = parseVerifierVerdict(event.payload, current, occurredAt);
+  const submitted: typeof current = {
+    ...cloneVerifierReview(current),
+    status: "submitted",
+    verdict,
+  };
+  if (current.status === "submitted") {
+    if (sameVerifierReview(current, submitted)) return;
+    throw new Error("Verifier review already has a conflicting verdict.");
+  }
+  projection.verifier!.current = submitted;
 }
 
 function parseVerificationRepairSource(

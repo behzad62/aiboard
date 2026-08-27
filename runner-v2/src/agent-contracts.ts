@@ -82,6 +82,11 @@ export interface ToolDefinition {
 
 export type AgentLifecycleSignal =
   | { type: "submit_task"; changeSetId: string }
+  | {
+      type: "verifier_verdict_submitted";
+      reviewId: string;
+      satisfied: boolean;
+    }
   | { type: "ask_architect"; requestId: string; blocking: boolean }
   | { type: "request_replan"; requestId: string }
   | { type: "return_subagent"; summary: string; artifactHashes: string[] }
