@@ -612,6 +612,38 @@ test("unavailable independent verification creates a typed user-selection pause"
   }
 });
 
+test("verifier budget exhaustion creates a typed user-selection pause", async () => {
+  const fixture = createFixture("runtime-budget-exhausted");
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => ({
+        status: "suspended",
+        reason: "budget_exhausted",
+        runtimeId: "google:verifier",
+      }),
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      assert.fail("Completion must not run after verifier budget exhaustion.");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    const paused = await runtime.step();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "verifier_selection_required");
+    assert.deepEqual(runtime.projection().verifierSelection, {
+      status: "required",
+      reason: "budget_exhausted",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+    });
+    assert.equal(runtime.projection().projectHandoff, undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("guidance invalidation during verifier execution suppresses stale selection pause", async () => {
   const fixture = createFixture("runtime-guidance-invalidation");
   try {
