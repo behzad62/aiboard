@@ -4,10 +4,33 @@ export interface UserGuidanceSubmission {
   version: number;
 }
 
+export interface UserGuidanceNoPlanChangeResolution {
+  type: "no_plan_change";
+  rationale: string;
+  evidenceIds: string[];
+}
+
+export interface UserGuidancePlanReconciledResolution {
+  type: "plan_reconciled";
+  rationale: string;
+  /** Validated by the scheduler's existing reconciliation parser. */
+  planReconciliation: PlanReconciliation;
+}
+
+export type UserGuidanceAcknowledgementResolution =
+  | UserGuidanceNoPlanChangeResolution
+  | UserGuidancePlanReconciledResolution;
+
+export type ParsedUserGuidanceAcknowledgementResolution =
+  | UserGuidanceNoPlanChangeResolution
+  | Omit<UserGuidancePlanReconciledResolution, "planReconciliation"> & {
+    planReconciliation: unknown;
+  };
+
 export interface UserGuidanceAcknowledgement {
   guidanceId: string;
   expectedVersion: number;
-  acknowledgement: string;
+  resolution: ParsedUserGuidanceAcknowledgementResolution;
 }
 
 export interface ArchitectQuestionRequest {
@@ -24,7 +47,7 @@ export interface ArchitectQuestionAnswer {
 
 export interface UserGuidanceItem extends UserGuidanceSubmission {
   status: "submitted" | "acknowledged";
-  acknowledgement?: string;
+  resolution?: UserGuidanceAcknowledgementResolution;
 }
 
 export interface ArchitectQuestionItem extends ArchitectQuestionRequest {
@@ -42,11 +65,11 @@ export function parseUserGuidanceSubmission(payload: Record<string, unknown>): U
 }
 
 export function parseUserGuidanceAcknowledgement(payload: Record<string, unknown>): UserGuidanceAcknowledgement {
-  assertExactKeys(payload, ["guidanceId", "expectedVersion", "acknowledgement"]);
+  assertExactKeys(payload, ["guidanceId", "expectedVersion", "resolution"]);
   return {
     guidanceId: requiredText(payload, "guidanceId"),
     expectedVersion: requiredPositiveInteger(payload, "expectedVersion"),
-    acknowledgement: requiredText(payload, "acknowledgement"),
+    resolution: parseAcknowledgementResolution(payload.resolution),
   };
 }
 
@@ -75,8 +98,46 @@ function assertExactKeys(payload: Record<string, unknown>, allowed: readonly str
 
 function requiredText(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${key} is required.`);
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be nonblank.`);
   return value;
+}
+
+function parseAcknowledgementResolution(value: unknown): ParsedUserGuidanceAcknowledgementResolution {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("resolution is required.");
+  }
+  const resolution = value as Record<string, unknown>;
+  const type = requiredText(resolution, "type");
+  if (type === "no_plan_change") {
+    assertExactKeys(resolution, ["type", "rationale", "evidenceIds"]);
+    const evidenceIds = requiredTextArray(resolution, "evidenceIds");
+    return { type, rationale: requiredText(resolution, "rationale"), evidenceIds };
+  }
+  if (type === "plan_reconciled") {
+    assertExactKeys(resolution, ["type", "rationale", "planReconciliation"]);
+    if (
+      typeof resolution.planReconciliation !== "object" ||
+      resolution.planReconciliation === null ||
+      Array.isArray(resolution.planReconciliation)
+    ) {
+      throw new Error("planReconciliation is required.");
+    }
+    return {
+      type,
+      rationale: requiredText(resolution, "rationale"),
+      planReconciliation: resolution.planReconciliation,
+    };
+  }
+  throw new Error(`resolution type ${type} is invalid.`);
+}
+
+function requiredTextArray(payload: Record<string, unknown>, key: string): string[] {
+  const value = payload[key];
+  if (!Array.isArray(value) || value.length === 0) throw new Error(`${key} is required.`);
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.trim()) throw new Error(`${key} must contain nonblank strings.`);
+    return item;
+  });
 }
 
 function requiredPositiveInteger(payload: Record<string, unknown>, key: string): number {
@@ -86,3 +147,4 @@ function requiredPositiveInteger(payload: Record<string, unknown>, key: string):
   }
   return value as number;
 }
+import type { PlanReconciliation } from "./task-contracts.js";

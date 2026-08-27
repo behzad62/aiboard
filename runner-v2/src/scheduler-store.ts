@@ -46,6 +46,7 @@ import {
   parseUserGuidanceAcknowledgement,
   parseUserGuidanceSubmission,
   type ArchitectQuestionItem,
+  type UserGuidanceAcknowledgementResolution,
   type UserGuidanceItem,
 } from "./user-steering-contracts.js";
 
@@ -1057,7 +1058,12 @@ export function reduceSchedulerEvent(
     ...current,
     tasks: { ...current.tasks },
     guidance: { ...current.guidance },
-    userGuidance: { ...current.userGuidance },
+    userGuidance: Object.fromEntries(
+      Object.entries(current.userGuidance).map(([guidanceId, guidance]) => [
+        guidanceId,
+        cloneUserGuidanceItem(guidance),
+      ]),
+    ),
     architectQuestions: { ...current.architectQuestions },
     reviews: { ...current.reviews },
     submissionHistory: cloneSubmissionHistory(current.submissionHistory),
@@ -1438,10 +1444,25 @@ export function reduceSchedulerEvent(
           `User guidance ${acknowledgement.guidanceId} version is ${guidance.version}, not ${acknowledgement.expectedVersion}.`,
         );
       }
+      const resolution: UserGuidanceAcknowledgementResolution =
+        acknowledgement.resolution.type === "plan_reconciled"
+          ? {
+              ...acknowledgement.resolution,
+              planReconciliation: parsePlanReconciliation(
+                acknowledgement.resolution.planReconciliation,
+              ),
+            }
+          : {
+              ...acknowledgement.resolution,
+              evidenceIds: [...acknowledgement.resolution.evidenceIds],
+            };
+      if (resolution.type === "plan_reconciled") {
+        applyPlanReconciliation(next, resolution.planReconciliation);
+      }
       next.userGuidance[guidance.guidanceId] = {
         ...guidance,
         status: "acknowledged",
-        acknowledgement: acknowledgement.acknowledgement,
+        resolution: cloneUserGuidanceResolution(resolution),
       };
       break;
     }
@@ -3253,6 +3274,43 @@ function acceptanceContractStatusForTasks(
   ).length > 0
     ? "acceptance_contract_upgrade_required"
     : "current";
+}
+
+function cloneUserGuidanceItem(guidance: UserGuidanceItem): UserGuidanceItem {
+  return {
+    ...guidance,
+    ...(guidance.resolution
+      ? { resolution: cloneUserGuidanceResolution(guidance.resolution) }
+      : {}),
+  };
+}
+
+function cloneUserGuidanceResolution(
+  resolution: UserGuidanceAcknowledgementResolution,
+): UserGuidanceAcknowledgementResolution {
+  if (resolution.type === "no_plan_change") {
+    return { ...resolution, evidenceIds: [...resolution.evidenceIds] };
+  }
+  return {
+    ...resolution,
+    planReconciliation: {
+      ...resolution.planReconciliation,
+      taskUpdates: resolution.planReconciliation.taskUpdates.map((update) => ({
+        ...update,
+        ...(update.dependencies ? { dependencies: [...update.dependencies] } : {}),
+        ...(update.requiredCapabilities
+          ? { requiredCapabilities: [...update.requiredCapabilities] }
+          : {}),
+        ...(update.acceptanceCriteria
+          ? {
+              acceptanceCriteria: update.acceptanceCriteria.map((criterion) => ({
+                ...criterion,
+              })),
+            }
+          : {}),
+      })),
+    },
+  };
 }
 
 function emptySchedulerProjection(event: SchedulerEvent): SchedulerProjection {

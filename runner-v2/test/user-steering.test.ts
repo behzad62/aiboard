@@ -35,12 +35,20 @@ test("P3.1 durable guidance is idempotent, versioned, acknowledged once, and pre
     append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:ack", {
       guidanceId: "guidance-1",
       expectedVersion: 1,
-      acknowledgement: "The next plan review will incorporate this.",
+      resolution: {
+        type: "no_plan_change",
+        rationale: "The existing plan already includes the requested account flow.",
+        evidenceIds: ["evidence:plan:1"],
+      },
     });
     assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:ack:duplicate", {
       guidanceId: "guidance-1",
       expectedVersion: 1,
-      acknowledgement: "Second acknowledgement is forbidden.",
+      resolution: {
+        type: "no_plan_change",
+        rationale: "A second acknowledgement is forbidden.",
+        evidenceIds: ["evidence:plan:1"],
+      },
     }), /already acknowledged/i);
     append(store, "user.guidance_submitted", USER, "guidance:two", {
       guidanceId: "guidance-2",
@@ -60,10 +68,109 @@ test("P3.1 durable guidance is idempotent, versioned, acknowledged once, and pre
     assert.equal(projection.initialObjective, "Build\nexactly\tthis application.");
     assert.equal(projection.userGuidance["guidance-1"].version, 1);
     assert.equal(projection.userGuidance["guidance-1"].status, "acknowledged");
-    assert.equal(projection.userGuidance["guidance-1"].acknowledgement, "The next plan review will incorporate this.");
+    assert.deepEqual(projection.userGuidance["guidance-1"].resolution, {
+      type: "no_plan_change",
+      rationale: "The existing plan already includes the requested account flow.",
+      evidenceIds: ["evidence:plan:1"],
+    });
     assert.equal(projection.userGuidanceVersion, 2);
     assert.equal(projection.userGuidance["guidance-2"].status, "submitted");
     reopened.close();
+  });
+});
+
+test("P3.1 plan-reconciled acknowledgement atomically changes the plan and survives WAL reopen", () => {
+  withStore((store, database) => {
+    initialize(store, "Build the requested application.");
+    seedPlan(store);
+    append(store, "user.guidance_submitted", USER, "guidance:reconcile", {
+      guidanceId: "guidance-reconcile", text: "Make the dashboard keyboard-accessible.", version: 1,
+    });
+    const acknowledgement = append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:reconcile:ack", {
+      guidanceId: "guidance-reconcile",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The new accessibility requirement changes the planned dashboard work.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Add keyboard accessibility to the dashboard task.",
+          taskUpdates: [{
+            taskId: "task-1",
+            action: "revise",
+            objective: "Implement the keyboard-accessible dashboard.",
+          }],
+        },
+      },
+    });
+    const duplicate = append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:reconcile:ack", {
+      guidanceId: "guidance-reconcile",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The new accessibility requirement changes the planned dashboard work.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Add keyboard accessibility to the dashboard task.",
+          taskUpdates: [{
+            taskId: "task-1",
+            action: "revise",
+            objective: "Implement the keyboard-accessible dashboard.",
+          }],
+        },
+      },
+    });
+    assert.equal(duplicate.eventId, acknowledgement.eventId);
+    const current = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(current.userGuidance["guidance-reconcile"].status, "acknowledged");
+    assert.equal(current.userGuidance["guidance-reconcile"].resolution?.type, "plan_reconciled");
+    assert.equal(current.planRevision, 2);
+    assert.equal(current.tasks["task-1"].objective, "Implement the keyboard-accessible dashboard.");
+    assert.equal(existsSync(`${database}-wal`), true);
+
+    store.close();
+    const reopened = new SqliteSchedulerStore(database);
+    const replayed = rebuildSchedulerProjection(reopened.readRun(RUN_ID));
+    assert.deepEqual(replayed, current);
+    reopened.close();
+  });
+});
+
+test("P3.1 invalid reconciliation and whitespace-only steering fields roll back atomically", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    seedPlan(store);
+    append(store, "user.guidance_submitted", USER, "guidance:one", {
+      guidanceId: "guidance-1", text: "Use keyboard navigation.", version: 1,
+    });
+    const before = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:invalid-reconcile", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled", rationale: "This should fail atomically.",
+        planReconciliation: { revision: 3, summary: "Wrong revision.", taskUpdates: [{ taskId: "task-1", action: "revise", objective: "Changed." }] },
+      },
+    }), /must advance plan revision/i);
+    const afterInvalid = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(afterInvalid.userGuidance["guidance-1"].status, "submitted");
+    assert.equal(afterInvalid.planRevision, before.planRevision);
+    assert.equal(afterInvalid.tasks["task-1"].objective, before.tasks["task-1"].objective);
+
+    const whitespaceCases: Array<[NewSchedulerEvent["type"], NewSchedulerEvent["actor"], Record<string, unknown>]> = [
+      ["user.guidance_submitted", USER, { guidanceId: " ", text: "Text", version: 2 }],
+      ["user.guidance_submitted", USER, { guidanceId: "guidance-2", text: " \t", version: 2 }],
+      ["architect.question_requested", ARCHITECT, { questionId: " ", question: "Question", version: 1 }],
+      ["architect.question_requested", ARCHITECT, { questionId: "question-1", question: " \n", version: 1 }],
+      ["architect.question_answered", USER, { questionId: "question-1", expectedVersion: 1, answer: " " }],
+      ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: " ", evidenceIds: ["evidence-1"] } }],
+      ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: "Reason", evidenceIds: [" "] } }],
+      ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: "Reason", evidenceIds: ["evidence-1"], unexpected: true } }],
+      ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "plan_reconciled", rationale: "Reason", planReconciliation: [] } }],
+    ];
+    for (const [type, actor, payload] of whitespaceCases) {
+      assert.throws(() => append(store, type, actor, `whitespace:${type}:${JSON.stringify(payload)}`, payload), /required|nonblank|unknown/i);
+    }
+    assert.deepEqual(rebuildSchedulerProjection(store.readRun(RUN_ID)), afterInvalid);
   });
 });
 
@@ -130,6 +237,22 @@ test("P3.1 rejects malformed and authority-bypass steering events atomically", (
 
 function initialize(store: SqliteSchedulerStore, objective: string): void {
   append(store, "run.initialized", { role: "runner", id: "runner" }, "initialized", { objective });
+}
+
+function seedPlan(store: SqliteSchedulerStore): void {
+  append(store, "plan.created", ARCHITECT, "plan:1", {
+    revision: 1,
+    tasks: [{
+      id: "task-1",
+      objective: "Implement the dashboard.",
+      dependencies: [],
+      status: "planned",
+      requiredCapabilities: ["code"],
+      acceptanceCriteria: [{ id: "done", text: "Dashboard is implemented." }],
+      acceptanceCriteriaVersion: 1,
+      attempt: 0,
+    }],
+  });
 }
 
 function append(
