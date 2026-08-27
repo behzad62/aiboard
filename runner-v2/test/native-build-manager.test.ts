@@ -238,6 +238,10 @@ test("durable steering appends before the manager wakes the autonomous pump", as
           integrationBranch: "aiboard/run/integration",
           appliedToProject: false,
         }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => { calls.push("verification-quiesced"); },
+          cleanup: async () => ({}),
+        },
         cleanup: async () => undefined,
         close: async () => undefined,
       }),
@@ -251,7 +255,12 @@ test("durable steering appends before the manager wakes the autonomous pump", as
       idempotencyKey: "guidance:1",
     });
     await manager.awaitIdle("run_1");
-    assert.deepEqual(calls, ["guidance-appended", "pump-started"]);
+    assert.deepEqual(calls, [
+      "guidance-appended",
+      "verification-quiesced",
+      "pump-started",
+      "verification-quiesced",
+    ]);
 
     calls.length = 0;
     await manager.answerArchitectQuestion("run_1", {
@@ -261,7 +270,7 @@ test("durable steering appends before the manager wakes the autonomous pump", as
       idempotencyKey: "question:1:answer",
     });
     await manager.awaitIdle("run_1");
-    assert.deepEqual(calls, ["answer-appended", "pump-started"]);
+    assert.deepEqual(calls, ["answer-appended", "pump-started", "verification-quiesced"]);
   } finally {
     await manager?.close();
     rmSync(root, { recursive: true, force: true });
@@ -516,6 +525,114 @@ test("completed project handoff replays without applying the project twice", asy
     assert.equal(replay.status, "completed");
     assert.equal(handoffCalls, 1);
     assert.deepEqual(selectionActors, [{ role: "user", id: "local-user" }]);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("guidance and project handoff are linearized before external project mutation", { timeout: 2_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-handoff-steering-race-"));
+  let manager: NativeBuildManager | undefined;
+  let projection = requestedHandoffProjection("budgeted");
+  let handoffStarted!: () => void;
+  let releaseHandoff!: () => void;
+  const started = new Promise<void>((resolve) => { handoffStarted = resolve; });
+  const release = new Promise<void>((resolve) => { releaseHandoff = resolve; });
+  const calls: string[] = [];
+  try {
+    const runtime = {
+      ...fakeRuntime("run_1"),
+      projection: () => projection,
+      submitUserGuidance: () => {
+        if (projection.status === "completed") throw new Error("A completed Build cannot receive in-flight user guidance.");
+        calls.push("guidance-appended");
+        projection = { ...projection, status: "running", projectHandoff: undefined };
+        return projection;
+      },
+      selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+        calls.push("handoff-recorded");
+        projection = {
+          ...projection,
+          status: "completed",
+          projectHandoff: { ...projection.projectHandoff!, status: "selected", choice },
+        };
+        return projection;
+      },
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          calls.push("handoff-started");
+          handoffStarted();
+          await release;
+          calls.push("project-mutated");
+          return { integrationRevision: "revision_final", integrationBranch: "aiboard/run/integration", appliedToProject: true };
+        },
+        cleanup: () => undefined, close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    const handoff = manager.selectProjectHandoff("run_1", "apply_to_project", "handoff:apply");
+    await started;
+    const guidance = manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-race", text: "Change the result before handoff.", version: 1,
+      idempotencyKey: "guidance:handoff-race",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(calls, ["handoff-started"]);
+    releaseHandoff();
+    await handoff;
+    await assert.rejects(guidance, /completed Build/i);
+    assert.deepEqual(calls, ["handoff-started", "project-mutated", "handoff-recorded"]);
+    assert.equal(projection.projectHandoff?.status, "selected");
+  } finally {
+    releaseHandoff?.();
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("guidance that wins handoff serialization prevents external project mutation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-guidance-wins-handoff-"));
+  let manager: NativeBuildManager | undefined;
+  let projection = requestedHandoffProjection("budgeted");
+  let handoffCalls = 0;
+  try {
+    const runtime = {
+      ...fakeRuntime("run_1"),
+      projection: () => projection,
+      submitUserGuidance: () => {
+        projection = { ...projection, status: "running", projectHandoff: undefined };
+        return projection;
+      },
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => {
+          handoffCalls += 1;
+          return { integrationRevision: "revision_final", integrationBranch: "aiboard/run/integration", appliedToProject: true };
+        },
+        cleanup: () => undefined, close: () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    const guidance = manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-wins", text: "Change this before handoff.", version: 1,
+      idempotencyKey: "guidance:wins-handoff",
+    });
+    const handoff = manager.selectProjectHandoff("run_1", "apply_to_project", "handoff:stale");
+    await guidance;
+    await assert.rejects(handoff, /not awaiting user selection/i);
+    assert.equal(handoffCalls, 0);
+    assert.equal(projection.status, "running");
+    assert.equal(projection.projectHandoff, undefined);
   } finally {
     await manager?.close();
     rmSync(root, { recursive: true, force: true });

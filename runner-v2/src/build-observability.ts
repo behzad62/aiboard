@@ -61,7 +61,10 @@ export interface FinalVerificationObservabilityGeneration {
 export interface FinalVerificationObservability {
   canonicalRevision?: string;
   current?: FinalVerificationObservabilityGeneration;
-  history: Array<Pick<FinalVerificationObservabilityGeneration, "generationId" | "taskId" | "targetRevision" | "revisionStatus"> & { invalidatedByRevision?: string }>;
+  history: Array<Pick<FinalVerificationObservabilityGeneration, "generationId" | "taskId" | "targetRevision" | "revisionStatus"> & {
+    invalidatedByRevision?: string;
+    invalidatedByGuidanceId?: string;
+  }>;
 }
 
 export interface BuildAgentObservation {
@@ -123,6 +126,7 @@ export function projectFinalVerificationObservability(
       targetRevision: generation.targetRevision,
       revisionStatus: "stale",
       ...(generation.invalidatedByRevision ? { invalidatedByRevision: generation.invalidatedByRevision } : {}),
+      ...(generation.invalidatedByGuidanceId ? { invalidatedByGuidanceId: generation.invalidatedByGuidanceId } : {}),
     })),
   };
 }

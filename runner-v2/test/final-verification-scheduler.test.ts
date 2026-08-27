@@ -262,6 +262,55 @@ test("integration revision advancement invalidates current verification and surv
   }
 });
 
+test("durable user guidance invalidates the exact verification generation and survives replay", () => {
+  const fixture = createFixture();
+  const database = join(fixture.root, "scheduler.sqlite");
+  try {
+    appendValidatedSubmission(fixture, "submission-steered", "steered");
+    fixture.store.append(event(fixture.runId, "final_verification.review_requested", "verification:review:steered", {
+      taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE,
+      attempt: 1, submissionId: "submission-steered", reviewId: "review-steered",
+    }));
+    fixture.store.append(event(fixture.runId, "final_verification.review_decided", "verification:review:steered-decision", {
+      taskId: fixture.taskId, generationId: GENERATION_ONE, targetRevision: REVISION_ONE,
+      attempt: 1, submissionId: "submission-steered", reviewId: "review-steered", decision: "approved",
+    }));
+    fixture.store.append({
+      runId: fixture.runId,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-26T00:00:10.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance:invalidate-verification",
+      payload: { guidanceId: "guidance-verification", text: "Add the requested edge case.", version: 1 },
+    });
+
+    const invalidated = rebuildSchedulerProjection(fixture.store.readRun(fixture.runId));
+    assert.equal(invalidated.finalVerification?.current, undefined);
+    assert.equal(invalidated.finalVerification?.history.length, 1);
+    assert.equal(invalidated.finalVerification?.history[0]?.generationId, GENERATION_ONE);
+    assert.equal(invalidated.finalVerification?.history[0]?.invalidatedByGuidanceId, "guidance-verification");
+    assert.equal(invalidated.finalVerification?.history[0]?.submission?.submissionId, "submission-steered");
+    assert.equal(invalidated.finalVerification?.history[0]?.review?.status, "approved");
+    assert.equal(invalidated.userGuidance["guidance-verification"]?.status, "submitted");
+    assert.equal(invalidated.integrationRevision, REVISION_ONE);
+    assert.throws(
+      () => fixture.store.append(event(fixture.runId, "project.handoff_requested", "handoff:stale", { summary: "stale" })),
+      /user guidance|completion|verification/i,
+    );
+
+    fixture.store.close();
+    const reopened = new SqliteSchedulerStore(database, SCHEDULER_OPTIONS);
+    try {
+      assert.deepEqual(rebuildSchedulerProjection(reopened.readRun(fixture.runId)), invalidated);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    try { fixture.store.close(); } catch { /* already closed for reopen */ }
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 interface Fixture {
   root: string;
   store: SqliteSchedulerStore;

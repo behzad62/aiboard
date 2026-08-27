@@ -195,7 +195,12 @@ export class NativeBuildManager implements BuildControlPlane {
     input: UserGuidanceControlInput
   ): Promise<SchedulerProjection> {
     const projection = await this.withRuntimeActivity(async () =>
-      this.require(runId).runtime.submitUserGuidance(input)
+      this.serialized(async () => {
+        const handle = this.require(runId);
+        const submitted = handle.runtime.submitUserGuidance(input);
+        await handle.finalVerificationCleanup?.quiesceRun();
+        return submitted;
+      })
     );
     this.wake(runId);
     return projection;

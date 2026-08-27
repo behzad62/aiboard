@@ -87,6 +87,81 @@ test("terminal implementation work requires a typed final-verification plan", as
   }
 });
 
+test("acknowledged steering creates a fresh verification generation for the same revision", async () => {
+  const fixture = createFixture();
+  const tools = new ToolRegistry();
+  for (const tool of createArchitectTools({
+    store: fixture.store,
+    finalVerificationPlanAvailable: true,
+    finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
+  })) tools.register(tool);
+  const context = {
+    runId: RUN_ID,
+    sessionId: `architect:${RUN_ID}`,
+    actor: { role: "architect" as const, id: "architect-test" },
+  };
+  try {
+    const first = await invokePlan(tools, context, "plan-generation-one", finalVerificationPlan());
+    assert.equal(first.isError, false, first.error?.message ?? "first verification plan failed");
+    const firstGeneration = runtimeProjection(fixture.store).finalVerification?.current;
+    assert.ok(firstGeneration);
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-26T00:00:05.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance:fresh-verification",
+      payload: { guidanceId: "guidance-fresh-verification", text: "Verify the added scope.", version: 1 },
+    });
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_acknowledged",
+      occurredAt: "2026-08-26T00:00:06.000Z",
+      actor: context.actor,
+      idempotencyKey: "guidance:fresh-verification:ack",
+      payload: {
+        guidanceId: "guidance-fresh-verification",
+        expectedVersion: 1,
+        resolution: {
+          type: "plan_reconciled",
+          rationale: "The durable plan records the steering before verification is repeated.",
+          planReconciliation: {
+            revision: 2,
+            summary: "Record steered scope.",
+            taskUpdates: [],
+            newTasks: [{
+              id: "steered-scope",
+              objective: "Record the added scope before verification.",
+              dependencies: ["implementation-one"],
+              requiredCapabilities: ["code"],
+              acceptanceCriteria: [{ id: "scope-recorded", text: "The added scope is durably represented." }],
+            }],
+          },
+        },
+      },
+    });
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "task.transitioned",
+      occurredAt: "2026-08-26T00:00:07.000Z",
+      actor: context.actor,
+      idempotencyKey: "steered-scope:cancel",
+      payload: { taskId: "steered-scope", status: "cancelled" },
+    });
+    const second = await invokePlan(tools, context, "plan-generation-two", finalVerificationPlan());
+    assert.equal(second.isError, false, second.error?.message ?? "fresh verification plan failed");
+    const projection = runtimeProjection(fixture.store);
+    assert.equal(projection.finalVerification?.history[0]?.generationId, firstGeneration.generationId);
+    assert.equal(projection.finalVerification?.history[0]?.invalidatedByGuidanceId, "guidance-fresh-verification");
+    assert.notEqual(projection.finalVerification?.current?.generationId, firstGeneration.generationId);
+    assert.equal(projection.finalVerification?.current?.targetRevision, INTEGRATION_REVISION);
+    assert.equal(projection.finalVerification?.current?.planVersion, 2);
+  } finally {
+    fixture.store.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("runner-owned final-verification planning consumes its exact answered checkpoint across WAL reopen", async () => {
   const fixture = createFixture();
   const context = {
@@ -422,8 +497,10 @@ test("guidance cancellation of a rejecting final-check driver does not create a 
       status: "progressed",
       action: "final_verification_interrupted",
     });
-    const current = runtime.projection().finalVerification?.current;
-    assert.equal(current?.completedChecks?.length ?? 0, 0);
+    const projection = runtime.projection();
+    assert.equal(projection.finalVerification?.current, undefined);
+    assert.equal(projection.finalVerification?.history[0]?.generationId.startsWith("final-verification-generation-"), true);
+    assert.equal(projection.finalVerification?.history[0]?.invalidatedByGuidanceId, "guidance-final-check");
     assert.equal(runtime.projection().status, "running");
   } finally {
     fixture.store.close();

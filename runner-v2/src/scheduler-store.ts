@@ -220,6 +220,12 @@ export interface ProjectHandoffProjection {
   projectRevision?: string;
 }
 
+export interface WithdrawnProjectHandoffProjection
+  extends Omit<ProjectHandoffProjection, "status"> {
+  status: "withdrawn";
+  withdrawnByGuidanceId: string;
+}
+
 export interface FinalVerificationSubmissionReference {
   submissionId: string;
   generationId: string;
@@ -261,6 +267,7 @@ export interface FinalVerificationGenerationProjection {
   executionProfile: FinalVerificationExecutionProfile;
   state: "current" | "invalidated";
   invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
   completedChecks?: FinalVerificationCompletedCheckProjection[];
   failure?: FinalVerificationFailureProjection;
   submission?: FinalVerificationSubmissionReference;
@@ -378,6 +385,7 @@ export interface SchedulerProjection {
   integrationRevision?: string;
   finalVerification?: FinalVerificationProjection;
   projectHandoff?: ProjectHandoffProjection;
+  projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
   lastArchitectActionEvent?: {
     sequence: number;
     type: SchedulerEventType;
@@ -1341,6 +1349,14 @@ export function reduceSchedulerEvent(
           },
         }
       : {}),
+    ...(current.projectHandoffHistory
+      ? {
+          projectHandoffHistory: current.projectHandoffHistory.map((handoff) => ({
+            ...handoff,
+            options: [...handoff.options],
+          })),
+        }
+      : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -1675,6 +1691,9 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "user") {
         throw new Error("Only the user may submit user guidance.");
       }
+      if (current.status === "completed") {
+        throw new Error("A completed Build cannot receive in-flight user guidance.");
+      }
       const submission = parseUserGuidanceSubmission(event.payload);
       if (submission.version !== next.userGuidanceVersion + 1) {
         throw new Error(
@@ -1689,6 +1708,23 @@ export function reduceSchedulerEvent(
         status: "submitted",
       };
       next.userGuidanceVersion = submission.version;
+      invalidateFinalVerificationForGuidance(next, submission.guidanceId);
+      if (next.projectHandoff?.status === "requested") {
+        next.projectHandoffHistory = [
+          ...(next.projectHandoffHistory ?? []).map((handoff) => ({
+            ...handoff,
+            options: [...handoff.options],
+          })),
+          {
+            ...next.projectHandoff,
+            status: "withdrawn",
+            withdrawnByGuidanceId: submission.guidanceId,
+            options: [...next.projectHandoff.options],
+          },
+        ];
+        delete next.projectHandoff;
+        if (next.status === "paused") next.status = "running";
+      }
       break;
     }
     case "user.guidance_acknowledged": {
@@ -4039,6 +4075,26 @@ function cloneBuildTask(task: BuildTask): BuildTask {
       ? { verificationPlan: planFinalVerification(task.verificationPlan) }
       : {}),
     ...(task.conflictPaths ? { conflictPaths: [...task.conflictPaths] } : {}),
+  };
+}
+
+function invalidateFinalVerificationForGuidance(
+  projection: SchedulerProjection,
+  guidanceId: string,
+): void {
+  const current = projection.finalVerification?.current;
+  if (!current) return;
+  projection.finalVerification = {
+    history: [
+      ...(projection.finalVerification?.history ?? []).map(
+        cloneFinalVerificationGeneration,
+      ),
+      {
+        ...cloneFinalVerificationGeneration(current),
+        state: "invalidated",
+        invalidatedByGuidanceId: guidanceId,
+      },
+    ],
   };
 }
 

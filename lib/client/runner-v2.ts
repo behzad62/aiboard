@@ -126,6 +126,7 @@ export interface NativeFinalVerificationObservability {
     targetRevision: string;
     revisionStatus: "stale";
     invalidatedByRevision?: string;
+    invalidatedByGuidanceId?: string;
   }>;
 }
 
@@ -366,6 +367,17 @@ export interface NativeBuildProjection {
     appliedToProject?: boolean;
     projectRevision?: string;
   };
+  projectHandoffHistory?: Array<{
+    status: "withdrawn";
+    summary: string;
+    options: NativeProjectHandoffChoice[];
+    choice?: NativeProjectHandoffChoice;
+    integrationRevision?: string;
+    integrationBranch?: string;
+    appliedToProject?: boolean;
+    projectRevision?: string;
+    withdrawnByGuidanceId: string;
+  }>;
   integrationRevision?: string;
   finalVerification?: {
     current?: {
@@ -376,6 +388,7 @@ export interface NativeBuildProjection {
       plan: { checks: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; repositoryInspection?: { paths: string[]; summary: string } }> };
       state: "current" | "invalidated";
       invalidatedByRevision?: string;
+      invalidatedByGuidanceId?: string;
       cleanup?: { generationId: string; taskId: string; targetRevision: string; attempt: number; status: "started" | "succeeded" | "failed"; startedAt: string; finishedAt?: string; error?: string; diagnosticsPath?: string };
       failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
       submission?: { submissionId: string; generationId: string; targetRevision: string; attempt: number };
@@ -384,7 +397,7 @@ export interface NativeBuildProjection {
       repairTaskIds?: string[];
       completedChecks?: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; green: boolean; evidenceIds: string[]; issues: string[]; attempt: number; startedAt: string; finishedAt: string }>;
     };
-    history: Array<{ generationId: string; taskId: string; targetRevision: string; state: "invalidated"; invalidatedByRevision?: string }>;
+    history: Array<{ generationId: string; taskId: string; targetRevision: string; state: "invalidated"; invalidatedByRevision?: string; invalidatedByGuidanceId?: string }>;
   };
   lastSequence: number;
 }

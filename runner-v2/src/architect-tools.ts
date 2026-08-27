@@ -742,16 +742,17 @@ function planFinalVerificationTool(
       }
       const revisionKey = shortHash(projection.integrationRevision);
       const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
+      const generationSuffix = planVersion === 1 ? "" : `-${planVersion}`;
       try {
         const output = appendEvent(store, {
           runId: context.runId,
           type: "final_verification.generation_created",
           occurredAt: clock(),
           actor: { role: "runner", id: "build-runtime" },
-          idempotencyKey: `final-verification-plan:${projection.integrationRevision}`,
+          idempotencyKey: `final-verification-plan:${projection.integrationRevision}${generationSuffix}`,
           payload: {
-            taskId: `final-verification-${revisionKey}`,
-            generationId: `final-verification-generation-${revisionKey}`,
+            taskId: `final-verification-${revisionKey}${generationSuffix}`,
+            generationId: `final-verification-generation-${revisionKey}${generationSuffix}`,
             targetRevision: projection.integrationRevision,
             planVersion,
             plan: input.plan,

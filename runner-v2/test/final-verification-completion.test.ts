@@ -124,6 +124,19 @@ test("raw terminal events require the exact current approved verification projec
   );
   assert.equal(selected.status, "completed");
   assert.equal(selected.projectHandoff?.status, "selected");
+  assert.throws(
+    () => reduceSchedulerEvent(selected, {
+      eventId: "guidance-after-completed-handoff",
+      runId: selected.runId,
+      sequence: selected.lastSequence + 1,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-26T00:00:20.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance:completed-handoff",
+      payload: { guidanceId: "guidance-completed-handoff", text: "This requires a new Build pass.", version: 1 },
+    }),
+    /completed Build/i,
+  );
 });
 
 test("SQLite append and replay fail closed on forged completion", () => {
@@ -210,6 +223,53 @@ test("complete_run rejects early and an approved current generation requests one
     ).length, 1);
   } finally {
     ready.close();
+  }
+});
+
+test("guidance withdraws a pending handoff and its approved verification across WAL reopen", () => {
+  const fixture = createStoreFixture(true);
+  try {
+    appendTerminal(fixture.store, "project.handoff_requested", "handoff:before-guidance");
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      initialObjective: "",
+      store: fixture.store,
+      evidenceStore: fixture.evidence,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: REVISION }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+    });
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-after-handoff",
+      text: "Reconcile this before applying the project.",
+      version: 1,
+      idempotencyKey: "guidance:after-handoff",
+    });
+    const withdrawn = runtime.projection();
+    assert.equal(withdrawn.status, "running");
+    assert.equal(withdrawn.projectHandoff, undefined);
+    assert.equal(withdrawn.projectHandoffHistory?.length, 1);
+    assert.equal(withdrawn.projectHandoffHistory?.[0]?.status, "withdrawn");
+    assert.equal(withdrawn.projectHandoffHistory?.[0]?.withdrawnByGuidanceId, "guidance-after-handoff");
+    assert.equal(withdrawn.finalVerification?.current, undefined);
+    assert.equal(withdrawn.finalVerification?.history[0]?.invalidatedByGuidanceId, "guidance-after-handoff");
+    assert.equal(withdrawn.userGuidance["guidance-after-handoff"]?.status, "submitted");
+
+    fixture.store.close();
+    fixture.store = new SqliteSchedulerStore(fixture.database, {
+      evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
+    });
+    assert.deepEqual(rebuildSchedulerProjection(fixture.store.readRun(RUN_ID)), withdrawn);
+    assert.throws(
+      () => appendTerminal(fixture.store, "project.handoff_selected", "handoff:stale-choice"),
+      /guidance|handoff|completion|verification/i,
+    );
+  } finally {
+    fixture.close();
   }
 });
 
