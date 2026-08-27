@@ -12,11 +12,12 @@
 - P2.3B1b implementation revision: `61ce8e6b`
 - P2.3B2 implementation revision: `c2056116`
 - P2.4A implementation revision: `16c2024f`
-- Current reviewed implementation head before this report update: `88fc2458`
-- Current reviewed bundle revision: `117fb39f`
+- Current reviewed implementation head before this report update: `2d581997`
+- Current reviewed bundle revision: `321b1968`
 - Implemented scope: every P2 packet from P2.1 through P2.6D, including all
   review-repair commits through fail-closed browser-policy profile validation
-  and the property-aware, source-mapped raw credential redaction correction.
+  and the property-aware, source-mapped, bounded-work raw credential redaction
+  correction.
 - Historical-note convention: statements in the packet-era sections below that
   say a later packet was "locked," "deferred," or "remained with the
   controller" describe that packet's boundary at the time. They are not the
@@ -2368,5 +2369,103 @@ passed
 
 Commit `117fb39f` records the deterministic Runner V2 and WorkBench bundles
 generated from `88fc2458`. Node policy remains maintained LTS lines 22/24 with
+the capability floor and no exact Node patch pin. This correction records
+current implementation evidence and does not declare the P2 phase outcome.
+
+## P2 raw-key discovery work-bound re-review correction
+
+### Correction: the 64-step inspection cap did not bound aggregate scanner work
+
+The `88fc2458` section correctly reports property-aware source-span semantics
+and a 64-layer decoding cap, but its broader bounded-inspection claim was
+incomplete. For every escaped opening quote, raw key discovery tried up to 64
+later quotes and repeatedly sliced and decoded the growing candidate. A benign
+diagnostic made from repeated escaped ordinary strings therefore caused
+quadratic work inside the documented 32 KiB diagnostic limit despite every
+individual candidate loop being capped.
+
+Commit `2d581997` pairs each raw candidate only with its earliest plausible
+closing quote. A sensitive JSON property key cannot contain an unescaped raw
+quote, so that boundary is exact for a valid candidate. A non-sensitive or
+invalid token returns immediately; the single outer scanner remains
+responsible for considering later escaped starts. This removes repeated suffix
+rescans and candidate slices while preserving the existing source-span value
+replacement, Unicode-key decoding, property authority, malformed fail-closed
+behavior, unmatched-quote and backslash-parity preservation, and the 64-layer
+decode policy. The existing twelve-layer opaque-value guard remains green.
+
+The deterministic regression instruments sliced-character work. The old
+source sliced 2,048,416 characters while processing a 1,024-byte benign input;
+the restored implementation stays below the asserted 16-times-input budget.
+A separate 32 KiB smoke guard exercises the full documented text bound without
+making wall-clock timing the primary proof.
+
+RED, fault mutation, restore, and current gate evidence:
+
+```text
+pre-fix deterministic work-bound guard
+1 test, 0 passed, 1 failed
+- 2,048,416 sliced characters for 1,024 input bytes
+- 3,855.9 ms
+
+fault mutation selecting the final diagnostic quote for each candidate
+1 test, 0 passed, 1 failed
+- 105,470 sliced characters for 1,024 input bytes
+- 109.0 ms
+
+restored selected performance guards
+2 tests, 2 passed, 0 failed
+- deterministic work-bound: 1.60 ms
+- 32 KiB smoke: 4.78 ms
+
+restored focused redaction/cleanup/observability gate
+41 tests, 41 passed, 0 failed
+
+Node.js 22.13.0 scoped direct, persistence, observability, recovery, and
+performance guards
+11 tests, 11 passed, 0 failed
+- 32 KiB smoke: 26.38 ms
+
+combined final-verification plus redaction gate
+144 tests, 144 passed, 0 failed
+
+npm run test:runner-v2
+549 tests, 549 passed, 0 failed
+all 11 chained client/policy/UI/pause/model-usage/live-state/transcript/
+files/stats/observability scripts passed; exit 0
+
+impact triage before the clean full retry
+- first full run: 548 passed, 1 unrelated runtime-process status assertion
+  failed under suite load
+- exact failed check rerun: 1 passed, 0 failed
+- isolated clean full retry above: 549 passed, 0 failed
+
+npm run typecheck:runner-v2
+passed, exit 0
+
+targeted ESLint and npm run lint
+passed, exit 0
+
+npx playwright test tests/e2e/runner-v2-final-verification.spec.ts
+5 tests, 5 passed, 0 failed
+
+npm run build
+publish-downloads passed; Next production build passed; 20/20 static pages
+
+npx tsx scripts/test-deploy-runner-artifacts.mts
+1,127 PASS assertions, 0 FAIL assertions, exit 0
+Runner V2 and WorkBench ZIP publication reproducible; public and exported ZIPs
+byte-identical; every archived Runner source matched normalized current source
+
+repeat npm run publish-downloads SHA-256 comparison
+- Runner V2 ZIP identical before/after
+- WorkBench Runner ZIP identical before/after
+
+git diff --check and fix-only diff inspection
+passed
+```
+
+Commit `321b1968` records the deterministic Runner V2 and WorkBench bundles
+generated from `2d581997`. Node policy remains maintained LTS lines 22/24 with
 the capability floor and no exact Node patch pin. This correction records
 current implementation evidence and does not declare the P2 phase outcome.
