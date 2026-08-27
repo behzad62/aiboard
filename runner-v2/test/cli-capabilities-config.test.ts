@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,16 @@ const tsxPath = fileURLToPath(
   new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url),
 );
 
+interface ChildClose {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+interface TrackedCliChild {
+  child: ChildProcess;
+  closed: Promise<ChildClose>;
+}
+
 test("CLI rejects malformed capability configuration before Git preflight or readiness", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-"));
   const project = join(root, "project");
@@ -25,32 +35,23 @@ test("CLI rejects malformed capability configuration before Git preflight or rea
     languageServers: [],
     plaintextEnvironment: { API_KEY: "not-allowed" },
   }));
+  let runner: TrackedCliChild | undefined;
   try {
-    const child = spawn(
-      process.execPath,
-      [
-        tsxPath,
-        cliPath,
-        "--project",
-        project,
-        "--state-dir",
-        state,
-        "--port",
-        "0",
-        "--token",
-        "cli-capabilities-test-token",
-        "--capabilities-config",
-        config,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    runner = spawnCli(
+      project,
+      state,
+      config,
+      "cli-capabilities-test-token",
     );
+    const { child } = runner;
+    const streams = runnerStreams(child);
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    const [code] = await once(child, "exit") as [number | null];
+    streams.stdout.setEncoding("utf8");
+    streams.stderr.setEncoding("utf8");
+    streams.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    streams.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    const { code } = await runner.closed;
 
     assert.equal(code, 1);
     assert.equal(stdout, "");
@@ -58,6 +59,7 @@ test("CLI rejects malformed capability configuration before Git preflight or rea
     assert.match(stderr, /capabilities configuration contains unknown field plaintextEnvironment/i);
     assert.doesNotMatch(stderr, /git/i);
   } finally {
+    if (runner) await terminateCliChild(runner);
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
@@ -171,26 +173,10 @@ test("CLI accepts a valid external capability configuration before listening", a
     extensions: [],
     languageServers: [],
   }));
-  let child: ReturnType<typeof spawn> | undefined;
+  let runner: TrackedCliChild | undefined;
   try {
-    child = spawn(
-      process.execPath,
-      [
-        tsxPath,
-        cliPath,
-        "--project",
-        project,
-        "--state-dir",
-        state,
-        "--port",
-        "0",
-        "--token",
-        "cli-capabilities-valid-token",
-        "--capabilities-config",
-        config,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-    );
+    runner = spawnCli(project, state, config, "cli-capabilities-valid-token");
+    const { child } = runner;
     const diagnostics: string[] = [];
     const streams = runnerStreams(child);
     streams.stderr.setEncoding("utf8");
@@ -204,7 +190,7 @@ test("CLI accepts a valid external capability configuration before listening", a
           projectPath: string;
           stateDirectory: string;
         }),
-        once(child, "exit").then(([code]) => {
+        runner.closed.then(({ code }) => {
           throw new Error(`Runner exited before readiness (${String(code)}): ${diagnostics.join("")}`);
         }),
         new Promise<never>((_resolve, reject) => {
@@ -219,10 +205,7 @@ test("CLI accepts a valid external capability configuration before listening", a
       lines.close();
     }
   } finally {
-    if (child && child.exitCode === null) {
-      child.kill("SIGTERM");
-      await once(child, "exit");
-    }
+    if (runner) await terminateCliChild(runner);
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
@@ -239,26 +222,10 @@ test("CLI rejects a capability configuration placed inside the project", async (
     extensions: [],
     languageServers: [],
   }));
-  let child: ReturnType<typeof spawn> | undefined;
+  let runner: TrackedCliChild | undefined;
   try {
-    child = spawn(
-      process.execPath,
-      [
-        tsxPath,
-        cliPath,
-        "--project",
-        project,
-        "--state-dir",
-        state,
-        "--port",
-        "0",
-        "--token",
-        "cli-capabilities-contained-token",
-        "--capabilities-config",
-        config,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-    );
+    runner = spawnCli(project, state, config, "cli-capabilities-contained-token");
+    const { child } = runner;
     let stdout = "";
     let stderr = "";
     const streams = runnerStreams(child);
@@ -268,7 +235,7 @@ test("CLI rejects a capability configuration placed inside the project", async (
     streams.stderr.on("data", (chunk: string) => { stderr += chunk; });
     let timer: NodeJS.Timeout | undefined;
     const outcome = await Promise.race([
-      once(child, "exit").then(([code]) => ({ type: "exit" as const, code: code as number | null })),
+      runner.closed.then(({ code }) => ({ type: "exit" as const, code })),
       new Promise<{ type: "timeout" }>((resolve) => {
         timer = setTimeout(() => resolve({ type: "timeout" }), 3_000);
       }),
@@ -282,15 +249,55 @@ test("CLI rejects a capability configuration placed inside the project", async (
     assert.equal(stdout, "");
     assert.match(stderr, /capabilities configuration must be outside the project directory/i);
   } finally {
-    if (child && child.exitCode === null) {
-      child.kill("SIGTERM");
-      await once(child, "exit");
-    }
+    if (runner) await terminateCliChild(runner);
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
-function runnerStreams(child: ReturnType<typeof spawn>) {
+function spawnCli(
+  project: string,
+  state: string,
+  config: string,
+  token: string,
+): TrackedCliChild {
+  return trackCliChild(spawn(
+    process.execPath,
+    [
+      tsxPath,
+      cliPath,
+      "--project",
+      project,
+      "--state-dir",
+      state,
+      "--port",
+      "0",
+      "--token",
+      token,
+      "--capabilities-config",
+      config,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+  ));
+}
+
+function trackCliChild(child: ChildProcess): TrackedCliChild {
+  return {
+    child,
+    closed: new Promise<ChildClose>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+  };
+}
+
+async function terminateCliChild(runner: TrackedCliChild): Promise<ChildClose> {
+  const { child } = runner;
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGTERM");
+  }
+  return await runner.closed;
+}
+
+function runnerStreams(child: ChildProcess) {
   const { stdout, stderr } = child;
   if (!stdout || !stderr) {
     throw new Error("Runner CLI test requires stdout and stderr pipes.");
@@ -324,24 +331,8 @@ async function runCliToExit(
   config: string,
   token: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn(
-    process.execPath,
-    [
-      tsxPath,
-      cliPath,
-      "--project",
-      project,
-      "--state-dir",
-      state,
-      "--port",
-      "0",
-      "--token",
-      token,
-      "--capabilities-config",
-      config,
-    ],
-    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-  );
+  const runner = spawnCli(project, state, config, token);
+  const { child } = runner;
   const streams = runnerStreams(child);
   let stdout = "";
   let stderr = "";
@@ -352,22 +343,18 @@ async function runCliToExit(
   let timeout: NodeJS.Timeout | undefined;
   try {
     const outcome = await Promise.race([
-      once(child, "exit").then(([code]) => ({ exited: true as const, code: code as number | null })),
+      runner.closed.then(({ code }) => ({ exited: true as const, code })),
       new Promise<{ exited: false }>((resolve) => {
         timeout = setTimeout(() => resolve({ exited: false }), 4_000);
       }),
     ]);
     if (!outcome.exited) {
-      child.kill("SIGTERM");
-      await once(child, "exit");
+      await terminateCliChild(runner);
       assert.fail(`Runner reached a live state instead of rejecting startup: ${stdout}`);
     }
     return { code: outcome.code, stdout, stderr };
   } finally {
     if (timeout) clearTimeout(timeout);
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await once(child, "exit");
-    }
+    await terminateCliChild(runner);
   }
 }

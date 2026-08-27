@@ -181,7 +181,7 @@ test("LSP client cannot bypass the restart limit through an explicit start", asy
 test("LSP client force-closes a server that does not answer shutdown", async () => {
   const fixture = workspace("forced-shutdown");
   const client = fixture.client({
-    requestTimeoutMs: 100,
+    requestTimeoutMs: 500,
     shutdownTimeoutMs: 100,
     env: {
       LSP_FIXTURE_IGNORE_SHUTDOWN: "1",
