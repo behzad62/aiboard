@@ -273,6 +273,52 @@ test("guidance withdraws a pending handoff and its approved verification across 
   }
 });
 
+test("an exact accepted guidance retry survives completed handoff and WAL reopen", () => {
+  const accepted = {
+    guidanceId: "guidance-before-completion",
+    text: "Preserve this durable instruction through handoff.",
+    version: 1,
+    idempotencyKey: "guidance:before-completion",
+  };
+  const fixture = createStoreFixture(true, accepted);
+  try {
+    appendTerminal(fixture.store, "project.handoff_requested", "handoff:after-guidance");
+    appendTerminal(fixture.store, "project.handoff_selected", "handoff:after-guidance:keep");
+    const completed = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.initialObjective, "Terminal replay objective.\n");
+
+    fixture.store.close();
+    fixture.store = new SqliteSchedulerStore(fixture.database, {
+      evidenceStore: fixture.evidence,
+      validateCleanupReceipt: () => undefined,
+      validateExecutionProfile: acceptFinalVerificationProfile,
+    });
+    const runtime = runtimeForStore(fixture.store, "Terminal replay objective.\n");
+    const beforeRetry = runtime.projection();
+    assert.equal(beforeRetry.status, completed.status);
+    assert.deepEqual(runtime.submitUserGuidance(accepted), beforeRetry);
+    assert.equal(fixture.store.readRun(RUN_ID).filter(
+      (event) => event.type === "user.guidance_submitted",
+    ).length, 1);
+    assert.equal(runtime.projection().initialObjective, "Terminal replay objective.\n");
+    assert.throws(
+      () => runtime.submitUserGuidance({ ...accepted, text: "Changed after completion." }),
+      /completed|idempotency/i,
+    );
+    assert.throws(
+      () => runtime.submitUserGuidance({
+        ...accepted,
+        guidanceId: "new-guidance-after-completion",
+        idempotencyKey: "guidance:new-after-completion",
+      }),
+      /completed Build/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 test("integration advancement after approval blocks tool, request, selection, and completion", async () => {
   const stale = createStoreFixture(true);
   try {
@@ -641,7 +687,15 @@ interface StoreFixture {
   close(): void;
 }
 
-function createStoreFixture(ready: boolean): StoreFixture {
+function createStoreFixture(
+  ready: boolean,
+  acceptedGuidance?: {
+    guidanceId: string;
+    text: string;
+    version: number;
+    idempotencyKey: string;
+  },
+): StoreFixture {
   const root = mkdtempSync(join(tmpdir(), "runner-v2 completion gate "));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
@@ -661,6 +715,33 @@ function createStoreFixture(ready: boolean): StoreFixture {
     },
   };
   const plan = finalPlan();
+  let acknowledgementEvidenceId: string | undefined;
+  if (acceptedGuidance) {
+    const acknowledgementEvidence = fixture.evidence.record({
+      runId: RUN_ID,
+      taskId: "architect",
+      actor: { role: "architect", id: "architect" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "initial plan includes accepted guidance",
+        capturedAt: "2026-08-26T00:00:01.250Z",
+        screenshotArtifactHash: "c".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: "2026-08-26T00:00:01.250Z",
+      idempotencyKey: "guidance-terminal-replay:evidence",
+    });
+    acknowledgementEvidenceId = acknowledgementEvidence.id;
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "run.initialized",
+      occurredAt: "2026-08-26T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "run-initialized",
+      payload: { objective: "Terminal replay objective.\n" },
+    });
+  }
   fixture.store.append({
     runId: RUN_ID,
     type: "run.policy_configured",
@@ -669,6 +750,20 @@ function createStoreFixture(ready: boolean): StoreFixture {
     idempotencyKey: "policy",
     payload: { runPolicy: "finish" },
   });
+  if (acceptedGuidance) {
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-26T00:00:00.500Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: acceptedGuidance.idempotencyKey,
+      payload: {
+        guidanceId: acceptedGuidance.guidanceId,
+        text: acceptedGuidance.text,
+        version: acceptedGuidance.version,
+      },
+    });
+  }
   fixture.store.append({
     runId: RUN_ID,
     type: "plan.created",
@@ -680,6 +775,24 @@ function createStoreFixture(ready: boolean): StoreFixture {
       tasks: [validProjection().tasks.implementation],
     },
   });
+  if (acceptedGuidance) {
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_acknowledged",
+      occurredAt: "2026-08-26T00:00:01.500Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: `${acceptedGuidance.idempotencyKey}:ack`,
+      payload: {
+        guidanceId: acceptedGuidance.guidanceId,
+        expectedVersion: acceptedGuidance.version,
+        resolution: {
+          type: "no_plan_change",
+          rationale: "The initial plan already incorporates the durable guidance.",
+          evidenceIds: [acknowledgementEvidenceId!],
+        },
+      },
+    });
+  }
   fixture.store.append({
     runId: RUN_ID,
     type: "integration.revision_advanced",
@@ -794,6 +907,19 @@ function createStoreFixture(ready: boolean): StoreFixture {
     },
   });
   return fixture;
+}
+
+function runtimeForStore(store: SqliteSchedulerStore, objective = ""): BuildRuntime {
+  return new BuildRuntime({
+    runId: RUN_ID,
+    initialObjective: objective,
+    store,
+    workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+    architectDriver: { run: async () => undefined },
+    integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: REVISION }) },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/unused",
+  });
 }
 
 async function invokeComplete(

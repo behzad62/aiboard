@@ -43,6 +43,30 @@ export interface FinalVerificationCleanupReceiptIdentity {
   requiresDiagnostics: boolean;
 }
 
+export async function retireInvalidatedFinalVerificationGeneration(input: {
+  cleanup: FinalVerificationCleanupController;
+  generation: {
+    generationId: string;
+    taskId: string;
+    targetRevision: string;
+    executionProfile: { portLease?: unknown };
+  };
+  releasePortLease?(lease: unknown, targetRevision: string): Promise<void>;
+}): Promise<void> {
+  const lease = input.generation.executionProfile.portLease;
+  try {
+    await input.cleanup.cleanup({
+      generationId: input.generation.generationId,
+      taskId: input.generation.taskId,
+      targetRevision: input.generation.targetRevision,
+    });
+  } finally {
+    if (lease && input.releasePortLease) {
+      await input.releasePortLease(lease, input.generation.targetRevision);
+    }
+  }
+}
+
 /** Validate the owned receipt synchronously at scheduler append/replay boundaries. */
 export function validateOwnedFinalVerificationCleanupReceipt(
   stateDirectory: string,
@@ -196,6 +220,7 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
 
 export class OwnedFinalVerificationCleanup implements FinalVerificationCleanupController {
   private readonly stateDirectory: string;
+  private operationQueue: Promise<void> = Promise.resolve();
   constructor(private readonly options: {
     stateDirectory: string;
     runId: string;
@@ -213,6 +238,15 @@ export class OwnedFinalVerificationCleanup implements FinalVerificationCleanupCo
   }
 
   async cleanup(input: {
+    generationId: string;
+    taskId: string;
+    targetRevision: string;
+    failed?: FinalVerificationDiagnosticsInput;
+  }): Promise<{ diagnosticsPath?: string }> {
+    return await this.serialize(() => this.cleanupOwned(input));
+  }
+
+  private async cleanupOwned(input: {
     generationId: string;
     taskId: string;
     targetRevision: string;
@@ -277,6 +311,15 @@ export class OwnedFinalVerificationCleanup implements FinalVerificationCleanupCo
       ...(diagnosticsPath ? { diagnosticsPath } : {}),
     });
     return diagnosticsPath ? { diagnosticsPath } : {};
+  }
+
+  private async serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationQueue;
+    let release!: () => void;
+    this.operationQueue = new Promise<void>((resolveQueue) => { release = resolveQueue; });
+    await previous;
+    try { return await operation(); }
+    finally { release(); }
   }
 
   private receiptPath(generationId: string): string {

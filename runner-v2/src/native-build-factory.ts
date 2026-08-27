@@ -34,6 +34,7 @@ import { FinalVerificationPortAuthority } from "./final-verification-port-author
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
+  retireInvalidatedFinalVerificationGeneration,
   validateOwnedFinalVerificationCleanupReceipt,
 } from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
@@ -429,6 +430,17 @@ export class NativeBuildFactory {
     return {
       runtime,
       finalVerificationCleanup,
+      retireInvalidatedFinalVerification: async (generation) =>
+        await retireInvalidatedFinalVerificationGeneration({
+          cleanup: finalVerificationCleanup,
+          generation,
+          releasePortLease: async (lease, targetRevision) =>
+            await finalVerificationPorts.release(
+              lease,
+              spec.runId,
+              targetRevision,
+            ),
+        }),
       usage: () => {
         const budget = budgetLedger.snapshot(spec.runId);
         return {

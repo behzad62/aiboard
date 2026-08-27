@@ -14,6 +14,7 @@ import type {
   ProjectHandoffChoice,
   SchedulerActor,
   SchedulerEvent,
+  FinalVerificationGenerationProjection,
   SchedulerProjection,
 } from "./scheduler-store.js";
 import { assertBuildCompletionReady } from "./scheduler-store.js";
@@ -33,6 +34,9 @@ export interface NativeBuildRuntimeHandle {
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
   /** Constructed cleanup primitive; lifecycle wiring is owned by the P2.6 manager packet. */
   finalVerificationCleanup?: FinalVerificationCleanupController;
+  retireInvalidatedFinalVerification?(
+    generation: FinalVerificationGenerationProjection,
+  ): Promise<void>;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
 }
@@ -74,7 +78,17 @@ export class NativeBuildManager implements BuildControlPlane {
       for (const spec of this.options.specs.list()) {
         const handle = await this.ensureRuntime(spec);
         try {
-          await handle.finalVerificationCleanup?.quiesceRun();
+          const projection = handle.runtime.projection();
+          const interrupted = projection.status === "completed" || projection.finalVerification?.current
+            ? undefined
+            : [...(projection.finalVerification?.history ?? [])]
+                .reverse()
+                .find((generation) => generation.invalidatedByGuidanceId);
+          if (interrupted && handle.retireInvalidatedFinalVerification) {
+            await handle.retireInvalidatedFinalVerification(interrupted);
+          } else {
+            await handle.finalVerificationCleanup?.quiesceRun();
+          }
         } catch (error) {
           quiesceFailed.add(spec.runId);
           this.options.onPumpError?.(spec.runId, error);
@@ -198,7 +212,18 @@ export class NativeBuildManager implements BuildControlPlane {
       this.serialized(async () => {
         const handle = this.require(runId);
         const submitted = handle.runtime.submitUserGuidance(input);
-        await handle.finalVerificationCleanup?.quiesceRun();
+        const interrupted = submitted.status === "completed"
+          ? undefined
+          : [...(submitted.finalVerification?.history ?? [])]
+              .reverse()
+              .find((generation) =>
+                generation.invalidatedByGuidanceId === input.guidanceId
+              );
+        if (interrupted && handle.retireInvalidatedFinalVerification) {
+          await handle.retireInvalidatedFinalVerification(interrupted);
+        } else {
+          await handle.finalVerificationCleanup?.quiesceRun();
+        }
         return submitted;
       })
     );

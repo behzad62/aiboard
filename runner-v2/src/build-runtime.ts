@@ -293,9 +293,6 @@ export class BuildRuntime {
     version: number;
     idempotencyKey: string;
   }): SchedulerProjection {
-    if (this.projection().status === "completed") {
-      throw new Error("A completed Build cannot receive in-flight user guidance.");
-    }
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const appended = this.store.append({
       runId: this.runId,

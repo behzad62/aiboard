@@ -277,6 +277,151 @@ test("durable steering appends before the manager wakes the autonomous pump", as
   }
 });
 
+test("durable steering retires the exact invalidated verification generation before pumping", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-retirement-"));
+  let manager: NativeBuildManager | undefined;
+  const calls: string[] = [];
+  let projection = requestedHandoffProjection("finish");
+  projection = { ...projection, status: "running", projectHandoff: undefined };
+  const invalidated = projection.finalVerification!.current!;
+  try {
+    const runtime = {
+      ...fakeRuntime("run_1"),
+      projection: () => projection,
+      submitUserGuidance: () => {
+        calls.push("guidance-appended");
+        projection = {
+          ...projection,
+          finalVerification: {
+            history: [{ ...invalidated, state: "invalidated", invalidatedByGuidanceId: "guidance-retire" }],
+          },
+        };
+        return projection;
+      },
+      runUntilBlocked: async () => {
+        calls.push("pump-started");
+        return { status: "blocked" as const, action: "user_guidance_required" };
+      },
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"),
+        runtime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({
+          integrationRevision: "revision-final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => { calls.push("verification-quiesced"); },
+          cleanup: async () => ({}),
+        },
+        retireInvalidatedFinalVerification: async (generation: typeof invalidated) => {
+          assert.equal(generation.generationId, invalidated.generationId);
+          calls.push("verification-retired");
+        },
+        cleanup: async () => undefined,
+        close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    await manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-retire",
+      text: "Interrupt verification safely.",
+      version: 1,
+      idempotencyKey: "guidance:retire",
+    });
+    await manager.awaitIdle("run_1");
+    assert.deepEqual(calls.slice(0, 4), [
+      "guidance-appended",
+      "verification-retired",
+      "pump-started",
+      "verification-quiesced",
+    ]);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery retires a durably invalidated generation after post-append cleanup failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-retirement-recovery-"));
+  const specsPath = join(root, "builds.sqlite");
+  let first: NativeBuildManager | undefined;
+  let recovered: NativeBuildManager | undefined;
+  const calls: string[] = [];
+  let projection = requestedHandoffProjection("finish");
+  projection = { ...projection, status: "running", projectHandoff: undefined };
+  const invalidated = projection.finalVerification!.current!;
+  const runtime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    submitUserGuidance: () => {
+      projection = {
+        ...projection,
+        finalVerification: {
+          history: [{ ...invalidated, state: "invalidated", invalidatedByGuidanceId: "guidance-recover-retire" }],
+        },
+      };
+      return projection;
+    },
+    runUntilBlocked: async () => {
+      calls.push("pump-started");
+      return { status: "blocked" as const, action: "user_guidance_required" };
+    },
+  } as unknown as BuildRuntime;
+  try {
+    first = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(specsPath),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "revision-final", integrationBranch: "aiboard/run/integration", appliedToProject: false }),
+        retireInvalidatedFinalVerification: async () => { throw new Error("cleanup storage unavailable"); },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await first.create(spec);
+    await assert.rejects(
+      first.submitUserGuidance("run_1", {
+        guidanceId: "guidance-recover-retire",
+        text: "Persist before cleanup fails.",
+        version: 1,
+        idempotencyKey: "guidance:recover-retire",
+      }),
+      /cleanup storage unavailable/i,
+    );
+    assert.equal(projection.finalVerification?.history[0]?.invalidatedByGuidanceId, "guidance-recover-retire");
+    await first.close();
+    first = undefined;
+
+    recovered = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(specsPath),
+      shouldAutoRun: () => true,
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "revision-final", integrationBranch: "aiboard/run/integration", appliedToProject: false }),
+        retireInvalidatedFinalVerification: async (generation) => {
+          assert.equal(generation.generationId, invalidated.generationId);
+          calls.push("verification-retired-after-restart");
+        },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await recovered.recover();
+    await recovered.awaitIdle("run_1");
+    assert.deepEqual(calls.slice(0, 2), ["verification-retired-after-restart", "pump-started"]);
+  } finally {
+    await first?.close();
+    await recovered?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("steering that lands during an active pump schedules a post-checkpoint wake", { timeout: 2_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-active-wake-"));
   let manager: NativeBuildManager | undefined;

@@ -10,9 +10,12 @@ import { IntegrationManager } from "../src/integration-manager.js";
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
+  retireInvalidatedFinalVerificationGeneration,
   validateOwnedFinalVerificationCleanupReceipt,
 } from "../src/final-verification-cleanup.js";
+import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
 
 test("failed verification diagnostics archive dirty files before exact cleanup", async () => {
   const fixture = await createFixture("archive");
@@ -384,6 +387,88 @@ test("later generation cleanup is not skipped and quiesce preserves its workspac
     await cleanup.cleanup({ ...cleanupIdentity(fixture), generationId: "generation-2", taskId: "verification-2" });
     assert.equal(existsSync(second.path), false);
     assert.deepEqual(calls, ["process", "browser", "process", "browser", "process", "browser"]);
+  } finally { await closeFixture(fixture); }
+});
+
+test("guidance retirement removes dirty verification state and releases its lease before same-revision restart", async () => {
+  const fixture = await createFixture("guidance-retirement");
+  try {
+    const workspace = await fixture.workspace.create();
+    writeFileSync(join(workspace.path, "interrupted-output.txt"), "partial verification output\n");
+    const ports = new FinalVerificationPortAuthority(fixture.state);
+    const lease = await ports.reserve(fixture.runId, fixture.integration.revision);
+    const cleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      stopRun: async () => undefined,
+      closeBrowserRun: async () => undefined,
+      workspaceManager: fixture.workspace,
+    });
+    await retireInvalidatedFinalVerificationGeneration({
+      cleanup,
+      generation: {
+        generationId: "generation-interrupted",
+        taskId: "verification-interrupted",
+        targetRevision: fixture.integration.revision,
+        executionProfile: {
+          ...emptyFinalVerificationProfile(fixture.integration.revision),
+          portLease: lease,
+        },
+      },
+      releasePortLease: async (ownedLease, targetRevision) =>
+        await ports.release(ownedLease, fixture.runId, targetRevision),
+    });
+    assert.equal(existsSync(workspace.path), false);
+    await assert.rejects(
+      () => ports.validate(lease, fixture.runId, fixture.integration.revision),
+      /lease is missing or invalid/i,
+    );
+
+    const restartedWorkspace = new VerificationWorkspaceManager({
+      repositoryRoot: fixture.project,
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      targetRevision: fixture.integration.revision,
+    });
+    const fresh = await restartedWorkspace.create();
+    assert.equal(fresh.targetRevision, fixture.integration.revision);
+    assert.equal(existsSync(fresh.path), true);
+    await restartedWorkspace.cleanup();
+  } finally { await closeFixture(fixture); }
+});
+
+test("concurrent exact-generation cleanup and guidance retirement share one owned cleanup transaction", async () => {
+  const fixture = await createFixture("concurrent-guidance-retirement");
+  let releaseStop!: () => void;
+  const stopReleased = new Promise<void>((resolve) => { releaseStop = resolve; });
+  let stopStarted!: () => void;
+  const stopObserved = new Promise<void>((resolve) => { stopStarted = resolve; });
+  const calls: string[] = [];
+  try {
+    await fixture.workspace.create();
+    const cleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      stopRun: async () => {
+        calls.push("process");
+        stopStarted();
+        await stopReleased;
+      },
+      closeBrowserRun: async () => { calls.push("browser"); },
+      workspaceManager: fixture.workspace,
+    });
+    const identity = {
+      generationId: "generation-concurrent",
+      taskId: "verification-concurrent",
+      targetRevision: fixture.integration.revision,
+    };
+    const ordinaryCleanup = cleanup.cleanup(identity);
+    await stopObserved;
+    const steeringRetirement = cleanup.cleanup(identity);
+    releaseStop();
+    await Promise.all([ordinaryCleanup, steeringRetirement]);
+    assert.deepEqual(calls, ["process", "browser"]);
+    assert.equal(existsSync(fixture.workspace.path), false);
   } finally { await closeFixture(fixture); }
 });
 
