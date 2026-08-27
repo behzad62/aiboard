@@ -23,6 +23,21 @@ interface TrackedCliChild {
   closed: Promise<ChildClose>;
 }
 
+test("CLI successful shutdown guard rejects a nonzero child close result", async () => {
+  const runner = trackCliChild(spawn(
+    process.execPath,
+    ["-e", "process.exit(1)"],
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+  ));
+  const close = await runner.closed;
+
+  assert.deepEqual(close, { code: 1, signal: null });
+  assert.throws(
+    () => assertSuccessfulCliShutdown(close),
+    /Runner exited after successful readiness with code 1/i,
+  );
+});
+
 test("CLI rejects malformed capability configuration before Git preflight or readiness", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-"));
   const project = join(root, "project");
@@ -174,6 +189,7 @@ test("CLI accepts a valid external capability configuration before listening", a
     languageServers: [],
   }));
   let runner: TrackedCliChild | undefined;
+  let readinessSucceeded = false;
   try {
     runner = spawnCli(project, state, config, "cli-capabilities-valid-token");
     const { child } = runner;
@@ -200,13 +216,20 @@ test("CLI accepts a valid external capability configuration before listening", a
       assert.equal(readiness.protocolVersion, 2);
       assert.equal(readiness.projectPath, project);
       assert.equal(readiness.stateDirectory, state);
+      readinessSucceeded = true;
     } finally {
       if (timeout) clearTimeout(timeout);
       lines.close();
     }
   } finally {
-    if (runner) await terminateCliChild(runner);
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    try {
+      if (runner) {
+        const close = await terminateCliChild(runner);
+        if (readinessSucceeded) assertSuccessfulCliShutdown(close);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
   }
 });
 
@@ -295,6 +318,16 @@ async function terminateCliChild(runner: TrackedCliChild): Promise<ChildClose> {
     child.kill("SIGTERM");
   }
   return await runner.closed;
+}
+
+function assertSuccessfulCliShutdown(close: ChildClose): void {
+  const gracefulExit = close.code === 0 && close.signal === null;
+  const expectedSigtermExit = close.code === null && close.signal === "SIGTERM";
+  if (!gracefulExit && !expectedSigtermExit) {
+    throw new Error(
+      `Runner exited after successful readiness with code ${String(close.code)} and signal ${String(close.signal)}.`,
+    );
+  }
 }
 
 function runnerStreams(child: ChildProcess) {
