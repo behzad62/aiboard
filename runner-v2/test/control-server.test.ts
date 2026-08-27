@@ -42,6 +42,54 @@ async function json(response: Response): Promise<Record<string, unknown>> {
   return (await response.json()) as Record<string, unknown>;
 }
 
+async function createSteeringControlFixture(
+  directory: string,
+  decorateBuilds?: (builds: BuildControlPlane) => BuildControlPlane,
+) {
+  const scheduler = new SqliteSchedulerStore(join(directory, "scheduler.sqlite"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const runtime = new BuildRuntime({
+    runId: "run-steering",
+    initialObjective: "Build exactly this application.\n",
+    store: scheduler,
+    workerDriver: { run: async () => ({ type: "paused" as const, reason: "unused" }) },
+    architectDriver: { run: async () => undefined },
+    integrationDriver: {
+      integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+    },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/unused",
+    clock: () => "2026-08-27T00:00:00.000Z",
+  });
+  const registry = new BuildRuntimeRegistry();
+  registry.register(runtime);
+  const server = new ControlServer({
+    supervisor,
+    token,
+    bootstrapRun,
+    builds: decorateBuilds?.(registry) ?? registry,
+  });
+  const address = await server.start(0);
+  return {
+    scheduler,
+    server,
+    url: `${address.url}/v2/runs/run-steering/build/user-guidance`,
+    async close() {
+      await server.close();
+      scheduler.close();
+      supervisor.close();
+    },
+  };
+}
+
+function durableGuidanceBody(
+  guidanceId: string,
+  text: string,
+  idempotencyKey: string,
+) {
+  return { guidanceId, text, idempotencyKey };
+}
+
 test("control API authenticates every route and drives durable lifecycle", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-control-api-"));
   const supervisor = new RunSupervisor(
@@ -986,7 +1034,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
   }
 });
 
-test("authenticated steering endpoints are durable, concurrent, idempotent, versioned, and restart-safe", async () => {
+test("authenticated steering routes enforce validation, unique concurrency, idempotency conflicts, and exact question versions", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-control-steering-"));
   const schedulerPath = join(directory, "scheduler.sqlite");
   const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
@@ -1016,8 +1064,8 @@ test("authenticated steering endpoints are durable, concurrent, idempotent, vers
     idempotencyKey,
   });
   try {
-    let control = createServer();
-    let address = await control.start(0);
+    const control = createServer();
+    const address = await control.start(0);
     const activeScheduler = scheduler!;
     const guidanceUrl = `${address.url}/v2/runs/run-steering/build/user-guidance`;
     assert.equal((await fetch(guidanceUrl, { method: "POST", body: "{}" })).status, 401);
@@ -1115,26 +1163,165 @@ test("authenticated steering endpoints are durable, concurrent, idempotent, vers
     assert.equal(duplicateAnswer.status, 409);
     assert.equal((await json(duplicateAnswer)).code, "invalid_transition");
     assert.equal(activeScheduler.readRun("run-steering").filter((event) => event.type === "architect.question_answered").length, 1);
-
-    await control.close();
-    activeScheduler.close();
-    server = undefined;
-    scheduler = undefined;
-    control = createServer();
-    address = await control.start(0);
-    const recoveredScheduler = scheduler!;
-    const retryAfterRestart = await fetch(
-      `${address.url}/v2/runs/run-steering/build/user-guidance`,
-      authorized({ method: "POST", body: JSON.stringify(guidanceBody(1)) }),
-    );
-    assert.equal(retryAfterRestart.status, 200);
-    assert.equal(recoveredScheduler.readRun("run-steering").filter((event) => event.type === "user.guidance_submitted").length, 3);
-    assert.equal(recoveredScheduler.readRun("run-steering").filter((event) => event.type === "architect.question_answered").length, 1);
-    assert.equal(recoveredScheduler.readRun("run-steering").find((event) => event.type === "run.initialized")?.payload.objective, "Build exactly this application.\n");
   } finally {
     await server?.close();
     scheduler?.close();
     supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent identical guidance retries both succeed with one durable event and version", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-guidance-identical-"));
+  let fixture: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  try {
+    fixture = await createSteeringControlFixture(directory);
+    const body = durableGuidanceBody(
+      "guidance-concurrent",
+      "Apply the same durable direction.",
+      "guidance:concurrent:same",
+    );
+    const responses = await Promise.all([
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(body) })),
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(body) })),
+    ]);
+    assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+    const projections = await Promise.all(responses.map(async (response) => await json(response)));
+    assert.deepEqual(projections.map((projection) => projection.userGuidanceVersion), [1, 1]);
+
+    const events = fixture.scheduler.readRun("run-steering");
+    const guidanceEvents = events.filter((event) => event.type === "user.guidance_submitted");
+    assert.equal(guidanceEvents.length, 1);
+    assert.equal(guidanceEvents[0]?.payload.guidanceId, "guidance-concurrent");
+    assert.equal(guidanceEvents[0]?.payload.version, 1);
+  } finally {
+    await fixture?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent conflicting guidance retries yield one success, one conflict, and one durable winner", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-guidance-conflict-"));
+  let fixture: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  try {
+    fixture = await createSteeringControlFixture(directory);
+    const first = durableGuidanceBody(
+      "guidance-conflict",
+      "Choose the first direction.",
+      "guidance:concurrent:conflict",
+    );
+    const second = durableGuidanceBody(
+      "guidance-conflict",
+      "Choose the second direction.",
+      "guidance:concurrent:conflict",
+    );
+    const responses = await Promise.all([
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(first) })),
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(second) })),
+    ]);
+    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
+    const conflict = responses.find((response) => response.status === 409);
+    assert.ok(conflict);
+    assert.equal((await json(conflict)).code, "idempotency_conflict");
+
+    const guidanceEvents = fixture.scheduler
+      .readRun("run-steering")
+      .filter((event) => event.type === "user.guidance_submitted");
+    assert.equal(guidanceEvents.length, 1);
+    assert.equal(guidanceEvents[0]?.payload.version, 1);
+    assert.ok(
+      guidanceEvents[0]?.payload.text === first.text
+      || guidanceEvents[0]?.payload.text === second.text,
+    );
+  } finally {
+    await fixture?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("guidance retry after a lost post-append response replays one WAL event without changing the objective", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-guidance-lost-response-"));
+  let releaseResponse!: () => void;
+  const responseReleased = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  let signalAppended!: () => void;
+  const appended = new Promise<void>((resolve) => {
+    signalAppended = resolve;
+  });
+  let signalReturned!: () => void;
+  const returned = new Promise<void>((resolve) => {
+    signalReturned = resolve;
+  });
+  let fixture: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  let recovered: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  try {
+    fixture = await createSteeringControlFixture(directory, (builds) => new Proxy(builds, {
+      get(target, property, receiver) {
+        if (property === "submitUserGuidance") {
+          return async (
+            runId: Parameters<BuildControlPlane["submitUserGuidance"]>[0],
+            input: Parameters<BuildControlPlane["submitUserGuidance"]>[1],
+          ) => {
+            const projection = await target.submitUserGuidance(runId, input);
+            signalAppended();
+            await responseReleased;
+            signalReturned();
+            return projection;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }));
+    const body = durableGuidanceBody(
+      "guidance-lost-response",
+      "Persist this before acknowledging HTTP success.",
+      "guidance:lost-response",
+    );
+    const abortController = new AbortController();
+    const request = fetch(fixture.url, authorized({
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: abortController.signal,
+    })).then(
+      (response) => ({ response }),
+      (error: unknown) => ({ error }),
+    );
+
+    await appended;
+    assert.equal(
+      fixture.scheduler.readRun("run-steering").filter((event) => event.type === "user.guidance_submitted").length,
+      1,
+    );
+    abortController.abort();
+    releaseResponse();
+    const lostResponse = await request;
+    assert.ok("error" in lostResponse);
+    assert.equal((lostResponse.error as Error).name, "AbortError");
+    await returned;
+
+    await fixture.close();
+    fixture = undefined;
+    recovered = await createSteeringControlFixture(directory);
+    const retry = await fetch(recovered.url, authorized({
+      method: "POST",
+      body: JSON.stringify(body),
+    }));
+    assert.equal(retry.status, 200);
+    const retryProjection = await json(retry);
+    assert.equal(retryProjection.userGuidanceVersion, 1);
+
+    const recoveredEvents = recovered.scheduler.readRun("run-steering");
+    assert.equal(recoveredEvents.filter((event) => event.type === "user.guidance_submitted").length, 1);
+    assert.equal(
+      recoveredEvents.find((event) => event.type === "run.initialized")?.payload.objective,
+      "Build exactly this application.\n",
+    );
+  } finally {
+    releaseResponse();
+    await fixture?.close();
+    await recovered?.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
