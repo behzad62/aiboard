@@ -48,6 +48,11 @@ implements VerifierVerdictAuthority {
   ) {}
 
   requestReview(input: RequestVerifierReviewInput): VerifierReviewProjection {
+    const current = this.currentReview(input.runId);
+    const supersedesReviewId =
+      current?.status === "requested" && current.reviewId !== input.reviewId
+        ? current.reviewId
+        : undefined;
     this.store.append({
       runId: input.runId,
       type: "verifier.review_requested",
@@ -61,6 +66,7 @@ implements VerifierVerdictAuthority {
         runtime: { ...input.runtime },
         excludedModels: input.excludedModels.map((model) => ({ ...model })),
         criteria: input.criteria.map((criterion) => ({ ...criterion })),
+        ...(supersedesReviewId ? { supersedesReviewId } : {}),
       },
     });
     const review = this.currentReview(input.runId);

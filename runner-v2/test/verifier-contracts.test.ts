@@ -6,6 +6,11 @@ import test from "node:test";
 
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
 import {
+  BuildRuntime,
+  type ArchitectRuntimeDriver,
+  type IndependentVerifierDriver,
+} from "../src/build-runtime.js";
+import {
   buildCompletionReadiness,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
@@ -532,6 +537,242 @@ test("risk assessment is recomputed by the kernel and cannot be lowered for one 
   }
 });
 
+test("high-risk runtime assesses, verifies, and only then requests completion", async () => {
+  const fixture = createFixture("runtime-positive");
+  let verifierCalls = 0;
+  let completionCalls = 0;
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        verifierCalls += 1;
+        appendVerifierRequest(fixture.store);
+        fixture.store.append(verdictEvent({
+          criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+        }));
+        return { status: "verdict_submitted" };
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async (request) => {
+      assert.equal(request.reason.type, "completion_decision_required");
+      completionCalls += 1;
+      const result = await request.tools.invoke({
+        type: "tool_call",
+        callId: "complete-after-verifier",
+        name: "complete_run",
+        arguments: { summary: "The independently verified build is ready." },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "Completion failed");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    assert.equal(completionCalls, 0);
+    assert.equal((await runtime.step()).action, "verifier_verdict_submitted");
+    assert.equal(completionCalls, 0);
+    const completed = await runtime.step();
+    assert.equal(completed.status, "paused");
+    assert.equal(completed.action, "completion_decision_required");
+    assert.equal(runtime.projection().projectHandoff?.status, "requested");
+    assert.equal(verifierCalls, 1);
+    assert.equal(completionCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("unavailable independent verification creates a typed user-selection pause", async () => {
+  const fixture = createFixture("runtime-unavailable");
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => ({
+        status: "unavailable",
+        reason: "no_independent_healthy_capability_match",
+      }),
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      assert.fail("Completion must not run without an independent verifier.");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    const paused = await runtime.step();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "verifier_selection_required");
+    assert.deepEqual(runtime.projection().verifierSelection, {
+      status: "required",
+      reason: "no_independent_healthy_capability_match",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+    });
+    assert.equal(runtime.projection().projectHandoff, undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("provider failure supersedes a pending review with an independent fallback", async () => {
+  const fixture = createFixture("runtime-provider-fallback");
+  let calls = 0;
+  try {
+    const authority = new SchedulerVerifierVerdictAuthority(fixture.store);
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        calls += 1;
+        if (calls === 1) {
+          requestReviewFor(authority, {
+            reviewId: "review-google",
+            runtimeId: "google:verifier",
+            providerId: "google",
+            modelId: "google/verifier-model",
+            sessionId: "session-google",
+          });
+          return {
+            status: "suspended",
+            reason: "provider_error",
+            runtimeId: "google:verifier",
+          };
+        }
+        requestReviewFor(authority, {
+          reviewId: "review-fallback",
+          runtimeId: "fallback:verifier",
+          providerId: "fallback",
+          modelId: "fallback/independent-model",
+          sessionId: "session-fallback",
+        });
+        authority.submitVerdict({
+          runId: RUN_ID,
+          reviewId: "review-fallback",
+          targetRevision: REVISION,
+          sessionId: "session-fallback",
+          actor: { role: "verifier", id: "fallback:verifier" },
+          criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+          occurredAt: "2026-08-27T00:00:05.000Z",
+        });
+        return { status: "verdict_submitted" };
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      assert.fail("This test stops before the completion request.");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    assert.equal((await runtime.step()).action, "verifier_provider_failed");
+    assert.equal((await runtime.step()).action, "verifier_verdict_submitted");
+    const projection = runtime.projection();
+    assert.equal(projection.verifier?.current?.reviewId, "review-fallback");
+    assert.equal(projection.verifier?.current?.verdict?.satisfied, true);
+    assert.equal(projection.verifier?.history[0]?.reviewId, "review-google");
+    assert.equal(projection.verifier?.history[0]?.state, "superseded");
+    assert.equal(
+      projection.verifier?.history[0]?.supersededByReviewId,
+      "review-fallback",
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("typed verifier selection resumes with the selected runtime", async () => {
+  const fixture = createFixture("runtime-selection-resume");
+  let preferredRuntimeId: string | undefined;
+  try {
+    const authority = new SchedulerVerifierVerdictAuthority(fixture.store);
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async (request) => {
+        preferredRuntimeId = request.preferredRuntimeId;
+        if (!request.preferredRuntimeId) {
+          return {
+            status: "unavailable",
+            reason: "no_independent_healthy_capability_match",
+          };
+        }
+        requestReviewFor(authority, {
+          reviewId: "review-selected",
+          runtimeId: request.preferredRuntimeId,
+          providerId: "fallback",
+          modelId: "fallback/independent-model",
+          sessionId: "session-selected",
+        });
+        authority.submitVerdict({
+          runId: RUN_ID,
+          reviewId: "review-selected",
+          targetRevision: REVISION,
+          sessionId: "session-selected",
+          actor: { role: "verifier", id: request.preferredRuntimeId },
+          criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+          occurredAt: "2026-08-27T00:00:05.000Z",
+        });
+        return { status: "verdict_submitted" };
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      assert.fail("This test stops before the completion request.");
+    });
+
+    await runtime.step();
+    assert.equal((await runtime.step()).status, "paused");
+    assert.throws(
+      () => runtime.resume("forbidden-generic-resume"),
+      /verifier selection/i,
+    );
+    const selected = runtime.selectVerifierRuntime(
+      "fallback:verifier",
+      "select:fallback",
+    );
+    assert.equal(selected.status, "running");
+    assert.equal((await runtime.step()).action, "verifier_verdict_submitted");
+    assert.equal(preferredRuntimeId, "fallback:verifier");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("restart with a durable positive verdict does not invoke the verifier again", async () => {
+  const fixture = createFixture("runtime-durable-restart");
+  let verifierCalls = 0;
+  let completionCalls = 0;
+  try {
+    appendVerifierPolicy(fixture.store);
+    appendRiskAssessment(fixture.store, highRiskInput(), "risk:restart");
+    appendVerifierRequest(fixture.store);
+    fixture.store.append(verdictEvent({
+      criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+    }));
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => {
+        assert.fail("Durable risk must be reused.");
+      },
+      verify: async () => {
+        verifierCalls += 1;
+        return { status: "verdict_submitted" };
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async (request) => {
+      completionCalls += 1;
+      const result = await request.tools.invoke({
+        type: "tool_call",
+        callId: "complete-after-restart",
+        name: "complete_run",
+        arguments: { summary: "Recovered verification remains current." },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "Completion failed");
+    });
+
+    assert.equal((await runtime.step()).action, "completion_decision_required");
+    assert.equal(verifierCalls, 0);
+    assert.equal(completionCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
 interface Fixture {
   root: string;
   database: string;
@@ -708,6 +949,31 @@ function createFixture(
   };
 }
 
+function createRuntime(
+  store: SqliteSchedulerStore,
+  independentVerifier: IndependentVerifierDriver,
+  architectRun: ArchitectRuntimeDriver["run"],
+): BuildRuntime {
+  return new BuildRuntime({
+    runId: RUN_ID,
+    store,
+    workerDriver: {
+      run: async () => ({ type: "failed", reason: "unused" }),
+    },
+    architectDriver: { run: architectRun },
+    integrationDriver: {
+      integrate: async () => ({
+        status: "integrated",
+        integrationRevision: REVISION,
+      }),
+    },
+    independentVerifier,
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/unused",
+    clock: () => "2026-08-27T00:00:04.000Z",
+  });
+}
+
 function appendVerifierRequest(store: SqliteSchedulerStore): void {
   store.append(event(
     "verifier.review_requested",
@@ -715,6 +981,45 @@ function appendVerifierRequest(store: SqliteSchedulerStore): void {
     verifierRequestPayload(),
     { role: "runner", id: "native-verifier-runtime" },
   ));
+}
+
+function requestReviewFor(
+  authority: SchedulerVerifierVerdictAuthority,
+  runtime: {
+    reviewId: string;
+    runtimeId: string;
+    providerId: string;
+    modelId: string;
+    sessionId: string;
+  },
+): void {
+  authority.requestReview({
+    runId: RUN_ID,
+    reviewId: runtime.reviewId,
+    targetRevision: REVISION,
+    finalVerificationGenerationId: GENERATION_ID,
+    runtime: {
+      runtimeId: runtime.runtimeId,
+      providerId: runtime.providerId,
+      modelId: runtime.modelId,
+      modelIdentity: runtime.modelId.split("/").at(-1)!,
+      sessionId: runtime.sessionId,
+    },
+    excludedModels: [
+      {
+        source: "architect",
+        runtimeId: "openai:architect",
+        modelIdentity: "architect-model",
+      },
+      {
+        source: "accepted_change_author",
+        runtimeId: "anthropic:author",
+        modelIdentity: "author-model",
+      },
+    ],
+    criteria: CRITERIA,
+    occurredAt: "2026-08-27T00:00:04.000Z",
+  });
 }
 
 function appendVerifierPolicy(store: SqliteSchedulerStore): void {

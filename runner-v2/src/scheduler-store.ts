@@ -129,6 +129,8 @@ export type SchedulerEventType =
   | "final_verification.repairs_planned"
   | "verifier.policy_configured"
   | "build.risk_assessed"
+  | "verifier.selection_required"
+  | "verifier.selection_selected"
   | "verifier.review_requested"
   | "verifier.verdict_submitted";
 
@@ -390,6 +392,14 @@ export interface BuildRiskProjection {
   history: BuildRiskAssessmentProjection[];
 }
 
+export interface VerifierSelectionProjection {
+  status: "required" | "selected";
+  reason: string;
+  requiredCapabilities: string[];
+  candidateRuntimeIds: string[];
+  selectedRuntimeId?: string;
+}
+
 export interface SchedulerProjection {
   runId: string;
   /** Optional for event-log compatibility with runs created before P3.1. */
@@ -427,6 +437,7 @@ export interface SchedulerProjection {
   finalVerification?: FinalVerificationProjection;
   verifierPolicy?: VerifierPolicyProjection;
   buildRisk?: BuildRiskProjection;
+  verifierSelection?: VerifierSelectionProjection;
   verifier?: VerifierProjection;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
@@ -1451,6 +1462,15 @@ export function reduceSchedulerEvent(
     ...(current.buildRisk
       ? { buildRisk: cloneBuildRiskProjection(current.buildRisk) }
       : {}),
+    ...(current.verifierSelection
+      ? {
+          verifierSelection: {
+            ...current.verifierSelection,
+            requiredCapabilities: [...current.verifierSelection.requiredCapabilities],
+            candidateRuntimeIds: [...current.verifierSelection.candidateRuntimeIds],
+          },
+        }
+      : {}),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -1644,6 +1664,59 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner may assess build risk.");
       }
       recordBuildRiskAssessment(next, event.payload, event.occurredAt);
+      break;
+    }
+    case "verifier.selection_required": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may require verifier selection.");
+      }
+      const policyCandidates = next.verifierPolicy?.candidateRuntimeIds;
+      if (!policyCandidates) {
+        throw new Error("Verifier selection requires configured verifier policy.");
+      }
+      const candidateRuntimeIds = stringArray(event.payload, "candidateRuntimeIds");
+      if (!sameValue(candidateRuntimeIds, policyCandidates)) {
+        throw new Error("Verifier selection candidates conflict with configured policy.");
+      }
+      const requiredCapabilities = stringArray(
+        event.payload,
+        "requiredCapabilities",
+      );
+      if (
+        requiredCapabilities.length === 0 ||
+        requiredCapabilities.some((capability) => !capability.trim())
+      ) {
+        throw new Error("Verifier selection requires non-empty capabilities.");
+      }
+      next.verifierSelection = {
+        status: "required",
+        reason: requiredString(event.payload, "reason"),
+        requiredCapabilities,
+        candidateRuntimeIds: [...candidateRuntimeIds],
+      };
+      next.status = "paused";
+      delete next.pauseReason;
+      break;
+    }
+    case "verifier.selection_selected": {
+      if (event.actor.role !== "user") {
+        throw new Error("Verifier runtime selection requires the user.");
+      }
+      const selection = next.verifierSelection;
+      const runtimeId = requiredString(event.payload, "runtimeId");
+      if (
+        !selection || selection.status !== "required" ||
+        !selection.candidateRuntimeIds.includes(runtimeId)
+      ) {
+        throw new Error(`Runtime ${runtimeId} is not an offered verifier selection.`);
+      }
+      next.verifierSelection = {
+        ...selection,
+        status: "selected",
+        selectedRuntimeId: runtimeId,
+      };
+      next.status = "running";
+      delete next.pauseReason;
       break;
     }
     case "verifier.review_requested": {
@@ -3153,7 +3226,26 @@ function recordVerifierReviewRequest(
   const current = projection.verifier?.current;
   if (current) {
     if (sameVerifierReview(current, review)) return;
-    throw new Error("A conflicting independent verifier review already exists.");
+    if (current.status !== "requested") {
+      throw new Error("A submitted independent verifier review cannot be superseded.");
+    }
+    if (payload.supersedesReviewId !== current.reviewId) {
+      throw new Error(
+        "A replacement verifier review must explicitly supersede the pending review.",
+      );
+    }
+    projection.verifier = {
+      current: cloneVerifierReview(review),
+      history: [
+        ...(projection.verifier?.history ?? []).map(cloneVerifierReview),
+        {
+          ...cloneVerifierReview(current),
+          state: "superseded",
+          supersededByReviewId: review.reviewId,
+        },
+      ],
+    };
+    return;
   }
   projection.verifier = {
     current: cloneVerifierReview(review),

@@ -5,6 +5,7 @@ import type { ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools } from "./architect-tools.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
+  BuildRiskAssessmentProjection,
   ProjectHandoffChoice,
   SchedulerActor,
   SchedulerEvent,
@@ -37,6 +38,10 @@ import { redactSensitiveText } from "./sensitive-redaction.js";
 import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ArchitectActionReason } from "./user-steering-contracts.js";
+import {
+  assessBuildRisk,
+  type BuildRiskAssessmentInput,
+} from "./risk-policy.js";
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -109,6 +114,38 @@ export interface FinalVerificationCleanupDriver {
   }): Promise<{ diagnosticsPath?: string }>;
 }
 
+export interface IndependentVerifierRequest {
+  runId: string;
+  projection: SchedulerProjection;
+  risk: BuildRiskAssessmentProjection;
+  preferredRuntimeId?: string;
+  signal?: AbortSignal;
+}
+
+export type IndependentVerifierResult =
+  | { status: "verdict_submitted" }
+  | {
+      status: "unavailable";
+      reason:
+        | "no_independent_healthy_capability_match"
+        | "runtime_unavailable";
+    }
+  | {
+      status: "suspended";
+      reason: string;
+      runtimeId?: string;
+      error?: string;
+    };
+
+export interface IndependentVerifierDriver {
+  candidateRuntimeIds: readonly string[];
+  assessRisk(input: {
+    runId: string;
+    projection: SchedulerProjection;
+  }): Promise<BuildRiskAssessmentInput>;
+  verify(input: IndependentVerifierRequest): Promise<IndependentVerifierResult>;
+}
+
 export interface BuildRuntimeOptions {
   runId: string;
   initialObjective?: string;
@@ -130,6 +167,7 @@ export interface BuildRuntimeOptions {
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
+  independentVerifier?: IndependentVerifierDriver;
 }
 
 export interface BuildStepResult {
@@ -157,6 +195,7 @@ export class BuildRuntime {
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
+  private readonly independentVerifier?: IndependentVerifierDriver;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -179,8 +218,23 @@ export class BuildRuntime {
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
+    this.independentVerifier = options.independentVerifier;
+    if (
+      this.independentVerifier &&
+      (
+        this.independentVerifier.candidateRuntimeIds.length === 0 ||
+        new Set(this.independentVerifier.candidateRuntimeIds).size !==
+          this.independentVerifier.candidateRuntimeIds.length ||
+        this.independentVerifier.candidateRuntimeIds.some((runtimeId) => !runtimeId.trim())
+      )
+    ) {
+      throw new Error(
+        "Independent verifier requires unique non-empty candidate runtime IDs.",
+      );
+    }
     this.initializeRun();
     this.configureRunPolicy();
+    this.configureVerifierPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -253,6 +307,11 @@ export class BuildRuntime {
         "This Build is awaiting the user's final project handoff selection."
       );
     }
+    if (projection.verifierSelection?.status === "required") {
+      throw new Error(
+        "This Build is awaiting the user's independent verifier selection."
+      );
+    }
     const occurredAt = this.clock();
     if (
       renewBudgetWindow &&
@@ -279,6 +338,21 @@ export class BuildRuntime {
     this.store.append({
       runId: this.runId,
       type: "architect.handoff_selected",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
+  selectVerifierRuntime(
+    runtimeId: string,
+    idempotencyKey: string,
+  ): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "verifier.selection_selected",
       occurredAt: this.clock(),
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
@@ -700,6 +774,8 @@ export class BuildRuntime {
         return await this.advanceFinalVerificationCleanup(generation);
       }
       if (generation.review?.status === "approved") {
+        const verifierResult = await this.advanceIndependentVerification();
+        if (verifierResult) return verifierResult;
         await this.runArchitect(
           { type: "completion_decision_required" },
           this.projection(),
@@ -951,6 +1027,108 @@ export class BuildRuntime {
       },
     });
     return { status: "progressed", action: "final_verification_submitted" };
+  }
+
+  private async advanceIndependentVerification(): Promise<BuildStepResult | undefined> {
+    const driver = this.independentVerifier;
+    if (!driver) return undefined;
+    let projection = this.projection();
+    const targetRevision = projection.integrationRevision;
+    const finalVerification = projection.finalVerification?.current;
+    if (!targetRevision || !finalVerification) {
+      throw new Error("Independent verification requires a current integrated revision.");
+    }
+    const risk = projection.buildRisk?.current;
+    if (
+      !risk || risk.state !== "current" ||
+      risk.targetRevision !== targetRevision
+    ) {
+      const input = await driver.assessRisk({ runId: this.runId, projection });
+      projection = this.projection();
+      if (
+        projection.integrationRevision !== targetRevision ||
+        projection.finalVerification?.current?.generationId !==
+          finalVerification.generationId
+      ) {
+        return { status: "progressed", action: "build_risk_assessment_invalidated" };
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "build.risk_assessed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `build-risk:${targetRevision}`,
+        payload: {
+          targetRevision,
+          input,
+          assessment: assessBuildRisk(input),
+        },
+      });
+      return { status: "progressed", action: "build_risk_assessed" };
+    }
+    if (risk.assessment.risk === "low") return undefined;
+
+    const currentReview = projection.verifier?.current;
+    if (
+      currentReview?.status === "submitted" &&
+      currentReview.verdict?.satisfied === true
+    ) {
+      return undefined;
+    }
+    if (
+      currentReview?.status === "submitted" &&
+      currentReview.verdict?.satisfied === false
+    ) {
+      return { status: "idle", action: "verifier_repair_required" };
+    }
+
+    const result = await driver.verify({
+      runId: this.runId,
+      projection,
+      risk,
+      ...(projection.verifierSelection?.status === "selected" &&
+          projection.verifierSelection.selectedRuntimeId
+        ? { preferredRuntimeId: projection.verifierSelection.selectedRuntimeId }
+        : {}),
+      signal: this.activeLifecycleSignal(),
+    });
+    if (result.status === "verdict_submitted") {
+      const durable = this.projection().verifier?.current;
+      if (
+        durable?.status !== "submitted" || !durable.verdict ||
+        durable.targetRevision !== targetRevision
+      ) {
+        throw new Error(
+          "Verifier returned before its revision-bound verdict was durable.",
+        );
+      }
+      return { status: "progressed", action: "verifier_verdict_submitted" };
+    }
+    if (result.status === "suspended" && result.reason === "provider_error") {
+      return { status: "progressed", action: "verifier_provider_failed" };
+    }
+    if (
+      result.status === "suspended" && result.reason === "cancelled" &&
+      this.projection().status === "paused"
+    ) {
+      return { status: "paused", action: "verifier_interrupted" };
+    }
+    const reason = result.status === "unavailable"
+      ? result.reason
+      : result.reason || "verifier_suspended";
+    this.store.append({
+      runId: this.runId,
+      type: "verifier.selection_required",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `verifier-selection:${targetRevision}:${reason}`,
+      payload: {
+        reason,
+        requiredCapabilities: ["code"],
+        candidateRuntimeIds: [...driver.candidateRuntimeIds],
+      },
+    });
+    return { status: "paused", action: "verifier_selection_required" };
   }
 
   private async advanceFinalVerificationCleanup(
@@ -1247,6 +1425,21 @@ export class BuildRuntime {
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: "run-policy-configured",
       payload: { runPolicy: this.runPolicy },
+    });
+  }
+
+  private configureVerifierPolicy(): void {
+    if (!this.independentVerifier || this.runPolicy === "plan_only") return;
+    this.store.append({
+      runId: this.runId,
+      type: "verifier.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "verifier-policy-configured",
+      payload: {
+        mode: "risk_based",
+        candidateRuntimeIds: [...this.independentVerifier.candidateRuntimeIds],
+      },
     });
   }
 }
