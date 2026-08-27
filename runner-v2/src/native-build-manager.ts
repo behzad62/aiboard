@@ -45,6 +45,14 @@ export interface NativeBuildRuntimeHandle {
 export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
+  /** Stamps runner-owned durable identity before a new Build spec is persisted. */
+  prepareSpec?(spec: NativeBuildSpec): Promise<NativeBuildSpec>;
+  /** Rejects a stored spec before recovery can construct its runtime or model clients. */
+  validateRecoveredSpec?(spec: NativeBuildSpec): Promise<void>;
+  /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
+  shouldRecoverSpec?(spec: NativeBuildSpec): boolean | Promise<boolean>;
+  /** Records a durable recovery validation failure without starting the rejected Build. */
+  onRecoverySpecError?(runId: string, error: unknown): void;
   shouldAutoRun?(runId: string): boolean;
   onPumpResult?(runId: string, result: BuildStepResult): void;
   onPumpError?(runId: string, error: unknown): void;
@@ -77,6 +85,16 @@ export class NativeBuildManager implements BuildControlPlane {
     const quiesceFailed = new Set<string>();
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
+        try {
+          if (this.options.shouldRecoverSpec && !await this.options.shouldRecoverSpec(spec)) {
+            continue;
+          }
+          await this.options.validateRecoveredSpec?.(spec);
+        } catch (error) {
+          this.options.onRecoverySpecError?.(spec.runId, error);
+          this.options.onPumpError?.(spec.runId, error);
+          continue;
+        }
         const handle = await this.ensureRuntime(spec);
         try {
           const projection = handle.runtime.projection();
@@ -162,7 +180,10 @@ export class NativeBuildManager implements BuildControlPlane {
 
   async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
-      const saved = this.options.specs.save(spec);
+      const prepared = this.options.prepareSpec
+        ? await this.options.prepareSpec(spec)
+        : spec;
+      const saved = this.options.specs.save(prepared);
       const handle = await this.ensureRuntime(saved);
       return handle.runtime.projection();
     });

@@ -8,6 +8,11 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { RunSupervisor } from "../src/run-supervisor.js";
+import { createRunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
+import { SqliteEventStore } from "../src/sqlite-event-store.js";
+
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
   new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url),
@@ -233,6 +238,211 @@ test("CLI accepts a valid external capability configuration before listening", a
   }
 });
 
+test("CLI fails an active legacy Build without a capability contract before recovery runtime startup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-missing-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "legacy_missing_capability_contract";
+  const token = "cli-capability-recovery-token";
+  mkdirSync(project);
+  mkdirSync(state);
+  writeCapabilitiesConfig(config, []);
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+  const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
+  supervisor.createRun({
+    runId,
+    projectPath: project,
+    permissionProfile: "project",
+    idempotencyKey: `create:${runId}`,
+  });
+  specs.save({
+    version: 2,
+    runId,
+    projectId: "project_1",
+    objective: "Do not recover this unbound legacy Build.",
+    architectRuntimeId: "fixture:architect",
+    workerRuntimeIds: ["fixture:worker"],
+    verifierRuntimeIds: ["fixture:worker"],
+    alwaysRequireIndependentVerifier: false,
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    runPolicy: "finish",
+    budgetLimits: {},
+    createdAt: "2026-08-28T00:00:00.000Z",
+    idempotencyKey: `build:${runId}`,
+  });
+  specs.close();
+  supervisor.close();
+
+  let runner: TrackedCliChild | undefined;
+  try {
+    runner = spawnCli(project, state, config, token);
+    const readiness = await awaitCliReadiness(runner);
+    const response = await fetch(`${readiness.url}/v2/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await response.json() as { state?: unknown; stopReason?: unknown };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.state, "failed");
+    assert.equal(body.stopReason, "capability-contract:capability_contract_missing");
+    assert.equal(existsSync(join(state, "builds", runId)), false);
+  } finally {
+    try {
+      if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  }
+});
+
+test("CLI keeps a terminal legacy Build readable without recovering it against current capabilities", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-terminal-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "terminal_legacy_capability_contract";
+  const token = "cli-capability-terminal-token";
+  mkdirSync(project);
+  mkdirSync(state);
+  writeCapabilitiesConfig(config, []);
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+  const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
+  supervisor.createRun({
+    runId,
+    projectPath: project,
+    permissionProfile: "project",
+    idempotencyKey: `create:${runId}`,
+  });
+  supervisor.fail(runId, `fail:${runId}`, "previous terminal outcome");
+  specs.save({
+    version: 2,
+    runId,
+    projectId: "project_1",
+    objective: "A terminal legacy Build remains inspectable.",
+    architectRuntimeId: "fixture:architect",
+    workerRuntimeIds: ["fixture:worker"],
+    verifierRuntimeIds: ["fixture:worker"],
+    alwaysRequireIndependentVerifier: false,
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    runPolicy: "finish",
+    budgetLimits: {},
+    createdAt: "2026-08-28T00:00:00.000Z",
+    idempotencyKey: `build:${runId}`,
+  });
+  specs.close();
+  supervisor.close();
+
+  let runner: TrackedCliChild | undefined;
+  try {
+    runner = spawnCli(project, state, config, token);
+    const readiness = await awaitCliReadiness(runner);
+    const response = await fetch(`${readiness.url}/v2/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await response.json() as { state?: unknown; stopReason?: unknown };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.state, "failed");
+    assert.equal(body.stopReason, "previous terminal outcome");
+    assert.equal(existsSync(join(state, "builds", runId)), false);
+  } finally {
+    try {
+      if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  }
+});
+
+test("CLI fails an active Build when its persisted extension contract no longer matches", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-mutated-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const extension = join(root, "extension");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "mutated_capability_contract";
+  const token = "cli-capability-mutated-token";
+  mkdirSync(project);
+  mkdirSync(state);
+  writeExtension(extension, {
+    id: "fixture.cli.contract",
+    module: `
+      export function createExtension() {
+        return {
+          capabilities: () => ({
+            tools: [{
+              definition: { name: "fixture.cli.contract.inspect", description: "Inspect", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+              validate: () => ({ ok: true, value: {} }),
+              execute: async () => ({ content: [], isError: false }),
+            }],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async () => undefined,
+          close: async () => undefined,
+        };
+      }
+    `,
+  });
+  writeCapabilitiesConfig(config, [extension]);
+  const capabilityContract = await createRunnerCapabilityContract({
+    extensions: [extension],
+    languageServers: [],
+  });
+  writeFileSync(join(extension, "index.mjs"), "// changed after the Build was persisted\n", { flag: "a" });
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+  const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
+  supervisor.createRun({
+    runId,
+    projectPath: project,
+    permissionProfile: "project",
+    idempotencyKey: `create:${runId}`,
+  });
+  specs.save({
+    version: 2,
+    runId,
+    projectId: "project_1",
+    objective: "Do not recover this mutated Build.",
+    architectRuntimeId: "fixture:architect",
+    workerRuntimeIds: ["fixture:worker"],
+    verifierRuntimeIds: ["fixture:worker"],
+    alwaysRequireIndependentVerifier: false,
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    runPolicy: "finish",
+    budgetLimits: {},
+    createdAt: "2026-08-28T00:00:00.000Z",
+    idempotencyKey: `build:${runId}`,
+    capabilityContract,
+  });
+  specs.close();
+  supervisor.close();
+
+  let runner: TrackedCliChild | undefined;
+  try {
+    runner = spawnCli(project, state, config, token);
+    const readiness = await awaitCliReadiness(runner);
+    const response = await fetch(`${readiness.url}/v2/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await response.json() as { state?: unknown; stopReason?: unknown };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.state, "failed");
+    assert.equal(body.stopReason, "capability-contract:capability_contract_mismatch");
+    assert.equal(existsSync(join(state, "builds", runId)), false);
+  } finally {
+    try {
+      if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  }
+});
+
 test("CLI rejects a capability configuration placed inside the project", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-contained-"));
   const project = join(root, "project");
@@ -301,6 +511,33 @@ function spawnCli(
     ],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   ));
+}
+
+async function awaitCliReadiness(
+  runner: TrackedCliChild,
+): Promise<{ url: string }> {
+  const streams = runnerStreams(runner.child);
+  const diagnostics: string[] = [];
+  streams.stderr.setEncoding("utf8");
+  streams.stderr.on("data", (chunk: string) => diagnostics.push(chunk));
+  const lines = createInterface({ input: streams.stdout });
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      once(lines, "line").then(([line]) => JSON.parse(String(line)) as { url: string }),
+      runner.closed.then(({ code, signal }) => {
+        throw new Error(
+          `Runner exited before readiness (${String(code)}, ${String(signal)}): ${diagnostics.join("")}`,
+        );
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), 10_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    lines.close();
+  }
 }
 
 function trackCliChild(child: ChildProcess): TrackedCliChild {

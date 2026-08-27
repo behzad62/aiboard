@@ -24,6 +24,10 @@ public static class ManagedProcessJobHost
     private const uint OPEN_EXISTING = 3;
     private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const uint HANDLE_FLAG_INHERIT = 0x00000001;
+    private const int STD_INPUT_HANDLE = -10;
+    private const int STD_OUTPUT_HANDLE = -11;
+    private const int STD_ERROR_HANDLE = -12;
     private const int JobObjectBasicAccountingInformation = 1;
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint WAIT_OBJECT_0 = 0;
@@ -158,6 +162,12 @@ public static class ManagedProcessJobHost
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int standardHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFile(
@@ -307,6 +317,111 @@ public static class ManagedProcessJobHost
         }
     }
 
+    // The LSP mode keeps its standard streams transparent: the PowerShell host
+    // reads one bootstrap line, then the launched server exclusively owns the
+    // inherited stdin/stdout/stderr handles. The Job Object remains open until
+    // the root and every descendant are gone, and closing this host kills all of
+    // them through JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+    public static int RunInteractive(
+        string command,
+        string[] arguments,
+        string cwd,
+        IDictionary<string, string> environment)
+    {
+        IntPtr job = IntPtr.Zero;
+        IntPtr environmentBlock = IntPtr.Zero;
+        PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
+        try
+        {
+            job = CreateJobObject(IntPtr.Zero, null);
+            CheckHandle(job, "CreateJobObject");
+            SetKillOnClose(job);
+
+            IntPtr stdin = GetStdHandle(STD_INPUT_HANDLE);
+            IntPtr stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+            IntPtr stderr = GetStdHandle(STD_ERROR_HANDLE);
+            CheckHandle(stdin, "GetStdHandle(stdin)");
+            CheckHandle(stdout, "GetStdHandle(stdout)");
+            CheckHandle(stderr, "GetStdHandle(stderr)");
+            MakeInheritable(stdin, "SetHandleInformation(stdin)");
+            MakeInheritable(stdout, "SetHandleInformation(stdout)");
+            MakeInheritable(stderr, "SetHandleInformation(stderr)");
+
+            SECURITY_ATTRIBUTES inheritable = new SECURITY_ATTRIBUTES();
+            inheritable.nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES));
+            inheritable.bInheritHandle = true;
+            STARTUPINFO startup = new STARTUPINFO();
+            startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+            startup.dwFlags = STARTF_USESTDHANDLES;
+            startup.hStdInput = stdin;
+            startup.hStdOutput = stdout;
+            startup.hStdError = stderr;
+            SECURITY_ATTRIBUTES processAttributes = inheritable;
+            SECURITY_ATTRIBUTES threadAttributes = inheritable;
+            environmentBlock = BuildEnvironmentBlock(environment);
+            LaunchSpec launch = ResolveLaunch(command, arguments, cwd, environment);
+            StringBuilder commandLine = new StringBuilder(
+                BuildCommandLine(launch.Application, launch.Arguments));
+
+            if (!CreateProcess(launch.Application, commandLine,
+                ref processAttributes, ref threadAttributes,
+                true, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+                environmentBlock, cwd, ref startup, out processInfo))
+                ThrowWin32("CreateProcess");
+            if (!AssignProcessToJobObject(job, processInfo.hProcess))
+                ThrowWin32("AssignProcessToJobObject");
+            if (ResumeThread(processInfo.hThread) == 0xffffffff)
+                ThrowWin32("ResumeThread");
+            CloseHandle(processInfo.hThread);
+            processInfo.hThread = IntPtr.Zero;
+            EmitLsp("started", processInfo.dwProcessId, null, ActiveProcesses(job), null);
+
+            bool rootExited = false;
+            bool rootReported = false;
+            uint rootExitCode = 0;
+            while (true)
+            {
+                if (!rootExited && WaitForSingleObject(processInfo.hProcess, 50) == WAIT_OBJECT_0)
+                {
+                    rootExited = true;
+                    if (!GetExitCodeProcess(processInfo.hProcess, out rootExitCode))
+                        ThrowWin32("GetExitCodeProcess");
+                }
+                if (rootExited)
+                {
+                    uint active = ActiveProcesses(job);
+                    if (active == 0)
+                    {
+                        EmitLsp("natural_stopped", processInfo.dwProcessId, rootExitCode, 0, null);
+                        return unchecked((int)rootExitCode);
+                    }
+                    if (!rootReported)
+                    {
+                        rootReported = true;
+                        EmitLsp("root_exited", processInfo.dwProcessId, rootExitCode, active, null);
+                    }
+                }
+                Thread.Sleep(25);
+            }
+        }
+        catch (Exception error)
+        {
+            Win32Exception native = error as Win32Exception;
+            string detail = native == null
+                ? error.Message
+                : error.Message + " (Win32 " + native.NativeErrorCode + ")";
+            EmitLsp("error", processInfo.dwProcessId, null, 0, detail);
+            return 1;
+        }
+        finally
+        {
+            if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
+            if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
+            if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
+            if (job != IntPtr.Zero) CloseHandle(job);
+        }
+    }
+
     private static void SetKillOnClose(IntPtr job)
     {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
@@ -320,6 +435,12 @@ public static class ManagedProcessJobHost
                 ThrowWin32("SetInformationJobObject");
         }
         finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    private static void MakeInheritable(IntPtr handle, string operation)
+    {
+        if (!SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+            ThrowWin32(operation);
     }
 
     private static uint ActiveProcesses(IntPtr job)
@@ -551,6 +672,15 @@ public static class ManagedProcessJobHost
         Console.Out.Flush();
     }
 
+    private static void EmitLsp(string type, uint pid, uint? exitCode, uint active, string error)
+    {
+        string escaped = error == null ? "null" : "\"" + error.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        Console.Error.WriteLine("@aiboard-lsp-job-host:{\"type\":\"" + type + "\",\"pid\":" + pid +
+            ",\"exitCode\":" + (exitCode.HasValue ? exitCode.Value.ToString() : "null") +
+            ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}");
+        Console.Error.Flush();
+    }
+
     private static void CheckHandle(IntPtr handle, string operation)
     {
         if (handle == IntPtr.Zero || handle == new IntPtr(-1)) ThrowWin32(operation);
@@ -562,6 +692,40 @@ public static class ManagedProcessJobHost
     }
 }
 '@
+
+if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
+    try {
+        $bootstrap = [Console]::In.ReadLine()
+        if ([string]::IsNullOrWhiteSpace($bootstrap)) {
+            throw "LSP Job Object bootstrap is missing."
+        }
+        $envelope = $bootstrap | ConvertFrom-Json
+        if ($envelope.encoding -ne "base64-utf8-json" -or [string]::IsNullOrWhiteSpace([string]$envelope.payload)) {
+            throw "LSP Job Object bootstrap encoding is invalid."
+        }
+        $configuration = [Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String([string]$envelope.payload)
+        ) | ConvertFrom-Json
+        if ($null -eq $configuration.command -or $null -eq $configuration.cwd -or $null -eq $configuration.env) {
+            throw "LSP Job Object bootstrap is incomplete."
+        }
+        $environment = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($property in $configuration.env.PSObject.Properties) {
+            $environment[$property.Name] = [string]$property.Value
+        }
+        $exitCode = [ManagedProcessJobHost]::RunInteractive(
+            [string]$configuration.command,
+            [string[]]@($configuration.args | ForEach-Object { [string]$_ }),
+            [string]$configuration.cwd,
+            $environment
+        )
+        exit $exitCode
+    } catch {
+        [Console]::Error.WriteLine('@aiboard-lsp-job-host:{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}')
+        [Console]::Error.Flush()
+        exit 1
+    }
+}
 
 $configuration = [Console]::In.ReadLine() | ConvertFrom-Json
 $environment = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)

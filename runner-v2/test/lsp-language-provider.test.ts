@@ -180,7 +180,66 @@ test("LSP provider rejects malformed ranges and oversized server-result files", 
   }
 });
 
-function providerFixture(name: string, environment: Record<string, string>) {
+test("LSP provider uses bounded, version-matched publish diagnostics when pull is unavailable", async () => {
+  const fixture = providerFixture("push diagnostics", {
+    LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
+    LSP_FIXTURE_DIAGNOSTIC_COUNT: "3",
+  });
+  try {
+    const result = await fixture.provider.diagnostics({
+      root: fixture.workspace,
+      path: "main.py",
+      limit: 1,
+    });
+    assert.deepEqual(result.results.map((diagnostic) => diagnostic.code), ["fixture-warning"]);
+    assert.equal(result.truncated, true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("LSP provider uses cached publish diagnostics when only document pull is negotiated", async () => {
+  const fixture = providerFixture("partial diagnostics", {
+    LSP_FIXTURE_DIAGNOSTICS_MODE: "partial",
+  });
+  try {
+    const document = await fixture.provider.diagnostics({
+      root: fixture.workspace,
+      path: "main.py",
+    });
+    assert.equal(document.results[0]?.code, "fixture-warning");
+
+    const workspace = await fixture.provider.diagnostics({
+      root: fixture.workspace,
+    });
+    assert.equal(workspace.results[0]?.path, "main.py");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("LSP provider ignores stale publish diagnostics after a bounded wait", async () => {
+  const fixture = providerFixture("stale push diagnostics", {
+    LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
+    LSP_FIXTURE_PUBLISH_STALE_VERSION: "1",
+  }, 80);
+  try {
+    const result = await fixture.provider.diagnostics({
+      root: fixture.workspace,
+      path: "main.py",
+    });
+    assert.deepEqual(result.results, []);
+    assert.equal(result.truncated, false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+function providerFixture(
+  name: string,
+  environment: Record<string, string>,
+  requestTimeoutMs = 500,
+) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-lsp-${name}-`));
   const workspace = join(root, "workspace Ω");
   mkdirSync(workspace);
@@ -188,7 +247,7 @@ function providerFixture(name: string, environment: Record<string, string>) {
   writeFileSync(file, "😀value = 1\nprint(value)\n");
   writeFileSync(join(workspace, "note.txt"), "not supported\n");
   writeFileSync(join(workspace, "pyproject.toml"), "[project]\nname='fixture'\n");
-  const provider = createProvider(workspace, environment);
+  const provider = createProvider(workspace, environment, 128 * 1024, requestTimeoutMs);
   return {
     root,
     workspace,
@@ -205,6 +264,7 @@ function createProvider(
   workspaceRoot: string,
   environment: Record<string, string>,
   maxDocumentBytes = 128 * 1024,
+  requestTimeoutMs = 500,
 ): LspLanguageProvider {
   return new LspLanguageProvider({
     descriptor,
@@ -215,7 +275,7 @@ function createProvider(
     client: {
       command: process.execPath,
       args: [fixtureServer],
-      requestTimeoutMs: 500,
+      requestTimeoutMs,
       shutdownTimeoutMs: 500,
       restartLimit: 1,
       env: { ...process.env, ...environment },

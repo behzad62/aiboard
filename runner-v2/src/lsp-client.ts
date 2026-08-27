@@ -8,11 +8,12 @@ import {
   basename,
   dirname,
   isAbsolute,
+  join,
   relative,
   resolve,
   sep,
 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HEADER_BOUNDARY = Buffer.from("\r\n\r\n", "ascii");
 const MAX_HEADER_BYTES = 8 * 1024;
@@ -21,6 +22,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 128;
 const MAX_STDERR_BYTES = 8 * 1024;
+const WINDOWS_JOB_HOST_CONTROL_PREFIX = "@aiboard-lsp-job-host:";
+const WINDOWS_JOB_HOST_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "managed-process-job-host.ps1",
+);
 
 export type LspClientErrorCode =
   | "invalid_configuration"
@@ -85,6 +91,11 @@ export interface PublishedDiagnostics {
   diagnostics: unknown[];
 }
 
+export interface LspDiagnosticSupport {
+  textDocumentPull: boolean;
+  workspacePull: boolean;
+}
+
 interface OpenDocument {
   uri: string;
   path: string;
@@ -99,10 +110,20 @@ interface ProcessSession {
   buffer: Buffer;
   stderr: Buffer;
   initialized: boolean;
+  diagnosticSupport: LspDiagnosticSupport;
   expectedExit: boolean;
+  windowsJobHost?: JobHostStartup;
   failure?: LspClientError;
   exited: Promise<void>;
   resolveExited(): void;
+}
+
+interface JobHostStartup {
+  buffer: string;
+  settled: boolean;
+  ready: Promise<void>;
+  resolve(): void;
+  reject(error: LspClientError): void;
 }
 
 interface PendingRequest {
@@ -116,6 +137,17 @@ interface PendingRequest {
   cancellationError?: LspClientError;
   settled: boolean;
   resolve(value: unknown): void;
+  reject(error: unknown): void;
+}
+
+interface PublishedDiagnosticsWaiter {
+  uri: string;
+  version: number;
+  timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+  settled: boolean;
+  resolve(value: PublishedDiagnostics | undefined): void;
   reject(error: unknown): void;
 }
 
@@ -142,6 +174,7 @@ export class LspClient {
   private readonly maxPendingRequests: number;
   private readonly documents = new Map<string, OpenDocument>();
   private readonly diagnostics = new Map<string, PublishedDiagnostics>();
+  private readonly diagnosticWaiters = new Set<PublishedDiagnosticsWaiter>();
   private readonly pending = new Map<string, PendingRequest>();
   private session?: ProcessSession;
   private startPromise?: Promise<void>;
@@ -282,21 +315,28 @@ export class LspClient {
     }
     await this.start();
     const session = this.requireRunningSession();
-    await this.notifyOnSession(session, "textDocument/didOpen", {
-      textDocument: {
-        uri,
-        languageId: input.languageId,
-        version: input.version,
-        text: input.text,
-      },
-    });
-    this.documents.set(uri, {
+    const document: OpenDocument = {
       uri,
       path,
       languageId: input.languageId,
       version: input.version,
       text: input.text,
-    });
+    };
+    this.documents.set(uri, document);
+    try {
+      await this.notifyOnSession(session, "textDocument/didOpen", {
+        textDocument: {
+          uri,
+          languageId: input.languageId,
+          version: input.version,
+          text: input.text,
+        },
+      });
+    } catch (error) {
+      this.documents.delete(uri);
+      this.diagnostics.delete(uri);
+      throw error;
+    }
   }
 
   async updateDocument(
@@ -325,15 +365,24 @@ export class LspClient {
     }
     await this.start();
     const session = this.requireRunningSession();
-    await this.notifyOnSession(session, "textDocument/didChange", {
-      textDocument: { uri, version: input.version },
-      contentChanges: [{ text: input.text }],
-    });
-    this.documents.set(uri, {
+    const next: OpenDocument = {
       ...current,
       version: input.version,
       text: input.text,
-    });
+    };
+    const priorDiagnostics = this.diagnostics.get(uri);
+    this.documents.set(uri, next);
+    this.diagnostics.delete(uri);
+    try {
+      await this.notifyOnSession(session, "textDocument/didChange", {
+        textDocument: { uri, version: input.version },
+        contentChanges: [{ text: input.text }],
+      });
+    } catch (error) {
+      this.documents.set(uri, current);
+      if (priorDiagnostics) this.diagnostics.set(uri, priorDiagnostics);
+      throw error;
+    }
   }
 
   async closeDocument(pathValue: string): Promise<void> {
@@ -369,6 +418,57 @@ export class LspClient {
       : undefined;
   }
 
+  async diagnosticSupport(): Promise<LspDiagnosticSupport> {
+    await this.start();
+    return { ...this.requireRunningSession().diagnosticSupport };
+  }
+
+  async waitForPublishedDiagnostics(
+    uri: string,
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<PublishedDiagnostics | undefined> {
+    const cached = this.publishedDiagnosticsForVersion(uri, version);
+    if (cached) return cached;
+    if (signal?.aborted) {
+      throw new LspClientError(
+        "request_cancelled",
+        "Waiting for publish diagnostics was cancelled.",
+      );
+    }
+    return await new Promise<PublishedDiagnostics | undefined>((resolvePromise, rejectPromise) => {
+      const waiter: PublishedDiagnosticsWaiter = {
+        uri,
+        version,
+        timer: setTimeout(() => this.settleDiagnosticWaiter(waiter, undefined), this.requestTimeoutMs),
+        signal,
+        settled: false,
+        resolve: resolvePromise,
+        reject: rejectPromise,
+      };
+      if (signal) {
+        waiter.onAbort = () => this.settleDiagnosticWaiter(
+          waiter,
+          new LspClientError(
+            "request_cancelled",
+            "Waiting for publish diagnostics was cancelled.",
+          ),
+        );
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      this.diagnosticWaiters.add(waiter);
+      const current = this.publishedDiagnosticsForVersion(uri, version);
+      if (current) this.settleDiagnosticWaiter(waiter, current);
+    });
+  }
+
+  publishedDiagnosticsForOpenDocuments(): PublishedDiagnostics[] {
+    return [...this.documents.values()]
+      .map((document) => this.publishedDiagnosticsForVersion(document.uri, document.version))
+      .filter((diagnostics): diagnostics is PublishedDiagnostics => diagnostics !== undefined)
+      .sort((left, right) => left.uri.localeCompare(right.uri));
+  }
+
   stats(): LspClientStats {
     return {
       starts: this.starts,
@@ -400,16 +500,19 @@ export class LspClient {
           );
           session.expectedExit = true;
           await this.notifyOnSession(session, "exit", null);
+          if (!session.windowsJobHost) {
+            await terminateProcessTree(session.child);
+          }
         } catch {
           session.expectedExit = true;
-          killProcess(session.child);
+          await terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined);
         }
       } else {
         session.expectedExit = true;
-        killProcess(session.child);
+        await terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined);
       }
       if (!(await waitForProcessExit(session, this.shutdownTimeoutMs))) {
-        killProcess(session.child, "SIGKILL");
+        await terminateProcessTree(session.child, "SIGKILL", session.windowsJobHost !== undefined);
         if (!(await waitForProcessExit(session, this.shutdownTimeoutMs))) {
           const failure = new LspClientError(
             "process_error",
@@ -425,6 +528,7 @@ export class LspClient {
     }
     const closed = new LspClientError("client_closed", "LSP client is closed.");
     this.rejectPending(() => true, closed);
+    this.settleDiagnosticWaiters(undefined);
     this.documents.clear();
     this.diagnostics.clear();
     this.session = undefined;
@@ -439,29 +543,47 @@ export class LspClient {
     const exited = new Promise<void>((resolvePromise) => {
       resolveExited = resolvePromise;
     });
-    const child = spawn(this.command, this.args, {
+    const usesWindowsJobHost = process.platform === "win32";
+    const child = spawn(
+      usesWindowsJobHost ? "powershell.exe" : this.command,
+      usesWindowsJobHost
+        ? [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            WINDOWS_JOB_HOST_PATH,
+            "--aiboard-lsp-pipe",
+          ]
+        : this.args,
+      {
       cwd: this.workspaceRoot,
       env: this.env,
       shell: false,
       windowsHide: true,
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
-    });
+      },
+    );
+    const windowsJobHost = usesWindowsJobHost ? createJobHostStartup() : undefined;
     const session: ProcessSession = {
       generation,
       child,
       buffer: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
       initialized: false,
+      diagnosticSupport: { textDocumentPull: false, workspacePull: false },
       expectedExit: false,
+      ...(windowsJobHost ? { windowsJobHost } : {}),
       exited,
       resolveExited,
     };
     this.session = session;
     this.starts += 1;
     child.stdout.on("data", (chunk: Buffer) => this.consumeStdout(session, chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
-      session.stderr = boundedAppend(session.stderr, chunk, MAX_STDERR_BYTES);
-    });
+    child.stderr.on("data", (chunk: Buffer) => this.consumeStderr(session, chunk));
     child.on("exit", (code, signal) => this.onProcessExit(session, code, signal));
     child.on("error", (error) => this.onProcessError(session, error));
     try {
@@ -478,6 +600,9 @@ export class LspClient {
       throw failure;
     }
     try {
+      if (session.windowsJobHost) {
+        await this.bootstrapWindowsJobHost(session);
+      }
       const initialized = await this.requestOnSession<Record<string, unknown>>(
         session,
         "initialize",
@@ -524,6 +649,7 @@ export class LspClient {
           "Language server selected an unsupported position encoding; UTF-16 is required.",
         );
       }
+      session.diagnosticSupport = negotiatedDiagnosticSupport(initialized.capabilities);
       await this.notifyOnSession(session, "initialized", {});
       session.initialized = true;
       for (const document of this.documents.values()) {
@@ -557,9 +683,9 @@ export class LspClient {
     this.restarts += 1;
     this.restartPromise = (async () => {
       failed.expectedExit = true;
-      killProcess(failed.child);
+      await terminateProcessTree(failed.child, "SIGTERM", failed.windowsJobHost !== undefined);
       if (!(await waitForProcessExit(failed, this.shutdownTimeoutMs))) {
-        killProcess(failed.child, "SIGKILL");
+        await terminateProcessTree(failed.child, "SIGKILL", failed.windowsJobHost !== undefined);
         if (!(await waitForProcessExit(failed, this.shutdownTimeoutMs))) {
           throw new LspClientError(
             "process_error",
@@ -649,10 +775,57 @@ export class LspClient {
     await this.writeMessage(session, { jsonrpc: "2.0", method, params });
   }
 
-  private async writeMessage(
-    session: ProcessSession,
-    message: Record<string, unknown>,
-  ): Promise<void> {
+  private async bootstrapWindowsJobHost(session: ProcessSession): Promise<void> {
+    const startup = session.windowsJobHost;
+    if (!startup) return;
+    const environment = Object.fromEntries(
+      Object.entries(this.env ?? process.env)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
+    let bootstrap: string;
+    try {
+      const payload = JSON.stringify({
+        command: this.command,
+        args: this.args,
+        cwd: this.workspaceRoot,
+        env: environment,
+      });
+      bootstrap = JSON.stringify({
+        encoding: "base64-utf8-json",
+        payload: Buffer.from(payload, "utf8").toString("base64"),
+      });
+    } catch (error) {
+      throw new LspClientError(
+        "invalid_configuration",
+        "LSP Job Object bootstrap is not JSON serializable.",
+        false,
+        { cause: error },
+      );
+    }
+    if (Buffer.byteLength(bootstrap, "utf8") > 1024 * 1024) {
+      throw new LspClientError(
+        "invalid_configuration",
+        "LSP Job Object bootstrap exceeds its 1 MiB bound.",
+      );
+    }
+    await this.writeRaw(session, `${bootstrap}\n`);
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        startup.ready,
+        new Promise<never>((_resolvePromise, rejectPromise) => {
+          timeout = setTimeout(() => rejectPromise(new LspClientError(
+            "spawn_failed",
+            "LSP Job Object host did not confirm startup before the deadline.",
+          )), Math.max(this.requestTimeoutMs, 5_000));
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private async writeRaw(session: ProcessSession, value: string | Buffer): Promise<void> {
     if (session.failure || session.child.stdin.destroyed || !session.child.stdin.writable) {
       throw session.failure ?? new LspClientError(
         "write_failed",
@@ -660,6 +833,26 @@ export class LspClient {
         true,
       );
     }
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      session.child.stdin.write(value, (error) => {
+        if (error) {
+          rejectPromise(new LspClientError(
+            "write_failed",
+            `Language server write failed: ${boundedMessage(error)}.`,
+            true,
+            { cause: error },
+          ));
+        } else {
+          resolvePromise();
+        }
+      });
+    });
+  }
+
+  private async writeMessage(
+    session: ProcessSession,
+    message: Record<string, unknown>,
+  ): Promise<void> {
     let body: Buffer;
     try {
       body = Buffer.from(JSON.stringify(message));
@@ -681,20 +874,41 @@ export class LspClient {
       Buffer.from(`Content-Length: ${body.byteLength}\r\n\r\n`, "ascii"),
       body,
     ]);
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      session.child.stdin.write(frame, (error) => {
-        if (error) {
-          rejectPromise(new LspClientError(
-            "write_failed",
-            `Language server write failed: ${boundedMessage(error)}.`,
-            true,
-            { cause: error },
+    await this.writeRaw(session, frame);
+  }
+
+  private consumeStderr(session: ProcessSession, chunk: Buffer): void {
+    session.stderr = boundedAppend(session.stderr, chunk, MAX_STDERR_BYTES);
+    const startup = session.windowsJobHost;
+    if (!startup || startup.settled) return;
+    startup.buffer += chunk.toString("utf8");
+    if (startup.buffer.length > MAX_STDERR_BYTES * 2) {
+      startup.buffer = startup.buffer.slice(-MAX_STDERR_BYTES);
+    }
+    while (true) {
+      const newline = startup.buffer.indexOf("\n");
+      if (newline < 0) return;
+      const line = startup.buffer.slice(0, newline).replace(/\r$/, "");
+      startup.buffer = startup.buffer.slice(newline + 1);
+      if (!line.startsWith(WINDOWS_JOB_HOST_CONTROL_PREFIX)) continue;
+      try {
+        const control = JSON.parse(line.slice(WINDOWS_JOB_HOST_CONTROL_PREFIX.length));
+        if (!isObject(control)) continue;
+        if (control.type === "started") {
+          startup.resolve();
+        } else if (control.type === "error") {
+          startup.reject(new LspClientError(
+            "spawn_failed",
+            `LSP Job Object host failed: ${boundedText(
+              typeof control.error === "string" ? control.error : "unknown startup error",
+              512,
+            )}.`,
           ));
-        } else {
-          resolvePromise();
         }
-      });
-    });
+      } catch {
+        // Non-control language-server stderr remains diagnostic text only.
+      }
+    }
   }
 
   private consumeStdout(session: ProcessSession, chunk: Buffer): void {
@@ -819,13 +1033,53 @@ export class LspClient {
   private handleNotification(method: string, params: unknown): void {
     if (method !== "textDocument/publishDiagnostics" || !isObject(params)) return;
     if (typeof params.uri !== "string" || !Array.isArray(params.diagnostics)) return;
+    const document = this.documents.get(params.uri);
+    if (!document || !Number.isSafeInteger(params.version) || params.version !== document.version) {
+      return;
+    }
     this.diagnostics.set(params.uri, {
       uri: params.uri,
-      ...(Number.isSafeInteger(params.version)
-        ? { version: params.version as number }
-        : {}),
+      version: params.version as number,
       diagnostics: structuredClone(params.diagnostics),
     });
+    this.settleDiagnosticWaiters(params.uri);
+  }
+
+  private publishedDiagnosticsForVersion(
+    uri: string,
+    version: number,
+  ): PublishedDiagnostics | undefined {
+    const value = this.diagnostics.get(uri);
+    if (!value || value.version !== version) return undefined;
+    return {
+      ...value,
+      diagnostics: structuredClone(value.diagnostics),
+    };
+  }
+
+  private settleDiagnosticWaiters(uri: string | undefined): void {
+    for (const waiter of [...this.diagnosticWaiters]) {
+      if (uri !== undefined && waiter.uri !== uri) continue;
+      const result = uri === undefined
+        ? undefined
+        : this.publishedDiagnosticsForVersion(waiter.uri, waiter.version);
+      if (uri === undefined || result) this.settleDiagnosticWaiter(waiter, result);
+    }
+  }
+
+  private settleDiagnosticWaiter(
+    waiter: PublishedDiagnosticsWaiter,
+    value: PublishedDiagnostics | LspClientError | undefined,
+  ): void {
+    if (waiter.settled) return;
+    waiter.settled = true;
+    clearTimeout(waiter.timer);
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    }
+    this.diagnosticWaiters.delete(waiter);
+    if (value instanceof LspClientError) waiter.reject(value);
+    else waiter.resolve(value);
   }
 
   private async handleServerRequest(
@@ -905,6 +1159,10 @@ export class LspClient {
     signal: NodeJS.Signals | null,
   ): void {
     session.resolveExited();
+    session.windowsJobHost?.reject(new LspClientError(
+      "spawn_failed",
+      "LSP Job Object host exited before confirming startup.",
+    ));
     if (session.expectedExit) return;
     const detail = session.stderr.byteLength > 0
       ? ` stderr: ${boundedText(session.stderr.toString("utf8"), 512)}`
@@ -919,6 +1177,7 @@ export class LspClient {
       (pending) => pending.generation === session.generation,
       failure,
     );
+    this.settleDiagnosticWaiters(undefined);
     if (this.session?.generation === session.generation && this.state !== "closed") {
       this.state = "failed";
     }
@@ -937,14 +1196,16 @@ export class LspClient {
   private failSession(session: ProcessSession, error: LspClientError): void {
     if (session.failure) return;
     session.failure = error;
+    session.windowsJobHost?.reject(error);
     this.rejectPending(
       (pending) => pending.generation === session.generation,
       error,
     );
+    this.settleDiagnosticWaiters(undefined);
     if (this.session?.generation === session.generation && this.state !== "closed") {
       this.state = "failed";
     }
-    killProcess(session.child);
+    void terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined);
   }
 
   private containedPath(pathValue: string): string {
@@ -1056,6 +1317,44 @@ function configurationError(message: string): LspClientError {
   return new LspClientError("invalid_configuration", message);
 }
 
+function negotiatedDiagnosticSupport(
+  capabilities: Record<string, unknown>,
+): LspDiagnosticSupport {
+  const diagnosticProvider = capabilities.diagnosticProvider;
+  if (!isObject(diagnosticProvider)) {
+    return { textDocumentPull: false, workspacePull: false };
+  }
+  return {
+    textDocumentPull: true,
+    workspacePull: diagnosticProvider.workspaceDiagnostics === true,
+  };
+}
+
+function createJobHostStartup(): JobHostStartup {
+  let resolveReady!: () => void;
+  let rejectReady!: (error: LspClientError) => void;
+  const ready = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolveReady = resolvePromise;
+    rejectReady = rejectPromise;
+  });
+  const startup: JobHostStartup = {
+    buffer: "",
+    settled: false,
+    ready,
+    resolve: () => {
+      if (startup.settled) return;
+      startup.settled = true;
+      resolveReady();
+    },
+    reject: (error) => {
+      if (startup.settled) return;
+      startup.settled = true;
+      rejectReady(error);
+    },
+  };
+  return startup;
+}
+
 function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
     const onSpawn = () => {
@@ -1075,15 +1374,57 @@ function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void> {
   });
 }
 
-function killProcess(
+async function terminateProcessTree(
   child: ChildProcessWithoutNullStreams,
   signal: NodeJS.Signals = "SIGTERM",
-): void {
-  if (child.exitCode === null && child.signalCode === null) {
+  windowsJobHost = false,
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === "win32" && windowsJobHost) {
     try {
       child.kill(signal);
     } catch {}
+    return;
   }
+  if (process.platform === "win32" && child.pid) {
+    await new Promise<void>((resolvePromise) => {
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        resolvePromise();
+      };
+      try {
+        const terminator = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+          shell: false,
+          windowsHide: true,
+          stdio: "ignore",
+        });
+        terminator.once("error", () => {
+          try {
+            child.kill(signal);
+          } catch {}
+          settle();
+        });
+        terminator.once("close", settle);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {}
+        settle();
+      }
+    });
+    return;
+  }
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  try {
+    child.kill(signal);
+  } catch {}
 }
 
 async function waitForProcessExit(

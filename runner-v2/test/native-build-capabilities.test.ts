@@ -60,6 +60,54 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
   }
 });
 
+test("NativeBuildFactory persists and validates a capability contract before recovery", async () => {
+  const fixture = createFixture("recovery-contract");
+  let factory: NativeBuildFactory | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId: "capability_recovery_contract",
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [configuredServer("fixture.contract")],
+    });
+    const prepared = await factory.prepareSpec(buildSpec("capability_recovery_contract"));
+    assert.match(prepared.capabilityContract?.digest ?? "", /^[a-f0-9]{64}$/);
+
+    await factory.validateRecoveryCapabilityContract(prepared);
+    const structurallyTampered = structuredClone(prepared);
+    structurallyTampered.capabilityContract!.extensions[0]!.version = "0.0.0";
+    await assert.rejects(
+      factory.validateRecoveryCapabilityContract(structurallyTampered),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_invalid",
+    );
+    await assert.rejects(
+      factory.validateRecoveryCapabilityContract({
+        ...prepared,
+        capabilityContract: undefined,
+      }),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_missing",
+    );
+
+    writeFileSync(
+      join(fixture.extension, "index.mjs"),
+      `${extensionModuleSource(undefined, "fixture.factory.inspect")}\n// changed entry identity\n`,
+    );
+    await assert.rejects(
+      factory.validateRecoveryCapabilityContract(prepared),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_mismatch",
+    );
+  } finally {
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
 test("NativeBuildFactory snapshot preserves attribution for a live extension tool call", async () => {
   const fixture = createFixture("extension-tool-observation");
   let factory: NativeBuildFactory | undefined;

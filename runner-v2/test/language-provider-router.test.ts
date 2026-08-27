@@ -19,7 +19,9 @@ import type {
   LanguageProviderDescriptor,
 } from "../src/language-intelligence.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
+import { RepositoryIntelligence } from "../src/repository-intelligence.js";
 import type { ConfiguredLanguageServer } from "../src/runner-capabilities-config.js";
+import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
 
 const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
 
@@ -142,17 +144,44 @@ test("configured LSP creates a distinct inner-root provider for each nested file
 
     assert.deepEqual(
       [firstResult.projectConfig, secondResult.projectConfig],
-      ["pyproject.toml", "pyproject.toml"],
+      ["first project/pyproject.toml", "second project/pyproject.toml"],
     );
     assert.deepEqual(
       [firstResult.results[0]?.path, secondResult.results[0]?.path],
-      ["src/main.py", "src/main.py"],
+      ["first project/src/main.py", "second project/src/main.py"],
     );
     await waitFor(() => rootRecords(rootLog).length === 2);
     assert.deepEqual(
       rootRecords(rootLog).map((record) => record.rootUri),
       [pathToFileURL(first).href, pathToFileURL(second).href],
     );
+  } finally {
+    await router.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("nested built-in TypeScript results preserve caller-root-relative paths", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-language-typescript-caller-root-"));
+  const project = join(root, "nested project");
+  mkdirSync(join(project, "src"), { recursive: true });
+  writeFileSync(join(project, "tsconfig.json"), JSON.stringify({
+    compilerOptions: { strict: true },
+    include: ["src/**/*.ts"],
+  }));
+  writeFileSync(join(project, "src", "main.ts"), "export const value: string = 1;\n");
+  const router = new LanguageProviderRouter({
+    builtInProvider: new TypeScriptIntelligence(new RepositoryIntelligence()),
+    extensionProviders: [],
+    configuredServers: [],
+  });
+  try {
+    const result = await router.diagnostics({
+      root,
+      path: "nested project/src/main.ts",
+    });
+    assert.equal(result.projectConfig, "nested project/tsconfig.json");
+    assert.equal(result.results[0]?.path, "nested project/src/main.ts");
   } finally {
     await router.close();
     rmSync(root, { recursive: true, force: true });
@@ -183,7 +212,7 @@ test("configured LSP treats a directory root marker as the project root", async 
       column: 1,
     });
     assert.equal(result.projectConfig, undefined);
-    assert.equal(result.results[0]?.path, "src/main.py");
+    assert.equal(result.results[0]?.path, "nested project/src/main.py");
     await waitFor(() => rootRecords(rootLog).length === 1);
     assert.deepEqual(rootRecords(rootLog)[0]?.rootUri, pathToFileURL(project).href);
   } finally {

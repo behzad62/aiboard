@@ -198,19 +198,37 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
     let reports: Array<{ uri: string; diagnostics: unknown[] }>;
     if (query.path) {
       const document = await this.synchronizeDocument(context.root, query.path, signal);
-      const response = await this.client.request<unknown>(
-        "textDocument/diagnostic",
-        { textDocument: { uri: document.uri } },
-        signal,
-      );
-      reports = [{ uri: document.uri, diagnostics: diagnosticItems(response) }];
+      const support = await this.client.diagnosticSupport();
+      if (support.textDocumentPull) {
+        const response = await this.client.request<unknown>(
+          "textDocument/diagnostic",
+          { textDocument: { uri: document.uri } },
+          signal,
+        );
+        reports = [{ uri: document.uri, diagnostics: diagnosticItems(response) }];
+      } else {
+        const published = await this.client.waitForPublishedDiagnostics(
+          document.uri,
+          document.version,
+          signal,
+        );
+        reports = [{ uri: document.uri, diagnostics: published?.diagnostics ?? [] }];
+      }
     } else {
-      const response = await this.client.request<unknown>(
-        "workspace/diagnostic",
-        { previousResultIds: [] },
-        signal,
-      );
-      reports = workspaceDiagnosticReports(response);
+      const support = await this.client.diagnosticSupport();
+      if (support.workspacePull) {
+        const response = await this.client.request<unknown>(
+          "workspace/diagnostic",
+          { previousResultIds: [] },
+          signal,
+        );
+        reports = workspaceDiagnosticReports(response);
+      } else {
+        reports = this.client.publishedDiagnosticsForOpenDocuments().map((published) => ({
+          uri: published.uri,
+          diagnostics: published.diagnostics,
+        }));
+      }
     }
     const values: CodeDiagnostic[] = [];
     let observed = 0;

@@ -1,5 +1,8 @@
 import type { ArtifactStore } from "./artifact-store.js";
-import type { CapabilityRegistry } from "./capability-registry.js";
+import type {
+  CapabilityRegistry,
+  RegisteredExtensionTool,
+} from "./capability-registry.js";
 import type {
   ContextAssembler,
   ContextPack,
@@ -60,6 +63,10 @@ export interface AssembleContextWithExtensionsOptions {
   contributorTimeoutMs?: number;
 }
 
+export interface RegisterExtensionCapabilitiesOptions {
+  includeTool?(registration: RegisteredExtensionTool): boolean;
+}
+
 interface PendingContribution {
   extensionId: string;
   contributorId: string;
@@ -71,8 +78,11 @@ class ExtensionContextTimeoutError extends Error {}
 export function registerExtensionCapabilities(
   registry: CapabilityRegistry,
   broker: ToolBroker,
+  options: RegisterExtensionCapabilitiesOptions = {},
 ): void {
-  const registrations = registry.tools();
+  const registrations = registry.tools().filter((registration) =>
+    options.includeTool?.(registration) ?? true,
+  );
   const names = new Set(broker.definitions().map((definition) => definition.name));
   for (const registration of registrations) {
     const name = registration.tool.definition.name;

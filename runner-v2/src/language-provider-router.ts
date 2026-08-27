@@ -67,7 +67,8 @@ interface ProviderCandidate {
 
 interface ProviderSelection {
   candidate: ProviderCandidate;
-  root: string;
+  callerRoot: string;
+  providerRoot: string;
   path?: string;
   matchedRootMarker?: string;
   projectConfig?: string;
@@ -158,7 +159,12 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (!selection) return unsupported();
     const provider = this.provider(selection);
     this.audit("workspace_symbols", selection);
-    return await provider.workspaceSymbols({ ...query, root: selection.root }, signal);
+    const providerRoot = this.queryRoot(selection);
+    return this.rebaseResult(
+      await provider.workspaceSymbols({ ...query, root: providerRoot }, signal),
+      selection,
+      providerRoot,
+    );
   }
 
   async definition(
@@ -183,11 +189,12 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (!selection) return unsupported();
     const provider = this.provider(selection);
     this.audit("diagnostics", selection);
-    return await provider.diagnostics({
+    const providerRoot = this.queryRoot(selection);
+    return this.rebaseResult(await provider.diagnostics({
       ...query,
-      root: selection.root,
+      root: providerRoot,
       ...(selection.path ? { path: selection.path } : {}),
-    }, signal);
+    }, signal), selection, providerRoot);
   }
 
   providerMetadata(): LanguageProviderAuditMetadata[] {
@@ -245,14 +252,16 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (!selection) return unsupported();
     const provider = this.provider(selection);
     this.audit(operation, selection);
+    const providerRoot = this.queryRoot(selection);
     const routed = {
       ...query,
-      root: selection.root,
+      root: providerRoot,
       ...(selection.path ? { path: selection.path } : {}),
     };
-    return operation === "definition"
+    const result = operation === "definition"
       ? await provider.definition(routed, signal)
       : await provider.references(routed, signal);
+    return this.rebaseResult(result, selection, providerRoot);
   }
 
   private select(
@@ -261,16 +270,17 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     pathValue?: string,
   ): ProviderSelection | undefined {
     this.assertOpen();
-    const root = existingDirectory(rootValue);
-    const path = pathValue === undefined ? undefined : containedTarget(root, pathValue);
+    const callerRoot = existingDirectory(rootValue);
+    const path = pathValue === undefined ? undefined : containedTarget(callerRoot, pathValue);
     const extension = path ? extname(path).toLowerCase() : undefined;
     const ranked = this.candidates.flatMap((item) => {
       if (extension && !item.descriptor.extensions.includes(extension)) return [];
-      const marker = matchedRootMarker(root, path, item.descriptor.rootMarkers);
+      const marker = matchedRootMarker(callerRoot, path, item.descriptor.rootMarkers);
       if (!extension && item.descriptor.rootMarkers.length > 0 && !marker) return [];
       return [{
         candidate: item,
-        root: marker?.projectRoot ?? root,
+        callerRoot,
+        providerRoot: marker?.projectRoot ?? callerRoot,
         ...(path ? { path } : {}),
         ...(marker ? {
           matchedRootMarker: marker.marker,
@@ -283,7 +293,11 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       compareText(left.candidate.descriptor.id, right.candidate.descriptor.id));
     if (ranked.length > 0) return ranked[0];
     if (!extension) {
-      return { candidate: this.candidates[0]!, root };
+      return {
+        candidate: this.candidates[0]!,
+        callerRoot,
+        providerRoot: callerRoot,
+      };
     }
     return undefined;
   }
@@ -292,13 +306,13 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (selection.candidate.provider) return selection.candidate.provider;
     const configured = selection.candidate.configured;
     if (!configured) throw new Error("Language provider candidate has no implementation.");
-    const key = `${configured.descriptor.id}\0${pathKey(selection.root)}`;
+    const key = `${configured.descriptor.id}\0${pathKey(selection.providerRoot)}`;
     const existing = this.configuredProviders.get(key);
     if (existing) return existing;
     this.assertOpen();
     const provider = new LspLanguageProvider({
       descriptor: configured.descriptor,
-      workspaceRoot: selection.root,
+      workspaceRoot: selection.providerRoot,
       ...(selection.projectConfig ? { projectConfig: selection.projectConfig } : {}),
       languageId: configured.languageId,
       ...(configured.maxDocumentBytes !== undefined
@@ -327,6 +341,38 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     this.configuredProviders.set(key, provider);
     this.ownedProviders.push(provider);
     return provider;
+  }
+
+  private queryRoot(selection: ProviderSelection): string {
+    // The built-in provider historically owns the caller workspace and uses it
+    // to discover nested TypeScript projects. Configured and extension providers
+    // instead start at their matched project root, then have results rebased.
+    return selection.candidate.source === "builtin"
+      ? selection.callerRoot
+      : selection.providerRoot;
+  }
+
+  private rebaseResult<T extends CodeLocation>(
+    result: CodeIntelligenceResult<T>,
+    selection: ProviderSelection,
+    providerRoot: string,
+  ): CodeIntelligenceResult<T> {
+    return {
+      ...result,
+      ...(result.projectConfig === undefined
+        ? {}
+        : {
+            projectConfig: rebaseProviderPath(
+              selection.callerRoot,
+              providerRoot,
+              result.projectConfig,
+            ),
+          }),
+      results: result.results.map((value) => ({
+        ...value,
+        path: rebaseProviderPath(selection.callerRoot, providerRoot, value.path),
+      })),
+    };
   }
 
   private audit(operation: LanguageRouteOperation, selection: ProviderSelection): void {
@@ -476,6 +522,27 @@ function displayPath(root: string, path: string): string {
 
 function pathKey(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function rebaseProviderPath(
+  callerRoot: string,
+  providerRoot: string,
+  value: string,
+): string {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
+    throw new LanguageProviderRoutingError(
+      "path_outside_workspace",
+      "Language provider returned an invalid path.",
+    );
+  }
+  const path = isAbsolute(value) ? resolve(value) : resolve(providerRoot, value);
+  if (!contained(callerRoot, path)) {
+    throw new LanguageProviderRoutingError(
+      "path_outside_workspace",
+      "Language provider returned a path outside the caller workspace.",
+    );
+  }
+  return displayPath(callerRoot, path);
 }
 
 function unsupported<T>(): CodeIntelligenceResult<T> {

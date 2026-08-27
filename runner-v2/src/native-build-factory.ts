@@ -31,7 +31,7 @@ import {
   projectIndependentVerifierObservability,
 } from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
-import type { NativeBuildSpec } from "./build-spec.js";
+import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime } from "./final-verification-runtime.js";
 import { FinalVerificationProfileAuthority } from "./final-verification-profile.js";
@@ -69,6 +69,10 @@ import {
   emptyRunnerCapabilitiesConfig,
   type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
+import {
+  createRunnerCapabilityContract,
+  validateRunnerCapabilityContract,
+} from "./runner-capability-contract.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import {
@@ -140,12 +144,28 @@ export class NativeBuildFactory {
     });
   }
 
+  async prepareSpec(spec: NativeBuildSpec): Promise<NativeBuildSpec> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    return {
+      ...cloneBuildSpec(spec),
+      capabilityContract: await createRunnerCapabilityContract(this.capabilitiesConfig()),
+    };
+  }
+
+  async validateRecoveryCapabilityContract(spec: NativeBuildSpec): Promise<void> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    await validateRunnerCapabilityContract(spec.capabilityContract, this.capabilitiesConfig());
+  }
+
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    if (spec.capabilityContract) {
+      await this.validateRecoveryCapabilityContract(spec);
+    }
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     await mkdir(runRoot, { recursive: true });
     const runCapabilities = await createNativeRunCapabilities({
-      config: this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig(),
+      config: this.capabilitiesConfig(),
       projectDirectory: this.options.projectRoot,
       stateDirectory: runRoot,
       reservedToolNames: [
@@ -725,6 +745,10 @@ export class NativeBuildFactory {
     } finally {
       if (!runCapabilitiesTransferred) await runCapabilities.close();
     }
+  }
+
+  private capabilitiesConfig(): RunnerCapabilitiesConfig {
+    return this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig();
   }
 
   async close(): Promise<void> {

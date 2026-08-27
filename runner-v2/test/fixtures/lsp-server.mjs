@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 
 let input = Buffer.alloc(0);
 let rootUri = "";
@@ -8,13 +9,19 @@ let outputQueue = Promise.resolve();
 const documents = new Map();
 const cancellations = [];
 const blocked = new Set();
+const requests = [];
 
 process.stdin.on("data", (chunk) => {
   input = Buffer.concat([input, chunk]);
   drainInput();
 });
 process.stdin.on("end", () => process.exit(shutdownRequested ? 0 : 1));
-process.on("SIGTERM", () => process.exit(143));
+process.on("SIGTERM", () => {
+  // The descendant fixture deliberately keeps the root alive long enough for
+  // the client test to observe whether it terminated the complete tree.
+  if (process.env.LSP_FIXTURE_DESCENDANT_PID_FILE) return;
+  process.exit(143);
+});
 process.on("exit", (code) => {
   const markerArgument = process.argv.indexOf("--fixture-exit-file");
   const marker = process.env.LSP_FIXTURE_EXIT_FILE ||
@@ -51,10 +58,12 @@ function drainInput() {
 async function handle(message) {
   const method = typeof message.method === "string" ? message.method : undefined;
   if (!method) return;
+  requests.push(method);
   if (method === "initialize") {
     rootUri = message.params?.rootUri ?? "";
     clientProcessId = message.params?.processId ?? null;
     writeRootMarker();
+    startDescendantFixture();
     await respond(message.id, {
       capabilities: {
         ...(process.env.LSP_FIXTURE_POSITION_ENCODING
@@ -64,10 +73,15 @@ async function handle(message) {
         definitionProvider: true,
         referencesProvider: true,
         workspaceSymbolProvider: true,
-        diagnosticProvider: {
-          interFileDependencies: false,
-          workspaceDiagnostics: true,
-        },
+        ...(process.env.LSP_FIXTURE_DIAGNOSTICS_MODE === "push"
+          ? {}
+          : {
+              diagnosticProvider: {
+                interFileDependencies: false,
+                workspaceDiagnostics:
+                  process.env.LSP_FIXTURE_DIAGNOSTICS_MODE !== "partial",
+              },
+            }),
       },
       serverInfo: { name: "aiboard-lsp-fixture", version: "1" },
     });
@@ -82,6 +96,9 @@ async function handle(message) {
   }
   if (method === "exit") {
     await outputQueue;
+    if (process.env.LSP_FIXTURE_DESCENDANT_PID_FILE) {
+      await delay(400);
+    }
     process.exit(shutdownRequested ? 0 : 1);
   }
   if (method === "textDocument/didOpen") {
@@ -152,6 +169,10 @@ async function handle(message) {
     return;
   }
   if (method === "textDocument/diagnostic") {
+    if (process.env.LSP_FIXTURE_DIAGNOSTICS_MODE === "push") {
+      await respondError(message.id, -32601, "Pull diagnostics are disabled.");
+      return;
+    }
     await respond(message.id, {
       kind: "full",
       items: diagnostics(message.params.textDocument.uri),
@@ -159,6 +180,11 @@ async function handle(message) {
     return;
   }
   if (method === "workspace/diagnostic") {
+    if (process.env.LSP_FIXTURE_DIAGNOSTICS_MODE === "push" ||
+        process.env.LSP_FIXTURE_DIAGNOSTICS_MODE === "partial") {
+      await respondError(message.id, -32601, "Workspace pull diagnostics are disabled.");
+      return;
+    }
     await respond(message.id, {
       items: [...documents.keys()].map((uri) => ({
         uri,
@@ -175,6 +201,7 @@ async function handle(message) {
       rootUri,
       documents: [...documents.entries()].map(([uri, value]) => ({ uri, ...value })),
       cancellations: [...cancellations],
+      requests: [...requests],
     });
     return;
   }
@@ -220,6 +247,23 @@ function writeRootMarker() {
   } catch {}
 }
 
+function startDescendantFixture() {
+  const marker = process.env.LSP_FIXTURE_DESCENDANT_PID_FILE;
+  if (!marker) return;
+  try {
+    const descendant = spawn(process.execPath, ["-e", [
+      "const { writeFileSync } = require('node:fs');",
+      "writeFileSync(process.env.LSP_FIXTURE_DESCENDANT_PID_FILE, JSON.stringify({ pid: process.pid, parentPid: process.ppid }));",
+      "setInterval(() => {}, 1000);",
+    ].join("")], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    descendant.unref();
+  } catch {}
+}
+
 async function verifyExpectedCharacter(message) {
   const expected = process.env.LSP_FIXTURE_EXPECT_CHARACTER;
   if (expected !== undefined && message.params?.position?.character !== Number(expected)) {
@@ -238,19 +282,22 @@ function firstDocumentUri() {
 }
 
 function diagnostics(uri) {
-  return [{
+  const count = Number(process.env.LSP_FIXTURE_DIAGNOSTIC_COUNT ?? "1");
+  return Array.from({ length: Number.isSafeInteger(count) && count > 0 ? count : 1 }, (_value, index) => ({
     range: range(1, 0, 1, 5),
     severity: 2,
-    code: "fixture-warning",
+    code: index === 0 ? "fixture-warning" : `fixture-warning-${index + 1}`,
     source: "fixture",
     message: `Fixture diagnostic for ${uri}`,
-  }];
+  }));
 }
 
 async function publishDiagnostics(uri, version) {
   await notify("textDocument/publishDiagnostics", {
     uri,
-    version,
+    version: process.env.LSP_FIXTURE_PUBLISH_STALE_VERSION === "1"
+      ? Math.max(0, version - 1)
+      : version,
     diagnostics: diagnostics(uri),
   });
 }

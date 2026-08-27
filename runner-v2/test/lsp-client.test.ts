@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { LspClient, LspClientError } from "../src/lsp-client.js";
 
@@ -161,6 +162,44 @@ test("LSP client returns typed bounded errors for missing executables, malformed
   }
 });
 
+test("LSP client launches a safe Windows command-shell shim through the Job Object host", async () => {
+  const fixture = workspace("cmd launcher");
+  const shim = join(fixture.root, "fixture-language-server.cmd");
+  writeFileSync(
+    shim,
+    `@echo off\r\n"${process.execPath}" "${fixtureServer}" %*\r\n`,
+  );
+  const client = new LspClient({
+    command: shim,
+    workspaceRoot: fixture.workspace,
+    requestTimeoutMs: 3_000,
+    shutdownTimeoutMs: 500,
+    restartLimit: 0,
+    env: { ...process.env },
+  });
+  try {
+    await client.start();
+    const state = await client.request<FixtureState>("fixture/state", {});
+    assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
+  } finally {
+    await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
+test("LSP client launches a direct executable in a space and Unicode workspace", async () => {
+  const fixture = workspace("space Ω launch");
+  const client = fixture.client();
+  try {
+    await client.start();
+    const state = await client.request<FixtureState>("fixture/state", {});
+    assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
+  } finally {
+    await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
 test("LSP client cannot bypass the restart limit through an explicit start", async () => {
   const fixture = workspace("restart-limit");
   const client = fixture.client({ restartLimit: 0 });
@@ -195,6 +234,36 @@ test("LSP client force-closes a server that does not answer shutdown", async () 
     assert.equal(client.stats().state, "closed");
   } finally {
     await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
+test("LSP client shutdown owns and terminates language-server descendants", async () => {
+  const fixture = workspace("descendant Ω");
+  const descendantMarker = join(fixture.root, "descendant.pid");
+  const client = fixture.client({
+    env: { LSP_FIXTURE_DESCENDANT_PID_FILE: descendantMarker },
+  });
+  let descendantPid = 0;
+  try {
+    await client.start();
+    await waitFor(() => existsSync(descendantMarker));
+    const descendant = JSON.parse(await readFile(descendantMarker, "utf8")) as {
+      pid: number;
+      parentPid: number;
+    };
+    descendantPid = descendant.pid;
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+    const state = await client.request<FixtureState>("fixture/state", {});
+    assert.equal(descendant.parentPid, state.pid);
+    await client.close();
+    await waitFor(() => !processExists(descendantPid));
+  } finally {
+    await client.close().catch(() => undefined);
+    if (descendantPid > 0 && processExists(descendantPid)) {
+      process.kill(descendantPid, "SIGKILL");
+      await waitFor(() => !processExists(descendantPid));
+    }
     fixture.close();
   }
 });
@@ -246,6 +315,7 @@ test("LSP client restarts a crashed server only within the configured limit and 
 interface FixtureState {
   pid: number;
   clientProcessId: number | null;
+  rootUri: string;
   documents: Array<{ uri: string; version: number; text: string }>;
   cancellations: Array<number | string>;
 }
@@ -292,8 +362,8 @@ function isLspError(code: string) {
   return (error: unknown) => error instanceof LspClientError && error.code === code;
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

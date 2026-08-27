@@ -270,7 +270,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       }
     }
     if (this.options.capabilityRegistry) {
-      registerExtensionCapabilities(this.options.capabilityRegistry, extras);
+      registerExtensionCapabilities(this.options.capabilityRegistry, extras, {
+        includeTool: ({ tool }) =>
+          tool.definition.readOnly === true && tool.definition.effect === "none",
+      });
     }
     const inspectionTools = this.options.runPolicy === "plan_only"
       ? new PlanOnlyInspectionRuntime(extras)

@@ -11,6 +11,10 @@ import { ArtifactReachabilityGuard } from "../src/artifact-reachability.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
 import {
+  createRunnerCapabilityContract,
+  RunnerCapabilityContractError,
+} from "../src/runner-capability-contract.js";
+import {
   configuredModelUsageRuntime,
   providerHealthFromSchedulerEvents,
   selectRuntimeCandidates,
@@ -2656,6 +2660,89 @@ test("close waits for an in-flight automatic handoff before closing resources", 
     assert.equal(projection.status, "completed");
   } finally {
     releasePump();
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery rejects an active missing capability contract before constructing its runtime", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-capability-contract-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  let constructed = 0;
+  const recoveryErrors: unknown[] = [];
+  const manager = new NativeBuildManager({
+    specs,
+    createRuntime: async () => {
+      constructed += 1;
+      throw new Error("runtime construction must not reach provider/model startup");
+    },
+    validateRecoveredSpec: async () => {
+      throw new RunnerCapabilityContractError(
+        "capability_contract_missing",
+        "active Build recovery requires a persisted capability contract",
+      );
+    },
+    onRecoverySpecError: (_runId, error) => {
+      recoveryErrors.push(error);
+    },
+  });
+  try {
+    specs.save({ ...spec, runPolicy: "finish", budgetLimits: {} });
+
+    await manager.recover();
+
+    assert.equal(constructed, 0);
+    assert.equal(recoveryErrors.length, 1);
+    assert.equal(
+      (recoveryErrors[0] as RunnerCapabilityContractError).code,
+      "capability_contract_missing",
+    );
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("new Builds persist a runner-prepared capability contract before runtime construction", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-capability-stamp-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  const capabilityContract = await createRunnerCapabilityContract({
+    extensions: [],
+    languageServers: [],
+  });
+  let runtimeSpec: NativeBuildSpec | undefined;
+  const manager = new NativeBuildManager({
+    specs,
+    prepareSpec: async (input) => ({
+      ...input,
+      capabilityContract,
+    }),
+    createRuntime: async (input) => {
+      runtimeSpec = input;
+      return {
+        ...handleProjections(input.runId),
+        runtime: fakeRuntime(input.runId),
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        cleanup: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+
+    assert.equal(
+      specs.get(spec.runId).capabilityContract?.digest,
+      capabilityContract.digest,
+    );
+    assert.equal(runtimeSpec?.capabilityContract?.digest, capabilityContract.digest);
+  } finally {
     await manager.close();
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,6 +1,11 @@
 import type { BudgetLimits } from "./budget-ledger.js";
 import type { PermissionProfile } from "./contracts.js";
 import { assertBudgetLimits } from "./budget-policy.js";
+import {
+  assertRunnerCapabilityContract,
+  cloneRunnerCapabilityContract,
+  type RunnerCapabilityContract,
+} from "./runner-capability-contract.js";
 
 export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 
@@ -27,6 +32,8 @@ export interface NativeBuildSpec {
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
+  /** Durable identity of executable extension and language-provider capabilities. */
+  capabilityContract?: RunnerCapabilityContract;
   benchmark?: NativeBuildBenchmarkPolicy;
 }
 
@@ -95,6 +102,9 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     throw new Error("Build spec run policy is invalid.");
   }
   assertBudgetLimits(spec.budgetLimits);
+  if (spec.capabilityContract !== undefined) {
+    assertRunnerCapabilityContract(spec.capabilityContract);
+  }
   if (spec.benchmark) {
     if (!spec.benchmark.attemptId.trim()) {
       throw new Error("Build spec benchmark attempt identity is incomplete.");
@@ -179,6 +189,9 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
     workerRuntimeIds: [...spec.workerRuntimeIds],
     verifierRuntimeIds: [...spec.verifierRuntimeIds],
     budgetLimits: { ...spec.budgetLimits },
+    ...(spec.capabilityContract
+      ? { capabilityContract: cloneRunnerCapabilityContract(spec.capabilityContract) }
+      : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

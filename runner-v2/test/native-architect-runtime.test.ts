@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -737,6 +737,149 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     evidence.close();
     memory.close();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Architect excludes mutating extension tools under Project and Full access", async () => {
+  for (const permissionProfile of ["project", "full"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `aiboard-architect-extension-${permissionProfile}-`));
+    const project = join(root, "project");
+    const state = join(root, "state");
+    mkdirSync(project);
+    mkdirSync(state);
+    writeFileSync(join(project, "source.txt"), "original\n");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    try {
+      const model = new ScriptedModel([
+        {
+          blocks: [{
+            type: "tool_call",
+            callId: "mutate_source",
+            name: "fixture.architect.mutate",
+            arguments: {},
+          }],
+          stopReason: "tool_calls",
+        },
+        {
+          blocks: [{
+            type: "tool_call",
+            callId: "plan_tasks",
+            name: "plan_tasks",
+            arguments: {
+              revision: 1,
+              tasks: [{
+                id: "task_a",
+                objective: "Inspect the extension boundary.",
+                dependencies: [],
+                requiredCapabilities: ["code"],
+                acceptanceCriteria: [{ id: "boundary", text: "The boundary is preserved." }],
+              }],
+            },
+          }],
+          stopReason: "tool_calls",
+        },
+      ]);
+      const candidate: AgentRuntimeCandidate = {
+        runtimeId: "fixture:architect",
+        providerId: "fixture",
+        modelId: "architect",
+        capabilities: ["code"],
+        priority: 1,
+      };
+      const registry = new CapabilityRegistry([{
+        manifest: {
+          apiVersion: 1,
+          id: "fixture.architect-boundary",
+          name: "Architect boundary fixture",
+          version: "1.0.0",
+          entry: "index.mjs",
+          capabilities: ["tools"],
+        },
+        instance: {
+          capabilities: () => ({
+            tools: [
+              {
+                definition: {
+                  name: "fixture.architect.inspect",
+                  description: "Inspect the source boundary.",
+                  inputSchema: { type: "object", additionalProperties: false },
+                  readOnly: true,
+                  effect: "none",
+                },
+                validate: () => ({ ok: true as const, value: {} }),
+                execute: async () => ({ content: [], isError: false }),
+              },
+              {
+                definition: {
+                  name: "fixture.architect.mutate",
+                  description: "Mutate the source boundary.",
+                  inputSchema: { type: "object", additionalProperties: false },
+                  readOnly: false,
+                  effect: "workspace",
+                },
+                validate: () => ({ ok: true as const, value: {} }),
+                execute: async (_input, context) => {
+                  assert.ok(context.workspacePath);
+                  writeFileSync(join(context.workspacePath, "source.txt"), "mutated\n");
+                  return { content: [], isError: false };
+                },
+              },
+            ],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async () => undefined,
+          close: async () => undefined,
+        },
+      }]);
+      const health = new ProviderHealthRegistry();
+      const architect = new NativeArchitectRuntime({
+        schedulerStore: scheduler,
+        router: new RuntimeRouter({ candidates: [candidate], health }),
+        health,
+        candidates: [candidate],
+        models: new Map([[candidate.runtimeId, model]]),
+        initialRuntimeId: candidate.runtimeId,
+        sessions,
+        artifacts,
+        skillCatalog: new SkillCatalog({ projectRoot: project }),
+        memoryStore: memory,
+        evidenceStore: evidence,
+        projectId: "project_1",
+        projectRoot: project,
+        objective: "Protect the project source.",
+        permissionProfile,
+        capabilityRegistry: registry,
+      });
+      const runtime = new BuildRuntime({
+        runId: `run_${permissionProfile}`,
+        store: scheduler,
+        workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+        architectDriver: architect,
+        integrationDriver: {
+          integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+        },
+        maxConcurrency: 1,
+        workspaceFor: async () => "unused",
+      });
+
+      assert.equal((await runtime.step()).status, "progressed");
+      const advertised = new Set(model.requests[0]!.tools.map((tool) => tool.name));
+      assert.equal(advertised.has("fixture.architect.inspect"), true);
+      assert.equal(advertised.has("fixture.architect.mutate"), false);
+      assert.equal(readFileSync(join(project, "source.txt"), "utf8"), "original\n");
+      assert.equal(runtime.projection().planRevision, 1);
+    } finally {
+      sessions.close();
+      scheduler.close();
+      evidence.close();
+      memory.close();
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
   }
 });
 

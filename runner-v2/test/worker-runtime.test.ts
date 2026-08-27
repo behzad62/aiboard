@@ -58,7 +58,7 @@ const browserEvidenceBackend: BrowserBackend = {
   async closeAll() {},
 };
 
-test("worker runtime exposes extension tools through the governed live broker", async () => {
+test("worker runtime runs mutating extension tools inside its isolated workspace", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-worker-extension-live-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -97,15 +97,17 @@ test("worker runtime exposes extension tools through the governed live broker", 
         capabilities: () => ({
           tools: [{
             definition: {
-              name: "fixture.inspect",
-              description: "Inspect the fixture",
+              name: "fixture.mutate",
+              description: "Mutate the isolated fixture",
               inputSchema: { type: "object", additionalProperties: false },
-              readOnly: true,
-              effect: "none",
+              readOnly: false,
+              effect: "workspace",
             },
             validate: () => ({ ok: true as const, value: {} }),
-            execute: async () => {
+            execute: async (_input, context) => {
               executions += 1;
+              assert.ok(context.workspacePath);
+              writeFileSync(join(context.workspacePath, "value.txt"), "worker extension\n");
               return { content: [{ type: "json" as const, value: { ok: true } }], isError: false };
             },
           }],
@@ -117,7 +119,7 @@ test("worker runtime exposes extension tools through the governed live broker", 
       },
     }]);
     const model = new ScriptedModel([
-      toolTurn("extension_call", "fixture.inspect", {}),
+      toolTurn("extension_call", "fixture.mutate", {}),
       new Error("stop after governed extension call"),
     ]);
     const result = await runWorkerTask({
@@ -137,7 +139,9 @@ test("worker runtime exposes extension tools through the governed live broker", 
     });
     assert.equal(result.loop.status, "suspended");
     assert.equal(executions, 1);
-    assert.equal(model.requests[0]?.tools.some((tool) => tool.name === "fixture.inspect"), true);
+    assert.equal(model.requests[0]?.tools.some((tool) => tool.name === "fixture.mutate"), true);
+    assert.equal(readFileSync(join(workspace.path, "value.txt"), "utf8"), "worker extension\n");
+    assert.equal(readFileSync(join(project, "value.txt"), "utf8"), "one\n");
     assert.deepEqual(
       ledger.listRun("run_extension")
         .filter((event) => event.callId === "extension_call")

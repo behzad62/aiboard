@@ -20,8 +20,10 @@ import {
   emptyRunnerCapabilitiesConfig,
   loadRunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
+import { RunnerCapabilityContractError } from "./runner-capability-contract.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
+import type { RunState } from "./contracts.js";
 import {
   closeRunnerResources,
   startupFailureWithCleanup,
@@ -140,6 +142,17 @@ async function main(): Promise<void> {
         join(options.stateDirectory, "build-specs.sqlite")
       ),
       createRuntime: (spec) => buildFactory.create(spec),
+      prepareSpec: (spec) => buildFactory.prepareSpec(spec),
+      shouldRecoverSpec: (spec) =>
+        !isTerminalRunState(supervisor.getRun(spec.runId).state),
+      validateRecoveredSpec: async (spec) => {
+        const run = supervisor.getRun(spec.runId);
+        if (isTerminalRunState(run.state)) return;
+        await buildFactory.validateRecoveryCapabilityContract(spec);
+      },
+      onRecoverySpecError: (runId, error) => {
+        recordCapabilityContractRecoveryFailure(supervisor, runId, error);
+      },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
         syncAutonomousBuildLifecycle(
@@ -259,6 +272,38 @@ function syncAutonomousBuildLifecycle(
       result.action ?? "native-build"
     );
   }
+}
+
+function isTerminalRunState(state: RunState): boolean {
+  return state === "stopped" || state === "completed" || state === "failed";
+}
+
+function recordCapabilityContractRecoveryFailure(
+  supervisor: RunSupervisor,
+  runId: string,
+  error: unknown,
+): void {
+  try {
+    const run = supervisor.getRun(runId);
+    if (isTerminalRunState(run.state)) return;
+    supervisor.fail(
+      runId,
+      `capability-contract-recovery:${run.lastSequence}`,
+      capabilityContractRecoveryReason(error),
+    );
+  } catch (recordError) {
+    writeRunnerWarning(runId, new AggregateError(
+      [error, recordError],
+      "Unable to record Runner capability-contract recovery failure.",
+    ));
+  }
+}
+
+function capabilityContractRecoveryReason(error: unknown): string {
+  if (error instanceof RunnerCapabilityContractError) {
+    return `capability-contract:${error.code}`;
+  }
+  return "capability-contract:validation_failed";
 }
 
 function parseRunnerArguments(rawArgs: string[]): string[] {

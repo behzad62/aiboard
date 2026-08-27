@@ -41,6 +41,10 @@ The configuration is deliberately strict. It must be a regular, non-symbolic JSO
 
 `version`, `extensions`, and `languageServers` are required. Each language-server entry requires `id`, `displayName`, `extensions`, `rootMarkers`, `priority`, `languageId`, `command`, and `args`; the timeout, restart, and size limits are optional bounded tuning values. An empty pair of arrays disables optional capabilities while retaining the built-in TypeScript/JavaScript provider (`builtin.typescript`).
 
+On Windows, Runner launches each configured language server inside a Windows Job Object, so closing the provider also terminates its descendant processes. Direct executables and ordinary `.cmd`/`.bat` shims are supported through the Job host's safe argv resolution. Use a direct executable (for example `node.exe` plus the server entry module) when an argument needs command-shell metacharacters.
+
+Runner stamps each new active Build with a digest of its extension manifests and entries, configured language-server descriptors, and built-in language-provider identity. On restart, omitting or changing those capabilities fails an active Build before it can construct a runtime or make model calls; terminal history remains inspectable.
+
 ## Extension package contract
 
 Each allowlisted directory contains a `runner-extension.json` manifest and a contained ESM entry module. The manifest declares API version `1`, a stable extension ID, name, version, entry path, and one or more capabilities: `tools`, `context`, or `language_intelligence`.
@@ -55,6 +59,6 @@ Context contributors return bounded optional text. Runner V2 calls them through 
 
 `code.workspace_symbols`, `code.definition`, `code.references`, and `code.diagnostics` keep their existing names and response shapes. For each query, Runner selects a provider by file extension, then a matching root marker, then configured priority. Extension language providers and configured stdio LSP servers participate in the same routing table.
 
-The run's observability snapshot records loaded extension manifests, configured provider metadata, bounded language-route audit records, and extension tool calls with their `extensionId`. Runner owns configured LSP processes. During run cleanup it stops owned language providers before closing extension instances, in reverse startup order; an extension/provider startup failure also closes everything that began successfully.
+The run's observability snapshot records loaded extension manifests, configured provider metadata, bounded language-route audit records, and extension tool calls with their `extensionId`. Runner owns configured LSP process trees. During run cleanup it stops owned language providers before closing extension instances, in reverse startup order; an extension/provider startup failure also closes everything that began successfully.
 
 Use maintained Node.js 22.x or 24.x lines when operating Runner V2. Runner enforces the runtime capabilities it requires at startup (including `node:sqlite`) without asking operators to configure or pin a particular patch release.
