@@ -10,7 +10,7 @@ Create a JSON file outside the project directory, then start Runner V2 with its 
 npm run runner:v2 -- --project C:\work\my-project --state-dir C:\runner-state --capabilities-config C:\runner-config\capabilities.json
 ```
 
-The configuration is deliberately strict. It must be a regular, non-symbolic JSON file; extension paths must be absolute; unknown fields are rejected; and the Runner never reads this configuration from environment variables. Keep secrets out of this file. Provider credentials continue to use Runner's encrypted provider configuration.
+The configuration is deliberately strict. It must be a regular, non-symbolic JSON file; extension paths must be absolute; unknown fields are rejected; and the Runner never reads this configuration from environment variables. Before it opens its control listener, Runner validates extension manifests and registrations and runs each extension's startup/cleanup preflight atomically. Keep secrets out of this file. Provider credentials continue to use Runner's encrypted provider configuration.
 
 ```json
 {
@@ -55,6 +55,6 @@ Context contributors return bounded optional text. Runner V2 calls them through 
 
 `code.workspace_symbols`, `code.definition`, `code.references`, and `code.diagnostics` keep their existing names and response shapes. For each query, Runner selects a provider by file extension, then a matching root marker, then configured priority. Extension language providers and configured stdio LSP servers participate in the same routing table.
 
-The run's observability snapshot records loaded extension manifests, configured provider metadata, and bounded language-route audit records. Runner owns configured LSP processes. During run cleanup it stops owned language providers before closing extension instances, in reverse startup order; an extension/provider startup failure also closes everything that began successfully.
+The run's observability snapshot records loaded extension manifests, configured provider metadata, bounded language-route audit records, and extension tool calls with their `extensionId`. Runner owns configured LSP processes. During run cleanup it stops owned language providers before closing extension instances, in reverse startup order; an extension/provider startup failure also closes everything that began successfully.
 
-Use only maintained Node.js 22.x or 24.x lines when operating Runner V2. No exact Node patch release is required; Node 22 must be at least 22.13.0 for `node:sqlite`.
+Use maintained Node.js 22.x or 24.x lines when operating Runner V2. Runner enforces the runtime capabilities it requires at startup (including `node:sqlite`) without asking operators to configure or pin a particular patch release.

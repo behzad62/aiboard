@@ -4,7 +4,6 @@ import {
   dirname,
   extname,
   isAbsolute,
-  join,
   relative,
   resolve,
   sep,
@@ -69,7 +68,15 @@ interface ProviderCandidate {
 interface ProviderSelection {
   candidate: ProviderCandidate;
   root: string;
+  path?: string;
   matchedRootMarker?: string;
+  projectConfig?: string;
+}
+
+interface RootMarkerMatch {
+  marker: string;
+  projectRoot: string;
+  projectConfig?: string;
 }
 
 export class LanguageProviderRoutingError extends Error {
@@ -79,12 +86,13 @@ export class LanguageProviderRoutingError extends Error {
   }
 }
 
-/** Selects a protected provider per query while owning only built-in/configured lifecycles. */
+/** Selects protected providers and owns their language-provider lifecycles. */
 export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   readonly descriptor: LanguageProviderDescriptor;
 
   private readonly candidates: ProviderCandidate[];
   private readonly builtInProvider: LanguageIntelligenceProvider;
+  private readonly extensionProviderInstances: LanguageIntelligenceProvider[];
   private readonly configuredProviders = new Map<string, LspLanguageProvider>();
   private readonly ownedProviders: LanguageIntelligenceProvider[] = [];
   private readonly records: LanguageRouteAuditRecord[] = [];
@@ -101,6 +109,9 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       10_000,
     );
     this.builtInProvider = options.builtInProvider;
+    this.extensionProviderInstances = options.extensionProviders.map(
+      (registration) => registration.provider,
+    );
     const builtin = candidate(
       options.builtInProvider.descriptor,
       "builtin",
@@ -172,7 +183,11 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (!selection) return unsupported();
     const provider = this.provider(selection);
     this.audit("diagnostics", selection);
-    return await provider.diagnostics({ ...query, root: selection.root }, signal);
+    return await provider.diagnostics({
+      ...query,
+      root: selection.root,
+      ...(selection.path ? { path: selection.path } : {}),
+    }, signal);
   }
 
   providerMetadata(): LanguageProviderAuditMetadata[] {
@@ -200,7 +215,14 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (this.closed) return;
     this.closed = true;
     const failures: unknown[] = [];
-    for (const provider of [this.builtInProvider, ...this.ownedProviders].reverse()) {
+    const closedProviders = new Set<LanguageIntelligenceProvider>();
+    for (const provider of [
+      ...this.ownedProviders.slice().reverse(),
+      ...this.extensionProviderInstances.slice().reverse(),
+      this.builtInProvider,
+    ]) {
+      if (closedProviders.has(provider)) continue;
+      closedProviders.add(provider);
       try {
         await provider.close();
       } catch (error) {
@@ -223,9 +245,14 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     if (!selection) return unsupported();
     const provider = this.provider(selection);
     this.audit(operation, selection);
+    const routed = {
+      ...query,
+      root: selection.root,
+      ...(selection.path ? { path: selection.path } : {}),
+    };
     return operation === "definition"
-      ? await provider.definition({ ...query, root: selection.root }, signal)
-      : await provider.references({ ...query, root: selection.root }, signal);
+      ? await provider.definition(routed, signal)
+      : await provider.references(routed, signal);
   }
 
   private select(
@@ -243,8 +270,12 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       if (!extension && item.descriptor.rootMarkers.length > 0 && !marker) return [];
       return [{
         candidate: item,
-        root,
-        ...(marker ? { matchedRootMarker: marker } : {}),
+        root: marker?.projectRoot ?? root,
+        ...(path ? { path } : {}),
+        ...(marker ? {
+          matchedRootMarker: marker.marker,
+          ...(marker.projectConfig ? { projectConfig: marker.projectConfig } : {}),
+        } : {}),
       }];
     }).sort((left, right) =>
       Number(Boolean(right.matchedRootMarker)) - Number(Boolean(left.matchedRootMarker)) ||
@@ -265,13 +296,10 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     const existing = this.configuredProviders.get(key);
     if (existing) return existing;
     this.assertOpen();
-    const projectConfig = selection.matchedRootMarker
-      ? join(selection.root, ...selection.matchedRootMarker.split("/"))
-      : undefined;
     const provider = new LspLanguageProvider({
       descriptor: configured.descriptor,
       workspaceRoot: selection.root,
-      ...(projectConfig ? { projectConfig } : {}),
+      ...(selection.projectConfig ? { projectConfig: selection.projectConfig } : {}),
       languageId: configured.languageId,
       ...(configured.maxDocumentBytes !== undefined
         ? { maxDocumentBytes: configured.maxDocumentBytes }
@@ -363,7 +391,7 @@ function matchedRootMarker(
   root: string,
   path: string | undefined,
   markers: readonly string[],
-): string | undefined {
+): RootMarkerMatch | undefined {
   if (markers.length === 0) return undefined;
   let directory = path ? dirname(path) : root;
   while (contained(root, directory)) {
@@ -371,7 +399,18 @@ function matchedRootMarker(
       const candidate = resolve(directory, ...marker.split("/"));
       try {
         const actual = realpathSync(candidate);
-        if (contained(root, actual)) return displayPath(root, candidate);
+        const metadata = statSync(actual);
+        if (
+          contained(root, actual) &&
+          contained(directory, actual) &&
+          (metadata.isFile() || metadata.isDirectory())
+        ) {
+          return {
+            marker: displayPath(root, candidate),
+            projectRoot: directory,
+            ...(metadata.isFile() ? { projectConfig: actual } : {}),
+          };
+        }
       } catch {}
     }
     if (path === undefined || directory === root) break;

@@ -136,6 +136,7 @@ export interface BuildToolObservation {
   sessionId: string;
   callId: string;
   toolName: string;
+  extensionId?: string;
   status: "started" | "retrying" | "completed";
   occurredAt: string;
   isError?: boolean;

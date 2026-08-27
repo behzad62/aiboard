@@ -111,6 +111,8 @@ export interface NativeBuildFactoryOptions {
   capabilitiesConfig?: RunnerCapabilitiesConfig;
   baselineFor(runId: string): string;
   skillRoots?: readonly SharedSkillRoot[];
+  /** The CLI owns provider configuration cleanup when it manages the full process lifecycle. */
+  closeProviderConfigs?: boolean;
 }
 
 export class NativeBuildFactory {
@@ -729,7 +731,9 @@ export class NativeBuildFactory {
     if (this.closed) return;
     this.closed = true;
     this.memoryStore.close();
-    this.options.providerConfigs.close();
+    if (this.options.closeProviderConfigs !== false) {
+      this.options.providerConfigs.close();
+    }
     this.managedProcesses.close();
     await this.browserBackend.closeAll();
   }
@@ -743,7 +747,7 @@ export class NativeBuildFactory {
   }
 }
 
-interface NativeRunCapabilitiesOptions {
+export interface RunnerCapabilityPreflightOptions {
   config: RunnerCapabilitiesConfig;
   projectDirectory: string;
   stateDirectory: string;
@@ -773,12 +777,13 @@ class NativeRunCapabilities {
 }
 
 async function createNativeRunCapabilities(
-  options: NativeRunCapabilitiesOptions,
+  options: RunnerCapabilityPreflightOptions,
 ): Promise<NativeRunCapabilities> {
   const builtInLanguage = new TypeScriptIntelligence(
     new RepositoryIntelligence(),
   );
   let extensions: LoadedRunnerExtensions | undefined;
+  let registry: CapabilityRegistry | undefined;
   let language: LanguageProviderRouter | undefined;
   try {
     if (options.config.extensions.length > 0) {
@@ -789,7 +794,7 @@ async function createNativeRunCapabilities(
         reservedToolNames: options.reservedToolNames,
       }).load();
     }
-    const registry = extensions?.registry ?? new CapabilityRegistry([], {
+    registry = extensions?.registry ?? new CapabilityRegistry([], {
       reservedToolNames: options.reservedToolNames,
     });
     language = new LanguageProviderRouter({
@@ -800,8 +805,12 @@ async function createNativeRunCapabilities(
     return new NativeRunCapabilities(registry, language, extensions);
   } catch (error) {
     try {
+      const extensionProviders = language
+        ? []
+        : (registry?.languageProviders().map((registration) => registration.provider) ?? [])
+          .reverse();
       await closeCapabilityResources(
-        [language ?? builtInLanguage],
+        language ? [language] : [...extensionProviders, builtInLanguage],
         extensions,
       );
     } catch (cleanupError) {
@@ -812,6 +821,14 @@ async function createNativeRunCapabilities(
     }
     throw error;
   }
+}
+
+/** Validates and starts configured capabilities before accepting control-plane traffic. */
+export async function preflightRunnerCapabilities(
+  options: RunnerCapabilityPreflightOptions,
+): Promise<void> {
+  const capabilities = await createNativeRunCapabilities(options);
+  await capabilities.close();
 }
 
 async function closeCapabilityResources(
@@ -1096,6 +1113,11 @@ function summarizeToolCalls(
       sessionId: event.sessionId,
       callId: event.callId,
       toolName: event.toolName,
+      ...(event.extensionId
+        ? { extensionId: event.extensionId }
+        : previous?.extensionId
+          ? { extensionId: previous.extensionId }
+          : {}),
       status: event.type === "tool.completed"
         ? "completed"
         : event.type === "tool.retry_started"

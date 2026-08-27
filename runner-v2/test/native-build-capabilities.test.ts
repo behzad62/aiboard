@@ -7,8 +7,11 @@ import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { NativeBuildFactory } from "../src/native-build-factory.js";
+import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
+import { runWorkerTask } from "../src/worker-runtime.js";
+import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 
 test("NativeBuildFactory loads configured capabilities and reports provider audit metadata", async () => {
   const fixture = createFixture("metadata");
@@ -57,7 +60,101 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
   }
 });
 
-test("NativeBuildFactory closes already-started extensions when language provider startup validation fails", async () => {
+test("NativeBuildFactory snapshot preserves attribution for a live extension tool call", async () => {
+  const fixture = createFixture("extension-tool-observation");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  try {
+    const runId = "capability_extension_tool_observation";
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [],
+    });
+    handle = await factory.create(buildSpec(runId));
+
+    const options = factoryWorkerOptions(handle);
+    const workspace = await options.workspaceManager.createTaskWorkspace("extension_audit");
+    const result = await runWorkerTask({
+      model: new ScriptedModel([
+        toolTurn("extension_observation", "fixture.factory.inspect", {}),
+        new Error("stop after extension observation"),
+      ]),
+      runId,
+      sessionId: "worker:extension_audit:1",
+      taskId: "extension_audit",
+      actorId: "worker_extension_audit",
+      attempt: 1,
+      permissionProfile: "full",
+      workspace,
+      workspaceManager: options.workspaceManager,
+      artifacts: options.artifacts,
+      ledger: options.ledger,
+      sessions: options.sessions,
+      initialMessages: [{ id: "task", role: "user", content: "Inspect the extension." }],
+      capabilityRegistry: options.capabilityRegistry,
+      language: options.language,
+    });
+    assert.equal(result.loop.status, "suspended");
+
+    const snapshot = await handle.observability();
+    assert.deepEqual(
+      snapshot.tools
+        .filter((tool) => tool.callId === "extension_observation")
+        .map((tool) => ({
+          status: tool.status,
+          extensionId: tool.extensionId,
+        })),
+      [{ status: "completed", extensionId: "fixture.factory" }],
+    );
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory closes extension language providers before their extension instance", async () => {
+  const fixture = createFixture("extension-language-close", "fixture.extension.language");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId: "capability_extension_language_close",
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [],
+    });
+
+    handle = await factory.create(buildSpec("capability_extension_language_close"));
+    await handle.close();
+    await handle.close();
+    handle = undefined;
+
+    assert.equal(
+      readFileSync(join(
+        runRoot(fixture.state, "capability_extension_language_close"),
+        "extensions",
+        "fixture.factory",
+        "lifecycle.log",
+      ), "utf8"),
+      "language-provider-closed\nclosed\n",
+    );
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory closes extension providers before instances when language provider startup validation fails", async () => {
   const fixture = createFixture("atomic", "fixture.duplicate");
   let factory: NativeBuildFactory | undefined;
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
@@ -83,7 +180,7 @@ test("NativeBuildFactory closes already-started extensions when language provide
     assert.match(String(outcome.error), /Duplicate language provider fixture\.duplicate/);
     assert.equal(
       readFileSync(join(runRoot(fixture.state, "capability_atomic"), "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
-      "closed\n",
+      "language-provider-closed\nclosed\n",
     );
   } finally {
     await handle?.close();
@@ -124,6 +221,34 @@ test("NativeBuildFactory reserves built-in tool names before any extension start
     await handle?.close();
     await factory?.close();
     fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory leaves provider configuration cleanup to the CLI when requested", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-capabilities-provider-owner-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  let providerConfigsClosed = 0;
+  const options = {
+    projectRoot: project,
+    stateDirectory: state,
+    providerConfigs: {
+      load: () => [],
+      save: () => undefined,
+      close: () => { providerConfigsClosed += 1; },
+    },
+    baselineFor: () => "unused",
+    closeProviderConfigs: false,
+  } as unknown as ConstructorParameters<typeof NativeBuildFactory>[0];
+  const factory = new NativeBuildFactory(options);
+  try {
+    await factory.close();
+    assert.equal(providerConfigsClosed, 0);
+  } finally {
+    if (providerConfigsClosed === 0) options.providerConfigs.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -233,7 +358,7 @@ function extensionModuleSource(
   toolName: string,
 ): string {
   const language = languageId
-    ? `[{ descriptor: { id: ${JSON.stringify(languageId)}, displayName: "Duplicate fixture", extensions: [".fixture"], rootMarkers: [], priority: 1 }, workspaceSymbols: async () => ({ status: "ok", results: [], truncated: false }), definition: async () => ({ status: "ok", results: [], truncated: false }), references: async () => ({ status: "ok", results: [], truncated: false }), diagnostics: async () => ({ status: "ok", results: [], truncated: false }), close: async () => undefined }]`
+    ? `[{ descriptor: { id: ${JSON.stringify(languageId)}, displayName: "Duplicate fixture", extensions: [".fixture"], rootMarkers: [], priority: 1 }, workspaceSymbols: async () => ({ status: "ok", results: [], truncated: false }), definition: async () => ({ status: "ok", results: [], truncated: false }), references: async () => ({ status: "ok", results: [], truncated: false }), diagnostics: async () => ({ status: "ok", results: [], truncated: false }), close: async () => { await appendFile(join(stateDirectory, "lifecycle.log"), "language-provider-closed\\n"); } }]`
     : "[]";
   return [
     'import { appendFile, writeFile } from "node:fs/promises";',
@@ -257,4 +382,30 @@ function extensionModuleSource(
 function runRoot(stateDirectory: string, runId: string): string {
   const readable = runId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "run";
   return join(stateDirectory, "builds", `${readable}-${createHash("sha256").update(runId).digest("hex").slice(0, 10)}`);
+}
+
+function factoryWorkerOptions(
+  handle: Awaited<ReturnType<NativeBuildFactory["create"]>>,
+): NativeWorkerDriverOptions {
+  return (handle.runtime as unknown as {
+    scheduler: { driver: { options: NativeWorkerDriverOptions } };
+  }).scheduler.driver.options;
+}
+
+class ScriptedModel implements AgentModel {
+  constructor(private readonly turns: Array<ModelTurn | Error>) {}
+
+  async complete(_request: AgentModelRequest): Promise<ModelTurn> {
+    const turn = this.turns.shift();
+    if (!turn) throw new Error("script exhausted");
+    if (turn instanceof Error) throw turn;
+    return turn;
+  }
+}
+
+function toolTurn(callId: string, name: string, arguments_: unknown): ModelTurn {
+  return {
+    blocks: [{ type: "tool_call", callId, name, arguments: arguments_ }],
+    stopReason: "tool_calls",
+  };
 }

@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import type {
   CodeIntelligenceResult,
@@ -102,6 +110,88 @@ test("configured non-TypeScript LSP routes by extension and closes every owned p
   rmSync(root, { recursive: true, force: true });
 });
 
+test("configured LSP creates a distinct inner-root provider for each nested file marker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-language-nested-roots-"));
+  const first = join(root, "first project");
+  const second = join(root, "second project");
+  const rootLog = join(root, "lsp-roots.jsonl");
+  mkdirSync(join(first, "src"), { recursive: true });
+  mkdirSync(join(second, "src"), { recursive: true });
+  writeFileSync(join(first, "pyproject.toml"), "[project]\nname='first'\n");
+  writeFileSync(join(second, "pyproject.toml"), "[project]\nname='second'\n");
+  writeFileSync(join(first, "src", "main.py"), "first = 1\n");
+  writeFileSync(join(second, "src", "main.py"), "second = 2\n");
+  const router = new LanguageProviderRouter({
+    builtInProvider: fakeProvider("builtin.typescript", [".ts"], [], 0, []),
+    extensionProviders: [],
+    configuredServers: [configuredPythonServer([fixtureServer, "--fixture-root-log", rootLog])],
+  });
+  try {
+    const firstResult = await router.definition({
+      root,
+      path: "first project/src/main.py",
+      line: 1,
+      column: 1,
+    });
+    const secondResult = await router.definition({
+      root,
+      path: "second project/src/main.py",
+      line: 1,
+      column: 1,
+    });
+
+    assert.deepEqual(
+      [firstResult.projectConfig, secondResult.projectConfig],
+      ["pyproject.toml", "pyproject.toml"],
+    );
+    assert.deepEqual(
+      [firstResult.results[0]?.path, secondResult.results[0]?.path],
+      ["src/main.py", "src/main.py"],
+    );
+    await waitFor(() => rootRecords(rootLog).length === 2);
+    assert.deepEqual(
+      rootRecords(rootLog).map((record) => record.rootUri),
+      [pathToFileURL(first).href, pathToFileURL(second).href],
+    );
+  } finally {
+    await router.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("configured LSP treats a directory root marker as the project root", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-language-directory-marker-"));
+  const project = join(root, "nested project");
+  const rootLog = join(root, "lsp-roots.jsonl");
+  mkdirSync(join(project, ".fixture-root"), { recursive: true });
+  mkdirSync(join(project, "src"));
+  writeFileSync(join(project, "src", "main.py"), "value = 1\n");
+  const router = new LanguageProviderRouter({
+    builtInProvider: fakeProvider("builtin.typescript", [".ts"], [], 0, []),
+    extensionProviders: [],
+    configuredServers: [configuredPythonServer([
+      fixtureServer,
+      "--fixture-root-log",
+      rootLog,
+    ], [".fixture-root"])],
+  });
+  try {
+    const result = await router.definition({
+      root,
+      path: "nested project/src/main.py",
+      line: 1,
+      column: 1,
+    });
+    assert.equal(result.projectConfig, undefined);
+    assert.equal(result.results[0]?.path, "src/main.py");
+    await waitFor(() => rootRecords(rootLog).length === 1);
+    assert.deepEqual(rootRecords(rootLog)[0]?.rootUri, pathToFileURL(project).href);
+  } finally {
+    await router.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("language routing rejects provider identity collisions before any query", () => {
   const builtin = fakeProvider("builtin.typescript", [".ts"], [], 0, []);
   assert.throws(
@@ -146,6 +236,37 @@ function fakeProvider(
     diagnostics: async () => ({ status: "ok", results: [], truncated: false }),
     close: async () => undefined,
   };
+}
+
+function configuredPythonServer(
+  args: string[],
+  rootMarkers = ["pyproject.toml"],
+): ConfiguredLanguageServer {
+  return {
+    descriptor: {
+      id: "configured.python",
+      displayName: "Configured Python",
+      extensions: [".py"],
+      rootMarkers,
+      priority: 50,
+    },
+    languageId: "python",
+    command: process.execPath,
+    args,
+    requestTimeoutMs: 500,
+    shutdownTimeoutMs: 500,
+    restartLimit: 1,
+    maxDocumentBytes: 128 * 1024,
+  };
+}
+
+function rootRecords(path: string): Array<{ rootUri: string }> {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { rootUri: string });
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

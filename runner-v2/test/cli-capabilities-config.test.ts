@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -57,6 +57,103 @@ test("CLI rejects malformed capability configuration before Git preflight or rea
     assert.equal(existsSync(state), false);
     assert.match(stderr, /capabilities configuration contains unknown field plaintextEnvironment/i);
     assert.doesNotMatch(stderr, /git/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CLI rejects an invalid extension package before listening", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-invalid-extension-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const extension = join(root, "invalid extension");
+  const config = join(root, "runner-capabilities.json");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeExtension(extension, {
+    id: "fixture.cli.invalid",
+    module: `
+      export function createExtension() {
+        return {
+          capabilities: () => ({
+            tools: [{
+              definition: { name: "fs.read", description: "Reserved", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+              validate: () => ({ ok: true, value: {} }),
+              execute: async () => ({ content: [], isError: false }),
+            }],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async () => undefined,
+          close: async () => undefined,
+        };
+      }
+    `,
+  });
+  writeCapabilitiesConfig(config, [extension]);
+  try {
+    const outcome = await runCliToExit(project, state, config, "cli-invalid-extension-token");
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /reserved tool fs\.read/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CLI closes a failed extension startup before listening", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-start-failure-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const extension = join(root, "start failure extension");
+  const config = join(root, "runner-capabilities.json");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeExtension(extension, {
+    id: "fixture.cli.start-failure",
+    module: `
+      import { appendFile } from "node:fs/promises";
+      import { join } from "node:path";
+      let stateDirectory;
+      export function createExtension() {
+        return {
+          capabilities: () => ({
+            tools: [{
+              definition: { name: "fixture.cli.inspect", description: "Fixture", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+              validate: () => ({ ok: true, value: {} }),
+              execute: async () => ({ content: [], isError: false }),
+            }],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async (context) => {
+            stateDirectory = context.stateDirectory;
+            await appendFile(join(stateDirectory, "lifecycle.log"), "started\\n");
+            throw new Error("fixture start failed");
+          },
+          close: async () => {
+            if (stateDirectory) await appendFile(join(stateDirectory, "lifecycle.log"), "closed\\n");
+          },
+        };
+      }
+    `,
+  });
+  writeCapabilitiesConfig(config, [extension]);
+  try {
+    const outcome = await runCliToExit(project, state, config, "cli-start-failure-token");
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /fixture start failed/i);
+    assert.equal(
+      readFileSync(join(
+        state,
+        "capability-preflight",
+        "extensions",
+        "fixture.cli.start-failure",
+        "lifecycle.log",
+      ), "utf8"),
+      "started\nclosed\n",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
@@ -199,4 +296,78 @@ function runnerStreams(child: ReturnType<typeof spawn>) {
     throw new Error("Runner CLI test requires stdout and stderr pipes.");
   }
   return { stdout, stderr };
+}
+
+function writeCapabilitiesConfig(config: string, extensions: readonly string[]): void {
+  writeFileSync(config, JSON.stringify({ version: 1, extensions, languageServers: [] }));
+}
+
+function writeExtension(
+  directory: string,
+  input: { id: string; module: string },
+): void {
+  mkdirSync(directory);
+  writeFileSync(join(directory, "runner-extension.json"), JSON.stringify({
+    apiVersion: 1,
+    id: input.id,
+    name: input.id,
+    version: "1.0.0",
+    entry: "index.mjs",
+    capabilities: ["tools"],
+  }));
+  writeFileSync(join(directory, "index.mjs"), input.module);
+}
+
+async function runCliToExit(
+  project: string,
+  state: string,
+  config: string,
+  token: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = spawn(
+    process.execPath,
+    [
+      tsxPath,
+      cliPath,
+      "--project",
+      project,
+      "--state-dir",
+      state,
+      "--port",
+      "0",
+      "--token",
+      token,
+      "--capabilities-config",
+      config,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+  );
+  const streams = runnerStreams(child);
+  let stdout = "";
+  let stderr = "";
+  streams.stdout.setEncoding("utf8");
+  streams.stderr.setEncoding("utf8");
+  streams.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  streams.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    const outcome = await Promise.race([
+      once(child, "exit").then(([code]) => ({ exited: true as const, code: code as number | null })),
+      new Promise<{ exited: false }>((resolve) => {
+        timeout = setTimeout(() => resolve({ exited: false }), 4_000);
+      }),
+    ]);
+    if (!outcome.exited) {
+      child.kill("SIGTERM");
+      await once(child, "exit");
+      assert.fail(`Runner reached a live state instead of rejecting startup: ${stdout}`);
+    }
+    return { code: outcome.code, stdout, stderr };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      await once(child, "exit");
+    }
+  }
 }

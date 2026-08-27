@@ -3,13 +3,17 @@ import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
+import { ArtifactStore } from "./artifact-store.js";
 import type { BuildStepResult } from "./build-runtime.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
-import { NativeBuildFactory } from "./native-build-factory.js";
+import {
+  NativeBuildFactory,
+  preflightRunnerCapabilities,
+} from "./native-build-factory.js";
 import { NativeBuildManager } from "./native-build-manager.js";
-import { McpManager, type McpServerSpec } from "./mcp-tools.js";
+import { createMcpTools, McpManager, type McpServerSpec } from "./mcp-tools.js";
 import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
 import {
@@ -17,6 +21,12 @@ import {
   loadRunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
 import { RunSupervisor } from "./run-supervisor.js";
+import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
+import {
+  closeRunnerResources,
+  startupFailureWithCleanup,
+  type RunnerResources,
+} from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
 import {
@@ -35,19 +45,10 @@ interface CliOptions {
   capabilitiesConfigPath?: string;
 }
 
-interface RunnerResources {
-  server: ControlServer;
-  supervisor: RunSupervisor;
-  builds: NativeBuildManager;
-  buildFactory: NativeBuildFactory;
-  mcpManager: McpManager;
-  permissions: SqlitePermissionStore;
-}
-
 void main();
 
 async function main(): Promise<void> {
-  let resources: RunnerResources | undefined;
+  const resources: RunnerResources = {};
   try {
     assertSupportedNodeVersion(process.versions.node);
     const args = parseRunnerArguments(process.argv.slice(2));
@@ -86,18 +87,39 @@ async function main(): Promise<void> {
     const supervisor = new RunSupervisor(
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
     );
+    resources.supervisor = supervisor;
     const providerConfigs = new EncryptedProviderConfigStore(
       join(options.stateDirectory, "provider-configs.enc"),
       options.token
     );
+    resources.providerConfigs = providerConfigs;
     const mcpManager = new McpManager({
       cwd: options.projectPath,
       servers: options.mcpServers,
     });
+    resources.mcpManager = mcpManager;
     await mcpManager.start();
     const permissions = new SqlitePermissionStore(
       join(options.stateDirectory, "permissions.sqlite")
     );
+    resources.permissions = permissions;
+    const capabilityPreflightDirectory = join(
+      options.stateDirectory,
+      "capability-preflight",
+    );
+    await mkdir(capabilityPreflightDirectory, { recursive: true });
+    await preflightRunnerCapabilities({
+      config: capabilitiesConfig,
+      projectDirectory: options.projectPath,
+      stateDirectory: capabilityPreflightDirectory,
+      reservedToolNames: [
+        ...RUNNER_BUILTIN_TOOL_NAMES,
+        ...createMcpTools(
+          mcpManager,
+          new ArtifactStore(artifactDirectory),
+        ).map((tool) => tool.definition.name),
+      ],
+    });
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
@@ -105,12 +127,14 @@ async function main(): Promise<void> {
       mcpManager,
       permissions,
       capabilitiesConfig,
+      closeProviderConfigs: false,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
         return revision;
       },
     });
+    resources.buildFactory = buildFactory;
     const builds = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(
         join(options.stateDirectory, "build-specs.sqlite")
@@ -129,6 +153,7 @@ async function main(): Promise<void> {
         buildFactory.runArtifactCompaction(operation),
       prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
     });
+    resources.builds = builds;
     const server = new ControlServer({
       supervisor,
       builds,
@@ -160,7 +185,7 @@ async function main(): Promise<void> {
         };
       },
     });
-    resources = { server, supervisor, builds, buildFactory, mcpManager, permissions };
+    resources.server = server;
     await builds.recover();
     const address = await server.start(options.port);
 
@@ -183,7 +208,7 @@ async function main(): Promise<void> {
     const shutdown = (signal: NodeJS.Signals) => {
       if (shuttingDown) return;
       shuttingDown = true;
-      void closeResources(resources).then(
+      void closeRunnerResources(resources).then(
         () => {
           process.exitCode = signal === "SIGINT" ? 130 : 0;
         },
@@ -196,8 +221,17 @@ async function main(): Promise<void> {
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
   } catch (error) {
-    await closeResources(resources);
-    writeStartupError(error);
+    let cleanupError: unknown;
+    try {
+      await closeRunnerResources(resources);
+    } catch (closeError) {
+      cleanupError = closeError;
+    }
+    writeStartupError(
+      cleanupError
+        ? startupFailureWithCleanup(error, cleanupError)
+        : error,
+    );
     process.exitCode = 1;
   }
 }
@@ -459,16 +493,6 @@ async function assertDirectory(path: string, label: string): Promise<void> {
   if (!details.isDirectory()) {
     throw new Error(`invalid_${label}_directory: ${path} is not a directory.`);
   }
-}
-
-async function closeResources(resources: RunnerResources | undefined): Promise<void> {
-  if (!resources) return;
-  await resources.server.close();
-  resources.permissions.close();
-  await resources.builds.close();
-  await resources.buildFactory.close();
-  await resources.mcpManager.close();
-  resources.supervisor.close();
 }
 
 function writeStartupError(error: unknown): void {

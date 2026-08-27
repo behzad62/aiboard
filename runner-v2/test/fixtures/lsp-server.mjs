@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 let input = Buffer.alloc(0);
 let rootUri = "";
@@ -54,6 +54,7 @@ async function handle(message) {
   if (method === "initialize") {
     rootUri = message.params?.rootUri ?? "";
     clientProcessId = message.params?.processId ?? null;
+    writeRootMarker();
     await respond(message.id, {
       capabilities: {
         ...(process.env.LSP_FIXTURE_POSITION_ENCODING
@@ -208,6 +209,15 @@ async function handle(message) {
   }
   if (method === "fixture/crash") process.exit(87);
   await respondError(message.id, -32601, `Unknown fixture method ${method}`);
+}
+
+function writeRootMarker() {
+  const rootArgument = process.argv.indexOf("--fixture-root-log");
+  const rootLog = rootArgument >= 0 ? process.argv[rootArgument + 1] : undefined;
+  if (!rootLog) return;
+  try {
+    appendFileSync(rootLog, `${JSON.stringify({ rootUri, pid: process.pid })}\n`);
+  } catch {}
 }
 
 async function verifyExpectedCharacter(message) {
