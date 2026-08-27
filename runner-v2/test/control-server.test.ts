@@ -5,13 +5,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlServer } from "../src/control-server.js";
-import type { BuildControlPlane } from "../src/build-runtime-registry.js";
+import { BuildRuntimeRegistry, type BuildControlPlane } from "../src/build-runtime-registry.js";
+import { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqlitePermissionStore } from "../src/permission-store.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
+import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 
 const token = "test-control-token";
 const gitReady: GitPreflightResult = {
@@ -979,6 +981,159 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal(projectHandoffChoice, "keep_integration_branch");
   } finally {
     await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("authenticated steering endpoints are durable, concurrent, idempotent, versioned, and restart-safe", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-steering-"));
+  const schedulerPath = join(directory, "scheduler.sqlite");
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  let scheduler: SqliteSchedulerStore | undefined;
+  let server: ControlServer | undefined;
+  const createServer = () => {
+    scheduler = new SqliteSchedulerStore(schedulerPath);
+    const runtime = new BuildRuntime({
+      runId: "run-steering",
+      initialObjective: "Build exactly this application.\n",
+      store: scheduler,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-08-27T00:00:00.000Z",
+    });
+    const builds = new BuildRuntimeRegistry();
+    builds.register(runtime);
+    server = new ControlServer({ supervisor, token, bootstrapRun, builds });
+    return server;
+  };
+  const guidanceBody = (version: number, idempotencyKey = `guidance:${version}`) => ({
+    guidanceId: `guidance-${version}`,
+    text: `Durable guidance ${version}.`,
+    idempotencyKey,
+  });
+  try {
+    let control = createServer();
+    let address = await control.start(0);
+    const activeScheduler = scheduler!;
+    const guidanceUrl = `${address.url}/v2/runs/run-steering/build/user-guidance`;
+    assert.equal((await fetch(guidanceUrl, { method: "POST", body: "{}" })).status, 401);
+    assert.equal((await fetch(guidanceUrl, authorized())).status, 404);
+    const invalid = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ ...guidanceBody(1), text: " " }),
+    }));
+    assert.equal(invalid.status, 400);
+    assert.equal((await json(invalid)).code, "invalid_request");
+    const oversized = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ ...guidanceBody(1), text: "x".repeat(1024 * 1024) }),
+    }));
+    assert.equal(oversized.status, 413);
+    assert.equal((await json(oversized)).code, "body_too_large");
+
+    const concurrent = await Promise.all([1, 2, 3].map((version) => fetch(
+      guidanceUrl,
+      authorized({ method: "POST", body: JSON.stringify(guidanceBody(version)) }),
+    )));
+    const concurrentBodies = await Promise.all(concurrent.map(async (response) => await response.clone().json()));
+    assert.deepEqual(concurrent.map((response) => response.status), [200, 200, 200], JSON.stringify(concurrentBodies));
+    const eventsAfterConcurrent = activeScheduler.readRun("run-steering");
+    assert.equal(eventsAfterConcurrent.filter((event) => event.type === "user.guidance_submitted").length, 3);
+    assert.equal(eventsAfterConcurrent.find((event) => event.type === "run.initialized")?.payload.objective, "Build exactly this application.\n");
+
+    const duplicate = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify(guidanceBody(1)),
+    }));
+    assert.equal(duplicate.status, 200);
+    const duplicateProjection = await json(duplicate);
+    assert.equal(duplicateProjection.userGuidanceVersion, 3);
+    assert.equal(Object.keys(duplicateProjection.userGuidance as object).length, 3);
+    assert.equal(activeScheduler.readRun("run-steering").filter((event) => event.type === "user.guidance_submitted").length, 3);
+    const conflict = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ ...guidanceBody(1), text: "Conflicting retry." }),
+    }));
+    assert.equal(conflict.status, 409);
+    assert.equal((await json(conflict)).code, "idempotency_conflict");
+
+    activeScheduler.append({
+      runId: "run-steering",
+      type: "architect.question_requested",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: { role: "architect", id: "architect-test" },
+      idempotencyKey: "question:1",
+      payload: {
+        questionId: "question-1",
+        version: 1,
+        decisionKind: "authority_decision",
+        question: "Which documented behavior is authoritative?",
+      },
+    });
+    const answerUrl = `${address.url}/v2/runs/run-steering/build/architect-questions/question-1/answer`;
+    const stale = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 2, answer: "Use the public contract.", idempotencyKey: "answer:stale" }),
+    }));
+    assert.equal(stale.status, 409);
+    assert.equal((await json(stale)).code, "invalid_transition");
+    const forged = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({
+        expectedVersion: 1,
+        answer: "Use the public contract.",
+        idempotencyKey: "answer:forged",
+        actor: { role: "worker", id: "worker-1" },
+      }),
+    }));
+    assert.equal(forged.status, 400);
+    const answered = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1, answer: "Use the public contract.", idempotencyKey: "answer:1" }),
+    }));
+    assert.equal(answered.status, 200);
+    const answeredProjection = await json(answered);
+    assert.equal(
+      (answeredProjection.architectQuestions as Record<string, { status: string; version: number }>)["question-1"].status,
+      "answered",
+    );
+    assert.equal(answeredProjection.blockingArchitectQuestionId, undefined);
+    assert.equal(JSON.stringify(answeredProjection).includes(token), false);
+    const retryAnswer = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1, answer: "Use the public contract.", idempotencyKey: "answer:1" }),
+    }));
+    assert.equal(retryAnswer.status, 200);
+    const duplicateAnswer = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1, answer: "Use another contract.", idempotencyKey: "answer:2" }),
+    }));
+    assert.equal(duplicateAnswer.status, 409);
+    assert.equal((await json(duplicateAnswer)).code, "invalid_transition");
+    assert.equal(activeScheduler.readRun("run-steering").filter((event) => event.type === "architect.question_answered").length, 1);
+
+    await control.close();
+    activeScheduler.close();
+    server = undefined;
+    scheduler = undefined;
+    control = createServer();
+    address = await control.start(0);
+    const recoveredScheduler = scheduler!;
+    const retryAfterRestart = await fetch(
+      `${address.url}/v2/runs/run-steering/build/user-guidance`,
+      authorized({ method: "POST", body: JSON.stringify(guidanceBody(1)) }),
+    );
+    assert.equal(retryAfterRestart.status, 200);
+    assert.equal(recoveredScheduler.readRun("run-steering").filter((event) => event.type === "user.guidance_submitted").length, 3);
+    assert.equal(recoveredScheduler.readRun("run-steering").filter((event) => event.type === "architect.question_answered").length, 1);
+    assert.equal(recoveredScheduler.readRun("run-steering").find((event) => event.type === "run.initialized")?.payload.objective, "Build exactly this application.\n");
+  } finally {
+    await server?.close();
+    scheduler?.close();
     supervisor.close();
     rmSync(directory, { recursive: true, force: true });
   }

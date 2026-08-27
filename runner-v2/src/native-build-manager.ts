@@ -3,7 +3,11 @@ import type {
   BuildObservabilitySnapshot,
   BuildTranscriptPage,
 } from "./build-observability.js";
-import type { BuildControlPlane } from "./build-runtime-registry.js";
+import type {
+  ArchitectQuestionAnswerControlInput,
+  BuildControlPlane,
+  UserGuidanceControlInput,
+} from "./build-runtime-registry.js";
 import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
@@ -184,6 +188,28 @@ export class NativeBuildManager implements BuildControlPlane {
     });
     this.pumps.set(runId, pump);
     void pump.catch(() => undefined);
+  }
+
+  async submitUserGuidance(
+    runId: string,
+    input: UserGuidanceControlInput
+  ): Promise<SchedulerProjection> {
+    const projection = await this.withRuntimeActivity(async () =>
+      this.require(runId).runtime.submitUserGuidance(input)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
+  async answerArchitectQuestion(
+    runId: string,
+    input: ArchitectQuestionAnswerControlInput
+  ): Promise<SchedulerProjection> {
+    const projection = await this.withRuntimeActivity(async () =>
+      this.require(runId).runtime.answerArchitectQuestion(input)
+    );
+    this.wake(runId);
+    return projection;
   }
 
   async awaitIdle(runId?: string): Promise<void> {
@@ -425,6 +451,15 @@ export class NativeBuildManager implements BuildControlPlane {
       releaseActivity();
       if (compaction) await compaction;
     }
+  }
+
+  private wake(runId: string): void {
+    const active = this.pumps.get(runId);
+    if (!active) {
+      this.activate(runId);
+      return;
+    }
+    void active.finally(() => this.activate(runId)).catch(() => undefined);
   }
 
   private async executeWithFinalization(

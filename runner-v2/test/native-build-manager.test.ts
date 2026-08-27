@@ -204,6 +204,133 @@ test("an unanswered Architect question quiesces the autonomous pump without paus
   }
 });
 
+test("durable steering appends before the manager wakes the autonomous pump", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-wake-"));
+  const calls: string[] = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    const projection = fakeRuntime("run_1").projection();
+    const runtime = {
+      ...fakeRuntime("run_1"),
+      projection: () => projection,
+      submitUserGuidance: () => {
+        calls.push("guidance-appended");
+        return projection;
+      },
+      answerArchitectQuestion: () => {
+        calls.push("answer-appended");
+        return projection;
+      },
+      runUntilBlocked: async () => {
+        calls.push("pump-started");
+        return { status: "blocked" as const, action: "architect_question_pending" };
+      },
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"),
+        runtime,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({
+          integrationRevision: "revision-final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        cleanup: async () => undefined,
+        close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+
+    await manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-1",
+      text: "Preserve the public API.",
+      version: 1,
+      idempotencyKey: "guidance:1",
+    });
+    await manager.awaitIdle("run_1");
+    assert.deepEqual(calls, ["guidance-appended", "pump-started"]);
+
+    calls.length = 0;
+    await manager.answerArchitectQuestion("run_1", {
+      questionId: "question-1",
+      expectedVersion: 1,
+      answer: "Use the documented API.",
+      idempotencyKey: "question:1:answer",
+    });
+    await manager.awaitIdle("run_1");
+    assert.deepEqual(calls, ["answer-appended", "pump-started"]);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("steering that lands during an active pump schedules a post-checkpoint wake", { timeout: 2_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-active-wake-"));
+  let manager: NativeBuildManager | undefined;
+  let releaseFirst!: () => void;
+  let markFirstStarted!: () => void;
+  let markSecondStarted!: () => void;
+  const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+  const secondStarted = new Promise<void>((resolve) => { markSecondStarted = resolve; });
+  let pumpCalls = 0;
+  let guidanceAppended = false;
+  try {
+    const projection = fakeRuntime("run_1").projection();
+    const runtime = {
+      ...fakeRuntime("run_1"),
+      projection: () => projection,
+      submitUserGuidance: () => {
+        guidanceAppended = true;
+        return projection;
+      },
+      runUntilBlocked: async () => {
+        pumpCalls += 1;
+        if (pumpCalls === 1) {
+          markFirstStarted();
+          await firstRelease;
+        } else {
+          assert.equal(guidanceAppended, true);
+          markSecondStarted();
+        }
+        return { status: "blocked" as const, action: "architect_question_pending" };
+      },
+    } as unknown as BuildRuntime;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate("run_1");
+    await firstStarted;
+    await manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-active",
+      text: "Apply this after the active checkpoint.",
+      version: 1,
+      idempotencyKey: "guidance:active",
+    });
+    assert.equal(guidanceAppended, true);
+    assert.equal(pumpCalls, 1);
+    releaseFirst();
+    await secondStarted;
+    await manager.awaitIdle("run_1");
+    assert.equal(pumpCalls, 2);
+  } finally {
+    releaseFirst?.();
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("native Build manager recreates persisted runtimes and closes resources", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-"));
   const database = join(root, "builds.sqlite");

@@ -12,8 +12,12 @@ import {
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
+  submitNativeBuildUserGuidance,
+  answerNativeArchitectQuestion,
+  NativeRunnerError,
   type NativeRunnerConnection,
   type NativeBuildProjection,
+  type NativeBuildStepResult,
 } from "../lib/client/runner-v2";
 import {
   nativeBuildProvisioningRunId,
@@ -90,6 +94,44 @@ const connection: NativeRunnerConnection = {
   url: "http://127.0.0.1:8787/",
   token: "runner-control-token",
 };
+const blockedStep: NativeBuildStepResult = {
+  status: "blocked",
+  action: "architect_question_pending",
+};
+assert.equal(blockedStep.status, "blocked");
+const steeringProjection: NativeBuildProjection = {
+  runId: "run-steering",
+  status: "running",
+  planRevision: 1,
+  tasks: {},
+  guidance: {},
+  userGuidance: {
+    "guidance-1": {
+      guidanceId: "guidance-1",
+      text: "Preserve the public API.",
+      version: 1,
+      status: "submitted",
+    },
+  },
+  userGuidanceVersion: 1,
+  architectQuestions: {
+    "question-1": {
+      questionId: "question-1",
+      question: "Which public contract is authoritative?",
+      version: 1,
+      decisionKind: "authority_decision",
+      status: "open",
+      resumeStatus: "pending",
+    },
+  },
+  architectQuestionVersion: 1,
+  blockingArchitectQuestionId: "question-1",
+  reviews: {},
+  runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+  lastSequence: 4,
+};
+assert.equal(steeringProjection.userGuidance["guidance-1"].status, "submitted");
+assert.equal(steeringProjection.architectQuestions["question-1"].resumeStatus, "pending");
 const calls: Array<{ url: string; init: RequestInit }> = [];
 const requestController = new AbortController();
 const fetchImpl: typeof fetch = async (input, init = {}) => {
@@ -221,6 +263,29 @@ await createNativeBuild(connection, {
     },
   },
 }, fetchImpl, requestController.signal);
+await submitNativeBuildUserGuidance(
+  connection,
+  "run_1",
+  {
+    guidanceId: "guidance-1",
+    text: "Preserve the public API.",
+    idempotencyKey: "guidance:1",
+  },
+  fetchImpl,
+  requestController.signal,
+);
+await answerNativeArchitectQuestion(
+  connection,
+  "run_1",
+  "question-1",
+  {
+    expectedVersion: 1,
+    answer: "Use the documented public contract.",
+    idempotencyKey: "answer:1",
+  },
+  fetchImpl,
+  requestController.signal,
+);
 await selectNativeProjectHandoff(
   connection,
   "run_1",
@@ -257,6 +322,36 @@ assert.equal(audit.runEvents.length, 1);
 assert.equal(audit.acceptanceContract.tasks.task_a.acceptanceCriteria[0].text, "The behavior works.");
 assert.equal(audit.acceptanceContract.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
 assert.equal(audit.acceptanceContract.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+const guidanceCall = calls.find((call) => call.url.endsWith("/v2/runs/run_1/build/user-guidance"));
+assert.ok(guidanceCall);
+assert.equal(guidanceCall.init.method, "POST");
+assert.deepEqual(JSON.parse(String(guidanceCall.init.body)), {
+  guidanceId: "guidance-1",
+  text: "Preserve the public API.",
+  idempotencyKey: "guidance:1",
+});
+const answerCall = calls.find((call) => call.url.endsWith("/v2/runs/run_1/build/architect-questions/question-1/answer"));
+assert.ok(answerCall);
+assert.equal(answerCall.init.method, "POST");
+assert.deepEqual(JSON.parse(String(answerCall.init.body)), {
+  expectedVersion: 1,
+  answer: "Use the documented public contract.",
+  idempotencyKey: "answer:1",
+});
+await assert.rejects(
+  () => answerNativeArchitectQuestion(
+    connection,
+    "run_1",
+    "question-stale",
+    { expectedVersion: 1, answer: "Stale answer.", idempotencyKey: "answer:stale" },
+    async () => Response.json(
+      { error: "Architect question question-stale is not open.", code: "invalid_transition" },
+      { status: 409 },
+    ),
+  ),
+  (error: unknown) => error instanceof NativeRunnerError &&
+    error.status === 409 && error.code === "invalid_transition",
+);
 
 const clientProjection = projectNativeAcceptanceContract({
   runId: "run_1",
@@ -452,11 +547,13 @@ assert.deepEqual(JSON.parse(String(calls[2].init.body)).build.budgetLimits, {
   maxEstimatedCostMicros: 1_000_000,
   maxActiveMs: 1_800_000,
 });
-assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
-assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
-assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
-assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
-assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
+assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/user-guidance");
+assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/architect-questions/question-1/answer");
+assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
+assert.equal(JSON.parse(String(calls[5].init.body)).choice, "keep_integration_branch");
+assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
+assert.equal(calls[7].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
+assert.equal(calls[8].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
 
 const recoveryFetch: typeof fetch = async (input) => {
   const url = String(input);

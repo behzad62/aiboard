@@ -317,6 +317,27 @@ export class BuildRuntime {
     return this.projection();
   }
 
+  answerArchitectQuestion(input: {
+    questionId: string;
+    expectedVersion: number;
+    answer: string;
+    idempotencyKey: string;
+  }): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "architect.question_answered",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: input.idempotencyKey,
+      payload: {
+        questionId: input.questionId,
+        expectedVersion: input.expectedVersion,
+        answer: input.answer,
+      },
+    });
+    return this.projection();
+  }
+
   selectProjectHandoff(
     choice: ProjectHandoffChoice,
     result: {

@@ -114,6 +114,18 @@ interface ProjectHandoffBody {
   idempotencyKey: string;
 }
 
+interface UserGuidanceBody {
+  guidanceId: string;
+  text: string;
+  idempotencyKey: string;
+}
+
+interface ArchitectQuestionAnswerBody {
+  expectedVersion: number;
+  answer: string;
+  idempotencyKey: string;
+}
+
 interface PermissionDecisionBody {
   decision: "approved" | "denied";
   idempotencyKey: string;
@@ -473,6 +485,53 @@ export class ControlServer {
           runEvents: this.supervisor.events(runId),
           buildEvents: builds.events(runId),
         });
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "user-guidance" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<UserGuidanceBody>(request);
+        assertExactBodyKeys(body, ["guidanceId", "text", "idempotencyKey"]);
+        if (
+          !isNonEmptyString(body.guidanceId) ||
+          !isNonEmptyString(body.text) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        const projection = await this.serializeRunCommand(runId, async () => {
+          const builds = this.requireBuilds();
+          const current = builds.projection(runId);
+          const version = current.userGuidance[body.guidanceId]?.version ??
+            current.userGuidanceVersion + 1;
+          return await builds.submitUserGuidance(runId, { ...body, version });
+        });
+        sendJson(response, 200, projection);
+        return;
+      }
+      if (
+        segments.length === 7 &&
+        segments[3] === "build" &&
+        segments[4] === "architect-questions" &&
+        segments[6] === "answer" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<ArchitectQuestionAnswerBody>(request);
+        assertExactBodyKeys(body, ["expectedVersion", "answer", "idempotencyKey"]);
+        if (
+          !Number.isSafeInteger(body.expectedVersion) ||
+          body.expectedVersion < 1 ||
+          !isNonEmptyString(body.answer) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        const projection = await this.serializeRunCommand(runId, async () =>
+          await this.requireBuilds().answerArchitectQuestion(runId, {
+            questionId: segments[5],
+            ...body,
+          })
+        );
+        sendJson(response, 200, projection);
         return;
       }
       if (
@@ -1041,6 +1100,12 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function assertExactBodyKeys(body: unknown, expected: string[]): asserts body is Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) invalidBody();
+  const allowed = new Set(expected);
+  if (Object.keys(body).some((key) => !allowed.has(key))) invalidBody();
+}
+
 function invalidBody(): never {
   throw new HttpError(400, "invalid_request", "Request body is invalid.");
 }
@@ -1065,7 +1130,12 @@ function toHttpError(error: unknown): HttpError {
   if (/^Unknown build runtime /.test(message)) {
     return new HttpError(404, "build_runtime_not_found", message);
   }
-  if (/cannot accept|must be the first|Expected event sequence/i.test(message)) {
+  if (/Scheduler idempotency conflict/i.test(message)) {
+    return new HttpError(409, "idempotency_conflict", message);
+  }
+  if (
+    /cannot accept|must be the first|Expected event sequence|User guidance version must advance|Architect question .* (?:version is|is not open|is not the active blocking question)|Duplicate user guidance/i.test(message)
+  ) {
     return new HttpError(409, "invalid_transition", message);
   }
   return new HttpError(500, "internal_error", "The runner could not complete the request.");

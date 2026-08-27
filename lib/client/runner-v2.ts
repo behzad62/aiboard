@@ -228,6 +228,99 @@ export interface NativeReviewProjection {
   criterionVerdicts?: NativeCriterionReviewVerdict[];
 }
 
+export interface NativeUserGuidanceProjection {
+  guidanceId: string;
+  text: string;
+  version: number;
+  status: "submitted" | "acknowledged";
+  resolution?:
+    | { type: "no_plan_change"; rationale: string; evidenceIds: string[] }
+    | {
+        type: "plan_reconciled";
+        rationale: string;
+        planReconciliation: {
+          revision: number;
+          summary: string;
+          taskUpdates: NativePlanTaskUpdate[];
+          newTasks?: NativePlanNewTask[];
+        };
+      };
+}
+
+export interface NativePlanTaskUpdate {
+  taskId: string;
+  action: "cancel" | "revise";
+  objective?: string;
+  dependencies?: string[];
+  requiredCapabilities?: string[];
+  acceptanceCriteria?: NativeAcceptanceCriterion[];
+}
+
+export interface NativePlanNewTask {
+  id: string;
+  objective: string;
+  dependencies: string[];
+  requiredCapabilities: string[];
+  acceptanceCriteria: NativeAcceptanceCriterion[];
+}
+
+export type NativeArchitectQuestionDecisionKind =
+  | "authority_decision"
+  | "destructive_action"
+  | "requirement_conflict"
+  | "external_dependency"
+  | "control_weakening"
+  | "repair_budget_exhausted";
+
+export type NativeArchitectActionReason =
+  | { type: "plan_required" }
+  | { type: "acceptance_contract_upgrade_required" }
+  | { type: "user_guidance_required"; guidanceId: string; version: number }
+  | { type: "guidance_required"; requestId: string; taskId: string }
+  | { type: "review_required"; taskId: string; changeSetId: string }
+  | { type: "integration_approval_required"; taskId: string; changeSetId: string }
+  | { type: "completion_decision_required"; runPolicy?: "plan_only" }
+  | { type: "final_verification_plan_required"; integrationRevision: string }
+  | {
+      type: "final_verification_review_required";
+      taskId: string;
+      generationId: string;
+      submissionId: string;
+      targetRevision: string;
+    }
+  | {
+      type: "final_verification_repair_plan_required";
+      finalVerificationTaskId: string;
+      generationId: string;
+      targetRevision: string;
+      source:
+        | { type: "semantic_review"; submissionId: string; reviewId: string }
+        | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
+      failedCategories: string[];
+      evidenceIds: string[];
+    }
+  | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
+  | { type: "integration_resolution_required"; taskId: string };
+
+export interface NativeArchitectQuestionProjection {
+  questionId: string;
+  question: string;
+  version: number;
+  decisionKind?: NativeArchitectQuestionDecisionKind;
+  status: "open" | "answered";
+  answer?: string;
+  checkpoint?: {
+    reason: NativeArchitectActionReason;
+    sequence: number;
+  };
+  resumeStatus?: "pending" | "started" | "consumed" | "superseded";
+  resumeStartedSequence?: number;
+  resumeConsumedSequence?: number;
+  resumeSupersededSequence?: number;
+  supersededByGuidanceId?: string;
+  supersededRationale?: string;
+}
+
 export interface NativeBuildProjection {
   runId: string;
   status: "running" | "paused" | "completed";
@@ -241,6 +334,13 @@ export interface NativeBuildProjection {
   acceptanceUpgradeRequiredEventRecorded?: boolean;
   tasks: Record<string, NativeBuildTask>;
   guidance: Record<string, NativeGuidanceProjection>;
+  /** Optional only for projections cached from Runner versions before durable steering. */
+  userGuidance?: Record<string, NativeUserGuidanceProjection>;
+  userGuidanceVersion?: number;
+  /** Optional only for projections cached from Runner versions before durable steering. */
+  architectQuestions?: Record<string, NativeArchitectQuestionProjection>;
+  architectQuestionVersion?: number;
+  blockingArchitectQuestionId?: string;
   reviews: Record<string, NativeReviewProjection>;
   submissionHistory?: Record<string, NativeCriterionSubmissionProjection[]>;
   reviewHistory?: Record<string, NativeReviewProjection[]>;
@@ -698,8 +798,20 @@ function cloneNativeReviewProjection(
 }
 
 export interface NativeBuildStepResult {
-  status: "progressed" | "paused" | "completed" | "idle";
+  status: "progressed" | "paused" | "completed" | "idle" | "blocked";
   action?: string;
+}
+
+export interface SubmitNativeBuildUserGuidanceInput {
+  guidanceId: string;
+  text: string;
+  idempotencyKey: string;
+}
+
+export interface AnswerNativeArchitectQuestionInput {
+  expectedVersion: number;
+  answer: string;
+  idempotencyKey: string;
 }
 
 export interface NativeRunProjection {
@@ -1005,6 +1117,37 @@ export async function pumpNativeBuild(
       signal,
     },
     fetchImpl
+  );
+}
+
+export async function submitNativeBuildUserGuidance(
+  connection: NativeRunnerConnection,
+  runId: string,
+  input: SubmitNativeBuildUserGuidanceInput,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/user-guidance`,
+    { method: "POST", body: JSON.stringify(input), signal },
+    fetchImpl,
+  );
+}
+
+export async function answerNativeArchitectQuestion(
+  connection: NativeRunnerConnection,
+  runId: string,
+  questionId: string,
+  input: AnswerNativeArchitectQuestionInput,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/architect-questions/${encodeURIComponent(questionId)}/answer`,
+    { method: "POST", body: JSON.stringify(input), signal },
+    fetchImpl,
   );
 }
 
