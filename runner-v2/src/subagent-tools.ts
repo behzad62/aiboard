@@ -163,17 +163,20 @@ function spawnSubagentTool(
           : {}),
       });
       const repository = new RepositoryIntelligence();
-      const typescript = new TypeScriptIntelligence(repository);
+      const language = new TypeScriptIntelligence(repository);
       for (const tool of createFilesystemTools({
         artifacts: options.artifacts,
         repository,
-        diagnostics: typescript,
+        diagnostics: language,
         ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
         ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
       })) {
         if (!readOnly || tool.definition.readOnly) broker.register(tool);
       }
-      for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+      for (const tool of createCodeIntelligenceTools({
+        repository,
+        language,
+      })) {
         broker.register(tool);
       }
       for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);

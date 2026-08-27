@@ -17,16 +17,16 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type {
   RepositoryEntry,
   RepositoryIntelligence,
 } from "./repository-intelligence.js";
-import type { TypeScriptIntelligence } from "./typescript-intelligence.js";
 
 export interface FilesystemToolsOptions {
   artifacts?: ArtifactStore;
   repository?: RepositoryIntelligence;
-  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">;
+  diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">;
   maxReadBytes?: number;
   maxEntries?: number;
   maxSearchMatches?: number;
@@ -900,7 +900,7 @@ async function successRevision(
   context: ToolExecutionContext,
   path: string,
   bytes: Buffer,
-  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">,
+  diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">,
 ): Promise<ToolExecutionOutput> {
   const metadata: Record<string, unknown> = {
     path: displayPath(context, path),

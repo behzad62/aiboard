@@ -208,7 +208,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         : {}),
     });
     const repository = new RepositoryIntelligence();
-    const typescript = new TypeScriptIntelligence(repository);
+    const language = new TypeScriptIntelligence(repository);
     for (const tool of createFilesystemTools({
       artifacts: this.options.artifacts,
       repository,
@@ -217,7 +217,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     })) {
       if (tool.definition.readOnly) extras.register(tool);
     }
-    for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+    for (const tool of createCodeIntelligenceTools({
+      repository,
+      language,
+    })) {
       extras.register(tool);
     }
     for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);

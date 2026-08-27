@@ -1,28 +1,54 @@
-import type {
-  CodeDiagnostic,
-  CodeIntelligenceResult,
-  CodeLocation,
-  DiagnosticsQuery,
-  PositionQuery,
-  WorkspaceSymbol,
-  WorkspaceSymbolsQuery,
-} from "./typescript-intelligence.js";
+export interface CodeLocation {
+  path: string;
+  line: number;
+  column: number;
+  preview: string;
+  symbolKind?: string;
+}
 
-export type {
-  CodeDiagnostic,
-  CodeIntelligenceResult,
-  CodeLocation,
-  DiagnosticsQuery,
-  PositionQuery,
-  WorkspaceSymbol,
-  WorkspaceSymbolsQuery,
-} from "./typescript-intelligence.js";
+export interface WorkspaceSymbol extends CodeLocation {
+  name: string;
+}
+
+export interface CodeDiagnostic extends CodeLocation {
+  category: "error" | "warning" | "suggestion" | "message";
+  code: number | string;
+  message: string;
+}
+
+export interface CodeIntelligenceResult<T> {
+  status: "ok" | "unsupported_language";
+  projectConfig?: string;
+  results: T[];
+  truncated: boolean;
+}
+
+export interface WorkspaceSymbolsQuery {
+  root: string;
+  query: string;
+  kind?: string;
+  limit?: number;
+}
+
+export interface PositionQuery {
+  root: string;
+  path: string;
+  line: number;
+  column: number;
+  limit?: number;
+}
+
+export interface DiagnosticsQuery {
+  root: string;
+  path?: string;
+  limit?: number;
+}
 
 export interface LanguageProviderDescriptor {
   id: string;
   displayName: string;
-  extensions: string[];
-  rootMarkers: string[];
+  extensions: readonly string[];
+  rootMarkers: readonly string[];
   priority: number;
 }
 

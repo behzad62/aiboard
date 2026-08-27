@@ -23,7 +23,10 @@ test("code intelligence tools expose bounded read-only native contracts", async 
     const repository = new RepositoryIntelligence();
     const typescript = new TypeScriptIntelligence(repository);
     const broker = new ToolBroker({ permissionProfile: "project", workspacePath: root });
-    for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+    for (const tool of createCodeIntelligenceTools({
+      repository,
+      language: typescript,
+    })) {
       broker.register(tool);
     }
 
