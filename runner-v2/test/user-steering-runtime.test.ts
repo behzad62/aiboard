@@ -271,6 +271,263 @@ test("a question asked while acknowledging guidance resumes that exact guidance 
   }
 });
 
+test("plan-changing guidance supersedes an answered final-verification-plan checkpoint when it adds implementation work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-stale-fv-plan-question-"));
+  const database = join(root, "scheduler.sqlite");
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database, {
+    evidenceStore: FIXTURE_EVIDENCE_STORE,
+  });
+  let workerAssignment: WorkerAssignment | undefined;
+  try {
+    seedPlan(store, [task("task-a", "integrated")]);
+    store.append({
+      runId: RUN_ID,
+      type: "integration.revision_advanced",
+      occurredAt: CLOCK(),
+      actor: { role: "runner", id: "integration-manager" },
+      idempotencyKey: "integration:revision:stale-fv-plan",
+      payload: { integrationRevision: "revision-before-guidance" },
+    });
+    const checkpointSequence = rebuildSchedulerProjection(store.readRun(RUN_ID)).lastSequence;
+    store.append({
+      runId: RUN_ID,
+      type: "architect.question_requested",
+      occurredAt: CLOCK(),
+      actor: { role: "architect", id: "architect-test" },
+      idempotencyKey: "question:stale-fv-plan",
+      payload: {
+        questionId: "question-fv-plan",
+        version: 1,
+        decisionKind: "authority_decision",
+        question: "May final verification use the external test account?",
+        checkpoint: {
+          reason: {
+            type: "final_verification_plan_required",
+            integrationRevision: "revision-before-guidance",
+          },
+          sequence: checkpointSequence,
+        },
+      },
+    });
+    const architectDriver: ArchitectRuntimeDriver = {
+      run: async (request) => {
+        assert.equal(request.reason.type, "user_guidance_required");
+        await invoke(request, "acknowledge_user_guidance", {
+          guidanceId: "guidance-add-work",
+          expectedVersion: 1,
+          resolution: {
+            type: "plan_reconciled",
+            rationale: "The new requested behavior requires an additional implementation task.",
+            planReconciliation: {
+              revision: 2,
+              summary: "Add the newly requested implementation work.",
+              taskUpdates: [],
+              newTasks: [{
+                id: "task-b",
+                objective: "Implement the newly requested behavior.",
+                dependencies: ["task-a"],
+                requiredCapabilities: ["code"],
+                acceptanceCriteria: [{ id: "task-b-done", text: "The new behavior is implemented." }],
+              }],
+            },
+          },
+        });
+      },
+    };
+    const makeRuntime = () => new BuildRuntime({
+      runId: RUN_ID,
+      initialObjective: OBJECTIVE,
+      store: store!,
+      workerDriver: {
+        run: async (assignment) => {
+          workerAssignment = assignment;
+          return { type: "failed", reason: "scheduling probe complete" };
+        },
+      },
+      architectDriver,
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/task-b",
+      clock: CLOCK,
+    });
+
+    appendQuestionAnswer(store, "question-fv-plan", 1, "Do not use the external account; add a local substitute.");
+    let runtime = makeRuntime();
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-add-work",
+      text: "Implement a local substitute before final verification.",
+      version: 1,
+      idempotencyKey: "guidance:add-work-before-fv",
+    });
+    assert.equal((await runtime.step()).action, "user_guidance_required");
+    assert.equal(runtime.projection().tasks["task-b"].status, "planned");
+    assert.equal(runtime.projection().architectQuestions["question-fv-plan"].resumeStatus, "superseded");
+
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore: FIXTURE_EVIDENCE_STORE });
+    runtime = makeRuntime();
+    assert.equal(runtime.projection().architectQuestions["question-fv-plan"].resumeStatus, "superseded");
+    assert.equal((await runtime.step()).action, "workers_advanced");
+    assert.equal(workerAssignment?.task.id, "task-b");
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-changing guidance supersedes a resolved failed-task checkpoint after capacity is granted", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-stale-failure-question-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    evidenceStore: FIXTURE_EVIDENCE_STORE,
+  });
+  try {
+    seedPlan(store, [task("task-a", "failed", {
+      attempt: 1,
+      attemptLimit: 1,
+      failureReason: "old worker failure",
+    })]);
+    const runtime = runtimeFor(store, {
+      run: async (request) => {
+        if (request.reason.type === "task_failure_resolution_required") {
+          await invoke(request, "ask_user", {
+            questionId: "question-failure",
+            version: 1,
+            decisionKind: "authority_decision",
+            question: "May the failed implementation use the compatible fallback?",
+          });
+          return;
+        }
+        assert.equal(request.reason.type, "user_guidance_required");
+        await invoke(request, "acknowledge_user_guidance", {
+          guidanceId: "guidance-revise-failure",
+          expectedVersion: 1,
+          resolution: {
+            type: "plan_reconciled",
+            rationale: "The user authorized a revised implementation attempt.",
+            planReconciliation: {
+              revision: 2,
+              summary: "Revise the failed task for a fresh attempt.",
+              taskUpdates: [{
+                taskId: "task-a",
+                action: "revise",
+                objective: "Implement task-a using the authorized fallback.",
+              }],
+            },
+          },
+        });
+      },
+    });
+
+    assert.equal((await runtime.step()).action, "task_failure_resolution_required");
+    appendQuestionAnswer(store, "question-failure", 1, "Use the compatible fallback.");
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-revise-failure",
+      text: "Retry using the compatible fallback.",
+      version: 1,
+      idempotencyKey: "guidance:revise-failure",
+    });
+    assert.equal((await runtime.step()).action, "user_guidance_required");
+    const projection = runtime.projection();
+    assert.equal(projection.tasks["task-a"].status, "planned");
+    assert.equal(projection.tasks["task-a"].attempt, 1);
+    assert.equal(projection.tasks["task-a"].attemptLimit, 2);
+    assert.equal(projection.tasks["task-a"].failureReason, undefined);
+    assert.equal(projection.architectQuestions["question-failure"].resumeStatus, "superseded");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-changing guidance preserves an answered exhausted-planned checkpoint when its entry invariant still holds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-exhausted-planned-question-"));
+  const database = join(root, "scheduler.sqlite");
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database, {
+    evidenceStore: FIXTURE_EVIDENCE_STORE,
+  });
+  try {
+    seedPlan(store, [task("task-a", "planned", { attempt: 2, attemptLimit: 2 })]);
+    const checkpointSequence = rebuildSchedulerProjection(store.readRun(RUN_ID)).lastSequence;
+    store.append({
+      runId: RUN_ID,
+      type: "architect.question_requested",
+      occurredAt: CLOCK(),
+      actor: { role: "architect", id: "architect-test" },
+      idempotencyKey: "question:exhausted-planned",
+      payload: {
+        questionId: "question-exhausted-planned",
+        version: 1,
+        decisionKind: "repair_budget_exhausted",
+        question: "May the attempt budget be increased?",
+        checkpoint: {
+          reason: {
+            type: "task_failure_resolution_required",
+            taskId: "task-a",
+            attempt: 2,
+            failureReason: "task_attempt_budget_exhausted",
+          },
+          sequence: checkpointSequence,
+        },
+      },
+    });
+    appendQuestionAnswer(store, "question-exhausted-planned", 1, "Keep the current budget for now.");
+    const architectDriver: ArchitectRuntimeDriver = {
+      run: async (request) => {
+        if (request.reason.type === "user_guidance_required") {
+          await invoke(request, "acknowledge_user_guidance", {
+            guidanceId: "guidance-unrelated-task",
+            expectedVersion: 1,
+            resolution: {
+              type: "plan_reconciled",
+              rationale: "The guidance adds unrelated work and does not resolve the exhausted task.",
+              planReconciliation: {
+                revision: 2,
+                summary: "Add unrelated implementation work.",
+                taskUpdates: [],
+                newTasks: [{
+                  id: "task-b",
+                  objective: "Implement the unrelated requested behavior.",
+                  dependencies: [],
+                  requiredCapabilities: ["code"],
+                  acceptanceCriteria: [{ id: "task-b-done", text: "The unrelated behavior is implemented." }],
+                }],
+              },
+            },
+          });
+          return;
+        }
+        assert.equal(request.reason.type, "task_failure_resolution_required");
+        await invoke(request, "ask_user", {
+          questionId: "question-exhausted-follow-up",
+          version: 2,
+          decisionKind: "repair_budget_exhausted",
+          question: "Should the exhausted task now receive another attempt?",
+        });
+      },
+    };
+    const makeRuntime = () => runtimeFor(store!, architectDriver);
+    let runtime = makeRuntime();
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-unrelated-task",
+      text: "Add an unrelated behavior without changing task-a.",
+      version: 1,
+      idempotencyKey: "guidance:unrelated-task",
+    });
+    assert.equal((await runtime.step()).action, "user_guidance_required");
+    assert.equal(runtime.projection().architectQuestions["question-exhausted-planned"].resumeStatus, "pending");
+
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore: FIXTURE_EVIDENCE_STORE });
+    runtime = makeRuntime();
+    assert.equal((await runtime.step()).action, "architect_question_resumed");
+    assert.equal(runtime.projection().architectQuestions["question-exhausted-planned"].resumeStatus, "consumed");
+    assert.equal(runtime.projection().blockingArchitectQuestionId, "question-exhausted-follow-up");
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("production initialization preserves the objective bytes and durable guidance wins the next Architect action", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-steering-init-"));
   const database = join(root, "scheduler.sqlite");

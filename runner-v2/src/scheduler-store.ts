@@ -584,7 +584,15 @@ function architectActionReasonIsApplicable(
         ? projection.runPolicy === "plan_only" && projection.planRevision > 0
         : buildCompletionReadiness(projection).ready;
     case "final_verification_plan_required":
-      return projection.integrationRevision === reason.integrationRevision;
+      return Object.values(projection.tasks).every((task) =>
+        task.kind === "final_verification" ||
+        task.status === "integrated" ||
+        task.status === "cancelled"
+      ) &&
+        typeof projection.integrationRevision === "string" &&
+        projection.integrationRevision.trim().length > 0 &&
+        projection.integrationRevision === reason.integrationRevision &&
+        projection.finalVerification?.current === undefined;
     case "final_verification_review_required": {
       const current = projection.finalVerification?.current;
       return current?.taskId === reason.taskId &&
@@ -600,8 +608,19 @@ function architectActionReasonIsApplicable(
     }
     case "task_failure_resolution_required": {
       const task = projection.tasks[reason.taskId];
-      return task?.attempt === reason.attempt &&
-        (task.status === "failed" || task.status === "rejected" || task.status === "planned");
+      if (!task || task.attempt !== reason.attempt) return false;
+      if (task.status === "failed") {
+        return (task.failureReason ?? "worker_failed") === reason.failureReason;
+      }
+      const attemptBudgetIsStillExhausted =
+        task.attemptLimit === undefined || task.attempt >= task.attemptLimit;
+      if (task.status === "rejected") {
+        return attemptBudgetIsStillExhausted &&
+          reason.failureReason === "architect_rejected_attempt_budget_exhausted";
+      }
+      return task.status === "planned" &&
+        attemptBudgetIsStillExhausted &&
+        reason.failureReason === "task_attempt_budget_exhausted";
     }
     case "integration_resolution_required":
       return projection.tasks[reason.taskId]?.status === "integration_resolution";
