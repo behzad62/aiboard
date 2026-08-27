@@ -87,6 +87,96 @@ test("terminal implementation work requires a typed final-verification plan", as
   }
 });
 
+test("runner-owned final-verification planning consumes its exact answered checkpoint across WAL reopen", async () => {
+  const fixture = createFixture();
+  const context = {
+    runId: RUN_ID,
+    sessionId: `architect:${RUN_ID}`,
+    actor: { role: "architect" as const, id: "architect-test" },
+  };
+  try {
+    const checkpointSequence = runtimeProjection(fixture.store).lastSequence;
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "architect.question_requested",
+      occurredAt: "2026-08-26T00:00:03.000Z",
+      actor: context.actor,
+      idempotencyKey: "question:verification-plan",
+      payload: {
+        questionId: "question-verification-plan",
+        version: 1,
+        decisionKind: "external_dependency",
+        question: "Is the external browser dependency available?",
+        checkpoint: {
+          reason: { type: "final_verification_plan_required", integrationRevision: INTEGRATION_REVISION },
+          sequence: checkpointSequence,
+        },
+      },
+    });
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "architect.question_answered",
+      occurredAt: "2026-08-26T00:00:04.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "question:verification-plan:answer",
+      payload: { questionId: "question-verification-plan", expectedVersion: 1, answer: "It is unavailable." },
+    });
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "architect.question_resume_started",
+      occurredAt: "2026-08-26T00:00:05.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "question:verification-plan:resume",
+      payload: { questionId: "question-verification-plan", expectedVersion: 1 },
+    });
+    const tools = new ToolRegistry();
+    for (const tool of createArchitectTools({
+      store: fixture.store,
+      finalVerificationPlanAvailable: true,
+      finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
+      architectAction: {
+        reason: { type: "final_verification_plan_required", integrationRevision: INTEGRATION_REVISION },
+        sequence: checkpointSequence,
+      },
+    })) tools.register(tool);
+    const planned = await invokePlan(tools, context, "plan-after-question", finalVerificationPlan());
+    assert.equal(planned.isError, false, planned.error?.message ?? "planning failed");
+    const generation = fixture.store.readRun(RUN_ID).findLast(
+      (event) => event.type === "final_verification.generation_created",
+    );
+    assert.equal(generation?.actor.role, "runner");
+    assert.equal(generation?.actor.id, "build-runtime");
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "architect.question_resume_consumed",
+      occurredAt: "2026-08-26T00:00:06.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "question:verification-plan:consumed",
+      payload: {
+        questionId: "question-verification-plan",
+        expectedVersion: 1,
+        actionEventSequence: generation!.sequence,
+      },
+    });
+    fixture.store.close();
+    const reopened = new SqliteSchedulerStore(join(fixture.root, "scheduler.sqlite"), {
+      validateExecutionProfile: acceptFinalVerificationProfile,
+    });
+    try {
+      const replayed = runtimeProjection(reopened);
+      assert.equal(replayed.architectQuestions["question-verification-plan"].resumeStatus, "consumed");
+      assert.equal(replayed.lastArchitectActionEvent?.actor.role, "runner");
+      assert.equal(replayed.lastArchitectActionEvent?.actor.id, "build-runtime");
+      assert.equal(replayed.lastArchitectActionEvent?.payload.targetRevision, INTEGRATION_REVISION);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    try { fixture.store.close(); } catch { /* test closes before WAL reopen */ }
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("prose or a no-op Architect response cannot create final verification", async () => {
   const fixture = createFixture();
   try {

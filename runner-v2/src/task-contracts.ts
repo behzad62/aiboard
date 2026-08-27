@@ -101,10 +101,20 @@ export interface PlanTaskUpdate {
   acceptanceCriteria?: AcceptanceCriterion[];
 }
 
+export interface PlanNewTask {
+  id: string;
+  objective: string;
+  dependencies: string[];
+  requiredCapabilities: string[];
+  acceptanceCriteria: AcceptanceCriterion[];
+}
+
 export interface PlanReconciliation {
   revision: number;
   summary: string;
   taskUpdates: PlanTaskUpdate[];
+  /** New scope added atomically beside revise/cancel updates. */
+  newTasks?: PlanNewTask[];
 }
 
 export type TaskGraphIssueCode =

@@ -98,6 +98,8 @@ export type AgentLifecycleSignal =
         | "final_verification_planned"
         | "final_verification_review_decided"
         | "verification_repairs_planned"
+        | "user_guidance_acknowledged"
+        | "user_question_requested"
         | "run_completed";
       referenceId?: string;
     };

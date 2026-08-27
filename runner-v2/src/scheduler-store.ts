@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   isFinalVerificationTask,
   type BuildTask,
+  type PlanNewTask,
   type PlanReconciliation,
   type PlanTaskUpdate,
 } from "./task-contracts.js";
@@ -45,6 +46,7 @@ import {
   parseArchitectQuestionRequest,
   parseUserGuidanceAcknowledgement,
   parseUserGuidanceSubmission,
+  type ArchitectActionReason,
   type ArchitectQuestionItem,
   type UserGuidanceAcknowledgementResolution,
   type UserGuidanceItem,
@@ -80,6 +82,8 @@ export type SchedulerEventType =
   | "user.guidance_acknowledged"
   | "architect.question_requested"
   | "architect.question_answered"
+  | "architect.question_resume_started"
+  | "architect.question_resume_consumed"
   | "review.requested"
   | "review.decided"
   | "run.paused"
@@ -374,6 +378,12 @@ export interface SchedulerProjection {
   integrationRevision?: string;
   finalVerification?: FinalVerificationProjection;
   projectHandoff?: ProjectHandoffProjection;
+  lastArchitectActionEvent?: {
+    sequence: number;
+    type: SchedulerEventType;
+    actor: SchedulerActor;
+    payload: Record<string, unknown>;
+  };
   lastSequence: number;
 }
 
@@ -395,11 +405,31 @@ export function assertPendingUserGuidanceAllowsEvent(
   const taskStatus = event.type === "task.transitioned"
     ? event.payload.status
     : undefined;
+  const resumeQuestion =
+    (event.type === "architect.question_resume_started" ||
+      event.type === "architect.question_resume_consumed") &&
+    typeof event.payload.questionId === "string"
+      ? current.architectQuestions[event.payload.questionId]
+      : undefined;
+  const initialPlanQuestionResume =
+    resumeQuestion?.checkpoint?.reason.type === "plan_required" &&
+    ((event.type === "architect.question_resume_started" && current.planRevision === 0) ||
+      (event.type === "architect.question_resume_consumed" &&
+        resumeQuestion.resumeStatus === "started"));
+  const oldestPendingGuidance = Object.values(current.userGuidance)
+    .filter((guidance) => guidance.status === "submitted")
+    .sort((left, right) => left.version - right.version)[0];
+  const guidanceQuestionResume =
+    event.type === "architect.question_resume_started" &&
+    resumeQuestion?.checkpoint?.reason.type === "user_guidance_required" &&
+    resumeQuestion.checkpoint.reason.guidanceId === oldestPendingGuidance?.guidanceId &&
+    resumeQuestion.checkpoint.reason.version === oldestPendingGuidance.version;
   const allowed =
     event.type === "user.guidance_submitted" ||
     event.type === "user.guidance_acknowledged" ||
     event.type === "architect.question_requested" ||
     event.type === "architect.question_answered" ||
+    event.type === "architect.question_resume_consumed" ||
     ((event.type === "run.paused" || event.type === "run.resumed") &&
       event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
@@ -408,6 +438,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
     event.type === "acceptance_contract.upgrade_required" ||
+    initialPlanQuestionResume ||
+    guidanceQuestionResume ||
     event.type === "integration.revision_advanced" ||
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
@@ -419,6 +451,160 @@ export function assertPendingUserGuidanceAllowsEvent(
     throw new Error(
       `Pending user guidance must be acknowledged before ${event.type} may advance the run.`
     );
+  }
+}
+
+export function assertOpenArchitectQuestionAllowsEvent(
+  current: SchedulerProjection,
+  event: Pick<SchedulerEvent, "type" | "actor" | "payload">
+): void {
+  if (!current.blockingArchitectQuestionId) return;
+  const allowed =
+    event.type === "architect.question_answered" ||
+    event.type === "architect.question_resume_consumed" ||
+    event.type === "user.guidance_submitted" ||
+    ((event.type === "run.paused" || event.type === "run.resumed") &&
+      event.actor.role === "user") ||
+    event.type === "provider.retry_scheduled" ||
+    event.type === "provider.health_changed" ||
+    event.type === "architect.runtime_assigned" ||
+    event.type === "architect.handoff_required" ||
+    event.type === "architect.handoff_selected";
+  if (!allowed) {
+    throw new Error(
+      `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
+    );
+  }
+}
+
+export function architectLifecycleEventMatchesReason(
+  event: Pick<SchedulerEvent, "type" | "actor" | "payload">,
+  reason: ArchitectActionReason,
+): boolean {
+  if (event.type === "architect.question_requested") {
+    if (event.actor.role !== "architect") return false;
+    const checkpoint = event.payload.checkpoint;
+    return typeof checkpoint === "object" && checkpoint !== null &&
+      !Array.isArray(checkpoint) &&
+      sameValue((checkpoint as Record<string, unknown>).reason, reason);
+  }
+  switch (reason.type) {
+    case "plan_required":
+      return event.actor.role === "architect" && event.type === "plan.created";
+    case "acceptance_contract_upgrade_required":
+      return event.actor.role === "architect" && event.type === "acceptance_contract.upgraded";
+    case "user_guidance_required":
+      return event.actor.role === "architect" && event.type === "user.guidance_acknowledged" &&
+        event.payload.guidanceId === reason.guidanceId &&
+        event.payload.expectedVersion === reason.version;
+    case "guidance_required":
+      return event.actor.role === "architect" && event.type === "guidance.answered" && event.payload.requestId === reason.requestId;
+    case "review_required":
+      return event.actor.role === "architect" && event.type === "review.decided" && event.payload.taskId === reason.taskId;
+    case "integration_approval_required":
+    case "integration_resolution_required":
+      return event.actor.role === "architect" && event.type === "task.transitioned" &&
+        event.payload.taskId === reason.taskId && event.payload.status === "integrating";
+    case "completion_decision_required":
+      return event.actor.role === "architect" &&
+        (event.type === "project.handoff_requested" || event.type === "run.completed");
+    case "final_verification_plan_required":
+      return event.actor.role === "runner" && event.actor.id === "build-runtime" &&
+        event.type === "final_verification.generation_created" &&
+        event.payload.targetRevision === reason.integrationRevision;
+    case "final_verification_review_required":
+      return event.actor.role === "architect" && event.type === "final_verification.review_decided" &&
+        event.payload.taskId === reason.taskId &&
+        event.payload.generationId === reason.generationId &&
+        event.payload.submissionId === reason.submissionId &&
+        event.payload.targetRevision === reason.targetRevision;
+    case "final_verification_repair_plan_required":
+      return event.actor.role === "architect" && event.type === "final_verification.repairs_planned" &&
+        event.payload.finalVerificationTaskId === reason.finalVerificationTaskId &&
+        event.payload.generationId === reason.generationId &&
+        event.payload.targetRevision === reason.targetRevision;
+    case "task_failure_resolution_required":
+      return event.actor.role === "architect" &&
+        ((event.type === "task.revised" && event.payload.taskId === reason.taskId) ||
+        (event.type === "plan.reconciled" &&
+          Array.isArray(event.payload.taskUpdates) &&
+          event.payload.taskUpdates.some((update) =>
+            isRecord(update) && update.taskId === reason.taskId)));
+  }
+}
+
+function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
+  return [
+    "architect.question_requested",
+    "plan.created",
+    "plan.reconciled",
+    "acceptance_contract.upgraded",
+    "user.guidance_acknowledged",
+    "guidance.answered",
+    "review.decided",
+    "project.handoff_requested",
+    "run.completed",
+    "final_verification.generation_created",
+    "final_verification.review_decided",
+    "final_verification.repairs_planned",
+    "task.revised",
+  ].includes(event.type) ||
+    (event.type === "task.transitioned" &&
+      event.actor.role === "architect" && event.payload.status === "integrating");
+}
+
+function architectActionReasonIsApplicable(
+  projection: SchedulerProjection,
+  reason: ArchitectActionReason,
+): boolean {
+  switch (reason.type) {
+    case "plan_required":
+      return projection.planRevision === 0;
+    case "acceptance_contract_upgrade_required":
+      return projection.acceptanceContractStatus === "acceptance_contract_upgrade_required";
+    case "user_guidance_required": {
+      const guidance = projection.userGuidance[reason.guidanceId];
+      return guidance?.status === "submitted" && guidance.version === reason.version;
+    }
+    case "guidance_required": {
+      const guidance = projection.guidance[reason.requestId];
+      return guidance?.status === "open" && guidance.taskId === reason.taskId;
+    }
+    case "review_required": {
+      const task = projection.tasks[reason.taskId];
+      return (task?.status === "submitted" || task?.status === "architect_review") &&
+        task.changeSetId === reason.changeSetId;
+    }
+    case "integration_approval_required": {
+      const task = projection.tasks[reason.taskId];
+      return task?.status === "approved" && task.changeSetId === reason.changeSetId;
+    }
+    case "completion_decision_required":
+      return reason.runPolicy === "plan_only"
+        ? projection.runPolicy === "plan_only" && projection.planRevision > 0
+        : buildCompletionReadiness(projection).ready;
+    case "final_verification_plan_required":
+      return projection.integrationRevision === reason.integrationRevision;
+    case "final_verification_review_required": {
+      const current = projection.finalVerification?.current;
+      return current?.taskId === reason.taskId &&
+        current.generationId === reason.generationId &&
+        current.targetRevision === reason.targetRevision &&
+        current.submission?.submissionId === reason.submissionId;
+    }
+    case "final_verification_repair_plan_required": {
+      const current = projection.finalVerification?.current;
+      return current?.taskId === reason.finalVerificationTaskId &&
+        current.generationId === reason.generationId &&
+        current.targetRevision === reason.targetRevision;
+    }
+    case "task_failure_resolution_required": {
+      const task = projection.tasks[reason.taskId];
+      return task?.attempt === reason.attempt &&
+        (task.status === "failed" || task.status === "rejected" || task.status === "planned");
+    }
+    case "integration_resolution_required":
+      return projection.tasks[reason.taskId]?.status === "integration_resolution";
   }
 }
 
@@ -628,6 +814,17 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (event.type === "user.guidance_acknowledged") {
+    const resolution = event.payload.resolution;
+    if (isRecord(resolution) && resolution.type === "no_plan_change") {
+      const evidenceIds = stringArray(resolution, "evidenceIds");
+      const records = evidenceStore.getByIds({ runId: event.runId, ids: evidenceIds });
+      if (records.length !== evidenceIds.length) {
+        throw new Error("No-plan-change acknowledgement cites missing or foreign evidence.");
+      }
+    }
+    return;
+  }
   if (event.type === "final_verification.check_completed") {
     validateFinalVerificationCheckEvidence(projection, event, evidenceStore);
     return;
@@ -1099,6 +1296,7 @@ export function reduceSchedulerEvent(
     throw new Error(`Scheduler event ${event.eventId} has invalid run ordering.`);
   }
   assertPendingUserGuidanceAllowsEvent(current, event);
+  assertOpenArchitectQuestionAllowsEvent(current, event);
   const next: SchedulerProjection = {
     ...current,
     tasks: { ...current.tasks },
@@ -1506,6 +1704,26 @@ export function reduceSchedulerEvent(
           allowSteeringCheckpoints: true,
           supersedingGuidanceId: guidance.guidanceId,
         });
+        for (const [questionId, question] of Object.entries(next.architectQuestions)) {
+          if (
+            question.status !== "answered" ||
+            !question.checkpoint ||
+            (question.resumeStatus !== "pending" && question.resumeStatus !== "started")
+          ) continue;
+          const reason = question.checkpoint.reason;
+          const isAcknowledgedAction =
+            reason.type === "user_guidance_required" &&
+            reason.guidanceId === guidance.guidanceId &&
+            reason.version === guidance.version;
+          if (isAcknowledgedAction || architectActionReasonIsApplicable(next, reason)) continue;
+          next.architectQuestions[questionId] = {
+            ...question,
+            resumeStatus: "superseded",
+            resumeSupersededSequence: event.sequence,
+            supersededByGuidanceId: guidance.guidanceId,
+            supersededRationale: resolution.rationale,
+          };
+        }
       }
       next.userGuidance[guidance.guidanceId] = {
         ...guidance,
@@ -1519,6 +1737,9 @@ export function reduceSchedulerEvent(
         throw new Error("Only the Architect may request a user question.");
       }
       const request = parseArchitectQuestionRequest(event.payload);
+      if (request.checkpoint && request.checkpoint.sequence > current.lastSequence) {
+        throw new Error("Architect question checkpoint sequence is not durable in the current run.");
+      }
       if (next.blockingArchitectQuestionId) {
         throw new Error(`Architect question ${next.blockingArchitectQuestionId} is already open.`);
       }
@@ -1556,8 +1777,70 @@ export function reduceSchedulerEvent(
         ...question,
         status: "answered",
         answer: answer.answer,
+        ...(question.checkpoint ? { resumeStatus: "pending" } : {}),
       };
       delete next.blockingArchitectQuestionId;
+      break;
+    }
+    case "architect.question_resume_started": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may start an Architect question resume.");
+      }
+      const questionId = requiredString(event.payload, "questionId");
+      const expectedVersion = requiredPositiveInteger(event.payload, "expectedVersion");
+      const question = next.architectQuestions[questionId];
+      if (
+        !question ||
+        question.status !== "answered" ||
+        !question.checkpoint ||
+        question.version !== expectedVersion ||
+        (question.resumeStatus !== "pending" && question.resumeStatus !== "started")
+      ) {
+        throw new Error(`Architect question ${questionId} is not pending resume.`);
+      }
+      next.architectQuestions[questionId] = {
+        ...question,
+        resumeStatus: "started",
+        resumeStartedSequence: event.sequence,
+      };
+      break;
+    }
+    case "architect.question_resume_consumed": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may consume an Architect question resume.");
+      }
+      const questionId = requiredString(event.payload, "questionId");
+      const expectedVersion = requiredPositiveInteger(event.payload, "expectedVersion");
+      const actionEventSequence = requiredPositiveInteger(event.payload, "actionEventSequence");
+      const question = next.architectQuestions[questionId];
+      const actionEvent = current.lastArchitectActionEvent;
+      const checkpoint = question?.checkpoint;
+      if (
+        !question ||
+        question.status !== "answered" ||
+        !checkpoint ||
+        question.version !== expectedVersion ||
+        question.resumeStatus !== "started" ||
+        question.resumeStartedSequence === undefined ||
+        actionEventSequence <= question.resumeStartedSequence ||
+        actionEventSequence >= event.sequence ||
+        actionEvent?.sequence !== actionEventSequence ||
+        !architectLifecycleEventMatchesReason(
+          {
+            type: actionEvent.type,
+            actor: actionEvent.actor,
+            payload: actionEvent.payload,
+          },
+          checkpoint.reason
+        )
+      ) {
+        throw new Error(`Architect question ${questionId} has no completed resumed action.`);
+      }
+      next.architectQuestions[questionId] = {
+        ...question,
+        resumeStatus: "consumed",
+        resumeConsumedSequence: event.sequence,
+      };
       break;
     }
     case "guidance.requested": {
@@ -2037,6 +2320,14 @@ export function reduceSchedulerEvent(
       delete next.pauseReason;
       break;
     }
+  }
+  if (isArchitectLifecycleEvent(event)) {
+    next.lastArchitectActionEvent = {
+      sequence: event.sequence,
+      type: event.type,
+      actor: { ...event.actor },
+      payload: structuredClone(event.payload),
+    };
   }
   return next;
 }
@@ -2961,13 +3252,45 @@ function parsePlanReconciliation(value: unknown): PlanReconciliation {
   }
   const payload = value as Record<string, unknown>;
   const updates = payload.taskUpdates;
-  if (!Array.isArray(updates) || updates.length === 0) {
-    throw new Error("Plan reconciliation requires taskUpdates.");
+  const newTasks = payload.newTasks;
+  if (!Array.isArray(updates) || (newTasks !== undefined && !Array.isArray(newTasks))) {
+    throw new Error("Plan reconciliation task collections are invalid.");
+  }
+  if (updates.length === 0 && (!Array.isArray(newTasks) || newTasks.length === 0)) {
+    throw new Error("Plan reconciliation requires taskUpdates or newTasks.");
   }
   return {
     revision: requiredNumber(payload, "revision"),
     summary: requiredString(payload, "summary"),
     taskUpdates: updates.map(parsePlanTaskUpdate),
+    ...(Array.isArray(newTasks)
+      ? { newTasks: newTasks.map(parsePlanNewTask) }
+      : {}),
+  };
+}
+
+function parsePlanNewTask(value: unknown, index: number): PlanNewTask {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`New plan task ${index} is invalid.`);
+  }
+  const payload = value as Record<string, unknown>;
+  const allowed = new Set([
+    "id",
+    "objective",
+    "dependencies",
+    "requiredCapabilities",
+    "acceptanceCriteria",
+  ]);
+  const unknown = Object.keys(payload).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw new Error(`New plan task ${index} has unknown field(s): ${unknown.join(", ")}.`);
+  }
+  return {
+    id: requiredString(payload, "id"),
+    objective: requiredString(payload, "objective"),
+    dependencies: stringArray(payload, "dependencies"),
+    requiredCapabilities: stringArray(payload, "requiredCapabilities"),
+    acceptanceCriteria: parseAcceptanceCriteria(payload.acceptanceCriteria, `New plan task ${index}`),
   };
 }
 
@@ -3060,6 +3383,36 @@ function applyPlanReconciliation(
   const candidateTasks = Object.fromEntries(
     Object.entries(projection.tasks).map(([taskId, task]) => [taskId, cloneBuildTask(task)])
   );
+  const newTasks = reconciliation.newTasks ?? [];
+  const duplicateNewTask = newTasks.find(
+    (task, index, tasks) => tasks.findIndex((candidate) => candidate.id === task.id) !== index
+  );
+  if (duplicateNewTask) {
+    throw new Error(`Plan reconciliation repeats new task ${duplicateNewTask.id}.`);
+  }
+  const overlappingTask = newTasks.find((task) =>
+    reconciliation.taskUpdates.some((update) => update.taskId === task.id)
+  );
+  if (overlappingTask) {
+    throw new Error(
+      `Plan reconciliation task ${overlappingTask.id} must have exactly one operation.`
+    );
+  }
+  for (const task of newTasks) {
+    if (candidateTasks[task.id]) {
+      throw new Error(`Plan reconciliation new task ${task.id} already exists.`);
+    }
+    candidateTasks[task.id] = {
+      id: task.id,
+      objective: task.objective,
+      dependencies: [...task.dependencies],
+      requiredCapabilities: [...task.requiredCapabilities],
+      acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+      acceptanceCriteriaVersion: 1,
+      status: "planned",
+      attempt: 0,
+    };
+  }
   const sameAttemptSteeringTaskIds = new Set<string>();
   const reviewsToClear = new Set<string>();
   const guidanceTaskIdsToSupersede = new Set<string>();
@@ -3470,6 +3823,16 @@ function cloneUserGuidanceResolution(
             }
           : {}),
       })),
+      ...(resolution.planReconciliation.newTasks
+        ? {
+            newTasks: resolution.planReconciliation.newTasks.map((task) => ({
+              ...task,
+              dependencies: [...task.dependencies],
+              requiredCapabilities: [...task.requiredCapabilities],
+              acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+            })),
+          }
+        : {}),
     },
   };
 }
@@ -3506,6 +3869,16 @@ function planProjection(
     planRevision: requiredNumber(event.payload, "revision"),
     tasks: Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)])),
     acceptanceContractStatus: acceptanceContractStatusForTasks(tasks),
+    ...(event.actor.role === "architect"
+      ? {
+          lastArchitectActionEvent: {
+            sequence: event.sequence,
+            type: event.type,
+            actor: { ...event.actor },
+            payload: structuredClone(event.payload),
+          },
+        }
+      : {}),
   };
 }
 

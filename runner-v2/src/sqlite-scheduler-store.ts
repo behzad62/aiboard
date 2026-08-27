@@ -314,6 +314,13 @@ function requiresAuthoritativeEvidenceStore(
   event: SchedulerEvent,
 ): boolean {
   if (!projection) return false;
+  if (event.type === "user.guidance_acknowledged") {
+    const resolution = event.payload.resolution;
+    return typeof resolution === "object" &&
+      resolution !== null &&
+      !Array.isArray(resolution) &&
+      (resolution as Record<string, unknown>).type === "no_plan_change";
+  }
   if (
     event.type !== "task.transitioned" &&
     event.type !== "review.requested" &&

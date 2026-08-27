@@ -392,6 +392,9 @@ export class NativeBuildManager implements BuildControlPlane {
         }
         result = { status: "paused", action: "no_mechanical_progress" };
       }
+      if (result.status === "blocked") {
+        await handle.finalVerificationCleanup?.quiesceRun();
+      }
       const finalized = await this.finalizeExecutionInsideActivity(
         runId,
         handle,
@@ -438,7 +441,7 @@ export class NativeBuildManager implements BuildControlPlane {
         handle,
         await execute()
       );
-      if (finalized.result.status === "paused") {
+      if (finalized.result.status === "paused" || finalized.result.status === "blocked") {
         await handle.finalVerificationCleanup?.quiesceRun();
       }
       result = finalized.result;

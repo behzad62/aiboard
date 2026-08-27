@@ -8,6 +8,7 @@ import type {
 } from "./agent-contracts.js";
 import {
   assertPendingUserGuidanceAllowsEvent,
+  assertOpenArchitectQuestionAllowsEvent,
   buildCompletionReadiness,
   rebuildSchedulerProjection,
   type SchedulerStore,
@@ -15,6 +16,7 @@ import {
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   BuildTask,
+  PlanNewTask,
   PlanReconciliation,
   PlanTaskUpdate,
 } from "./task-contracts.js";
@@ -38,6 +40,11 @@ import {
   cloneFinalVerificationExecutionProfile,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
+import type {
+  ArchitectActionReason,
+  ArchitectQuestionDecisionKind,
+  UserGuidanceAcknowledgementResolution,
+} from "./user-steering-contracts.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -48,6 +55,10 @@ export interface ArchitectToolsOptions {
   finalVerificationReviewAvailable?: boolean;
   finalVerificationRepairPlanAvailable?: boolean;
   evidenceStore?: EvidenceStore;
+  architectAction?: {
+    reason: ArchitectActionReason;
+    sequence: number;
+  };
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
 }
@@ -72,6 +83,19 @@ interface ReviseTaskInput {
   dependencies?: string[];
   requiredCapabilities?: string[];
   acceptanceCriteria?: AcceptanceCriterion[];
+}
+
+interface AcknowledgeUserGuidanceInput {
+  guidanceId: string;
+  expectedVersion: number;
+  resolution: UserGuidanceAcknowledgementResolution;
+}
+
+interface AskUserInput {
+  questionId: string;
+  version: number;
+  decisionKind: ArchitectQuestionDecisionKind;
+  question: string;
 }
 
 interface AcceptanceContractUpgradeInput {
@@ -139,12 +163,26 @@ export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
   const clock = options.clock ?? (() => new Date().toISOString());
-  const core = [
+  const baseCore = [
     planTasksTool(options.store, clock),
     reviseTaskTool(options.store, clock),
     answerGuidanceTool(options.store, clock),
     upgradeAcceptanceContractTool(options.store, clock),
   ];
+  const withQuestion = options.architectAction
+    ? [...baseCore, askUserTool(options.store, clock, options.architectAction)]
+    : baseCore;
+  const core = options.architectAction?.reason.type === "user_guidance_required"
+    ? [
+        ...withQuestion,
+        acknowledgeUserGuidanceTool(
+          options.store,
+          clock,
+          options.architectAction,
+          options.evidenceStore
+        ),
+      ]
+    : withQuestion;
   const planning = options.finalVerificationPlanAvailable
     ? [...core, planFinalVerificationTool(
         options.store,
@@ -1123,12 +1161,24 @@ function requestIntegrationTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const events = store.readRun(context.runId);
+      const task = rebuildSchedulerProjection(events).tasks[input.taskId];
+      const resolutionSequence = task?.status === "integration_resolution"
+        ? events.findLast((event) =>
+            event.type === "task.transitioned" &&
+            event.payload.taskId === input.taskId &&
+            event.payload.status === "integration_resolution"
+          )?.sequence
+        : undefined;
+      const idempotencyKey = task?.status === "integration_resolution"
+        ? `integration-resolution-request:${input.taskId}:sequence:${resolutionSequence ?? "missing"}`
+        : `integration-request:${input.taskId}`;
       return appendEvent(store, {
         runId: context.runId,
         type: "task.transitioned",
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
-        idempotencyKey: `integration-request:${input.taskId}`,
+        idempotencyKey,
         payload: { taskId: input.taskId, status: "integrating" },
       }, {
         type: "architect_action",
@@ -1261,6 +1311,156 @@ function validateRevision(input: unknown): ValidationResult<ReviseTaskInput> {
   }, "taskId, revision, and at least one valid revision field are required");
 }
 
+function acknowledgeUserGuidanceTool(
+  store: SchedulerStore,
+  clock: () => string,
+  architectAction: { reason: ArchitectActionReason; sequence: number },
+  evidenceStore?: EvidenceStore,
+): NativeTool<AcknowledgeUserGuidanceInput> {
+  return lifecycleTool({
+    name: "acknowledge_user_guidance",
+    description: "Acknowledge the exact oldest pending user guidance with either durable evidence proving no semantic plan change or one atomic plan reconciliation",
+    schema: objectSchema({
+      guidanceId: { type: "string", minLength: 1 },
+      expectedVersion: { type: "integer", minimum: 1 },
+      resolution: objectSchema({
+        type: { type: "string", enum: ["no_plan_change", "plan_reconciled"] },
+        rationale: { type: "string", minLength: 1 },
+        evidenceIds: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string", minLength: 1 },
+        },
+        planReconciliation: planReconciliationSchema(),
+      }, ["type", "rationale"]),
+    }, ["guidanceId", "expectedVersion", "resolution"]),
+    validate: validateAcknowledgeUserGuidance,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      if (architectAction.reason.type !== "user_guidance_required") {
+        return errorOutput("wrong_architect_action", "User guidance acknowledgement is unavailable for this Architect action.");
+      }
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const oldest = Object.values(projection.userGuidance)
+        .filter((guidance) => guidance.status === "submitted")
+        .sort((left, right) => left.version - right.version || left.guidanceId.localeCompare(right.guidanceId))[0];
+      if (
+        !oldest ||
+        oldest.guidanceId !== architectAction.reason.guidanceId ||
+        oldest.version !== architectAction.reason.version ||
+        input.guidanceId !== oldest.guidanceId ||
+        input.expectedVersion !== oldest.version
+      ) {
+        return errorOutput(
+          "wrong_pending_guidance",
+          "Acknowledgement must target the exact oldest pending guidance ID and version exposed by the current Architect action."
+        );
+      }
+      if (input.resolution.type === "no_plan_change") {
+        if (!evidenceStore) {
+          return errorOutput(
+            "authoritative_evidence_required",
+            "No-plan-change acknowledgement requires the current run's authoritative durable evidence store."
+          );
+        }
+        const records = evidenceStore.getByIds({
+          runId: context.runId,
+          ids: input.resolution.evidenceIds,
+        });
+        if (records.length !== input.resolution.evidenceIds.length) {
+          return errorOutput(
+            "invalid_guidance_evidence",
+            "No-plan-change acknowledgement cites missing or foreign evidence."
+          );
+        }
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "user.guidance_acknowledged",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `user-guidance-ack:${input.guidanceId}:${input.expectedVersion}`,
+        payload: {
+          guidanceId: input.guidanceId,
+          expectedVersion: input.expectedVersion,
+          resolution: cloneGuidanceAcknowledgementResolution(input.resolution),
+        },
+      }, {
+        type: "architect_action",
+        action: "user_guidance_acknowledged",
+        referenceId: input.guidanceId,
+      });
+    },
+  });
+}
+
+function askUserTool(
+  store: SchedulerStore,
+  clock: () => string,
+  architectAction: { reason: ArchitectActionReason; sequence: number },
+): NativeTool<AskUserInput> {
+  return lifecycleTool({
+    name: "ask_user",
+    description: "Block on a genuine user authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, control weakening, or exhausted governed repair budget; never ask about routine technical work",
+    schema: objectSchema({
+      questionId: { type: "string", minLength: 1 },
+      version: { type: "integer", minimum: 1 },
+      decisionKind: {
+        type: "string",
+        enum: [
+          "authority_decision",
+          "destructive_action",
+          "requirement_conflict",
+          "external_dependency",
+          "control_weakening",
+          "repair_budget_exhausted",
+        ],
+      },
+      question: { type: "string", minLength: 1 },
+    }, ["questionId", "version", "decisionKind", "question"]),
+    validate: validateAskUser,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      if (projection.blockingArchitectQuestionId) {
+        return errorOutput(
+          "architect_question_open",
+          `Architect question ${projection.blockingArchitectQuestionId} is already open.`
+        );
+      }
+      if (input.version !== projection.architectQuestionVersion + 1) {
+        return errorOutput(
+          "architect_question_version",
+          `Architect question version must be ${projection.architectQuestionVersion + 1}.`
+        );
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "architect.question_requested",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `architect-question:${input.version}:${input.questionId}`,
+        payload: {
+          questionId: input.questionId,
+          question: input.question,
+          version: input.version,
+          decisionKind: input.decisionKind,
+          checkpoint: {
+            reason: structuredClone(architectAction.reason),
+            sequence: architectAction.sequence,
+          },
+        },
+      }, {
+        type: "architect_action",
+        action: "user_question_requested",
+        referenceId: input.questionId,
+      });
+    },
+  });
+}
+
 function validateAcceptanceContractUpgrade(
   input: unknown
 ): ValidationResult<AcceptanceContractUpgradeInput> {
@@ -1312,6 +1512,60 @@ function validatePlanReconciliation(input: unknown): ValidationResult<PlanReconc
   );
 }
 
+function validateAcknowledgeUserGuidance(
+  input: unknown
+): ValidationResult<AcknowledgeUserGuidanceInput> {
+  return validateObject(input, (value) => {
+    if (
+      !nonEmpty(value.guidanceId) ||
+      !positiveInteger(value.expectedVersion) ||
+      !isRecord(value.resolution) ||
+      !nonEmpty(value.resolution.rationale)
+    ) return null;
+    if (value.resolution.type === "no_plan_change") {
+      const evidenceIds = stringList(value.resolution.evidenceIds);
+      if (!evidenceIds || evidenceIds.length === 0 ||
+        new Set(evidenceIds).size !== evidenceIds.length ||
+        value.resolution.planReconciliation !== undefined) return null;
+      return {
+        guidanceId: value.guidanceId,
+        expectedVersion: value.expectedVersion,
+        resolution: { type: "no_plan_change" as const, rationale: value.resolution.rationale, evidenceIds },
+      };
+    }
+    if (value.resolution.type === "plan_reconciled") {
+      if (value.resolution.evidenceIds !== undefined) return null;
+      const planReconciliation = parsePlanReconciliation(value.resolution.planReconciliation);
+      if (!planReconciliation) return null;
+      return {
+        guidanceId: value.guidanceId,
+        expectedVersion: value.expectedVersion,
+        resolution: {
+          type: "plan_reconciled" as const,
+          rationale: value.resolution.rationale,
+          planReconciliation,
+        },
+      };
+    }
+    return null;
+  }, "guidanceId, expectedVersion, and one valid acknowledgement resolution are required");
+}
+
+function validateAskUser(input: unknown): ValidationResult<AskUserInput> {
+  const decisionKinds: ArchitectQuestionDecisionKind[] = [
+    "authority_decision", "destructive_action", "requirement_conflict",
+    "external_dependency", "control_weakening", "repair_budget_exhausted",
+  ];
+  return validateObject(input, (value) =>
+    nonEmpty(value.questionId) && positiveInteger(value.version) &&
+    typeof value.decisionKind === "string" &&
+    decisionKinds.includes(value.decisionKind as ArchitectQuestionDecisionKind) &&
+    nonEmpty(value.question)
+      ? value as unknown as AskUserInput
+      : null,
+  "questionId, version, decisionKind, and a nonblank question are required");
+}
+
 function parsePlanReconciliation(
   input: Record<string, unknown> | unknown
 ): PlanReconciliation | null {
@@ -1319,9 +1573,13 @@ function parsePlanReconciliation(
   if (
     !positiveInteger(input.revision) ||
     !nonEmpty(input.summary) ||
-    !Array.isArray(input.taskUpdates) ||
-    input.taskUpdates.length === 0
+    !Array.isArray(input.taskUpdates)
   ) return null;
+  const newTasks = input.newTasks === undefined
+    ? undefined
+    : parsePlanNewTasks(input.newTasks);
+  if (input.newTasks !== undefined && newTasks === null) return null;
+  if (input.taskUpdates.length === 0 && (!newTasks || newTasks.length === 0)) return null;
   const taskUpdates: PlanTaskUpdate[] = [];
   for (const candidate of input.taskUpdates) {
     if (!isRecord(candidate) || !nonEmpty(candidate.taskId)) return null;
@@ -1352,7 +1610,31 @@ function parsePlanReconciliation(
     revision: input.revision,
     summary: input.summary,
     taskUpdates,
+    ...(newTasks ? { newTasks } : {}),
   };
+}
+
+function parsePlanNewTasks(value: unknown): PlanNewTask[] | null {
+  if (!Array.isArray(value)) return null;
+  const tasks: PlanNewTask[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate)) return null;
+    const allowed = ["id", "objective", "dependencies", "requiredCapabilities", "acceptanceCriteria"];
+    if (Object.keys(candidate).some((key) => !allowed.includes(key))) return null;
+    if (!nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
+    const dependencies = stringList(candidate.dependencies);
+    const requiredCapabilities = stringList(candidate.requiredCapabilities);
+    const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+    if (!dependencies || !requiredCapabilities || !acceptanceCriteria) return null;
+    tasks.push({
+      id: candidate.id,
+      objective: candidate.objective,
+      dependencies,
+      requiredCapabilities,
+      acceptanceCriteria,
+    });
+  }
+  return tasks.length > 0 ? tasks : null;
 }
 
 function validateObject<T>(
@@ -1375,7 +1657,10 @@ function appendEvent(
     const projection = events.length > 0
       ? rebuildSchedulerProjection(events)
       : undefined;
-    if (projection) assertPendingUserGuidanceAllowsEvent(projection, event);
+    if (projection) {
+      assertPendingUserGuidanceAllowsEvent(projection, event);
+      assertOpenArchitectQuestionAllowsEvent(projection, event);
+    }
     const appended = store.append(event);
     return {
       content: [{ type: "json", value: appended }],
@@ -1425,7 +1710,6 @@ function planReconciliationSchema(): Record<string, unknown> {
     summary: { type: "string", minLength: 1 },
     taskUpdates: {
       type: "array",
-      minItems: 1,
       items: objectSchema({
         taskId: { type: "string", minLength: 1 },
         action: { type: "string", enum: ["cancel", "revise"] },
@@ -1434,6 +1718,11 @@ function planReconciliationSchema(): Record<string, unknown> {
         requiredCapabilities: { type: "array", items: { type: "string" } },
         acceptanceCriteria: { type: "array", minItems: 1, items: criterionSchema() },
       }, ["taskId", "action"]),
+    },
+    newTasks: {
+      type: "array",
+      minItems: 1,
+      items: taskSchema(),
     },
   }, ["revision", "summary", "taskUpdates"]);
 }
@@ -1530,4 +1819,38 @@ function stringList(value: unknown): string[] | null {
 
 function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function cloneGuidanceAcknowledgementResolution(
+  resolution: UserGuidanceAcknowledgementResolution
+): UserGuidanceAcknowledgementResolution {
+  if (resolution.type === "no_plan_change") {
+    return { ...resolution, evidenceIds: [...resolution.evidenceIds] };
+  }
+  return {
+    ...resolution,
+    planReconciliation: {
+      ...resolution.planReconciliation,
+      taskUpdates: resolution.planReconciliation.taskUpdates.map((update) => ({
+        ...update,
+        ...(update.dependencies ? { dependencies: [...update.dependencies] } : {}),
+        ...(update.requiredCapabilities
+          ? { requiredCapabilities: [...update.requiredCapabilities] }
+          : {}),
+        ...(update.acceptanceCriteria
+          ? { acceptanceCriteria: update.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+          : {}),
+      })),
+      ...(resolution.planReconciliation.newTasks
+        ? {
+            newTasks: resolution.planReconciliation.newTasks.map((task) => ({
+              ...task,
+              dependencies: [...task.dependencies],
+              requiredCapabilities: [...task.requiredCapabilities],
+              acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+            })),
+          }
+        : {}),
+    },
+  };
 }

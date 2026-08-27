@@ -232,6 +232,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
               request.tools.definitions().map((tool) => tool.name).sort(),
               [
                 "answer_guidance",
+                "ask_user",
                 "plan_tasks",
                 "revise_task",
                 "upgrade_acceptance_contract",
@@ -281,6 +282,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
             request.tools.definitions().map((tool) => tool.name).sort(),
             [
               "answer_guidance",
+              "ask_user",
               "complete_run",
               "plan_tasks",
               "revise_task",

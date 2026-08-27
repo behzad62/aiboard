@@ -350,6 +350,10 @@ test("Native Architect steering cancellation does not create a user-decision pau
       .join("\n");
     assert.match(steeringContext, /Keep the public API stable/);
     assert.match(steeringContext, /Build\\nthis exact application/);
+    assert.match(steeringContext, /immutable initial objective/i);
+    assert.match(steeringContext, /evidence-proven semantic equivalence/i);
+    assert.match(steeringContext, /acknowledge_user_guidance/);
+    assert.match(steeringContext, /ask_user/);
 
     const mismatchHealth = new ProviderHealthRegistry();
     const mismatchedArchitect = new NativeArchitectRuntime({

@@ -7,10 +7,12 @@ import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   ProjectHandoffChoice,
   SchedulerActor,
+  SchedulerEvent,
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
+  architectLifecycleEventMatchesReason,
   deriveFinalVerificationFailure,
   rebuildSchedulerProjection,
 } from "./scheduler-store.js";
@@ -34,44 +36,8 @@ import { ToolRegistry } from "./tool-registry.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type { ArtifactStore } from "./artifact-store.js";
-
-export type ArchitectActionReason =
-  | { type: "plan_required" }
-  | { type: "acceptance_contract_upgrade_required" }
-  | { type: "user_guidance_required"; guidanceId: string; version: number }
-  | { type: "guidance_required"; requestId: string; taskId: string }
-  | { type: "review_required"; taskId: string; changeSetId: string }
-  | { type: "integration_approval_required"; taskId: string; changeSetId: string }
-  | { type: "completion_decision_required"; runPolicy?: "plan_only" }
-  | {
-      type: "final_verification_plan_required";
-      integrationRevision: string;
-    }
-  | {
-      type: "final_verification_review_required";
-      taskId: string;
-      generationId: string;
-      submissionId: string;
-      targetRevision: string;
-    }
-  | {
-      type: "final_verification_repair_plan_required";
-      finalVerificationTaskId: string;
-      generationId: string;
-      targetRevision: string;
-      source:
-        | { type: "semantic_review"; submissionId: string; reviewId: string }
-        | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
-      failedCategories: string[];
-      evidenceIds: string[];
-    }
-  | {
-      type: "task_failure_resolution_required";
-      taskId: string;
-      attempt: number;
-      failureReason: string;
-    }
-  | { type: "integration_resolution_required"; taskId: string };
+import type { ArchitectActionReason } from "./user-steering-contracts.js";
+export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
   runId: string;
@@ -167,7 +133,7 @@ export interface BuildRuntimeOptions {
 }
 
 export interface BuildStepResult {
-  status: "progressed" | "paused" | "completed" | "idle";
+  status: "progressed" | "paused" | "completed" | "idle" | "blocked";
   action?: string;
 }
 
@@ -409,9 +375,27 @@ export class BuildRuntime {
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
     if (projection.status === "paused") return { status: "paused" };
+    if (projection.blockingArchitectQuestionId) {
+      return { status: "blocked", action: "architect_question_pending" };
+    }
+    const pendingQuestionResume = Object.values(projection.architectQuestions)
+      .filter((question) =>
+        question.status === "answered" &&
+        question.checkpoint !== undefined &&
+        (question.resumeStatus === "pending" || question.resumeStatus === "started")
+      )
+      .sort((left, right) => left.version - right.version)[0];
     if (projection.planRevision > 0) {
       const pendingGuidance = firstPendingUserGuidance(projection);
       if (pendingGuidance) {
+        const resumeReason = pendingQuestionResume?.checkpoint?.reason;
+        if (
+          resumeReason?.type === "user_guidance_required" &&
+          resumeReason.guidanceId === pendingGuidance.guidanceId &&
+          resumeReason.version === pendingGuidance.version
+        ) {
+          return await this.resumeArchitectQuestion(pendingQuestionResume.questionId);
+        }
         await this.runArchitect({
           type: "user_guidance_required",
           guidanceId: pendingGuidance.guidanceId,
@@ -419,6 +403,9 @@ export class BuildRuntime {
         }, projection);
         return this.afterArchitect("user_guidance_required");
       }
+    }
+    if (pendingQuestionResume?.checkpoint) {
+      return await this.resumeArchitectQuestion(pendingQuestionResume.questionId);
     }
     if (
       projection.acceptanceContractStatus ===
@@ -1060,6 +1047,10 @@ export class BuildRuntime {
         reason.type === "final_verification_review_required",
       finalVerificationRepairPlanAvailable:
         reason.type === "final_verification_repair_plan_required",
+      architectAction: {
+        reason,
+        sequence: projection.lastSequence,
+      },
       ...(this.finalVerificationProfileFor
         ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
         : {}),
@@ -1091,6 +1082,70 @@ export class BuildRuntime {
         `Architect returned from ${reason.type} without a typed action.`
       );
     }
+  }
+
+  private async resumeArchitectQuestion(questionId: string): Promise<BuildStepResult> {
+    let events = this.store.readRun(this.runId);
+    let projection = rebuildSchedulerProjection(events);
+    let question = projection.architectQuestions[questionId];
+    if (
+      !question ||
+      question.status !== "answered" ||
+      !question.checkpoint ||
+      (question.resumeStatus !== "pending" && question.resumeStatus !== "started")
+    ) {
+      return { status: "idle" };
+    }
+    const checkpoint = question.checkpoint;
+    let actionEvent = question.resumeStartedSequence === undefined
+      ? undefined
+      : firstMatchingArchitectActionEvent(
+          events,
+          question.resumeStartedSequence,
+          checkpoint.reason
+        );
+    if (!actionEvent) {
+      if (question.resumeStatus === "pending") {
+        this.store.append({
+          runId: this.runId,
+          type: "architect.question_resume_started",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `architect-question-resume-started:${question.questionId}:${question.version}`,
+          payload: { questionId: question.questionId, expectedVersion: question.version },
+        });
+        events = this.store.readRun(this.runId);
+        projection = rebuildSchedulerProjection(events);
+        question = projection.architectQuestions[questionId];
+      }
+      const startedSequence = question.resumeStartedSequence;
+      if (startedSequence === undefined) {
+        throw new Error(`Architect question ${questionId} has no durable resume start.`);
+      }
+      await this.runArchitect(checkpoint.reason, projection);
+      events = this.store.readRun(this.runId);
+      actionEvent = firstMatchingArchitectActionEvent(
+        events,
+        startedSequence,
+        checkpoint.reason
+      );
+      if (!actionEvent) {
+        return { status: "progressed", action: "architect_question_interrupted" };
+      }
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "architect.question_resume_consumed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `architect-question-resume-consumed:${question.questionId}:${question.version}`,
+      payload: {
+        questionId: question.questionId,
+        expectedVersion: question.version,
+        actionEventSequence: actionEvent.sequence,
+      },
+    });
+    return this.afterArchitect("architect_question_resumed");
   }
 
   private activeLifecycleSignal(allowPendingGuidanceReset = false): AbortSignal {
@@ -1146,6 +1201,16 @@ function firstTask(
   return Object.values(projection.tasks)
     .filter((task) => task.status === status)
     .sort((left, right) => left.id.localeCompare(right.id))[0];
+}
+
+function firstMatchingArchitectActionEvent(
+  events: readonly SchedulerEvent[],
+  afterSequence: number,
+  reason: ArchitectActionReason,
+): SchedulerEvent | undefined {
+  return events.find((event) =>
+    event.sequence > afterSequence && architectLifecycleEventMatchesReason(event, reason)
+  );
 }
 
 function firstPendingUserGuidance(projection: SchedulerProjection) {

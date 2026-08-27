@@ -7,12 +7,35 @@ import test from "node:test";
 import { rebuildSchedulerProjection, type NewSchedulerEvent } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import type { EvidenceStore } from "../src/evidence-store.js";
 import { TaskScheduler, type WorkerOutcome } from "../src/task-scheduler.js";
 import { workerSessionId } from "../src/worker-identity.js";
 
 const RUN_ID = "run_user_steering";
 const USER = { role: "user" as const, id: "local-user" };
 const ARCHITECT = { role: "architect" as const, id: "architect-1" };
+const FIXTURE_EVIDENCE_STORE: EvidenceStore = {
+  record: () => { throw new Error("unused"); },
+  list: () => [],
+  getByIds: ({ runId, ids }) => ids.map((id) => ({
+    id,
+    runId,
+    taskId: "architect",
+    actor: ARCHITECT,
+    status: "observed",
+    fact: {
+      kind: "browser_screenshot",
+      label: "legacy steering fixture",
+      capturedAt: "2026-08-27T00:00:00.000Z",
+      screenshotArtifactHash: "e".repeat(64),
+      mediaType: "image/png",
+      byteLength: 1,
+    },
+    createdAt: "2026-08-27T00:00:00.000Z",
+    idempotencyKey: `fixture:${id}`,
+  })),
+  close: () => undefined,
+};
 
 test("P3.1 durable guidance is idempotent, versioned, acknowledged once, and preserves objective bytes", () => {
   withStore((store, database) => {
@@ -66,7 +89,7 @@ test("P3.1 durable guidance is idempotent, versioned, acknowledged once, and pre
     assert.equal(existsSync(`${database}-wal`), true);
 
     store.close();
-    const reopened = new SqliteSchedulerStore(database);
+    const reopened = new SqliteSchedulerStore(database, { evidenceStore: FIXTURE_EVIDENCE_STORE });
     const projection = rebuildSchedulerProjection(reopened.readRun(RUN_ID));
     assert.equal(projection.initialObjective, "Build\nexactly\tthis application.");
     assert.equal(projection.userGuidance["guidance-1"].version, 1);
@@ -1164,7 +1187,7 @@ function withStore(run: (store: SqliteSchedulerStore, database: string) => void)
   const database = join(root, "scheduler.sqlite");
   let store: SqliteSchedulerStore | undefined;
   try {
-    store = new SqliteSchedulerStore(database);
+    store = new SqliteSchedulerStore(database, { evidenceStore: FIXTURE_EVIDENCE_STORE });
     run(store, database);
   } finally {
     if (store) {

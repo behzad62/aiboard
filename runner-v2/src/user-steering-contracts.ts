@@ -37,6 +37,51 @@ export interface ArchitectQuestionRequest {
   questionId: string;
   question: string;
   version: number;
+  decisionKind?: ArchitectQuestionDecisionKind;
+  checkpoint?: ArchitectActionCheckpoint;
+}
+
+export type ArchitectActionReason =
+  | { type: "plan_required" }
+  | { type: "acceptance_contract_upgrade_required" }
+  | { type: "user_guidance_required"; guidanceId: string; version: number }
+  | { type: "guidance_required"; requestId: string; taskId: string }
+  | { type: "review_required"; taskId: string; changeSetId: string }
+  | { type: "integration_approval_required"; taskId: string; changeSetId: string }
+  | { type: "completion_decision_required"; runPolicy?: "plan_only" }
+  | { type: "final_verification_plan_required"; integrationRevision: string }
+  | {
+      type: "final_verification_review_required";
+      taskId: string;
+      generationId: string;
+      submissionId: string;
+      targetRevision: string;
+    }
+  | {
+      type: "final_verification_repair_plan_required";
+      finalVerificationTaskId: string;
+      generationId: string;
+      targetRevision: string;
+      source:
+        | { type: "semantic_review"; submissionId: string; reviewId: string }
+        | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
+      failedCategories: string[];
+      evidenceIds: string[];
+    }
+  | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
+  | { type: "integration_resolution_required"; taskId: string };
+
+export type ArchitectQuestionDecisionKind =
+  | "authority_decision"
+  | "destructive_action"
+  | "requirement_conflict"
+  | "external_dependency"
+  | "control_weakening"
+  | "repair_budget_exhausted";
+
+export interface ArchitectActionCheckpoint {
+  reason: ArchitectActionReason;
+  sequence: number;
 }
 
 export interface ArchitectQuestionAnswer {
@@ -53,6 +98,12 @@ export interface UserGuidanceItem extends UserGuidanceSubmission {
 export interface ArchitectQuestionItem extends ArchitectQuestionRequest {
   status: "open" | "answered";
   answer?: string;
+  resumeStatus?: "pending" | "started" | "consumed" | "superseded";
+  resumeStartedSequence?: number;
+  resumeConsumedSequence?: number;
+  resumeSupersededSequence?: number;
+  supersededByGuidanceId?: string;
+  supersededRationale?: string;
 }
 
 export function parseUserGuidanceSubmission(payload: Record<string, unknown>): UserGuidanceSubmission {
@@ -74,11 +125,19 @@ export function parseUserGuidanceAcknowledgement(payload: Record<string, unknown
 }
 
 export function parseArchitectQuestionRequest(payload: Record<string, unknown>): ArchitectQuestionRequest {
-  assertExactKeys(payload, ["questionId", "question", "version"]);
+  assertExactKeys(payload, ["questionId", "question", "version", "decisionKind", "checkpoint"]);
+  const decisionKind = payload.decisionKind === undefined
+    ? undefined
+    : parseDecisionKind(payload.decisionKind);
+  const checkpoint = payload.checkpoint === undefined
+    ? undefined
+    : parseCheckpoint(payload.checkpoint);
   return {
     questionId: requiredText(payload, "questionId"),
     question: requiredText(payload, "question"),
     version: requiredPositiveInteger(payload, "version"),
+    ...(decisionKind ? { decisionKind } : {}),
+    ...(checkpoint ? { checkpoint } : {}),
   };
 }
 
@@ -111,6 +170,9 @@ function parseAcknowledgementResolution(value: unknown): ParsedUserGuidanceAckno
   if (type === "no_plan_change") {
     assertExactKeys(resolution, ["type", "rationale", "evidenceIds"]);
     const evidenceIds = requiredTextArray(resolution, "evidenceIds");
+    if (new Set(evidenceIds).size !== evidenceIds.length) {
+      throw new Error("evidenceIds must be unique.");
+    }
     return { type, rationale: requiredText(resolution, "rationale"), evidenceIds };
   }
   if (type === "plan_reconciled") {
@@ -146,5 +208,141 @@ function requiredPositiveInteger(payload: Record<string, unknown>, key: string):
     throw new Error(`${key} must be a positive integer.`);
   }
   return value as number;
+}
+
+function parseDecisionKind(value: unknown): ArchitectQuestionDecisionKind {
+  const allowed: ArchitectQuestionDecisionKind[] = [
+    "authority_decision",
+    "destructive_action",
+    "requirement_conflict",
+    "external_dependency",
+    "control_weakening",
+    "repair_budget_exhausted",
+  ];
+  if (typeof value !== "string" || !allowed.includes(value as ArchitectQuestionDecisionKind)) {
+    throw new Error("decisionKind is invalid.");
+  }
+  return value as ArchitectQuestionDecisionKind;
+}
+
+function parseCheckpoint(value: unknown): ArchitectActionCheckpoint {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("checkpoint is invalid.");
+  }
+  const checkpoint = value as Record<string, unknown>;
+  assertExactKeys(checkpoint, ["reason", "sequence"]);
+  if (
+    typeof checkpoint.reason !== "object" ||
+    checkpoint.reason === null ||
+    Array.isArray(checkpoint.reason) ||
+    !Number.isSafeInteger(checkpoint.sequence) ||
+    (checkpoint.sequence as number) < 1
+  ) {
+    throw new Error("checkpoint is invalid.");
+  }
+  return {
+    reason: parseArchitectActionReason(checkpoint.reason),
+    sequence: checkpoint.sequence as number,
+  };
+}
+
+export function parseArchitectActionReason(value: unknown): ArchitectActionReason {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Architect action reason is invalid.");
+  }
+  const reason = value as Record<string, unknown>;
+  const type = requiredText(reason, "type");
+  const exact = (keys: string[]) => assertExactKeys(reason, ["type", ...keys]);
+  const text = (key: string) => requiredText(reason, key);
+  switch (type) {
+    case "plan_required":
+    case "acceptance_contract_upgrade_required":
+      exact([]);
+      return { type };
+    case "user_guidance_required":
+      exact(["guidanceId", "version"]);
+      return { type, guidanceId: text("guidanceId"), version: requiredPositiveInteger(reason, "version") };
+    case "guidance_required":
+      exact(["requestId", "taskId"]);
+      return { type, requestId: text("requestId"), taskId: text("taskId") };
+    case "review_required":
+    case "integration_approval_required":
+      exact(["taskId", "changeSetId"]);
+      return { type, taskId: text("taskId"), changeSetId: text("changeSetId") };
+    case "completion_decision_required": {
+      exact(["runPolicy"]);
+      if (reason.runPolicy !== undefined && reason.runPolicy !== "plan_only") {
+        throw new Error("Architect action runPolicy is invalid.");
+      }
+      return { type, ...(reason.runPolicy === "plan_only" ? { runPolicy: "plan_only" as const } : {}) };
+    }
+    case "final_verification_plan_required":
+      exact(["integrationRevision"]);
+      return { type, integrationRevision: text("integrationRevision") };
+    case "final_verification_review_required":
+      exact(["taskId", "generationId", "submissionId", "targetRevision"]);
+      return {
+        type,
+        taskId: text("taskId"),
+        generationId: text("generationId"),
+        submissionId: text("submissionId"),
+        targetRevision: text("targetRevision"),
+      };
+    case "final_verification_repair_plan_required": {
+      exact(["finalVerificationTaskId", "generationId", "targetRevision", "source", "failedCategories", "evidenceIds"]);
+      const source = parseRepairSource(reason.source);
+      return {
+        type,
+        finalVerificationTaskId: text("finalVerificationTaskId"),
+        generationId: text("generationId"),
+        targetRevision: text("targetRevision"),
+        source,
+        failedCategories: requiredTextArray(reason, "failedCategories"),
+        evidenceIds: requiredTextArray(reason, "evidenceIds"),
+      };
+    }
+    case "task_failure_resolution_required":
+      exact(["taskId", "attempt", "failureReason"]);
+      return {
+        type,
+        taskId: text("taskId"),
+        attempt: requiredPositiveInteger(reason, "attempt"),
+        failureReason: text("failureReason"),
+      };
+    case "integration_resolution_required":
+      exact(["taskId"]);
+      return { type, taskId: text("taskId") };
+    default:
+      throw new Error(`Architect action reason ${type} is invalid.`);
+  }
+}
+
+function parseRepairSource(value: unknown): Extract<
+  ArchitectActionReason,
+  { type: "final_verification_repair_plan_required" }
+>["source"] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Architect repair source is invalid.");
+  }
+  const source = value as Record<string, unknown>;
+  const type = requiredText(source, "type");
+  if (type === "semantic_review") {
+    assertExactKeys(source, ["type", "submissionId", "reviewId"]);
+    return {
+      type,
+      submissionId: requiredText(source, "submissionId"),
+      reviewId: requiredText(source, "reviewId"),
+    };
+  }
+  if (type === "mechanical_failure") {
+    assertExactKeys(source, ["type", "failureId", "issueIds", "factIds"]);
+    return {
+      type,
+      failureId: requiredText(source, "failureId"),
+      issueIds: requiredTextArray(source, "issueIds"),
+      factIds: requiredTextArray(source, "factIds"),
+    };
+  }
+  throw new Error("Architect repair source is invalid.");
 }
 import type { PlanReconciliation } from "./task-contracts.js";

@@ -645,7 +645,7 @@ export class ControlServer {
 
   private syncBuildLifecycle(
     runId: string,
-    status: "progressed" | "paused" | "completed" | "idle",
+    status: "progressed" | "paused" | "completed" | "idle" | "blocked",
     completedProjection?: SchedulerProjection,
   ): void {
     let run;

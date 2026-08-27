@@ -145,6 +145,51 @@ test("Architect review context protects the immutable current submission descrip
   );
 });
 
+test("Architect context protects durable steering questions and their exact resume checkpoint", () => {
+  const pack = buildArchitectContext({
+    limits: { maxBytes: 8_000, maxEstimatedTokens: 4_000 },
+    objective: "Build the immutable original application.",
+    reason: { type: "plan_required" },
+    projection: {
+      runId: "run-question",
+      status: "running",
+      initialObjective: "Build the immutable original application.",
+      planRevision: 0,
+      tasks: {},
+      guidance: {},
+      userGuidance: {},
+      userGuidanceVersion: 0,
+      architectQuestions: {
+        "question-deploy": {
+          questionId: "question-deploy",
+          version: 1,
+          decisionKind: "authority_decision",
+          question: "Choose the authoritative deployment target.",
+          checkpoint: { reason: { type: "plan_required" }, sequence: 4 },
+          status: "answered",
+          answer: "Use the existing staging target.",
+          resumeStatus: "started",
+          resumeStartedSequence: 6,
+        },
+      },
+      architectQuestionVersion: 1,
+      reviews: {},
+      runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+      lastSequence: 6,
+    },
+    instructions: [],
+    skills: [],
+    memories: [],
+    evidence: [],
+    recentHistory: [],
+  });
+
+  assert.match(pack.text, /architectQuestions/);
+  assert.match(pack.text, /question-deploy/);
+  assert.match(pack.text, /resumeStartedSequence/);
+  assert.match(pack.text, /Build the immutable original application/);
+});
+
 test("same context inputs produce byte-identical packs", () => {
   const assembler = new ContextAssembler({ maxBytes: 1_000, maxEstimatedTokens: 1_000 });
   const sections = [
