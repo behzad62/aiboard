@@ -18,6 +18,7 @@ import {
   type AgentRuntimeCandidate,
 } from "../src/runtime-router.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import type {
   VerifierReviewProjection,
@@ -202,6 +203,59 @@ test("verifier receives complete revision-bound context in a separate read-only 
     assert.equal(session.actor.role, "verifier");
     assert.equal(session.actor.id, "google:verifier");
     assert.equal(session.status, "completed");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("verifier model calls and evidence inspections consume the governed run budget", async () => {
+  const fixture = createFixture("budget-attribution", [
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "inspect-evidence-1",
+        name: "inspect_evidence",
+        arguments: { taskId: "task_ui" },
+      }],
+      stopReason: "tool_calls",
+      usage: { inputTokens: 40, outputTokens: 8 },
+    },
+    {
+      blocks: [{ type: "text", text: "Evidence inspection complete." }],
+      stopReason: "end_turn",
+      usage: { inputTokens: 20, outputTokens: 4 },
+    },
+  ], TARGET_REVISION, undefined, false, true);
+  try {
+    const result = await fixture.runtime.inspect(
+      verifierRequest("run_budget_attribution"),
+    );
+    assert.equal(result.status, "inspected", JSON.stringify(result));
+    const budget = fixture.budgetLedger?.snapshot("run_budget_attribution");
+    assert.ok(budget);
+    assert.equal(budget.effective.modelCalls, 2);
+    assert.equal(budget.effective.toolCalls, 1);
+    const modelReservations = Object.values(budget.reservations).filter(
+      (reservation) => reservation.kind === "model",
+    );
+    assert.equal(modelReservations.length, 2);
+    assert.equal(
+      modelReservations.every(
+        (reservation) =>
+          reservation.attribution?.role === "verifier" &&
+          reservation.attribution.runtimeId === "google:verifier" &&
+          reservation.attribution.sessionId === result.sessionId,
+      ),
+      true,
+    );
+    assert.equal(
+      Object.values(budget.reservations).some(
+        (reservation) =>
+          reservation.kind === "tool" &&
+          reservation.reservationId.endsWith(":inspect-evidence-1"),
+      ),
+      true,
+    );
   } finally {
     fixture.close();
   }
@@ -400,6 +454,7 @@ function createFixture(
   returnedRevision = TARGET_REVISION,
   verdictAuthority?: VerifierVerdictAuthority,
   interruptAfterAssistantCheckpoint = false,
+  withBudget = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-native-verifier-${name}-`));
   const workspacePath = join(root, "workspace");
@@ -409,6 +464,11 @@ function createFixture(
     ? new InterruptingSessionStore(join(root, "sessions.sqlite"), artifacts)
     : new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
   const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const budgetLedger = withBudget
+    ? new SqliteBudgetLedger(join(root, "budget.sqlite"), {
+        limitsFor: () => ({ maxModelCalls: 10, maxToolCalls: 10 }),
+      })
+    : undefined;
   const model = new ScriptedModel(turns);
   const workspaceRequests: string[] = [];
   const workspaceManager = {
@@ -435,6 +495,7 @@ function createFixture(
     workspacePath,
     sessions,
     model,
+    budgetLedger,
     workspaceRequests,
     runtime: new NativeVerifierRuntime({
       router,
@@ -448,10 +509,12 @@ function createFixture(
       artifacts,
       evidenceStore,
       workspaceManager,
+      ...(budgetLedger ? { budgetLedger } : {}),
       ...(verdictAuthority ? { verdictAuthority } : {}),
       clock: () => "2026-08-27T00:00:00.000Z",
     }),
     close: () => {
+      budgetLedger?.close();
       sessions.close();
       evidenceStore.close();
       rmSync(root, { recursive: true, force: true });

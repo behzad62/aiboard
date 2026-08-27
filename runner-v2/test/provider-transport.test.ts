@@ -131,13 +131,14 @@ test("legacy provider configs infer billing conservatively", () => {
 
 test("explicit API billing fails closed without usable normal pricing", () => {
   const spec: NativeBuildSpec = {
-    version: 1,
+    version: 2,
     runId: "run_spoofed_pricing",
     projectId: "project_spoofed_pricing",
     objective: "Reject spoofed pricing",
     architectRuntimeId: "proxy:model",
     workerRuntimeIds: ["proxy:model"],
     verifierRuntimeIds: ["proxy:model"],
+    alwaysRequireIndependentVerifier: false,
     maxConcurrency: 1,
     permissionProfile: "full",
     runPolicy: "budgeted",
@@ -300,13 +301,14 @@ test("metered account-runner proxy keeps API billing and immutable pricing", () 
 
 test("Runner rejects USD-only runs with any unpriced selectable runtime", () => {
   const spec: NativeBuildSpec = {
-    version: 1,
+    version: 2,
     runId: "run_usd",
     projectId: "project",
     objective: "Enforce the configured budget.",
     architectRuntimeId: "api:priced",
     workerRuntimeIds: ["api:priced"],
     verifierRuntimeIds: ["api:priced"],
+    alwaysRequireIndependentVerifier: false,
     maxConcurrency: 1,
     permissionProfile: "full",
     runPolicy: "budgeted",

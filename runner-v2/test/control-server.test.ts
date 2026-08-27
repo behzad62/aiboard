@@ -286,6 +286,7 @@ test("control API stores provider credentials without returning secrets and prov
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
             verifierRuntimeIds: ["anthropic:claude-code"],
+            alwaysRequireIndependentVerifier: false,
             maxConcurrency: 2,
             runPolicy: "finish",
             budgetLimits: {},
@@ -296,13 +297,14 @@ test("control API stores provider credentials without returning secrets and prov
     assert.equal(create.status, 201);
     assert.equal(created.length, 1);
     assert.deepEqual(created[0], {
-      version: 1,
+      version: 2,
       runId: "run_native",
       projectId: "project_native",
       objective: "Build the requested feature.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
       verifierRuntimeIds: ["anthropic:claude-code"],
+      alwaysRequireIndependentVerifier: false,
       maxConcurrency: 2,
       permissionProfile: "full",
       runPolicy: "finish",
@@ -326,6 +328,7 @@ test("control API stores provider credentials without returning secrets and prov
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
             verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+            alwaysRequireIndependentVerifier: true,
             maxConcurrency: 1,
             runPolicy: "budgeted",
             budgetLimits: {
@@ -338,13 +341,14 @@ test("control API stores provider credentials without returning secrets and prov
     );
     assert.equal(createBudgeted.status, 201);
     assert.deepEqual(created[1], {
-      version: 1,
+      version: 2,
       runId: "run_budgeted",
       projectId: "project_native",
       objective: "Build within the selected window.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
       verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+      alwaysRequireIndependentVerifier: true,
       maxConcurrency: 1,
       permissionProfile: "guarded",
       runPolicy: "budgeted",
@@ -371,6 +375,7 @@ test("control API stores provider credentials without returning secrets and prov
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
             verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+            alwaysRequireIndependentVerifier: false,
             maxConcurrency: 1,
             runPolicy: "plan_only",
             budgetLimits: {},
@@ -380,13 +385,14 @@ test("control API stores provider credentials without returning secrets and prov
     );
     assert.equal(createPlanOnly.status, 201);
     assert.deepEqual(created[2], {
-      version: 1,
+      version: 2,
       runId: "run_plan_only",
       projectId: "project_native",
       objective: "Plan without implementation.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
       verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+      alwaysRequireIndependentVerifier: false,
       maxConcurrency: 1,
       permissionProfile: "guarded",
       runPolicy: "plan_only",
@@ -438,6 +444,7 @@ test("control API stores provider credentials without returning secrets and prov
               architectRuntimeId: "chatgpt:gpt-5.5",
               workerRuntimeIds: ["chatgpt:gpt-5.5"],
               verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+              alwaysRequireIndependentVerifier: false,
               maxConcurrency: 1,
               runPolicy: invalid.runPolicy,
               budgetLimits: invalid.budgetLimits,

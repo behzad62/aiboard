@@ -13,13 +13,14 @@ import {
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 
 const validSpec: NativeBuildSpec = {
-  version: 1,
+  version: 2,
   runId: "run_policy",
   projectId: "project_policy",
   objective: "Validate the native policy contract.",
   architectRuntimeId: "chatgpt:gpt-5.5",
   workerRuntimeIds: ["chatgpt:gpt-5.4"],
   verifierRuntimeIds: ["anthropic:claude-sonnet-4.5"],
+  alwaysRequireIndependentVerifier: false,
   maxConcurrency: 1,
   permissionProfile: "full",
   runPolicy: "budgeted",
@@ -27,6 +28,16 @@ const validSpec: NativeBuildSpec = {
   createdAt: "2026-07-12T00:00:00.000Z",
   idempotencyKey: "build-spec:run_policy",
 };
+
+test("P4 Build specs use a version boundary that older runners cannot accept", () => {
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, version: 2 } as NativeBuildSpec)
+  );
+  assert.throws(
+    () => validateBuildSpec({ ...validSpec, version: 1 } as unknown as NativeBuildSpec),
+    /unsupported Build spec version/i,
+  );
+});
 
 test("native Build specs enforce policy-specific limit shapes", () => {
   assert.doesNotThrow(() => validateBuildSpec(validSpec));
@@ -72,6 +83,13 @@ test("native Build specs enforce policy-specific limit shapes", () => {
   assert.throws(
     () => validateBuildSpec({ ...validSpec, verifierRuntimeIds: [" "] }),
     /verifier runtime/i
+  );
+  assert.throws(
+    () => validateBuildSpec({
+      ...validSpec,
+      alwaysRequireIndependentVerifier: "yes" as unknown as boolean,
+    }),
+    /independent verifier qualification/i
   );
   assert.throws(
     () =>
@@ -121,13 +139,14 @@ test("native Build specs recover exactly and idempotently", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-"));
   const database = join(root, "build-specs.sqlite");
   const spec = {
-    version: 1 as const,
+    version: 2 as const,
     runId: "run_1",
     projectId: "project_1",
     objective: "Build a reliable application.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.4", "chatgpt:gpt-5.5"],
     verifierRuntimeIds: ["anthropic:claude-sonnet-4.5"],
+    alwaysRequireIndependentVerifier: true,
     maxConcurrency: 2,
     permissionProfile: "full" as const,
     runPolicy: "budgeted" as const,
@@ -195,7 +214,9 @@ test("P3-era Build specs migrate durable verifier candidates without changing po
     try {
       assert.deepEqual(store.get(p3Spec.runId), {
         ...p3Spec,
+        version: 2,
         verifierRuntimeIds: p3Spec.workerRuntimeIds,
+        alwaysRequireIndependentVerifier: false,
       });
     } finally {
       store.close();
@@ -208,7 +229,9 @@ test("P3-era Build specs migrate durable verifier candidates without changing po
     persistedDatabase.close();
     assert.deepEqual(JSON.parse(persisted.spec_json), {
       ...p3Spec,
+      version: 2,
       verifierRuntimeIds: p3Spec.workerRuntimeIds,
+      alwaysRequireIndependentVerifier: false,
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -255,9 +278,11 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
     try {
       assert.deepEqual(store.get(legacySpec.runId), {
         ...legacySpec,
+        version: 2,
         runPolicy: "finish",
         budgetLimits: {},
         verifierRuntimeIds: legacySpec.workerRuntimeIds,
+        alwaysRequireIndependentVerifier: false,
       });
     } finally {
       store.close();
@@ -266,9 +291,11 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
     try {
       assert.deepEqual(store.get(legacySpec.runId), {
         ...legacySpec,
+        version: 2,
         runPolicy: "finish",
         budgetLimits: {},
         verifierRuntimeIds: legacySpec.workerRuntimeIds,
+        alwaysRequireIndependentVerifier: false,
       });
       const persistedDatabase = new DatabaseSync(database);
       const persisted = persistedDatabase
@@ -277,9 +304,11 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
       persistedDatabase.close();
       assert.deepEqual(JSON.parse(persisted.spec_json), {
         ...legacySpec,
+        version: 2,
         runPolicy: "finish",
         budgetLimits: {},
         verifierRuntimeIds: legacySpec.workerRuntimeIds,
+        alwaysRequireIndependentVerifier: false,
       });
     } finally {
       store.close();

@@ -139,6 +139,8 @@ export type IndependentVerifierResult =
 
 export interface IndependentVerifierDriver {
   candidateRuntimeIds: readonly string[];
+  /** Optional only for legacy/test drivers; production always supplies it. */
+  alwaysRequireIndependentVerifier?: boolean;
   assessRisk(input: {
     runId: string;
     projection: SchedulerProjection;
@@ -1043,7 +1045,12 @@ export class BuildRuntime {
       !risk || risk.state !== "current" ||
       risk.targetRevision !== targetRevision
     ) {
-      const input = await driver.assessRisk({ runId: this.runId, projection });
+      const assessed = await driver.assessRisk({ runId: this.runId, projection });
+      const input: BuildRiskAssessmentInput = {
+        ...assessed,
+        stricterQualification:
+          driver.alwaysRequireIndependentVerifier === true,
+      };
       projection = this.projection();
       if (
         projection.integrationRevision !== targetRevision ||
@@ -1468,6 +1475,31 @@ export class BuildRuntime {
 
   private configureVerifierPolicy(): void {
     if (!this.independentVerifier || this.runPolicy === "plan_only") return;
+    const expected = {
+      mode: "risk_based" as const,
+      candidateRuntimeIds: [...this.independentVerifier.candidateRuntimeIds],
+      alwaysRequireIndependentVerifier:
+        this.independentVerifier.alwaysRequireIndependentVerifier === true,
+    };
+    const recovered = this.projection().verifierPolicy;
+    if (recovered) {
+      if (
+        recovered.mode !== expected.mode ||
+        recovered.alwaysRequireIndependentVerifier !==
+          expected.alwaysRequireIndependentVerifier ||
+        recovered.candidateRuntimeIds.length !==
+          expected.candidateRuntimeIds.length ||
+        recovered.candidateRuntimeIds.some(
+          (runtimeId, index) =>
+            runtimeId !== expected.candidateRuntimeIds[index],
+        )
+      ) {
+        throw new Error(
+          "Scheduler independent verifier policy is already configured differently.",
+        );
+      }
+      return;
+    }
     this.store.append({
       runId: this.runId,
       type: "verifier.policy_configured",
@@ -1475,8 +1507,7 @@ export class BuildRuntime {
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: "verifier-policy-configured",
       payload: {
-        mode: "risk_based",
-        candidateRuntimeIds: [...this.independentVerifier.candidateRuntimeIds],
+        ...expected,
       },
     });
   }

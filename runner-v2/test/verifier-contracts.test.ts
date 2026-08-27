@@ -452,6 +452,31 @@ test("low-risk current assessment permits completion without an independent verd
   }
 });
 
+test("strict qualification durably raises an otherwise low-risk build", () => {
+  const fixture = createFixture("strict-qualification");
+  try {
+    appendVerifierPolicy(fixture.store, true);
+    assert.throws(
+      () => appendRiskAssessment(fixture.store, lowRiskInput(), "risk:weakened"),
+      /qualification.*policy|policy.*qualification/i,
+    );
+    const strictInput = {
+      ...lowRiskInput(),
+      stricterQualification: true,
+    };
+    appendRiskAssessment(fixture.store, strictInput, "risk:strict");
+    const projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(
+      projection.verifierPolicy?.alwaysRequireIndependentVerifier,
+      true,
+    );
+    assert.equal(projection.buildRisk?.current?.assessment.risk, "high");
+    assert.equal(buildCompletionReadiness(projection).ready, false);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("negative verifier verdict remains a completion blocker", () => {
   const fixture = createFixture("negative-completion");
   try {
@@ -1290,10 +1315,14 @@ function requestReviewFor(
   });
 }
 
-function appendVerifierPolicy(store: SqliteSchedulerStore): void {
+function appendVerifierPolicy(
+  store: SqliteSchedulerStore,
+  alwaysRequireIndependentVerifier = false,
+): void {
   store.append(event("verifier.policy_configured", "verifier:policy", {
     mode: "risk_based",
     candidateRuntimeIds: ["google:verifier"],
+    alwaysRequireIndependentVerifier,
   }));
 }
 

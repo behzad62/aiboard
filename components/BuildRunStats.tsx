@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { AlertTriangle, BarChart3, GitBranch } from "lucide-react";
 import { buildRunWorkflowStatus } from "@/lib/client/discussion-live-state";
 import { formatTokenCount } from "@/lib/client/token-usage";

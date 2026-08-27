@@ -27,13 +27,14 @@ import {
 } from "./support/final-verification-profile.js";
 
 const spec: NativeBuildSpec = {
-  version: 1,
+  version: 2,
   runId: "run_1",
   projectId: "project_1",
   objective: "Build a reliable application.",
   architectRuntimeId: "chatgpt:gpt-5.5",
   workerRuntimeIds: ["chatgpt:gpt-5.4"],
   verifierRuntimeIds: ["chatgpt:gpt-5.4"],
+  alwaysRequireIndependentVerifier: false,
   maxConcurrency: 1,
   permissionProfile: "full",
   runPolicy: "budgeted",
@@ -2679,11 +2680,25 @@ test("configured usage marks an Architect-only capability mismatch unavailable",
     capabilities: ["vision"],
     priority: 1,
   }, spec);
+  const verifier = configuredModelUsageRuntime({
+    runtimeId: "google:verifier-only",
+    providerId: "google",
+    modelId: "verifier-only",
+    transport: "google",
+    secret: "verifier-secret",
+    capabilities: ["code"],
+    priority: 2,
+  }, {
+    ...spec,
+    verifierRuntimeIds: ["google:verifier-only"],
+  });
 
   assert.deepEqual(architect.roles, ["architect"]);
   assert.equal(architect.selectable, false);
-  assert.deepEqual(worker.roles, ["worker"]);
+  assert.deepEqual(worker.roles, ["worker", "verifier"]);
   assert.equal(worker.selectable, true);
+  assert.deepEqual(verifier.roles, ["verifier"]);
+  assert.equal(verifier.selectable, true);
 });
 
 function emptyBudget(scopeId: string) {
@@ -2868,6 +2883,11 @@ function requestedHandoffProjection(
               decision: "approved",
               summary: "All final-verification categories are approved.",
               targetRevision: revision,
+              architectRisk: {
+                risk: "low",
+                rationale: "No semantic high-risk condition applies.",
+                source: "architect",
+              },
               categoryReviews: plan.checks.map((check) => ({
                 category: check.category,
                 verdict: "approved" as const,

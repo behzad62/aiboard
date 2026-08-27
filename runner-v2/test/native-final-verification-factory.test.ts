@@ -72,13 +72,14 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
   let scheduler: SqliteSchedulerStore | undefined;
   try {
     handle = await factory.create({
-      version: 1,
+      version: 2,
       runId,
       projectId: "fixture-project",
       objective: "Verify a real application.",
       architectRuntimeId: config.runtimeId,
       workerRuntimeIds: [config.runtimeId],
       verifierRuntimeIds: [config.runtimeId],
+      alwaysRequireIndependentVerifier: false,
       maxConcurrency: 1,
       permissionProfile: "full",
       runPolicy: "finish",

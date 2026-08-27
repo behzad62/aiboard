@@ -279,6 +279,11 @@ export interface FinalVerificationReviewDecisionProjection {
   decision: "approved" | "repair_required";
   summary: string;
   targetRevision: string;
+  architectRisk: {
+    risk: "low" | "high";
+    rationale?: string;
+    source: "architect" | "legacy_default";
+  };
   categoryReviews: FinalVerificationCategoryReviewProjection[];
   failedCategories: FinalVerificationCategory[];
 }
@@ -377,6 +382,7 @@ export interface FinalVerificationProjection {
 export interface VerifierPolicyProjection {
   mode: "risk_based";
   candidateRuntimeIds: string[];
+  alwaysRequireIndependentVerifier: boolean;
 }
 
 export interface BuildRiskAssessmentProjection {
@@ -2777,7 +2783,18 @@ function parseVerifierPolicy(
       "Independent verifier policy requires unique non-empty candidate runtime IDs.",
     );
   }
-  return { mode: "risk_based", candidateRuntimeIds };
+  const strict = payload.alwaysRequireIndependentVerifier;
+  if (strict !== undefined && typeof strict !== "boolean") {
+    throw new Error(
+      "Independent verifier qualification policy must be a boolean.",
+    );
+  }
+  return {
+    mode: "risk_based",
+    candidateRuntimeIds,
+    // Events written before P4.6 had only risk-based candidate selection.
+    alwaysRequireIndependentVerifier: strict === true,
+  };
 }
 
 function recordBuildRiskAssessment(
@@ -2807,6 +2824,14 @@ function recordBuildRiskAssessment(
     );
   }
   const input = parseBuildRiskAssessmentInput(payload.input);
+  if (
+    input.stricterQualification !==
+      projection.verifierPolicy.alwaysRequireIndependentVerifier
+  ) {
+    throw new Error(
+      "Build-risk qualification conflicts with the durable verifier policy.",
+    );
+  }
   const assessment = assessBuildRisk(input);
   if (!sameValue(payload.assessment, assessment)) {
     throw new Error(
@@ -3655,6 +3680,25 @@ function parseFinalVerificationReviewDecision(
     throw new Error("Structured final verification review decision is invalid.");
   }
   const summary = requiredString(payload, "summary");
+  const rawArchitectRisk = payload.architectRisk;
+  const rawArchitectRiskRationale = payload.architectRiskRationale;
+  const architectRisk: FinalVerificationReviewDecisionProjection["architectRisk"] =
+    rawArchitectRisk === undefined && rawArchitectRiskRationale === undefined
+      ? {
+          risk: "low" as const,
+          source: "legacy_default" as const,
+        }
+      : rawArchitectRisk === "low" || rawArchitectRisk === "high"
+        ? {
+            risk: rawArchitectRisk,
+            rationale: requiredString(payload, "architectRiskRationale"),
+            source: "architect" as const,
+          }
+        : (() => {
+            throw new Error(
+              "Final verification review Architect risk declaration is invalid.",
+            );
+          })();
   if (!Array.isArray(payload.categoryReviews)) {
     throw new Error("Final verification review requires category reviews.");
   }
@@ -3711,6 +3755,7 @@ function parseFinalVerificationReviewDecision(
     decision,
     summary,
     targetRevision: current.targetRevision,
+    architectRisk,
     categoryReviews: categoryReviews.map((review) => ({
       ...review,
       evidenceIds: [...review.evidenceIds],

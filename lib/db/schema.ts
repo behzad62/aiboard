@@ -51,7 +51,7 @@ export interface BuildUsageModelTotal {
   modelId: string;
   modelName: string;
   providerId: string;
-  roles?: Array<"architect" | "worker" | "subagent">;
+  roles?: Array<"architect" | "worker" | "subagent" | "verifier">;
   status?: "healthy" | "cooldown" | "unavailable" | "unused";
   calls: number;
   inputTokens: number;
@@ -290,6 +290,7 @@ export interface UserSettings {
   defaultBuildSkillMode?: BuildSkillMode;
   defaultBuildBudgetUsd?: number;
   defaultBuildTimeLimitMinutes?: number;
+  defaultBuildAlwaysRequireIndependentVerifier?: boolean;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
   modelContextOverrides?: ModelContextOverrides;
 }
@@ -352,6 +353,7 @@ export interface Discussion {
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
+  buildAlwaysRequireIndependentVerifier?: boolean;
   buildStopReason?: BuildStopReason | null;
   buildStoppedAt?: string | null;
   currentRound: number;

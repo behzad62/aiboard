@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
+import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { BuildNoteDraftField } from "../components/BuildNoteDraftField";

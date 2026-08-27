@@ -12,6 +12,7 @@ import {
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
+  selectNativeVerifierRuntime,
   submitNativeBuildUserGuidance,
   answerNativeArchitectQuestion,
   NativeRunnerError,
@@ -258,6 +259,7 @@ await createNativeBuild(connection, {
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.5"],
     verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+    alwaysRequireIndependentVerifier: true,
     maxConcurrency: 2,
     runPolicy: "budgeted",
     budgetLimits: {
@@ -286,6 +288,14 @@ await answerNativeArchitectQuestion(
     answer: "Use the documented public contract.",
     idempotencyKey: "answer:1",
   },
+  fetchImpl,
+  requestController.signal,
+);
+await selectNativeVerifierRuntime(
+  connection,
+  "run_1",
+  "google:verifier",
+  "verifier:google",
   fetchImpl,
   requestController.signal,
 );
@@ -552,11 +562,16 @@ assert.deepEqual(JSON.parse(String(calls[2].init.body)).build.budgetLimits, {
 });
 assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/user-guidance");
 assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/architect-questions/question-1/answer");
-assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
-assert.equal(JSON.parse(String(calls[5].init.body)).choice, "keep_integration_branch");
-assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
-assert.equal(calls[7].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
-assert.equal(calls[8].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
+assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/verifier-handoff");
+assert.deepEqual(JSON.parse(String(calls[5].init.body)), {
+  runtimeId: "google:verifier",
+  idempotencyKey: "verifier:google",
+});
+assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
+assert.equal(JSON.parse(String(calls[6].init.body)).choice, "keep_integration_branch");
+assert.equal(calls[7].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
+assert.equal(calls[8].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
+assert.equal(calls[9].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
 
 const recoveryFetch: typeof fetch = async (input) => {
   const url = String(input);

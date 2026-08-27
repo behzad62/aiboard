@@ -139,6 +139,8 @@ interface ReviewFinalVerificationInput {
   attempt: number;
   decision: "approved" | "repair_required";
   summary: string;
+  architectRisk: "low" | "high";
+  architectRiskRationale: string;
   categoryReviews: FinalVerificationCategoryReviewInput[];
 }
 interface VerificationRepairTaskInput {
@@ -665,6 +667,8 @@ function reviewFinalVerificationTool(
       attempt: { type: "integer", minimum: 1 },
       decision: { type: "string", enum: ["approved", "repair_required"] },
       summary: { type: "string", minLength: 1 },
+      architectRisk: { type: "string", enum: ["low", "high"] },
+      architectRiskRationale: { type: "string", minLength: 1 },
       categoryReviews: {
         type: "array",
         minItems: FINAL_VERIFICATION_CATEGORIES.length,
@@ -687,6 +691,8 @@ function reviewFinalVerificationTool(
       "attempt",
       "decision",
       "summary",
+      "architectRisk",
+      "architectRiskRationale",
       "categoryReviews",
     ]),
     validate: validateFinalVerificationReview,
@@ -827,6 +833,8 @@ function validateFinalVerificationReview(
       !positiveInteger(value.attempt) ||
       (value.decision !== "approved" && value.decision !== "repair_required") ||
       !nonEmpty(value.summary) ||
+      (value.architectRisk !== "low" && value.architectRisk !== "high") ||
+      !nonEmpty(value.architectRiskRationale) ||
       !Array.isArray(value.categoryReviews)
     ) return null;
     const categoryReviews: FinalVerificationCategoryReviewInput[] = [];
@@ -869,6 +877,8 @@ function validateFinalVerificationReview(
       attempt: value.attempt,
       decision: value.decision,
       summary: value.summary,
+      architectRisk: value.architectRisk,
+      architectRiskRationale: value.architectRiskRationale,
       categoryReviews: canonicalCategoryReviews,
     };
   }, "current final verification identity, decision, summary, and exactly one valid review per category are required");
@@ -881,6 +891,9 @@ function sameSemanticReview(
   return decision.decision === input.decision &&
     decision.summary === input.summary &&
     decision.targetRevision === input.targetRevision &&
+    decision.architectRisk.risk === input.architectRisk &&
+    decision.architectRisk.rationale === input.architectRiskRationale &&
+    decision.architectRisk.source === "architect" &&
     JSON.stringify(decision.categoryReviews) === JSON.stringify(input.categoryReviews);
 }
 

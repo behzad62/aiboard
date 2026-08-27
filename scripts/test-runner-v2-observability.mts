@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   filterRunnerObservability,
+  IndependentVerifierManifest,
   runnerAcceptanceContractSummary,
   runnerBuildControlSummary,
   runnerEvidenceDiagnosticDetail,
@@ -12,7 +15,11 @@ import {
   runnerVerificationTone,
 } from "../components/RunnerV2ObservabilityPanel";
 import { nativeBuildActivityEntries } from "../lib/client/native-build-activity";
-import type { NativeBuildObservability, NativeBuildProjection } from "../lib/client/runner-v2";
+import type {
+  NativeBuildObservability,
+  NativeBuildProjection,
+  NativeIndependentVerifierObservability,
+} from "../lib/client/runner-v2";
 
 const activity = nativeBuildActivityEntries("run_1", [
   {
@@ -400,6 +407,163 @@ assert.deepEqual(problemKeys(observability, {
   status: "paused",
 }), ["run:paused"]);
 
+const verifierSnapshot = {
+  ...observability,
+  independentVerifier: {
+    policy: {
+      mode: "risk_based",
+      candidateRuntimeIds: ["google:verifier"],
+      alwaysRequireIndependentVerifier: false,
+    },
+    risk: {
+      current: {
+        targetRevision: "revision-current",
+        state: "current",
+        risk: "high",
+        architectDeclaration: "high",
+        architectRationale: "Authentication behavior changed.",
+        architectRiskSource: "architect",
+        stricterQualification: false,
+        kernelFacts: {
+          destructiveEffects: false,
+          credentialEffects: false,
+          externalWriteEffects: false,
+          integrationConflict: false,
+          changedPaths: ["src/auth/session.ts"],
+        },
+        reasons: [{
+          code: "security_auth_crypto_path",
+          evidence: ["src/auth/session.ts"],
+        }],
+        normalizedChangedPaths: ["src/auth/session.ts"],
+        assessedAt: "2026-08-27T01:00:00.000Z",
+      },
+      history: [],
+    },
+    selection: {
+      status: "selected",
+      reason: "A distinct verifier is required.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+      selectedRuntimeId: "google:verifier",
+    },
+    review: {
+      current: {
+        reviewId: "review-current",
+        targetRevision: "revision-current",
+        finalVerificationGenerationId: "generation-current",
+        runtime: {
+          runtimeId: "google:verifier",
+          providerId: "google",
+          modelId: "verifier",
+          modelIdentity: "verifier",
+          sessionId: "verifier:run:1",
+        },
+        excludedModels: [{
+          source: "architect",
+          runtimeId: "openai:architect",
+          modelIdentity: "architect",
+        }],
+        criteria: [{ taskId: "T1", criterionId: "behavior" }],
+        status: "submitted",
+        state: "current",
+        requestedAt: "2026-08-27T01:00:01.000Z",
+        repairTaskIds: ["repair:behavior"],
+        verdict: {
+          reviewId: "review-current",
+          targetRevision: "revision-current",
+          sessionId: "verifier:run:1",
+          satisfied: false,
+          criterionVerdicts: [{
+            taskId: "T1",
+            criterionId: "behavior",
+            verdict: "unsatisfied",
+            rationale: "The authentication flow still fails.",
+            evidenceIds: ["evidence_auth_failure"],
+          }],
+          submittedAt: "2026-08-27T01:00:02.000Z",
+        },
+      },
+      history: [{
+        reviewId: "review-stale",
+        targetRevision: "revision-stale",
+        finalVerificationGenerationId: "generation-stale",
+        runtime: {
+          runtimeId: "old:verifier",
+          providerId: "old",
+          modelId: "old-verifier",
+          modelIdentity: "old-verifier",
+          sessionId: "verifier:old:1",
+        },
+        excludedModels: [{
+          source: "architect",
+          runtimeId: "openai:architect",
+          modelIdentity: "architect",
+        }],
+        criteria: [{ taskId: "T1", criterionId: "behavior" }],
+        status: "submitted",
+        state: "invalidated",
+        requestedAt: "2026-08-27T00:00:00.000Z",
+        verdict: {
+          reviewId: "review-stale",
+          targetRevision: "revision-stale",
+          sessionId: "verifier:old:1",
+          satisfied: true,
+          criterionVerdicts: [{
+            taskId: "T1",
+            criterionId: "behavior",
+            verdict: "satisfied",
+            rationale: "Stale approval must stay historical.",
+            evidenceIds: ["evidence_stale"],
+          }],
+          submittedAt: "2026-08-27T00:00:01.000Z",
+        },
+      }],
+    },
+  },
+} as unknown as NativeBuildObservability;
+const verifierView = runnerUserFacingObservability(
+  verifierSnapshot,
+  { ...projectionWithoutHandoff, integrationRevision: "revision-current" },
+);
+assert.ok(
+  verifierView.problems.some((problem) => problem.key === "verifier:repair"),
+);
+assert.doesNotMatch(JSON.stringify(verifierView), /Stale approval/);
+
+const verifierSelectionView = runnerUserFacingObservability({
+  ...verifierSnapshot,
+  independentVerifier: {
+    ...verifierSnapshot.independentVerifier,
+    selection: {
+      status: "required",
+      reason: "No compatible independent verifier is available.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+    },
+    review: { history: [] },
+  },
+}, { ...projectionWithoutHandoff, status: "paused" });
+assert.ok(
+  verifierSelectionView.problems.some(
+    (problem) => problem.key === "verifier:selection",
+  ),
+);
+
+const pendingRiskMarkup = renderToStaticMarkup(
+  createElement(IndependentVerifierManifest, {
+    verifier: {
+      ...verifierSnapshot.independentVerifier,
+      risk: { history: [] },
+      selection: undefined,
+      review: { history: [] },
+    } as unknown as NativeIndependentVerifierObservability,
+    projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
+  }),
+);
+assert.match(pendingRiskMarkup, /Risk assessment pending/i);
+assert.doesNotMatch(pendingRiskMarkup, /current low-risk revision/i);
+
 const cooldownNow = 2_000;
 assert.equal(runnerNextCooldownExpiry([{
   providerId: "chatgpt",
@@ -601,6 +765,10 @@ for (const copy of [
   "Acceptance contract",
   "Evidence submitted",
   "Architect verdict",
+  "Independent verification",
+  "Build risk",
+  "Verifier verdict",
+  "High-risk builds always require an independent verifier.",
   "Evidence is mechanical; Architect verdict is semantic.",
   "Problems requiring attention",
   "<details",

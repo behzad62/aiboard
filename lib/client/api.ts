@@ -359,6 +359,7 @@ export interface DiscussionConfigInput {
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
+  buildAlwaysRequireIndependentVerifier?: boolean;
 }
 
 export function minimumParticipatingModelsForMode(mode: DiscussionMode): number {
@@ -422,11 +423,16 @@ export function updateDiscussionConfig(
       buildBudgetUsd: input.buildBudgetUsd ?? discussion.buildBudgetUsd,
       buildTimeLimitMinutes:
         input.buildTimeLimitMinutes ?? discussion.buildTimeLimitMinutes,
+      buildAlwaysRequireIndependentVerifier:
+        input.buildAlwaysRequireIndependentVerifier ??
+        discussion.buildAlwaysRequireIndependentVerifier,
     });
     patch.buildRunPolicy = buildSettings.runPolicy;
     patch.buildSkillMode = buildSettings.skillMode;
     patch.buildBudgetUsd = buildSettings.budgetUsd;
     patch.buildTimeLimitMinutes = buildSettings.timeLimitMinutes;
+    patch.buildAlwaysRequireIndependentVerifier =
+      buildSettings.alwaysRequireIndependentVerifier;
   }
   updateDiscussion(id, patch);
   return { ...discussion, ...patch };
@@ -495,6 +501,7 @@ export interface CreateDiscussionInput {
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
+  buildAlwaysRequireIndependentVerifier?: boolean;
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
@@ -511,6 +518,9 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     buildBudgetUsd: input.buildBudgetUsd ?? settings.defaultBuildBudgetUsd,
     buildTimeLimitMinutes:
       input.buildTimeLimitMinutes ?? settings.defaultBuildTimeLimitMinutes,
+    buildAlwaysRequireIndependentVerifier:
+      input.buildAlwaysRequireIndependentVerifier ??
+      settings.defaultBuildAlwaysRequireIndependentVerifier,
   });
   const now = new Date().toISOString();
   const id = uuidv4();
@@ -544,6 +554,10 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,
     buildTimeLimitMinutes:
       input.mode === "build" ? buildSettings.timeLimitMinutes : undefined,
+    buildAlwaysRequireIndependentVerifier:
+      input.mode === "build"
+        ? buildSettings.alwaysRequireIndependentVerifier
+        : undefined,
     buildStopReason: null,
     buildStoppedAt: null,
     createdAt: now,

@@ -141,6 +141,7 @@ import {
   getNativeRunnerHealth,
   resolveNativeBuildRunId,
   selectNativeArchitectHandoff,
+  selectNativeVerifierRuntime,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeBuildObservability,
@@ -277,6 +278,11 @@ function DiscussionPageInner() {
     useState<BuildToolReviewReport | null>(null);
   const [architectHandoff, setArchitectHandoff] = useState<{
     reason: string;
+    candidateRuntimeIds: string[];
+  } | null>(null);
+  const [verifierSelection, setVerifierSelection] = useState<{
+    reason: string;
+    requiredCapabilities: string[];
     candidateRuntimeIds: string[];
   } | null>(null);
   const [projectHandoff, setProjectHandoff] = useState<{
@@ -564,6 +570,13 @@ function DiscussionPageInner() {
         case "architect_handoff_required":
           setArchitectHandoff({
             reason: event.reason,
+            candidateRuntimeIds: [...event.candidateRuntimeIds],
+          });
+          break;
+        case "verifier_selection_required":
+          setVerifierSelection({
+            reason: event.reason,
+            requiredCapabilities: [...event.requiredCapabilities],
             candidateRuntimeIds: [...event.candidateRuntimeIds],
           });
           break;
@@ -1074,6 +1087,7 @@ function DiscussionPageInner() {
         setNativeProjection(projection);
         setNativeObservability(observability);
         setArchitectHandoff(handoffs.architect);
+        setVerifierSelection(handoffs.verifier);
         setProjectHandoff(handoffs.project);
         setBuildTasks(
           Object.values(projection.tasks).map((task) => ({
@@ -1314,6 +1328,32 @@ function DiscussionPageInner() {
         handoffError instanceof Error
           ? handoffError.message
           : "Could not select the Architect runtime."
+      );
+    }
+  };
+
+  const handleVerifierSelection = async (runtimeId: string) => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    try {
+      const projection = await selectNativeVerifierRuntime(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId,
+        runtimeId,
+        `verifier-handoff:${discussion.nativeBuildRunId}:${runtimeId}`,
+      );
+      setNativeProjection(projection);
+      setVerifierSelection(null);
+      setError(null);
+      nativeAttachmentControllerRef.current?.wake();
+    } catch (selectionError) {
+      setError(
+        selectionError instanceof Error
+          ? selectionError.message
+          : "Could not select the independent verifier runtime."
       );
     }
   };
@@ -1799,7 +1839,11 @@ function DiscussionPageInner() {
                     <Button
                       size="sm"
                       onClick={handleResume}
-                      disabled={projectHandoff !== null}
+                      disabled={
+                        projectHandoff !== null ||
+                        architectHandoff !== null ||
+                        verifierSelection !== null
+                      }
                       title="Continue from where the run failed — already-generated responses are kept"
                     >
                       <Play className="mr-1 h-3.5 w-3.5" />
@@ -2173,6 +2217,36 @@ function DiscussionPageInner() {
             discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
           }
         />
+      )}
+
+      {discussion.mode === "build" && verifierSelection && (
+        <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          <div>
+            <p className="font-medium">Choose an independent verifier to continue</p>
+            <p className="mt-1 text-xs opacity-80">{verifierSelection.reason}</p>
+            {verifierSelection.requiredCapabilities.length > 0 && (
+              <p className="mt-1 text-xs opacity-75">
+                Required capabilities: {verifierSelection.requiredCapabilities.join(", ")}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {verifierSelection.candidateRuntimeIds.map((runtimeId) => (
+              <Button
+                key={runtimeId}
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleVerifierSelection(runtimeId)}
+              >
+                {getModelDisplayName(runtimeId)}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs opacity-75">
+            The selected model must remain distinct from the Architect and every accepted change author.
+          </p>
+        </div>
       )}
 
       {discussion.mode === "build" && architectHandoff && (

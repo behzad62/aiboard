@@ -84,6 +84,7 @@ interface CreateRunBody {
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     verifierRuntimeIds: string[];
+    alwaysRequireIndependentVerifier: boolean;
     maxConcurrency: number;
     runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
@@ -356,13 +357,15 @@ export class ControlServer {
             throw new HttpError(503, "native_build_unavailable", "Native Build provisioning is unavailable.");
           }
           await this.buildProvisioner.create({
-            version: 1,
+            version: 2,
             runId: body.runId,
             projectId: body.build.projectId,
             objective: body.build.objective,
             architectRuntimeId: body.build.architectRuntimeId,
             workerRuntimeIds: [...body.build.workerRuntimeIds],
             verifierRuntimeIds: [...body.build.verifierRuntimeIds],
+            alwaysRequireIndependentVerifier:
+              body.build.alwaysRequireIndependentVerifier,
             maxConcurrency: body.build.maxConcurrency,
             permissionProfile: body.permissionProfile,
             runPolicy: body.build.runPolicy,
@@ -1070,6 +1073,7 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     ) ||
     new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
   ) invalidBody();
+  if (typeof body.alwaysRequireIndependentVerifier !== "boolean") invalidBody();
   if (!Number.isSafeInteger(body.maxConcurrency) || body.maxConcurrency < 1) {
     invalidBody();
   }

@@ -125,11 +125,32 @@ assert.deepEqual(
   } as never),
   {
     architect: null,
+    verifier: null,
     project: {
       summary: "Ready",
       options: ["keep_integration_branch", "apply_to_project"],
     },
   }
+);
+assert.deepEqual(
+  durableBuildHandoffPanels({
+    verifierSelection: {
+      status: "required",
+      reason: "Choose a distinct verifier.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+    },
+    runtime: { architect: {} },
+  } as never),
+  {
+    architect: null,
+    verifier: {
+      reason: "Choose a distinct verifier.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+    },
+    project: null,
+  },
 );
 const automaticHandoffProjection = {
   runPolicy: "finish",

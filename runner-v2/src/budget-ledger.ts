@@ -359,7 +359,12 @@ export function modelCallAttribution(value: unknown): ModelCallAttribution {
   }
   const input = value as Record<string, unknown>;
   const role = requiredString(input, "role");
-  if (role !== "architect" && role !== "worker" && role !== "subagent") {
+  if (
+    role !== "architect" &&
+    role !== "worker" &&
+    role !== "subagent" &&
+    role !== "verifier"
+  ) {
     throw new Error(`Invalid model call role ${role}.`);
   }
   return {

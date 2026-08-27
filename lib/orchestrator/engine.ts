@@ -227,6 +227,12 @@ export type OrchestratorEvent =
       candidateRuntimeIds: string[];
     }
   | {
+      type: "verifier_selection_required";
+      reason: string;
+      requiredCapabilities: string[];
+      candidateRuntimeIds: string[];
+    }
+  | {
       type: "project_handoff_required";
       summary: string;
       options: Array<"keep_integration_branch" | "apply_to_project">;

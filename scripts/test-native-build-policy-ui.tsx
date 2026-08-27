@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { BuildRunPolicyControl } from "../components/BuildRunPolicyControl";
@@ -11,6 +12,7 @@ function renderPolicy(runPolicy: "finish" | "budgeted" | "plan_only"): string {
         skillMode: "balanced",
         budgetUsd: 2.75,
         timeLimitMinutes: 45,
+        alwaysRequireIndependentVerifier: false,
       }}
       onChange={() => undefined}
     />
@@ -24,6 +26,12 @@ assert.match(
 );
 assert.doesNotMatch(finish, /build-budget-usd/);
 assert.doesNotMatch(finish, /build-time-minutes/);
+assert.match(finish, /Always run independent verification/);
+assert.match(
+  finish,
+  /High-risk builds always require an independent verifier\. Enable this to verify low-risk builds too\./
+);
+assert.match(finish, /build-always-independent-verifier/);
 
 const planOnly = renderPolicy("plan_only");
 assert.doesNotMatch(planOnly, /build-budget-usd/);

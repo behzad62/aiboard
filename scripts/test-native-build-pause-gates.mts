@@ -64,6 +64,24 @@ assert.deepEqual(
 
 assert.deepEqual(
   nativeBuildPauseGate({
+    verifierSelection: {
+      status: "required",
+      reason: "Choose a distinct verifier.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+    },
+    runtime: { architect: {} },
+  } as never),
+  {
+    kind: "verifier_selection",
+    reason: "Choose a distinct verifier.",
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["google:verifier"],
+  }
+);
+
+assert.deepEqual(
+  nativeBuildPauseGate({
     projectHandoff: {
       status: "requested",
       summary: "Ready for user handoff",
@@ -97,5 +115,25 @@ assert.match(
   /nativeAttachmentControllerRef\.current\?\.wake\s*\(\s*\)/,
   "a completed project handoff should refresh the existing durable run in place"
 );
+const verifierSelectionHandler = discussionClientSource.slice(
+  discussionClientSource.indexOf("const handleVerifierSelection"),
+  discussionClientSource.indexOf("const handleProjectHandoff")
+);
+assert.match(
+  verifierSelectionHandler,
+  /selectNativeVerifierRuntime\s*\(/,
+  "verifier selection must use the typed Runner control route"
+);
+assert.match(
+  verifierSelectionHandler,
+  /nativeAttachmentControllerRef\.current\?\.wake\s*\(\s*\)/,
+  "verifier selection should refresh the existing durable run in place"
+);
+assert.doesNotMatch(
+  verifierSelectionHandler,
+  /handleResume\s*\(/,
+  "verifier selection already wakes the durable Runner pump and must not issue a second resume"
+);
+assert.match(discussionClientSource, /Choose an independent verifier to continue/);
 
 console.log("PASS native Build pause gates");

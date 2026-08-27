@@ -49,6 +49,12 @@ export type NativeBuildPauseGate =
   | { kind: "resume" }
   | { kind: "project_handoff" }
   | {
+      kind: "verifier_selection";
+      reason: string;
+      requiredCapabilities: string[];
+      candidateRuntimeIds: string[];
+    }
+  | {
       kind: "architect_handoff";
       reason: string;
       candidateRuntimeIds: string[];
@@ -59,6 +65,18 @@ export function nativeBuildPauseGate(
 ): NativeBuildPauseGate {
   if (projection.projectHandoff?.status === "requested") {
     return { kind: "project_handoff" };
+  }
+  if (projection.verifierSelection?.status === "required") {
+    return {
+      kind: "verifier_selection",
+      reason: projection.verifierSelection.reason,
+      requiredCapabilities: [
+        ...projection.verifierSelection.requiredCapabilities,
+      ],
+      candidateRuntimeIds: [
+        ...projection.verifierSelection.candidateRuntimeIds,
+      ],
+    };
   }
   const handoff = projection.runtime.architect.handoff;
   if (handoff) {
@@ -228,6 +246,10 @@ export async function runNativeBuildDiscussion(
       emitProjectHandoffPause(discussion, pausedProjection, emit);
       return;
     }
+    if (pauseGate.kind === "verifier_selection") {
+      emitVerifierSelectionPause(discussion, pauseGate, emit);
+      return;
+    }
     if (pauseGate.kind === "architect_handoff") {
       emitArchitectHandoffPause(discussion, pauseGate, emit);
       return;
@@ -300,6 +322,10 @@ export async function runNativeBuildDiscussion(
         const pauseGate = nativeBuildPauseGate(projection);
         if (pauseGate.kind === "project_handoff") {
           emitProjectHandoffPause(discussion, projection, emit);
+          return;
+        }
+        if (pauseGate.kind === "verifier_selection") {
+          emitVerifierSelectionPause(discussion, pauseGate, emit);
           return;
         }
         if (pauseGate.kind === "architect_handoff") {
@@ -397,6 +423,32 @@ export function selectNativeBuildRuntimes(
     workerRuntimeIds: workers,
     verifierRuntimeIds: [...configuredRuntimeIds],
   };
+}
+
+function emitVerifierSelectionPause(
+  discussion: Discussion,
+  selection: Extract<NativeBuildPauseGate, { kind: "verifier_selection" }>,
+  emit: Emit,
+): void {
+  emit({
+    type: "verifier_selection_required",
+    reason: selection.reason,
+    requiredCapabilities: [...selection.requiredCapabilities],
+    candidateRuntimeIds: [...selection.candidateRuntimeIds],
+  });
+  const now = new Date().toISOString();
+  updateDiscussion(discussion.id, {
+    status: "stopped",
+    buildStopReason: "blocked",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  emit({
+    type: "build_stopped",
+    reason: "blocked",
+    message:
+      "Independent verification requires your selection before the exact revision can be approved.",
+  });
 }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {

@@ -100,6 +100,42 @@ test("a review missing any final-verification category is rejected", async () =>
   }
 });
 
+test("current Architect review requires and persists an explicit build-risk declaration", async () => {
+  const fixture = createFixture();
+  const tools = reviewTools(fixture.store, fixture.evidence);
+  try {
+    const incomplete = approvedReview() as Partial<ReturnType<typeof approvedReview>>;
+    delete incomplete.architectRisk;
+    delete incomplete.architectRiskRationale;
+    const rejected = await invokeReview(
+      tools,
+      incomplete as ReturnType<typeof approvedReview>,
+      "missing-architect-risk",
+    );
+    assert.equal(rejected.isError, true);
+    assert.match(rejected.error?.message ?? "", /risk|invalid|required/i);
+
+    const declared = approvedReview();
+    declared.architectRisk = "high";
+    declared.architectRiskRationale =
+      "The accepted change crosses an authentication trust boundary.";
+    const accepted = await invokeReview(tools, declared, "architect-risk-high");
+    assert.equal(accepted.isError, false, accepted.error?.message ?? "review failed");
+    assert.deepEqual(
+      projection(fixture.store).finalVerification?.current?.review?.decision
+        ?.architectRisk,
+      {
+        risk: "high",
+        rationale:
+          "The accepted change crosses an authentication trust boundary.",
+        source: "architect",
+      },
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 test("mechanically non-green or unvalidated submission cannot be approved", () => {
   assert.throws(
     () => createFixture({ nonGreenCategory: "tests" }),
@@ -267,6 +303,9 @@ function approvedReview() {
     attempt: 1,
     decision: "approved" as "approved" | "repair_required",
     summary: "Every persisted final-verification category supports approval.",
+    architectRisk: "low" as "low" | "high",
+    architectRiskRationale:
+      "No additional semantic risk beyond the kernel-observed paths and effects.",
     categoryReviews: finalPlan().checks.map((check) => ({
       category: check.category,
       verdict: "approved" as "approved" | "repair_required",

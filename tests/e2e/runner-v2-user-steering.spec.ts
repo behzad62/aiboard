@@ -145,13 +145,14 @@ test.describe("Runner V2 durable user steering", () => {
           listSpecs: (projectId) => projectId && projectId !== "discussion-user-steering-e2e"
             ? []
             : [{
-                version: 1,
+                version: 2,
                 runId: RUN_ID,
                 projectId: "discussion-user-steering-e2e",
                 objective: OBJECTIVE,
                 architectRuntimeId: "fixture:architect",
                 workerRuntimeIds: ["fixture:worker"],
                 verifierRuntimeIds: ["fixture:worker"],
+                alwaysRequireIndependentVerifier: false,
                 maxConcurrency: 1,
                 permissionProfile: "full",
                 runPolicy: "finish",

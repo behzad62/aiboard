@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -25,6 +25,7 @@ import type {
   NativeBuildObservability,
   NativeBuildProjection,
   NativeFinalVerificationObservability,
+  NativeIndependentVerifierObservability,
 } from "@/lib/client/runner-v2";
 import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
@@ -445,6 +446,9 @@ export function runnerEvidenceDiagnosticDetail(fact: NativeBuildEvidenceFact): s
 
 function lifecycleLabel(projection: NativeBuildProjection | null): string {
   if (!projection) return "Waiting for build activity";
+  if (projection.verifierSelection?.status === "required") {
+    return "Choose an independent verifier";
+  }
   if (projection.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
     return "Acceptance criteria upgrade required";
   }
@@ -608,6 +612,27 @@ export function runnerUserFacingObservability(
     if (canonical.repairs.length > 0 || canonical.review.status === "repair_required") problems.push({ key: "final-verification:repair", title: canonical.repairs.some((repair) => !["integrated", "cancelled"].includes(repair.status)) ? "Verification repair is in progress" : "Verification repair required", detail: "Runner is fixing the failed category. A fresh verification generation will check the repaired revision." });
   } else if (snapshot.finalVerification && projection && projection.status !== "completed" && projection.runPolicy !== "plan_only") {
     problems.push({ key: "final-verification:missing", title: "Final verification has not started", detail: "Runner waits for all implementation work, then checks the exact integrated revision before completion." });
+  }
+  const independentVerifier = snapshot.independentVerifier;
+  const currentVerifierReview = independentVerifier?.review.current;
+  if (independentVerifier?.selection?.status === "required") {
+    problems.push({
+      key: "verifier:selection",
+      title: "Choose an independent verifier",
+      detail: independentVerifier.selection.reason,
+    });
+  }
+  if (
+    currentVerifierReview?.state === "current" &&
+    currentVerifierReview.verdict &&
+    !currentVerifierReview.verdict.satisfied
+  ) {
+    problems.push({
+      key: "verifier:repair",
+      title: "Independent verification requires repair",
+      detail:
+        "Runner will repair the unsatisfied criteria, integrate a new revision, and request a fresh independent verdict.",
+    });
   }
   if (projection?.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
     problems.push({
@@ -1041,6 +1066,13 @@ export function RunnerV2ObservabilityPanel({
           )}
         </UserSection>}
 
+        {snapshot.independentVerifier && (
+          <IndependentVerifierManifest
+            verifier={snapshot.independentVerifier}
+            projection={projection ?? null}
+          />
+        )}
+
         <UserSection
           title="Problems requiring attention"
           icon={view.problems.length > 0
@@ -1290,6 +1322,166 @@ export function FinalVerificationManifest({
       </div>
     </section>
   );
+}
+
+export function IndependentVerifierManifest({
+  verifier,
+  projection,
+}: {
+  verifier: NativeIndependentVerifierObservability;
+  projection: NativeBuildProjection | null;
+}) {
+  const risk = verifier.risk.current;
+  const review = verifier.review.current;
+  const verdict = review?.state === "current" ? review.verdict : undefined;
+  const strictQualification =
+    verifier.policy?.alwaysRequireIndependentVerifier ?? false;
+  const required = risk
+    ? risk.risk === "high" || strictQualification
+    : undefined;
+  const accent = verdict?.satisfied
+    ? "success"
+    : verdict && !verdict.satisfied
+      ? "error"
+      : required === true
+        ? "warning"
+        : "progress";
+  const riskLabel = !risk
+    ? "Not assessed"
+    : risk.risk === "high"
+      ? "High risk"
+      : "Low risk";
+  const verdictLabel = !risk
+    ? "Risk assessment pending"
+    : required === false
+      ? "Not required"
+      : !review
+      ? verifier.selection?.status === "required"
+        ? "Verifier choice required"
+        : "Waiting for verifier"
+      : !verdict
+        ? "Review in progress"
+        : verdict.satisfied
+          ? "Satisfied"
+          : "Repair required";
+
+  return (
+    <UserSection
+      title="Independent verification"
+      icon={<ShieldCheck className="h-4 w-4" />}
+      accent={accent}
+    >
+      <div className="space-y-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          High-risk builds always require an independent verifier.
+          {strictQualification
+            ? " This run also independently verifies low-risk revisions."
+            : " Low-risk revisions skip this gate unless the run opts into stricter qualification."}
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-md border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold">Build risk</p>
+              <Badge
+                variant={risk?.risk === "high" ? "warning" : "secondary"}
+                className="text-[0.65rem]"
+              >
+                {riskLabel}
+              </Badge>
+            </div>
+            {risk?.architectRationale && (
+              <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+                {risk.architectRationale}
+              </p>
+            )}
+            {risk?.reasons.length ? (
+              <ul className="mt-2 space-y-1 text-[0.68rem] text-muted-foreground">
+                {risk.reasons.map((reason) => (
+                  <li key={`${reason.code}:${reason.evidence.join(":")}`}>
+                    {riskReasonLabel(reason.code)}
+                    {reason.evidence.length > 0
+                      ? ` · ${reason.evidence.join(", ")}`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+          <div className="rounded-md border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold">Verifier verdict</p>
+              <Badge
+                variant={
+                  verdict?.satisfied
+                    ? "success"
+                    : verdict
+                      ? "destructive"
+                      : "secondary"
+                }
+                className="text-[0.65rem]"
+              >
+                {verdictLabel}
+              </Badge>
+            </div>
+            <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+              {review
+                ? `${review.runtime.runtimeId} · revision ${review.targetRevision.slice(0, 12)}`
+                : verifier.selection?.status === "required"
+                  ? verifier.selection.reason
+                  : !risk
+                    ? "Runner is assessing the exact integrated revision before deciding whether independent verification is required."
+                  : required === true
+                    ? "Runner will bind a distinct verifier to the exact integrated revision."
+                    : "The current low-risk revision does not require an independent verdict."}
+            </p>
+          </div>
+        </div>
+        {verdict && (
+          <ul className="space-y-2 border-t pt-3">
+            {verdict.criterionVerdicts.map((criterion) => (
+              <li
+                key={`${criterion.taskId}:${criterion.criterionId}`}
+                className="rounded-md border bg-card px-3 py-2.5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium">
+                    {projection?.tasks[criterion.taskId]?.objective ??
+                      criterion.taskId}{" "}
+                    · {criterion.criterionId}
+                  </p>
+                  <Badge
+                    variant={
+                      criterion.verdict === "satisfied"
+                        ? "success"
+                        : "destructive"
+                    }
+                    className="text-[0.65rem]"
+                  >
+                    {criterion.verdict === "satisfied"
+                      ? "Satisfied"
+                      : "Unsatisfied"}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-[0.7rem] leading-relaxed text-muted-foreground">
+                  {criterion.rationale}
+                </p>
+                <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground">
+                  Evidence: {criterion.evidenceIds.join(", ")}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </UserSection>
+  );
+}
+
+function riskReasonLabel(code: string): string {
+  return code
+    .split("_")
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+    .join(" ");
 }
 
 function verificationStatusClass(status: UserFacingVerificationStatus): string {

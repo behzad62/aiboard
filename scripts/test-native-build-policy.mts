@@ -16,7 +16,11 @@ const finish = effectiveNativeBuildPolicy(
     buildTimeLimitMinutes: 120,
   })
 );
-assert.deepEqual(finish, { runPolicy: "finish", budgetLimits: {} });
+assert.deepEqual(finish, {
+  runPolicy: "finish",
+  budgetLimits: {},
+  alwaysRequireIndependentVerifier: false,
+});
 assert.equal(usesBuildBudgetControls("finish"), false);
 
 const planOnly = effectiveNativeBuildPolicy(
@@ -26,7 +30,11 @@ const planOnly = effectiveNativeBuildPolicy(
     buildTimeLimitMinutes: 120,
   })
 );
-assert.deepEqual(planOnly, { runPolicy: "plan_only", budgetLimits: {} });
+assert.deepEqual(planOnly, {
+  runPolicy: "plan_only",
+  budgetLimits: {},
+  alwaysRequireIndependentVerifier: false,
+});
 assert.equal(usesBuildBudgetControls("plan_only"), false);
 
 const budgeted = effectiveNativeBuildPolicy(
@@ -38,6 +46,7 @@ const budgeted = effectiveNativeBuildPolicy(
 );
 assert.deepEqual(budgeted, {
   runPolicy: "budgeted",
+  alwaysRequireIndependentVerifier: false,
   budgetLimits: {
     maxEstimatedCostMicros: 2_750_000,
     maxActiveMs: 2_700_000,

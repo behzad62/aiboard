@@ -12,13 +12,15 @@ export interface NativeBuildBenchmarkPolicy {
 }
 
 export interface NativeBuildSpec {
-  version: 1;
+  version: 2;
   runId: string;
   projectId: string;
   objective: string;
   architectRuntimeId: string;
   workerRuntimeIds: string[];
   verifierRuntimeIds: string[];
+  /** Strengthens low-risk qualification; it never disables the high-risk gate. */
+  alwaysRequireIndependentVerifier: boolean;
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
@@ -28,6 +30,16 @@ export interface NativeBuildSpec {
   benchmark?: NativeBuildBenchmarkPolicy;
 }
 
+export type LegacyNativeBuildSpec = Omit<
+  NativeBuildSpec,
+  "version" | "runPolicy" | "verifierRuntimeIds" | "alwaysRequireIndependentVerifier"
+> & {
+  version: 1;
+} & Partial<Pick<
+  NativeBuildSpec,
+  "runPolicy" | "verifierRuntimeIds" | "alwaysRequireIndependentVerifier"
+>>;
+
 export interface BuildSpecStore {
   save(spec: NativeBuildSpec): NativeBuildSpec;
   get(runId: string): NativeBuildSpec;
@@ -36,7 +48,7 @@ export interface BuildSpecStore {
 }
 
 function validateBuildSpecCore(spec: NativeBuildSpec): void {
-  if (spec.version !== 1) throw new Error("Unsupported Build spec version.");
+  if (spec.version !== 2) throw new Error("Unsupported Build spec version.");
   if (
     !spec.runId ||
     !spec.projectId ||
@@ -67,6 +79,11 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
   }
   if (new Set(spec.verifierRuntimeIds).size !== spec.verifierRuntimeIds.length) {
     throw new Error("Build spec contains a duplicate verifier runtime.");
+  }
+  if (typeof spec.alwaysRequireIndependentVerifier !== "boolean") {
+    throw new Error(
+      "Build spec independent verifier qualification must be a boolean."
+    );
   }
   if (!Number.isSafeInteger(spec.maxConcurrency) || spec.maxConcurrency < 1) {
     throw new Error("Build spec maxConcurrency must be positive.");
@@ -134,18 +151,23 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
 }
 
 export function recoverLegacyBuildSpec(
-  spec: Omit<NativeBuildSpec, "runPolicy" | "verifierRuntimeIds"> &
-    Partial<Pick<NativeBuildSpec, "runPolicy" | "verifierRuntimeIds">>
+  spec: LegacyNativeBuildSpec
 ): NativeBuildSpec {
+  if (spec.version !== 1) {
+    throw new Error("Unsupported legacy Build spec version.");
+  }
   const legacyRunPolicy = spec.runPolicy === undefined;
   const recovered: NativeBuildSpec = {
     ...spec,
+    version: 2,
     runPolicy: spec.runPolicy ?? "finish",
     budgetLimits: legacyRunPolicy ? {} : { ...spec.budgetLimits },
     verifierRuntimeIds:
       spec.verifierRuntimeIds === undefined
         ? [...new Set(spec.workerRuntimeIds)]
         : [...spec.verifierRuntimeIds],
+    alwaysRequireIndependentVerifier:
+      spec.alwaysRequireIndependentVerifier ?? false,
   };
   validateBuildSpec(recovered);
   return recovered;

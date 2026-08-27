@@ -612,6 +612,11 @@ function validProjection(): SchedulerProjection {
             decision: "approved",
             summary: "Every persisted category supports completion.",
             targetRevision: REVISION,
+            architectRisk: {
+              risk: "low",
+              rationale: "No semantic high-risk condition applies.",
+              source: "architect",
+            },
             categoryReviews: plan.checks.map((check) => ({
               category: check.category,
               verdict: "approved" as const,
@@ -985,13 +990,14 @@ function appendTerminal(
 
 function nativeSpec(): NativeBuildSpec {
   return {
-    version: 1,
+    version: 2,
     runId: RUN_ID,
     projectId: "project-completion",
     objective: "Prove the final completion gate.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.4"],
     verifierRuntimeIds: ["chatgpt:gpt-5.4"],
+    alwaysRequireIndependentVerifier: false,
     maxConcurrency: 1,
     permissionProfile: "full",
     runPolicy: "finish",

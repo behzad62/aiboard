@@ -59,6 +59,7 @@ import {
 } from "@/lib/providers/pricing";
 import {
   DEFAULT_BUILD_BUDGET_USD,
+  DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER,
   DEFAULT_BUILD_RUN_POLICY,
   DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
@@ -91,6 +92,7 @@ interface DashboardData {
     defaultBuildSkillMode?: BuildSkillMode;
     defaultBuildBudgetUsd?: number;
     defaultBuildTimeLimitMinutes?: number;
+    defaultBuildAlwaysRequireIndependentVerifier?: boolean;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
   };
   defaultSelectedModelIds: string[];
@@ -126,6 +128,8 @@ export default function DashboardPage() {
   const [buildTimeLimitMinutes, setBuildTimeLimitMinutes] = useState(
     DEFAULT_BUILD_TIME_LIMIT_MINUTES
   );
+  const [buildAlwaysRequireIndependentVerifier, setBuildAlwaysRequireIndependentVerifier] =
+    useState(DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER);
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +178,10 @@ export default function DashboardPage() {
         setBuildTimeLimitMinutes(
           d.settings.defaultBuildTimeLimitMinutes ??
             DEFAULT_BUILD_TIME_LIMIT_MINUTES
+        );
+        setBuildAlwaysRequireIndependentVerifier(
+          d.settings.defaultBuildAlwaysRequireIndependentVerifier ??
+            DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER
         );
         const models = d.enabledModels.map((m) => m.fullId);
         const defaultSelectedModels = d.defaultSelectedModelIds.filter((modelId) =>
@@ -345,6 +353,8 @@ export default function DashboardPage() {
         buildBudgetUsd: mode === "build" ? buildBudgetUsd : undefined,
         buildTimeLimitMinutes:
           mode === "build" ? buildTimeLimitMinutes : undefined,
+        buildAlwaysRequireIndependentVerifier:
+          mode === "build" ? buildAlwaysRequireIndependentVerifier : undefined,
       });
       if (mode === "build") {
         await claimPendingProjectFolder(result.id);
@@ -471,12 +481,17 @@ export default function DashboardPage() {
                   skillMode: buildSkillMode,
                   budgetUsd: buildBudgetUsd,
                   timeLimitMinutes: buildTimeLimitMinutes,
+                  alwaysRequireIndependentVerifier:
+                    buildAlwaysRequireIndependentVerifier,
                 }}
                 onChange={(next) => {
                   setBuildRunPolicy(next.runPolicy);
                   setBuildSkillMode(next.skillMode);
                   setBuildBudgetUsd(next.budgetUsd);
                   setBuildTimeLimitMinutes(next.timeLimitMinutes);
+                  setBuildAlwaysRequireIndependentVerifier(
+                    next.alwaysRequireIndependentVerifier
+                  );
                 }}
               />
             ) : (

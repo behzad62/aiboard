@@ -26,6 +26,7 @@ import type {
 import {
   loadFinalVerificationDiagnostics,
   projectFinalVerificationObservability,
+  projectIndependentVerifierObservability,
 } from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import type { NativeBuildSpec } from "./build-spec.js";
@@ -335,12 +336,14 @@ export class NativeBuildFactory {
     });
     const independentVerifier: IndependentVerifierDriver = {
       candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      alwaysRequireIndependentVerifier:
+        spec.alwaysRequireIndependentVerifier,
       assessRisk: async ({ projection }) => deriveNativeVerifierRiskInput({
         projection,
         sessions: await sessions.listRun(spec.runId),
         schedulerEvents: schedulerStore.readRun(spec.runId),
         toolEvents: ledger.listRun(spec.runId),
-        stricterQualification: false,
+        stricterQualification: spec.alwaysRequireIndependentVerifier,
       }),
       verify: async (request) => {
         const result = await nativeVerifier.inspect(
@@ -628,6 +631,8 @@ export class NativeBuildFactory {
             schedulerProjection,
             diagnostics,
           ),
+          independentVerifier:
+            projectIndependentVerifierObservability(schedulerProjection),
         };
       },
       transcript: async (afterSequence = 0) =>
@@ -738,7 +743,9 @@ export function deriveNativeVerifierRiskInput(input: {
     (event) => event.type === "tool.started" || event.type === "tool.retry_started",
   );
   return {
-    architectDeclaration: "low",
+    architectDeclaration:
+      input.projection.finalVerification?.current?.review?.decision
+        ?.architectRisk.risk ?? "low",
     stricterQualification: input.stricterQualification,
     kernelFacts: {
       destructiveEffects: toolEffects.some(
@@ -1063,6 +1070,7 @@ export function configuredModelUsageRuntime(
   const roles = new Set<NativeModelUsageRuntime["roles"][number]>();
   if (config.runtimeId === spec.architectRuntimeId) roles.add("architect");
   if (spec.workerRuntimeIds.includes(config.runtimeId)) roles.add("worker");
+  if (spec.verifierRuntimeIds.includes(config.runtimeId)) roles.add("verifier");
   return {
     ...providerUsageConfig(config),
     roles: [...roles],

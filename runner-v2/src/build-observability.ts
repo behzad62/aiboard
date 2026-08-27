@@ -17,6 +17,15 @@ import type {
 } from "./scheduler-store.js";
 import type { FinalVerificationCategory } from "./final-verification-contracts.js";
 import { redactSensitiveValue } from "./sensitive-redaction.js";
+import type {
+  BuildRiskKernelFacts,
+  BuildRiskLevel,
+  BuildRiskReasonCode,
+} from "./risk-policy.js";
+import {
+  cloneVerifierReview,
+  type VerifierReviewProjection,
+} from "./verifier-contracts.js";
 
 export type FinalVerificationCategoryStatus = "pending" | "passed" | "failed" | "not_applicable";
 export type FinalVerificationDiagnosticValue =
@@ -67,6 +76,45 @@ export interface FinalVerificationObservability {
   }>;
 }
 
+export interface IndependentVerifierRiskObservation {
+  targetRevision: string;
+  state: "current" | "invalidated" | "superseded";
+  risk: BuildRiskLevel;
+  architectDeclaration: BuildRiskLevel;
+  architectRationale?: string;
+  architectRiskSource?: "architect" | "legacy_default";
+  stricterQualification: boolean;
+  kernelFacts: BuildRiskKernelFacts;
+  reasons: Array<{ code: BuildRiskReasonCode; evidence: string[] }>;
+  normalizedChangedPaths: string[];
+  assessedAt: string;
+  invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
+}
+
+export interface IndependentVerifierObservability {
+  policy?: {
+    mode: "risk_based";
+    candidateRuntimeIds: string[];
+    alwaysRequireIndependentVerifier: boolean;
+  };
+  risk: {
+    current?: IndependentVerifierRiskObservation;
+    history: IndependentVerifierRiskObservation[];
+  };
+  selection?: {
+    status: "required" | "selected";
+    reason: string;
+    requiredCapabilities: string[];
+    candidateRuntimeIds: string[];
+    selectedRuntimeId?: string;
+  };
+  review: {
+    current?: VerifierReviewProjection;
+    history: VerifierReviewProjection[];
+  };
+}
+
 export interface BuildAgentObservation {
   sessionId: string;
   actor: AgentActor;
@@ -109,6 +157,104 @@ export interface BuildObservabilitySnapshot {
     commits: IntegrationCommit[];
   };
   finalVerification?: FinalVerificationObservability;
+  independentVerifier?: IndependentVerifierObservability;
+}
+
+export function projectIndependentVerifierObservability(
+  projection: SchedulerProjection,
+): IndependentVerifierObservability {
+  const currentRisk = projection.buildRisk?.current;
+  const currentArchitectRisk =
+    currentRisk &&
+    projection.finalVerification?.current?.targetRevision ===
+      currentRisk.targetRevision
+      ? projection.finalVerification.current.review?.decision?.architectRisk
+      : undefined;
+  return {
+    ...(projection.verifierPolicy
+      ? {
+          policy: {
+            mode: projection.verifierPolicy.mode,
+            candidateRuntimeIds: [
+              ...projection.verifierPolicy.candidateRuntimeIds,
+            ],
+            alwaysRequireIndependentVerifier:
+              projection.verifierPolicy.alwaysRequireIndependentVerifier,
+          },
+        }
+      : {}),
+    risk: {
+      ...(currentRisk
+        ? {
+            current: projectVerifierRisk(
+              currentRisk,
+              currentArchitectRisk,
+            ),
+          }
+        : {}),
+      history: (projection.buildRisk?.history ?? [])
+        .slice(-8)
+        .map((risk) => projectVerifierRisk(risk)),
+    },
+    ...(projection.verifierSelection
+      ? {
+          selection: {
+            ...projection.verifierSelection,
+            requiredCapabilities: [
+              ...projection.verifierSelection.requiredCapabilities,
+            ],
+            candidateRuntimeIds: [
+              ...projection.verifierSelection.candidateRuntimeIds,
+            ],
+          },
+        }
+      : {}),
+    review: {
+      ...(projection.verifier?.current
+        ? { current: cloneVerifierReview(projection.verifier.current) }
+        : {}),
+      history: (projection.verifier?.history ?? [])
+        .slice(-8)
+        .map(cloneVerifierReview),
+    },
+  };
+}
+
+function projectVerifierRisk(
+  risk: NonNullable<SchedulerProjection["buildRisk"]>["history"][number],
+  architectRisk?: {
+    risk: BuildRiskLevel;
+    rationale?: string;
+    source: "architect" | "legacy_default";
+  },
+): IndependentVerifierRiskObservation {
+  return {
+    targetRevision: risk.targetRevision,
+    state: risk.state,
+    risk: risk.assessment.risk,
+    architectDeclaration: risk.input.architectDeclaration,
+    ...(architectRisk?.rationale
+      ? { architectRationale: architectRisk.rationale }
+      : {}),
+    ...(architectRisk ? { architectRiskSource: architectRisk.source } : {}),
+    stricterQualification: risk.input.stricterQualification,
+    kernelFacts: {
+      ...risk.input.kernelFacts,
+      changedPaths: [...risk.input.kernelFacts.changedPaths],
+    },
+    reasons: risk.assessment.reasons.map((reason) => ({
+      code: reason.code,
+      evidence: [...reason.evidence],
+    })),
+    normalizedChangedPaths: [...risk.assessment.normalizedChangedPaths],
+    assessedAt: risk.assessedAt,
+    ...(risk.invalidatedByRevision
+      ? { invalidatedByRevision: risk.invalidatedByRevision }
+      : {}),
+    ...(risk.invalidatedByGuidanceId
+      ? { invalidatedByGuidanceId: risk.invalidatedByGuidanceId }
+      : {}),
+  };
 }
 
 export function projectFinalVerificationObservability(

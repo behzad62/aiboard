@@ -1,5 +1,7 @@
 "use client";
 
+import React from "react";
+
 export function BuildNoteDraftField({
   value,
   onChange,

@@ -118,6 +118,44 @@ test("factory derives conservative risk and complete verifier context from durab
   assert.deepEqual(request.riskReasons, risk.assessment.reasons);
 });
 
+test("factory includes the current Architect risk declaration in kernel qualification", () => {
+  const projection = verifierProjection();
+  const current = projection.finalVerification!.current!;
+  current.review = {
+    reviewId: "final-review",
+    submissionId: "final-submission",
+    generationId: current.generationId,
+    targetRevision: current.targetRevision,
+    attempt: 1,
+    status: "approved",
+    decision: {
+      decision: "approved",
+      summary: "The evidence is green but the semantic boundary is high risk.",
+      targetRevision: current.targetRevision,
+      architectRisk: {
+        risk: "high",
+        rationale: "The change crosses an authentication trust boundary.",
+        source: "architect",
+      },
+      categoryReviews: [],
+      failedCategories: [],
+    },
+  };
+  projection.tasks["task-api"]!.objective = "Implement a card component";
+  const sessions = verifierSessions();
+  sessions[0]!.changeSet!.changedPaths = ["src/components/card.tsx"];
+
+  const input = deriveNativeVerifierRiskInput({
+    projection,
+    sessions,
+    schedulerEvents: [],
+    toolEvents: [],
+    stricterQualification: false,
+  });
+  assert.equal(input.architectDeclaration, "high");
+  assert.equal(assessBuildRisk(input).risk, "high");
+});
+
 function verifierProjection(): SchedulerProjection {
   return {
     runId: "run-factory-verifier",

@@ -32,6 +32,7 @@ export interface NativeBuildBudgetLimits {
 export interface EffectiveNativeBuildPolicy {
   runPolicy: BuildRunPolicy;
   budgetLimits: NativeBuildBudgetLimits;
+  alwaysRequireIndependentVerifier: boolean;
 }
 
 export function usesBuildBudgetControls(policy: BuildRunPolicy): boolean {
@@ -46,7 +47,12 @@ export function effectiveNativeBuildPolicy(
   settings: NormalizedBuildSettings
 ): EffectiveNativeBuildPolicy {
   if (!usesBuildBudgetControls(settings.runPolicy)) {
-    return { runPolicy: settings.runPolicy, budgetLimits: {} };
+    return {
+      runPolicy: settings.runPolicy,
+      budgetLimits: {},
+      alwaysRequireIndependentVerifier:
+        settings.alwaysRequireIndependentVerifier,
+    };
   }
   const budgetLimits: NativeBuildBudgetLimits = {};
   if (settings.budgetUsd > 0) {
@@ -62,5 +68,10 @@ export function effectiveNativeBuildPolicy(
   if (Object.keys(budgetLimits).length === 0) {
     throw new Error("Budgeted runs require a USD or time limit.");
   }
-  return { runPolicy: settings.runPolicy, budgetLimits };
+  return {
+    runPolicy: settings.runPolicy,
+    budgetLimits,
+    alwaysRequireIndependentVerifier:
+      settings.alwaysRequireIndependentVerifier,
+  };
 }

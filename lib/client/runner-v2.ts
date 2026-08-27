@@ -46,7 +46,7 @@ export interface NativePermissionRequest {
   sessionId: string;
   callId: string;
   toolName: string;
-  actor: { role: "architect" | "worker" | "subagent"; id: string };
+  actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
   permissionProfile: "guarded" | "project" | "full";
   access: { capability: string; external?: boolean; destructive?: boolean; credentialChange?: boolean };
   outsideWorkspace: boolean;
@@ -65,6 +65,7 @@ export interface CreateNativeBuildInput {
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     verifierRuntimeIds: string[];
+    alwaysRequireIndependentVerifier: boolean;
     maxConcurrency: number;
     runPolicy: BuildRunPolicy;
     budgetLimits: {
@@ -99,6 +100,12 @@ export interface NativeBuildTask {
   generationId?: string;
   targetRevision?: string;
   verificationRepair?: NativeVerificationRepairProvenance;
+  verifierRepair?: {
+    sourceReviewId: string;
+    targetRevision: string;
+    criteria: Array<{ taskId: string; criterionId: string }>;
+    evidenceIds: string[];
+  };
 }
 
 export type NativeFinalVerificationCategory = "build" | "tests" | "runtime_smoke" | "browser";
@@ -303,6 +310,17 @@ export type NativeArchitectActionReason =
       failedCategories: string[];
       evidenceIds: string[];
     }
+  | {
+      type: "verifier_repair_plan_required";
+      reviewId: string;
+      targetRevision: string;
+      unsatisfiedCriteria: Array<{
+        taskId: string;
+        criterionId: string;
+        rationale: string;
+        evidenceIds: string[];
+      }>;
+    }
   | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
   | { type: "integration_resolution_required"; taskId: string };
 
@@ -323,6 +341,129 @@ export interface NativeArchitectQuestionProjection {
   resumeSupersededSequence?: number;
   supersededByGuidanceId?: string;
   supersededRationale?: string;
+}
+
+export type NativeBuildRiskReasonCode =
+  | "architect_declared_high"
+  | "stricter_qualification"
+  | "destructive_effect"
+  | "credential_effect"
+  | "external_write_effect"
+  | "integration_conflict"
+  | "security_auth_crypto_path"
+  | "migration_schema_data_path"
+  | "dependency_lockfile"
+  | "ci_deployment_infrastructure_path";
+
+export interface NativeBuildRiskAssessmentProjection {
+  targetRevision: string;
+  input: {
+    architectDeclaration: "low" | "high";
+    stricterQualification: boolean;
+    kernelFacts: {
+      destructiveEffects: boolean;
+      credentialEffects: boolean;
+      externalWriteEffects: boolean;
+      integrationConflict: boolean;
+      changedPaths: string[];
+    };
+  };
+  assessment: {
+    risk: "low" | "high";
+    reasons: Array<{ code: NativeBuildRiskReasonCode; evidence: string[] }>;
+    normalizedChangedPaths: string[];
+  };
+  state: "current" | "invalidated" | "superseded";
+  assessedAt: string;
+  invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
+}
+
+export interface NativeBuildRiskObservation {
+  targetRevision: string;
+  state: "current" | "invalidated" | "superseded";
+  risk: "low" | "high";
+  architectDeclaration: "low" | "high";
+  architectRationale?: string;
+  architectRiskSource?: "architect" | "legacy_default";
+  stricterQualification: boolean;
+  kernelFacts: {
+    destructiveEffects: boolean;
+    credentialEffects: boolean;
+    externalWriteEffects: boolean;
+    integrationConflict: boolean;
+    changedPaths: string[];
+  };
+  reasons: Array<{ code: NativeBuildRiskReasonCode; evidence: string[] }>;
+  normalizedChangedPaths: string[];
+  assessedAt: string;
+  invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
+}
+
+export interface NativeVerifierRuntimeBinding {
+  runtimeId: string;
+  providerId: string;
+  modelId: string;
+  modelIdentity: string;
+  sessionId: string;
+}
+
+export interface NativeVerifierReviewProjection {
+  reviewId: string;
+  targetRevision: string;
+  finalVerificationGenerationId: string;
+  runtime: NativeVerifierRuntimeBinding;
+  excludedModels: Array<{
+    source: "architect" | "accepted_change_author";
+    runtimeId: string;
+    modelIdentity: string;
+  }>;
+  criteria: Array<{ taskId: string; criterionId: string }>;
+  status: "requested" | "submitted";
+  state: "current" | "invalidated" | "superseded";
+  requestedAt: string;
+  invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
+  supersededByReviewId?: string;
+  repairTaskIds?: string[];
+  verdict?: {
+    reviewId: string;
+    targetRevision: string;
+    sessionId: string;
+    satisfied: boolean;
+    criterionVerdicts: Array<{
+      taskId: string;
+      criterionId: string;
+      verdict: "satisfied" | "unsatisfied";
+      rationale: string;
+      evidenceIds: string[];
+    }>;
+    submittedAt: string;
+  };
+}
+
+export interface NativeIndependentVerifierObservability {
+  policy?: {
+    mode: "risk_based";
+    candidateRuntimeIds: string[];
+    alwaysRequireIndependentVerifier: boolean;
+  };
+  risk: {
+    current?: NativeBuildRiskObservation;
+    history: NativeBuildRiskObservation[];
+  };
+  selection?: {
+    status: "required" | "selected";
+    reason: string;
+    requiredCapabilities: string[];
+    candidateRuntimeIds: string[];
+    selectedRuntimeId?: string;
+  };
+  review: {
+    current?: NativeVerifierReviewProjection;
+    history: NativeVerifierReviewProjection[];
+  };
 }
 
 export interface NativeBuildProjection {
@@ -370,6 +511,16 @@ export interface NativeBuildProjection {
     appliedToProject?: boolean;
     projectRevision?: string;
   };
+  verifierPolicy?: NativeIndependentVerifierObservability["policy"];
+  buildRisk?: {
+    current?: NativeBuildRiskAssessmentProjection;
+    history: NativeBuildRiskAssessmentProjection[];
+  };
+  verifierSelection?: NativeIndependentVerifierObservability["selection"];
+  verifier?: {
+    current?: NativeVerifierReviewProjection;
+    history: NativeVerifierReviewProjection[];
+  };
   projectHandoffHistory?: Array<{
     status: "withdrawn";
     summary: string;
@@ -396,7 +547,7 @@ export interface NativeBuildProjection {
       failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
       submission?: { submissionId: string; generationId: string; targetRevision: string; attempt: number };
       submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean };
-      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }> } };
+      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; architectRisk: { risk: "low" | "high"; rationale?: string; source: "architect" | "legacy_default" }; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }> } };
       repairTaskIds?: string[];
       completedChecks?: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; green: boolean; evidenceIds: string[]; issues: string[]; attempt: number; startedAt: string; finishedAt: string }>;
     };
@@ -472,7 +623,7 @@ export interface NativeBudgetReservationProjection {
     runtimeId: string;
     providerId: string;
     modelId: string;
-    role: "architect" | "worker" | "subagent";
+    role: "architect" | "worker" | "subagent" | "verifier";
     sessionId: string;
     taskId?: string;
   };
@@ -504,7 +655,11 @@ export interface NativeBudgetReservationProjection {
   windowIndex: number;
 }
 
-export type NativeModelUsageRole = "architect" | "worker" | "subagent";
+export type NativeModelUsageRole =
+  | "architect"
+  | "worker"
+  | "subagent"
+  | "verifier";
 export type NativeModelUsageStatus =
   | "healthy"
   | "cooldown"
@@ -603,7 +758,7 @@ export interface NativeBuildObservability {
   toolCallCount: number;
   agents: Array<{
     sessionId: string;
-    actor: { role: "architect" | "worker" | "subagent"; id: string };
+    actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
     status: "active" | "suspended" | "submitted" | "completed";
     turns: number;
     suspensionReason?: string;
@@ -625,7 +780,7 @@ export interface NativeBuildObservability {
     id: string;
     runId: string;
     taskId: string;
-    actor: { role: "architect" | "worker" | "subagent"; id: string };
+    actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
     status: "observed";
     fact: NativeBuildEvidenceFact;
     createdAt: string;
@@ -677,6 +832,7 @@ export interface NativeBuildObservability {
     commits: Array<{ revision: string; parents: string[]; subject: string }>;
   };
   finalVerification?: NativeFinalVerificationObservability;
+  independentVerifier?: NativeIndependentVerifierObservability;
 }
 
 export interface NativeBuildAuditExport {
@@ -849,7 +1005,11 @@ export interface NativeBuildReference {
   updatedAt: string;
 }
 
-export type NativeBuildActorRole = "architect" | "worker" | "subagent";
+export type NativeBuildActorRole =
+  | "architect"
+  | "worker"
+  | "subagent"
+  | "verifier";
 
 export interface NativeBuildTranscriptTurn {
   id: string;
@@ -1198,6 +1358,26 @@ export async function selectNativeArchitectHandoff(
       signal,
     },
     fetchImpl
+  );
+}
+
+export async function selectNativeVerifierRuntime(
+  connection: NativeRunnerConnection,
+  runId: string,
+  runtimeId: string,
+  idempotencyKey: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/verifier-handoff`,
+    {
+      method: "POST",
+      body: JSON.stringify({ runtimeId, idempotencyKey }),
+      signal,
+    },
+    fetchImpl,
   );
 }
 

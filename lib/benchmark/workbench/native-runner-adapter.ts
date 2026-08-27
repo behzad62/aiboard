@@ -245,6 +245,7 @@ export async function runNativeWorkBenchBuild(
           architectRuntimeId: roleMapping.architectRuntimeId,
           workerRuntimeIds: roleMapping.workerRuntimeIds,
           verifierRuntimeIds: configuredRuntimeIds,
+          alwaysRequireIndependentVerifier: false,
           maxConcurrency: Math.max(1, Math.min(4, roleMapping.workerRuntimeIds.length)),
           runPolicy: Object.keys(budgetLimits).length > 0 ? "budgeted" : "finish",
           budgetLimits,
