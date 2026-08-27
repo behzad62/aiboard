@@ -332,3 +332,33 @@ test("deep raw escape layers cannot bypass bounded credential inspection", () =>
   assert.match(redacted, /\[REDACTED\]/);
   assert.equal(redactSensitiveText(redacted), redacted);
 });
+
+test("benign raw key discovery has a linear sliced-character work bound", () => {
+  const input = (String.raw`\"ordinary\" `).repeat(2000).slice(0, 1024);
+  const originalSlice = String.prototype.slice;
+  let slicedCharacters = 0;
+  String.prototype.slice = function instrumentedSlice(start?: number, end?: number): string {
+    const result = originalSlice.call(this, start, end);
+    slicedCharacters += result.length;
+    return result;
+  };
+  try {
+    assert.equal(redactSensitiveText(input), input);
+  } finally {
+    String.prototype.slice = originalSlice;
+  }
+  assert.ok(
+    slicedCharacters <= input.length * 16,
+    `raw key discovery sliced ${slicedCharacters} characters for ${input.length} bytes`,
+  );
+});
+
+test("a 32KiB benign escaped diagnostic completes within a conservative smoke bound", {
+  timeout: 5_000,
+}, () => {
+  const input = (String.raw`\"ordinary\" `).repeat(4000).slice(0, 32 * 1024);
+  const startedAt = performance.now();
+  assert.equal(redactSensitiveText(input), input);
+  const elapsed = performance.now() - startedAt;
+  assert.ok(elapsed < 2_000, `32KiB benign diagnostic took ${elapsed.toFixed(1)}ms`);
+});

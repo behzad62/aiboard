@@ -328,24 +328,18 @@ function decodeRawSensitiveKeyAt(value: string, start: number): RawSensitiveKey 
   let openingQuote = start;
   while (value[openingQuote] === "\\") openingQuote += 1;
   if (value[openingQuote] !== '"') return undefined;
-  const maximumEnd = value.length;
-  let quoteInspections = 0;
-  for (let end = openingQuote + 1; end < maximumEnd; end += 1) {
-    if (value[end] !== '"') continue;
-    quoteInspections += 1;
-    if (quoteInspections > MAXIMUM_JSON_STRING_BOUND_INSPECTIONS) return undefined;
-    let decoded = value.slice(start, end + 1);
-    for (let depth = 1; depth <= MAXIMUM_JSON_STRING_BOUND_INSPECTIONS; depth += 1) {
-      const layer = decodeRawJsonStringContentLayer(decoded);
-      if (layer.invalid) break;
-      decoded = layer.value;
-      let key: unknown;
-      try { key = JSON.parse(decoded) as unknown; }
-      catch { continue; }
-      if (typeof key !== "string") break;
-      if (!isSensitiveKey(key)) break;
-      return { key, end: end + 1, depth };
-    }
+  const end = value.indexOf('"', openingQuote + 1);
+  if (end < 0) return undefined;
+  let decoded = value.slice(start, end + 1);
+  for (let depth = 1; depth <= MAXIMUM_JSON_STRING_BOUND_INSPECTIONS; depth += 1) {
+    const layer = decodeRawJsonStringContentLayer(decoded);
+    if (layer.invalid) return undefined;
+    decoded = layer.value;
+    let key: unknown;
+    try { key = JSON.parse(decoded) as unknown; }
+    catch { continue; }
+    if (typeof key !== "string" || !isSensitiveKey(key)) return undefined;
+    return { key, end: end + 1, depth };
   }
   return undefined;
 }
