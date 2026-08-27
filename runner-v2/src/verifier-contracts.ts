@@ -43,7 +43,11 @@ export interface VerifierReviewProjection {
   excludedModels: VerifierExcludedModel[];
   criteria: VerifierCriterionReference[];
   status: "requested" | "submitted";
+  state: "current" | "invalidated" | "superseded";
   requestedAt: string;
+  invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
+  supersededByReviewId?: string;
   verdict?: VerifierVerdictProjection;
 }
 
@@ -100,6 +104,7 @@ export function parseVerifierReviewRequest(
     excludedModels,
     criteria: expectedCriteria.map((criterion) => ({ ...criterion })),
     status: "requested",
+    state: "current",
     requestedAt,
   };
 }

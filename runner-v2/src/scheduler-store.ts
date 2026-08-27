@@ -66,6 +66,11 @@ import {
   sameVerifierReview,
   type VerifierProjection,
 } from "./verifier-contracts.js";
+import {
+  assessBuildRisk,
+  type BuildRiskAssessment,
+  type BuildRiskAssessmentInput,
+} from "./risk-policy.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -122,6 +127,8 @@ export type SchedulerEventType =
   | "final_verification.review_requested"
   | "final_verification.review_decided"
   | "final_verification.repairs_planned"
+  | "verifier.policy_configured"
+  | "build.risk_assessed"
   | "verifier.review_requested"
   | "verifier.verdict_submitted";
 
@@ -363,6 +370,26 @@ export interface FinalVerificationProjection {
   history: FinalVerificationGenerationProjection[];
 }
 
+export interface VerifierPolicyProjection {
+  mode: "risk_based";
+  candidateRuntimeIds: string[];
+}
+
+export interface BuildRiskAssessmentProjection {
+  targetRevision: string;
+  input: BuildRiskAssessmentInput;
+  assessment: BuildRiskAssessment;
+  state: "current" | "invalidated" | "superseded";
+  assessedAt: string;
+  invalidatedByRevision?: string;
+  invalidatedByGuidanceId?: string;
+}
+
+export interface BuildRiskProjection {
+  current?: BuildRiskAssessmentProjection;
+  history: BuildRiskAssessmentProjection[];
+}
+
 export interface SchedulerProjection {
   runId: string;
   /** Optional for event-log compatibility with runs created before P3.1. */
@@ -398,6 +425,8 @@ export interface SchedulerProjection {
   runtime: RuntimeProjection;
   integrationRevision?: string;
   finalVerification?: FinalVerificationProjection;
+  verifierPolicy?: VerifierPolicyProjection;
+  buildRisk?: BuildRiskProjection;
   verifier?: VerifierProjection;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
@@ -829,6 +858,28 @@ export function buildCompletionReadiness(
     task?.verificationReviewId !== review?.reviewId
   ) {
     issues.push("Final-verification task submission/review references are invalid.");
+  }
+  if (projection.verifierPolicy?.mode === "risk_based") {
+    const risk = projection.buildRisk?.current;
+    if (
+      !risk || risk.state !== "current" ||
+      risk.targetRevision !== integrationRevision
+    ) {
+      issues.push("A current build-risk assessment is required.");
+    } else if (risk.assessment.risk === "high") {
+      const verifier = projection.verifier?.current;
+      if (
+        !verifier || verifier.state !== "current" ||
+        verifier.status !== "submitted" ||
+        verifier.verdict?.satisfied !== true ||
+        verifier.targetRevision !== integrationRevision ||
+        verifier.finalVerificationGenerationId !== current.generationId
+      ) {
+        issues.push(
+          "High-risk completion requires a current positive independent verifier verdict; a missing, pending, stale, or unsatisfied verdict blocks completion.",
+        );
+      }
+    }
   }
   return { ready: issues.length === 0, issues };
 }
@@ -1389,6 +1440,17 @@ export function reduceSchedulerEvent(
     ...(current.verifier
       ? { verifier: cloneVerifierProjection(current.verifier) }
       : {}),
+    ...(current.verifierPolicy
+      ? {
+          verifierPolicy: {
+            ...current.verifierPolicy,
+            candidateRuntimeIds: [...current.verifierPolicy.candidateRuntimeIds],
+          },
+        }
+      : {}),
+    ...(current.buildRisk
+      ? { buildRisk: cloneBuildRiskProjection(current.buildRisk) }
+      : {}),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -1564,6 +1626,24 @@ export function reduceSchedulerEvent(
         throw new Error("Only the Architect may plan final verification repairs.");
       }
       createFinalVerificationRepairTasks(next, event.payload);
+      break;
+    }
+    case "verifier.policy_configured": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure independent verifier policy.");
+      }
+      const policy = parseVerifierPolicy(event.payload);
+      if (current.verifierPolicy && !sameValue(current.verifierPolicy, policy)) {
+        throw new Error("Independent verifier policy is already configured differently.");
+      }
+      next.verifierPolicy = policy;
+      break;
+    }
+    case "build.risk_assessed": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may assess build risk.");
+      }
+      recordBuildRiskAssessment(next, event.payload, event.occurredAt);
       break;
     }
     case "verifier.review_requested": {
@@ -2511,7 +2591,194 @@ function advanceIntegrationRevision(
       ],
     };
   }
+  const currentRisk = projection.buildRisk?.current;
+  if (currentRisk) {
+    projection.buildRisk = {
+      history: [
+        ...(projection.buildRisk?.history ?? []).map(cloneBuildRiskAssessment),
+        {
+          ...cloneBuildRiskAssessment(currentRisk),
+          state: "invalidated",
+          invalidatedByRevision: integrationRevision,
+        },
+      ],
+    };
+  }
+  const currentVerifier = projection.verifier?.current;
+  if (currentVerifier) {
+    projection.verifier = {
+      history: [
+        ...(projection.verifier?.history ?? []).map(cloneVerifierReview),
+        {
+          ...cloneVerifierReview(currentVerifier),
+          state: "invalidated",
+          invalidatedByRevision: integrationRevision,
+        },
+      ],
+    };
+  }
   projection.integrationRevision = integrationRevision;
+}
+
+function parseVerifierPolicy(
+  payload: Record<string, unknown>,
+): VerifierPolicyProjection {
+  if (payload.mode !== "risk_based") {
+    throw new Error("Independent verifier policy mode must be risk_based.");
+  }
+  const candidateRuntimeIds = stringArray(payload, "candidateRuntimeIds")
+    .map((runtimeId) => runtimeId.trim());
+  if (
+    candidateRuntimeIds.length === 0 ||
+    candidateRuntimeIds.some((runtimeId) => !runtimeId) ||
+    new Set(candidateRuntimeIds).size !== candidateRuntimeIds.length
+  ) {
+    throw new Error(
+      "Independent verifier policy requires unique non-empty candidate runtime IDs.",
+    );
+  }
+  return { mode: "risk_based", candidateRuntimeIds };
+}
+
+function recordBuildRiskAssessment(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+  assessedAt: string,
+): void {
+  if (projection.verifierPolicy?.mode !== "risk_based") {
+    throw new Error("Build risk cannot be assessed before verifier policy is configured.");
+  }
+  const targetRevision = requiredString(payload, "targetRevision");
+  if (targetRevision !== projection.integrationRevision) {
+    throw new Error("Build risk assessment targets a stale integration revision.");
+  }
+  const finalVerification = projection.finalVerification?.current;
+  if (
+    !finalVerification || finalVerification.state !== "current" ||
+    finalVerification.targetRevision !== targetRevision ||
+    finalVerification.submissionResult?.green !== true ||
+    finalVerification.cleanup?.status !== "succeeded" ||
+    finalVerification.review?.status !== "approved" ||
+    finalVerification.review.decision?.decision !== "approved" ||
+    finalVerification.review.decision.failedCategories.length > 0
+  ) {
+    throw new Error(
+      "Build risk assessment requires current green final verification and structured Architect approval.",
+    );
+  }
+  const input = parseBuildRiskAssessmentInput(payload.input);
+  const assessment = assessBuildRisk(input);
+  if (!sameValue(payload.assessment, assessment)) {
+    throw new Error(
+      "Persisted build-risk assessment conflicts with the kernel recomputation.",
+    );
+  }
+  const priorForRevision = [
+    ...(projection.buildRisk?.current ? [projection.buildRisk.current] : []),
+    ...(projection.buildRisk?.history ?? []),
+  ].filter((candidate) => candidate.targetRevision === targetRevision);
+  if (
+    assessment.risk === "low" &&
+    priorForRevision.some((candidate) => candidate.assessment.risk === "high")
+  ) {
+    throw new Error("A high-risk assessment cannot be lowered for the same revision.");
+  }
+  const next: BuildRiskAssessmentProjection = {
+    targetRevision,
+    input,
+    assessment,
+    state: "current",
+    assessedAt,
+  };
+  const current = projection.buildRisk?.current;
+  if (current && sameValue(current, next)) return;
+  if (current && current.targetRevision !== targetRevision) {
+    throw new Error("A current build-risk assessment exists for another revision.");
+  }
+  projection.buildRisk = {
+    current: cloneBuildRiskAssessment(next),
+    history: [
+      ...(projection.buildRisk?.history ?? []).map(cloneBuildRiskAssessment),
+      ...(current
+        ? [{ ...cloneBuildRiskAssessment(current), state: "superseded" as const }]
+        : []),
+    ],
+  };
+}
+
+function parseBuildRiskAssessmentInput(value: unknown): BuildRiskAssessmentInput {
+  if (!isRecord(value)) throw new Error("Build-risk assessment input is invalid.");
+  const architectDeclaration = value.architectDeclaration;
+  if (architectDeclaration !== "low" && architectDeclaration !== "high") {
+    throw new Error("Build-risk Architect declaration is invalid.");
+  }
+  if (typeof value.stricterQualification !== "boolean") {
+    throw new Error("Build-risk stricter qualification flag is invalid.");
+  }
+  if (!isRecord(value.kernelFacts)) {
+    throw new Error("Build-risk kernel facts are invalid.");
+  }
+  const kernelFacts = value.kernelFacts;
+  const booleanKeys = [
+    "destructiveEffects",
+    "credentialEffects",
+    "externalWriteEffects",
+    "integrationConflict",
+  ] as const;
+  for (const key of booleanKeys) {
+    if (typeof kernelFacts[key] !== "boolean") {
+      throw new Error(`Build-risk kernel fact ${key} is invalid.`);
+    }
+  }
+  const changedPaths = stringArray(kernelFacts, "changedPaths");
+  if (changedPaths.some((path) => !path.trim())) {
+    throw new Error("Build-risk changed paths must be non-empty strings.");
+  }
+  return {
+    architectDeclaration,
+    stricterQualification: value.stricterQualification,
+    kernelFacts: {
+      destructiveEffects: kernelFacts.destructiveEffects as boolean,
+      credentialEffects: kernelFacts.credentialEffects as boolean,
+      externalWriteEffects: kernelFacts.externalWriteEffects as boolean,
+      integrationConflict: kernelFacts.integrationConflict as boolean,
+      changedPaths: [...changedPaths],
+    },
+  };
+}
+
+function cloneBuildRiskProjection(
+  projection: BuildRiskProjection,
+): BuildRiskProjection {
+  return {
+    ...(projection.current
+      ? { current: cloneBuildRiskAssessment(projection.current) }
+      : {}),
+    history: projection.history.map(cloneBuildRiskAssessment),
+  };
+}
+
+function cloneBuildRiskAssessment(
+  assessment: BuildRiskAssessmentProjection,
+): BuildRiskAssessmentProjection {
+  return {
+    ...assessment,
+    input: {
+      ...assessment.input,
+      kernelFacts: {
+        ...assessment.input.kernelFacts,
+        changedPaths: [...assessment.input.kernelFacts.changedPaths],
+      },
+    },
+    assessment: {
+      ...assessment.assessment,
+      reasons: assessment.assessment.reasons.map((reason) => ({
+        ...reason,
+        evidence: [...reason.evidence],
+      })),
+      normalizedChangedPaths: [...assessment.assessment.normalizedChangedPaths],
+    },
+  };
 }
 
 function createFinalVerificationGeneration(
@@ -2902,6 +3169,9 @@ function recordVerifierVerdict(
   const current = projection.verifier?.current;
   if (!current) {
     throw new Error("Verifier verdict requires a current requested review.");
+  }
+  if (current.state !== "current") {
+    throw new Error("Verifier verdict requires a current revision-bound review.");
   }
   if (
     projection.integrationRevision !== current.targetRevision ||
@@ -4309,6 +4579,32 @@ function invalidateFinalVerificationForGuidance(
       },
     ],
   };
+  const currentRisk = projection.buildRisk?.current;
+  if (currentRisk) {
+    projection.buildRisk = {
+      history: [
+        ...(projection.buildRisk?.history ?? []).map(cloneBuildRiskAssessment),
+        {
+          ...cloneBuildRiskAssessment(currentRisk),
+          state: "invalidated",
+          invalidatedByGuidanceId: guidanceId,
+        },
+      ],
+    };
+  }
+  const currentVerifier = projection.verifier?.current;
+  if (currentVerifier) {
+    projection.verifier = {
+      history: [
+        ...(projection.verifier?.history ?? []).map(cloneVerifierReview),
+        {
+          ...cloneVerifierReview(currentVerifier),
+          state: "invalidated",
+          invalidatedByGuidanceId: guidanceId,
+        },
+      ],
+    };
+  }
 }
 
 function requiredString(payload: Record<string, unknown>, key: string): string {

@@ -6,10 +6,12 @@ import test from "node:test";
 
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
 import {
+  buildCompletionReadiness,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
   type SchedulerEventType,
 } from "../src/scheduler-store.js";
+import { assessBuildRisk, type BuildRiskAssessmentInput } from "../src/risk-policy.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import type { VerifierCriterionVerdict } from "../src/verifier-contracts.js";
@@ -403,6 +405,133 @@ test("verifier verdict evidence must exist in the authoritative run and replay r
   }
 });
 
+test("risk-based policy blocks completion until risk is current and a high-risk verdict is positive", () => {
+  const fixture = createFixture("completion-gate");
+  try {
+    appendVerifierPolicy(fixture.store);
+    let projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.deepEqual(buildCompletionReadiness(projection), {
+      ready: false,
+      issues: ["A current build-risk assessment is required."],
+    });
+
+    appendRiskAssessment(fixture.store, highRiskInput(), "risk:high");
+    projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(buildCompletionReadiness(projection).ready, false);
+    assert.match(
+      buildCompletionReadiness(projection).issues.join(" "),
+      /positive.*independent verifier|verifier.*positive/i,
+    );
+
+    appendVerifierRequest(fixture.store);
+    fixture.store.append(verdictEvent({
+      criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+    }));
+    projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(buildCompletionReadiness(projection).ready, true);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("low-risk current assessment permits completion without an independent verdict", () => {
+  const fixture = createFixture("low-risk-completion");
+  try {
+    appendVerifierPolicy(fixture.store);
+    appendRiskAssessment(fixture.store, lowRiskInput(), "risk:low");
+    const projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(projection.buildRisk?.current?.assessment.risk, "low");
+    assert.equal(buildCompletionReadiness(projection).ready, true);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("negative verifier verdict remains a completion blocker", () => {
+  const fixture = createFixture("negative-completion");
+  try {
+    appendVerifierPolicy(fixture.store);
+    appendRiskAssessment(fixture.store, highRiskInput(), "risk:high");
+    appendVerifierRequest(fixture.store);
+    const verdicts = completeVerdicts(fixture.evidenceIds);
+    verdicts[0] = {
+      ...verdicts[0]!,
+      verdict: "unsatisfied",
+      rationale: "The high-risk behavior remains incomplete.",
+    };
+    fixture.store.append(verdictEvent({ criterionVerdicts: verdicts }));
+    const projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(projection.verifier?.current?.verdict?.satisfied, false);
+    assert.equal(buildCompletionReadiness(projection).ready, false);
+    assert.match(
+      buildCompletionReadiness(projection).issues.join(" "),
+      /positive.*independent verifier|unsatisfied/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("integration advancement preserves and invalidates prior risk and verifier verdict history", () => {
+  const fixture = createFixture("revision-invalidation");
+  try {
+    appendVerifierPolicy(fixture.store);
+    appendRiskAssessment(fixture.store, highRiskInput(), "risk:high");
+    appendVerifierRequest(fixture.store);
+    const verdicts = completeVerdicts(fixture.evidenceIds);
+    verdicts[2] = {
+      ...verdicts[2]!,
+      verdict: "unsatisfied",
+      rationale: "The UI has a revision-bound defect.",
+    };
+    fixture.store.append(verdictEvent({ criterionVerdicts: verdicts }));
+    const nextRevision = "b".repeat(40);
+    fixture.store.append(event("integration.revision_advanced", "integration:2", {
+      integrationRevision: nextRevision,
+      previousIntegrationRevision: REVISION,
+    }));
+
+    const projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(projection.verifier?.current, undefined);
+    assert.equal(projection.verifier?.history.length, 1);
+    assert.equal(projection.verifier?.history[0]?.state, "invalidated");
+    assert.equal(projection.verifier?.history[0]?.invalidatedByRevision, nextRevision);
+    assert.equal(projection.verifier?.history[0]?.verdict?.satisfied, false);
+    assert.equal(projection.buildRisk?.current, undefined);
+    assert.equal(projection.buildRisk?.history[0]?.state, "invalidated");
+    assert.equal(projection.buildRisk?.history[0]?.invalidatedByRevision, nextRevision);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("risk assessment is recomputed by the kernel and cannot be lowered for one revision", () => {
+  const fixture = createFixture("risk-integrity");
+  try {
+    appendVerifierPolicy(fixture.store);
+    appendRiskAssessment(fixture.store, highRiskInput(), "risk:high");
+    assert.throws(
+      () => appendRiskAssessment(fixture.store, lowRiskInput(), "risk:downgrade"),
+      /lower|downgrade|high risk/i,
+    );
+    const forged = lowRiskInput();
+    assert.throws(
+      () => fixture.store.append(event(
+        "build.risk_assessed",
+        "risk:forged",
+        {
+          targetRevision: REVISION,
+          input: forged,
+          assessment: assessBuildRisk(highRiskInput()),
+        },
+      )),
+      /assessment|recompute|conflict/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 interface Fixture {
   root: string;
   database: string;
@@ -586,6 +715,53 @@ function appendVerifierRequest(store: SqliteSchedulerStore): void {
     verifierRequestPayload(),
     { role: "runner", id: "native-verifier-runtime" },
   ));
+}
+
+function appendVerifierPolicy(store: SqliteSchedulerStore): void {
+  store.append(event("verifier.policy_configured", "verifier:policy", {
+    mode: "risk_based",
+    candidateRuntimeIds: ["google:verifier"],
+  }));
+}
+
+function appendRiskAssessment(
+  store: SqliteSchedulerStore,
+  input: BuildRiskAssessmentInput,
+  idempotencyKey: string,
+): void {
+  store.append(event("build.risk_assessed", idempotencyKey, {
+    targetRevision: REVISION,
+    input,
+    assessment: assessBuildRisk(input),
+  }));
+}
+
+function highRiskInput(): BuildRiskAssessmentInput {
+  return {
+    architectDeclaration: "low",
+    stricterQualification: false,
+    kernelFacts: {
+      destructiveEffects: false,
+      credentialEffects: false,
+      externalWriteEffects: false,
+      integrationConflict: false,
+      changedPaths: ["src/auth/session.ts"],
+    },
+  };
+}
+
+function lowRiskInput(): BuildRiskAssessmentInput {
+  return {
+    architectDeclaration: "low",
+    stricterQualification: false,
+    kernelFacts: {
+      destructiveEffects: false,
+      credentialEffects: false,
+      externalWriteEffects: false,
+      integrationConflict: false,
+      changedPaths: ["src/components/card.tsx"],
+    },
+  };
 }
 
 function verifierRequestPayload(): Record<string, unknown> {

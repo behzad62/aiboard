@@ -428,6 +428,7 @@ class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
       excludedModels: input.excludedModels.map((model) => ({ ...model })),
       criteria: input.criteria.map((criterion) => ({ ...criterion })),
       status: "requested",
+      state: "current",
       requestedAt: input.occurredAt,
     };
     this.current = this.afterRequest?.(requested) ?? requested;
