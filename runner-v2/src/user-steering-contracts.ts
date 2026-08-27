@@ -92,6 +92,7 @@ export interface ArchitectQuestionAnswer {
 
 export interface UserGuidanceItem extends UserGuidanceSubmission {
   status: "submitted" | "acknowledged";
+  interruptionStatus: "pending" | "completed";
   resolution?: UserGuidanceAcknowledgementResolution;
 }
 

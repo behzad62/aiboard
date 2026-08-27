@@ -1124,6 +1124,52 @@ test("guidance during an already-started integration records its exact revision 
   }
 });
 
+test("managed guidance cannot reach the Architect before durable interruption completion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-managed-guidance-interruption-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore: FIXTURE_EVIDENCE_STORE });
+  let architectCalls = 0;
+  try {
+    seedPlan(store, [task("task-a", "planned")]);
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          architectCalls += 1;
+          assert.deepEqual(request.reason, {
+            type: "user_guidance_required",
+            guidanceId: "guidance-managed",
+            version: 1,
+          });
+          acknowledge(store, "guidance-managed", 1);
+        },
+      },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+      clock: CLOCK,
+    });
+    runtime.submitManagedUserGuidance({
+      guidanceId: "guidance-managed",
+      text: "Wait until the old verification is retired.",
+      version: 1,
+      idempotencyKey: "guidance:managed",
+    });
+    assert.deepEqual(await runtime.step(), {
+      status: "blocked",
+      action: "user_guidance_interruption_pending",
+    });
+    assert.equal(architectCalls, 0);
+    runtime.completeManagedUserGuidanceInterruption("guidance-managed", 1);
+    assert.equal((await runtime.step()).action, "user_guidance_required");
+    assert.equal(architectCalls, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function runtimeFor(store: SqliteSchedulerStore, architectDriver: ArchitectRuntimeDriver): BuildRuntime {
   return new BuildRuntime({
     runId: RUN_ID,

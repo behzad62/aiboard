@@ -36,6 +36,7 @@ export interface NativeBuildRuntimeHandle {
   finalVerificationCleanup?: FinalVerificationCleanupController;
   retireInvalidatedFinalVerification?(
     generation: FinalVerificationGenerationProjection,
+    currentGeneration?: FinalVerificationGenerationProjection,
   ): Promise<void>;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
@@ -79,15 +80,43 @@ export class NativeBuildManager implements BuildControlPlane {
         const handle = await this.ensureRuntime(spec);
         try {
           const projection = handle.runtime.projection();
-          const interrupted = projection.status === "completed" || projection.finalVerification?.current
-            ? undefined
-            : [...(projection.finalVerification?.history ?? [])]
-                .reverse()
-                .find((generation) => generation.invalidatedByGuidanceId);
-          if (interrupted && handle.retireInvalidatedFinalVerification) {
-            await handle.retireInvalidatedFinalVerification(interrupted);
-          } else {
+          const pendingInterruptions = Object.values(projection.userGuidance ?? {})
+            .filter((guidance) => guidance.interruptionStatus !== "completed")
+            .sort((left, right) => left.version - right.version);
+          const orphanedInvalidations = (projection.finalVerification?.history ?? [])
+            .filter((generation) =>
+              generation.invalidatedByGuidanceId &&
+              !projection.userGuidance?.[generation.invalidatedByGuidanceId]
+            );
+          if (pendingInterruptions.length === 0 && orphanedInvalidations.length === 0) {
             await handle.finalVerificationCleanup?.quiesceRun();
+          } else {
+            for (const guidance of pendingInterruptions) {
+              const interrupted = (projection.finalVerification?.history ?? [])
+                .filter((generation) =>
+                  generation.invalidatedByGuidanceId === guidance.guidanceId
+                );
+              if (interrupted.length > 0 && handle.retireInvalidatedFinalVerification) {
+                for (const generation of interrupted) {
+                  await handle.retireInvalidatedFinalVerification(
+                    generation,
+                    projection.finalVerification?.current,
+                  );
+                }
+              } else {
+                await handle.finalVerificationCleanup?.quiesceRun();
+              }
+              handle.runtime.completeManagedUserGuidanceInterruption(
+                guidance.guidanceId,
+                guidance.version,
+              );
+            }
+            for (const generation of orphanedInvalidations) {
+              await handle.retireInvalidatedFinalVerification?.(
+                generation,
+                projection.finalVerification?.current,
+              );
+            }
           }
         } catch (error) {
           quiesceFailed.add(spec.runId);
@@ -208,10 +237,16 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     input: UserGuidanceControlInput
   ): Promise<SchedulerProjection> {
-    const projection = await this.withRuntimeActivity(async () =>
+    const result = await this.withRuntimeActivity(async () =>
       this.serialized(async () => {
         const handle = this.require(runId);
-        const submitted = handle.runtime.submitUserGuidance(input);
+        const submitted = typeof handle.runtime.submitManagedUserGuidance === "function"
+          ? handle.runtime.submitManagedUserGuidance(input)
+          : handle.runtime.submitUserGuidance(input);
+        const guidance = submitted.userGuidance?.[input.guidanceId];
+        if (guidance?.interruptionStatus === "completed") {
+          return { projection: submitted, shouldWake: false };
+        }
         const interrupted = submitted.status === "completed"
           ? undefined
           : [...(submitted.finalVerification?.history ?? [])]
@@ -220,15 +255,24 @@ export class NativeBuildManager implements BuildControlPlane {
                 generation.invalidatedByGuidanceId === input.guidanceId
               );
         if (interrupted && handle.retireInvalidatedFinalVerification) {
-          await handle.retireInvalidatedFinalVerification(interrupted);
+          await handle.retireInvalidatedFinalVerification(
+            interrupted,
+            submitted.finalVerification?.current,
+          );
         } else {
           await handle.finalVerificationCleanup?.quiesceRun();
         }
-        return submitted;
+        const projection = typeof handle.runtime.completeManagedUserGuidanceInterruption === "function"
+          ? handle.runtime.completeManagedUserGuidanceInterruption(
+              input.guidanceId,
+              input.version,
+            )
+          : submitted;
+        return { projection, shouldWake: true };
       })
     );
-    this.wake(runId);
-    return projection;
+    if (result.shouldWake) this.wake(runId);
+    return result.projection;
   }
 
   async answerArchitectQuestion(
@@ -448,7 +492,10 @@ export class NativeBuildManager implements BuildControlPlane {
         }
         result = { status: "paused", action: "no_mechanical_progress" };
       }
-      if (result.status === "blocked") {
+      if (
+        result.status === "blocked" &&
+        result.action !== "user_guidance_interruption_pending"
+      ) {
         await handle.finalVerificationCleanup?.quiesceRun();
       }
       const finalized = await this.finalizeExecutionInsideActivity(

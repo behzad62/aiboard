@@ -347,6 +347,291 @@ test("durable steering retires the exact invalidated verification generation bef
   }
 });
 
+test("active pump cannot consume guidance until exact verification retirement completes", { timeout: 2_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-retirement-barrier-"));
+  let manager: NativeBuildManager | undefined;
+  let releaseActive!: () => void;
+  let releaseRetirement!: () => void;
+  let activeStarted!: () => void;
+  const activeRelease = new Promise<void>((resolve) => { releaseActive = resolve; });
+  const retirementRelease = new Promise<void>((resolve) => { releaseRetirement = resolve; });
+  const activeObserved = new Promise<void>((resolve) => { activeStarted = resolve; });
+  let projection = requestedHandoffProjection("finish");
+  projection = { ...projection, status: "running", projectHandoff: undefined };
+  const invalidated = projection.finalVerification!.current!;
+  let barrier = false;
+  let freshGenerationId: string | undefined;
+  let calls = 0;
+  const trace: string[] = [];
+  const runtime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    submitUserGuidanceWithOutcome: () => {
+      projection = {
+        ...projection,
+        finalVerification: {
+          history: [{ ...invalidated, state: "invalidated", invalidatedByGuidanceId: "guidance-race" }],
+        },
+      };
+      trace.push("guidance-appended");
+      barrier = true;
+      trace.push("barrier-set");
+      return { projection, appended: true };
+    },
+    submitManagedUserGuidance: () => {
+      projection = {
+        ...projection,
+        userGuidance: {
+          "guidance-race": {
+            guidanceId: "guidance-race",
+            text: "Retire the old verification before replanning.",
+            version: 1,
+            status: "submitted",
+            interruptionStatus: "pending",
+          },
+        },
+        finalVerification: {
+          history: [{ ...invalidated, state: "invalidated", invalidatedByGuidanceId: "guidance-race" }],
+        },
+      };
+      trace.push("guidance-appended");
+      barrier = true;
+      trace.push("barrier-set");
+      return projection;
+    },
+    completeManagedUserGuidanceInterruption: () => {
+      barrier = false;
+      projection.userGuidance["guidance-race"].interruptionStatus = "completed";
+      trace.push("barrier-released");
+      return projection;
+    },
+    runUntilBlocked: async () => {
+      calls += 1;
+      if (calls === 1) {
+        trace.push("active-checkpoint");
+        activeStarted();
+        await activeRelease;
+        return { status: "progressed" as const, action: "stale-checkpoint-ended" };
+      }
+      if (barrier) {
+        trace.push("pump-blocked-by-retirement");
+        return { status: "blocked" as const, action: "user_guidance_retirement_pending" };
+      }
+      trace.push("guidance-acknowledged-and-fresh-generation-created");
+      freshGenerationId = "generation-fresh";
+      projection = {
+        ...projection,
+        finalVerification: {
+          current: { ...invalidated, generationId: freshGenerationId },
+          history: [...(projection.finalVerification?.history ?? [])],
+        },
+      };
+      return { status: "blocked" as const, action: "fresh_final_verification_planned" };
+    },
+  } as unknown as BuildRuntime;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "revision-final", integrationBranch: "aiboard/run/integration", appliedToProject: false }),
+        retireInvalidatedFinalVerification: async () => {
+          trace.push("retirement-started");
+          await retirementRelease;
+          trace.push("retirement-finished");
+        },
+        finalVerificationCleanup: { quiesceRun: async () => undefined, cleanup: async () => ({}) },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate("run_1");
+    await activeObserved;
+    const steering = manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-race",
+      text: "Retire the old verification before replanning.",
+      version: 1,
+      idempotencyKey: "guidance:race",
+    });
+    releaseActive();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(trace.includes("guidance-acknowledged-and-fresh-generation-created"), false);
+    assert.equal(projection.finalVerification?.current, undefined);
+    releaseRetirement();
+    await steering;
+    await manager.awaitIdle("run_1");
+    assert.equal(trace.indexOf("retirement-finished") < trace.indexOf("guidance-acknowledged-and-fresh-generation-created"), true);
+    assert.equal(freshGenerationId, "generation-fresh");
+  } finally {
+    releaseActive?.();
+    releaseRetirement?.();
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("acknowledged exact guidance replay performs no later lifecycle side effects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-guidance-replay-no-effects-"));
+  let manager: NativeBuildManager | undefined;
+  let quiesceCalls = 0;
+  let retirementCalls = 0;
+  const projection = {
+    ...fakeRuntime("run_1").projection(),
+    userGuidance: {
+      "guidance-replay": {
+        guidanceId: "guidance-replay",
+        text: "Already handled.",
+        version: 1,
+        status: "acknowledged" as const,
+        interruptionStatus: "completed" as const,
+        resolution: { type: "no_plan_change" as const, rationale: "Equivalent.", evidenceIds: ["evidence-1"] },
+      },
+    },
+  };
+  const runtime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    submitManagedUserGuidance: () => projection,
+    runUntilBlocked: async () => ({ status: "blocked" as const, action: "later-worker-active" }),
+  } as unknown as BuildRuntime;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        finalVerificationCleanup: { quiesceRun: async () => { quiesceCalls += 1; }, cleanup: async () => ({}) },
+        retireInvalidatedFinalVerification: async () => { retirementCalls += 1; },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    const replayed = await manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-replay",
+      text: "Already handled.",
+      version: 1,
+      idempotencyKey: "guidance:replay",
+    });
+    assert.equal(replayed.userGuidance?.["guidance-replay"]?.status, "acknowledged");
+    assert.equal(quiesceCalls, 0);
+    assert.equal(retirementCalls, 0);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("completed exact guidance replay succeeds without touching a failing cleanup service", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-terminal-guidance-replay-"));
+  let manager: NativeBuildManager | undefined;
+  const projection = {
+    ...fakeRuntime("run_1").projection(),
+    status: "completed" as const,
+    userGuidance: {
+      "guidance-terminal": {
+        guidanceId: "guidance-terminal",
+        text: "Accepted before completion.",
+        version: 1,
+        status: "acknowledged" as const,
+        interruptionStatus: "completed" as const,
+        resolution: { type: "no_plan_change" as const, rationale: "Equivalent.", evidenceIds: ["evidence-1"] },
+      },
+    },
+  };
+  const runtime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    submitManagedUserGuidance: () => projection,
+  } as unknown as BuildRuntime;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => { throw new Error("cleanup unavailable"); },
+          cleanup: async () => { throw new Error("cleanup unavailable"); },
+        },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    const replayed = await manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance-terminal",
+      text: "Accepted before completion.",
+      version: 1,
+      idempotencyKey: "guidance:terminal",
+    });
+    assert.equal(replayed.status, "completed");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("exact retry after post-append retirement failure retries cleanup and releases durable progress", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-guidance-retirement-retry-"));
+  let manager: NativeBuildManager | undefined;
+  let attempts = 0;
+  let projection = {
+    ...fakeRuntime("run_1").projection(),
+    userGuidance: {} as SchedulerProjection["userGuidance"],
+  };
+  const runtime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    submitManagedUserGuidance: () => {
+      projection = {
+        ...projection,
+        userGuidance: {
+          "guidance-retry": {
+            guidanceId: "guidance-retry", text: "Retry cleanup.", version: 1,
+            status: "submitted", interruptionStatus: "pending",
+          },
+        },
+      };
+      return projection;
+    },
+    completeManagedUserGuidanceInterruption: () => {
+      projection.userGuidance["guidance-retry"].interruptionStatus = "completed";
+      return projection;
+    },
+    runUntilBlocked: async () => ({ status: "blocked" as const, action: "user_guidance_required" }),
+  } as unknown as BuildRuntime;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        finalVerificationCleanup: {
+          quiesceRun: async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error("cleanup unavailable");
+          },
+          cleanup: async () => ({}),
+        },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    const input = { guidanceId: "guidance-retry", text: "Retry cleanup.", version: 1, idempotencyKey: "guidance:retry" };
+    await assert.rejects(manager.submitUserGuidance("run_1", input), /cleanup unavailable/i);
+    assert.equal(projection.userGuidance["guidance-retry"].interruptionStatus, "pending");
+    const replayed = await manager.submitUserGuidance("run_1", input);
+    assert.equal(attempts, 2);
+    assert.equal(replayed.userGuidance?.["guidance-retry"]?.interruptionStatus, "completed");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("recovery retires a durably invalidated generation after post-append cleanup failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-retirement-recovery-"));
   const specsPath = join(root, "builds.sqlite");
@@ -418,6 +703,68 @@ test("recovery retires a durably invalidated generation after post-append cleanu
   } finally {
     await first?.close();
     await recovered?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery adopts an invalidated generation without removing a newer current workspace", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-steering-adoption-recovery-"));
+  let manager: NativeBuildManager | undefined;
+  const approved = requestedHandoffProjection("finish").finalVerification!.current!;
+  const invalidated = {
+    ...approved,
+    state: "invalidated" as const,
+    invalidatedByGuidanceId: "guidance-adopt",
+  };
+  const current = {
+    ...approved,
+    generationId: "generation-newer",
+    planVersion: approved.planVersion + 1,
+  };
+  let workspaceExists = true;
+  const projection: SchedulerProjection = {
+    ...fakeRuntime("run_1").projection(),
+    userGuidance: {
+      "guidance-adopt": {
+        guidanceId: "guidance-adopt", text: "Preserve the newer generation.", version: 1,
+        status: "acknowledged", interruptionStatus: "pending",
+        resolution: { type: "no_plan_change", rationale: "Already reconciled.", evidenceIds: ["evidence-1"] },
+      },
+    },
+    finalVerification: { current, history: [invalidated] },
+  };
+  const runtime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    completeManagedUserGuidanceInterruption: () => {
+      projection.userGuidance["guidance-adopt"].interruptionStatus = "completed";
+      return projection;
+    },
+  } as unknown as BuildRuntime;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => ({
+        ...handleProjections("run_1"), runtime,
+        usage: () => emptyBudget("run_1"), observability: async () => emptyObservability("run_1"),
+        projectHandoff: async () => ({ integrationRevision: "r", integrationBranch: "b", appliedToProject: false }),
+        retireInvalidatedFinalVerification: async (generation, preservedCurrent) => {
+          assert.equal(generation.generationId, invalidated.generationId);
+          assert.equal(preservedCurrent?.generationId, current.generationId);
+          // The production callback adopts shared current-generation resources.
+          workspaceExists = true;
+        },
+        finalVerificationCleanup: { quiesceRun: async () => undefined, cleanup: async () => ({}) },
+        cleanup: async () => undefined, close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    await manager.recover();
+    assert.equal(workspaceExists, true);
+    assert.equal(projection.finalVerification?.current?.generationId, "generation-newer");
+    assert.equal(projection.userGuidance["guidance-adopt"].interruptionStatus, "completed");
+  } finally {
+    await manager?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

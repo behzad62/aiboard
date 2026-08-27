@@ -430,10 +430,11 @@ export class NativeBuildFactory {
     return {
       runtime,
       finalVerificationCleanup,
-      retireInvalidatedFinalVerification: async (generation) =>
+      retireInvalidatedFinalVerification: async (generation, currentGeneration) =>
         await retireInvalidatedFinalVerificationGeneration({
           cleanup: finalVerificationCleanup,
           generation,
+          currentGeneration,
           releasePortLease: async (lease, targetRevision) =>
             await finalVerificationPorts.release(
               lease,

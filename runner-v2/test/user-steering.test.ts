@@ -1043,6 +1043,9 @@ test("P3.1 invalid reconciliation and whitespace-only steering fields roll back 
 
 test("P3.1 rejects whitespace-only no-plan-change evidence IDs atomically", () => {
   withSubmittedGuidance((store) => {
+    append(store, "user.guidance_interruption_completed", { role: "runner", id: "build-manager" }, "guidance:one:interrupted", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+    });
     const before = rebuildSchedulerProjection(store.readRun(RUN_ID));
     assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:evidence-id-whitespace", {
       guidanceId: "guidance-1",
@@ -1059,6 +1062,9 @@ test("P3.1 rejects whitespace-only no-plan-change evidence IDs atomically", () =
 
 test("P3.1 rejects unknown nested acknowledgement-resolution fields atomically", () => {
   withSubmittedGuidance((store) => {
+    append(store, "user.guidance_interruption_completed", { role: "runner", id: "build-manager" }, "guidance:one:interrupted", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+    });
     const before = rebuildSchedulerProjection(store.readRun(RUN_ID));
     assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:resolution-unexpected", {
       guidanceId: "guidance-1",
@@ -1135,6 +1141,33 @@ test("P3.1 rejects malformed and authority-bypass steering events atomically", (
   });
 });
 
+test("guidance interruption completion is exact, runner-owned, replay-safe, and required before acknowledgement", () => {
+  withSubmittedGuidance((store) => {
+    const raw = (type: NewSchedulerEvent["type"], actor: NewSchedulerEvent["actor"], key: string, payload: Record<string, unknown>) =>
+      store.append({ runId: RUN_ID, type, occurredAt: "2026-08-27T00:00:00.000Z", actor, idempotencyKey: key, payload });
+    assert.throws(() => raw("user.guidance_acknowledged", ARCHITECT, "guidance:premature-ack", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+      resolution: { type: "no_plan_change", rationale: "Equivalent.", evidenceIds: ["evidence-1"] },
+    }), /interruption must complete/i);
+    assert.throws(() => raw("user.guidance_interruption_completed", { role: "worker", id: "worker-1" }, "guidance:bad-owner", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+    }), /build manager|pending user guidance/i);
+    assert.throws(() => raw("user.guidance_interruption_completed", { role: "runner", id: "build-manager" }, "guidance:bad-version", {
+      guidanceId: "guidance-1", expectedVersion: 2,
+    }), /version is 1/i);
+    const completed = raw("user.guidance_interruption_completed", { role: "runner", id: "build-manager" }, "guidance:complete", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+    });
+    const replayed = raw("user.guidance_interruption_completed", { role: "runner", id: "build-manager" }, "guidance:complete", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+    });
+    assert.equal(replayed.eventId, completed.eventId);
+    assert.throws(() => raw("user.guidance_interruption_completed", { role: "runner", id: "build-manager" }, "guidance:complete-conflict", {
+      guidanceId: "guidance-1", expectedVersion: 1,
+    }), /already completed/i);
+  });
+});
+
 function initialize(store: SqliteSchedulerStore, objective: string): void {
   append(store, "run.initialized", { role: "runner", id: "runner" }, "initialized", { objective });
 }
@@ -1172,6 +1205,23 @@ function append(
   idempotencyKey: string,
   payload: Record<string, unknown>,
 ) {
+  if (type === "user.guidance_acknowledged") {
+    const guidanceId = payload.guidanceId;
+    const expectedVersion = payload.expectedVersion;
+    if (typeof guidanceId === "string" && typeof expectedVersion === "number") {
+      const guidance = rebuildSchedulerProjection(store.readRun(RUN_ID)).userGuidance[guidanceId];
+      if (guidance?.interruptionStatus === "pending") {
+        store.append({
+          runId: RUN_ID,
+          type: "user.guidance_interruption_completed",
+          occurredAt: "2026-08-27T00:00:00.000Z",
+          actor: { role: "runner", id: "build-manager" },
+          idempotencyKey: `guidance-interruption:${guidanceId}:version:${expectedVersion}`,
+          payload: { guidanceId, expectedVersion },
+        });
+      }
+    }
+  }
   return store.append({
     runId: RUN_ID,
     type,

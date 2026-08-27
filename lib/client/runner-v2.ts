@@ -234,6 +234,8 @@ export interface NativeUserGuidanceProjection {
   text: string;
   version: number;
   status: "submitted" | "acknowledged";
+  /** Omitted only by Runner projections created before durable interruption completion. */
+  interruptionStatus?: "pending" | "completed";
   resolution?:
     | { type: "no_plan_change"; rationale: string; evidenceIds: string[] }
     | {

@@ -608,7 +608,39 @@ function append(
   idempotencyKey: string,
   payload: Record<string, unknown>,
 ) {
-  return store.append({ runId: RUN_ID, type, occurredAt: CLOCK(), actor, idempotencyKey, payload });
+  if (type === "user.guidance_acknowledged") {
+    const guidanceId = payload.guidanceId;
+    const expectedVersion = payload.expectedVersion;
+    if (typeof guidanceId === "string" && typeof expectedVersion === "number") {
+      const guidance = projection(store).userGuidance[guidanceId];
+      if (guidance?.interruptionStatus === "pending") {
+        store.append({
+          runId: RUN_ID,
+          type: "user.guidance_interruption_completed",
+          occurredAt: CLOCK(),
+          actor: { role: "runner", id: "build-manager" },
+          idempotencyKey: `guidance-interruption:${guidanceId}:version:${expectedVersion}`,
+          payload: { guidanceId, expectedVersion },
+        });
+      }
+    }
+  }
+  const appended = store.append({ runId: RUN_ID, type, occurredAt: CLOCK(), actor, idempotencyKey, payload });
+  if (type === "user.guidance_submitted") {
+    const guidanceId = payload.guidanceId;
+    const version = payload.version;
+    if (typeof guidanceId === "string" && typeof version === "number") {
+      store.append({
+        runId: RUN_ID,
+        type: "user.guidance_interruption_completed",
+        occurredAt: CLOCK(),
+        actor: { role: "runner", id: "build-manager" },
+        idempotencyKey: `guidance-interruption:${guidanceId}:version:${version}`,
+        payload: { guidanceId, expectedVersion: version },
+      });
+    }
+  }
+  return appended;
 }
 
 function projection(store: SqliteSchedulerStore) {

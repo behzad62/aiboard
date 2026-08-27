@@ -763,6 +763,17 @@ function createStoreFixture(
         version: acceptedGuidance.version,
       },
     });
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_interruption_completed",
+      occurredAt: "2026-08-26T00:00:00.750Z",
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: `guidance-interruption:${acceptedGuidance.guidanceId}:version:${acceptedGuidance.version}`,
+      payload: {
+        guidanceId: acceptedGuidance.guidanceId,
+        expectedVersion: acceptedGuidance.version,
+      },
+    });
   }
   fixture.store.append({
     runId: RUN_ID,

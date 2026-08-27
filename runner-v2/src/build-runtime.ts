@@ -293,6 +293,23 @@ export class BuildRuntime {
     version: number;
     idempotencyKey: string;
   }): SchedulerProjection {
+    const submitted = this.submitManagedUserGuidance(input);
+    const guidance = submitted.userGuidance[input.guidanceId];
+    if (guidance?.interruptionStatus === "pending") {
+      return this.completeManagedUserGuidanceInterruption(
+        input.guidanceId,
+        input.version,
+      );
+    }
+    return submitted;
+  }
+
+  submitManagedUserGuidance(input: {
+    guidanceId: string;
+    text: string;
+    version: number;
+    idempotencyKey: string;
+  }): SchedulerProjection {
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const appended = this.store.append({
       runId: this.runId,
@@ -311,6 +328,21 @@ export class BuildRuntime {
         new DOMException(`Build ${this.runId} received user guidance.`, "AbortError")
       );
     }
+    return this.projection();
+  }
+
+  completeManagedUserGuidanceInterruption(
+    guidanceId: string,
+    expectedVersion: number,
+  ): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "user.guidance_interruption_completed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: `guidance-interruption:${guidanceId}:version:${expectedVersion}`,
+      payload: { guidanceId, expectedVersion },
+    });
     return this.projection();
   }
 
@@ -393,6 +425,12 @@ export class BuildRuntime {
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
     if (projection.status === "paused") return { status: "paused" };
+    const pendingInterruption = Object.values(projection.userGuidance)
+      .filter((guidance) => guidance.interruptionStatus !== "completed")
+      .sort((left, right) => left.version - right.version)[0];
+    if (pendingInterruption) {
+      return { status: "blocked", action: "user_guidance_interruption_pending" };
+    }
     if (projection.blockingArchitectQuestionId) {
       return { status: "blocked", action: "architect_question_pending" };
     }

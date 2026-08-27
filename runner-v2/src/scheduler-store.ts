@@ -79,6 +79,7 @@ export type SchedulerEventType =
   | "guidance.answered"
   | "guidance.challenged"
   | "user.guidance_submitted"
+  | "user.guidance_interruption_completed"
   | "user.guidance_acknowledged"
   | "architect.question_requested"
   | "architect.question_answered"
@@ -434,6 +435,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     resumeQuestion.checkpoint.reason.version === oldestPendingGuidance.version;
   const allowed =
     event.type === "user.guidance_submitted" ||
+    (event.type === "user.guidance_interruption_completed" &&
+      event.actor.role === "runner" && event.actor.id === "build-manager") ||
     event.type === "user.guidance_acknowledged" ||
     event.type === "architect.question_requested" ||
     event.type === "architect.question_answered" ||
@@ -471,6 +474,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "architect.question_answered" ||
     event.type === "architect.question_resume_consumed" ||
     event.type === "user.guidance_submitted" ||
+    (event.type === "user.guidance_interruption_completed" &&
+      event.actor.role === "runner" && event.actor.id === "build-manager") ||
     ((event.type === "run.paused" || event.type === "run.resumed") &&
       event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
@@ -1706,6 +1711,7 @@ export function reduceSchedulerEvent(
       next.userGuidance[submission.guidanceId] = {
         ...submission,
         status: "submitted",
+        interruptionStatus: "pending",
       };
       next.userGuidanceVersion = submission.version;
       invalidateFinalVerificationForGuidance(next, submission.guidanceId);
@@ -1727,6 +1733,23 @@ export function reduceSchedulerEvent(
       }
       break;
     }
+    case "user.guidance_interruption_completed": {
+      if (event.actor.role !== "runner" || event.actor.id !== "build-manager") {
+        throw new Error("Only the native Build manager may complete a user-guidance interruption.");
+      }
+      const guidanceId = requiredString(event.payload, "guidanceId");
+      const expectedVersion = requiredPositiveInteger(event.payload, "expectedVersion");
+      const guidance = next.userGuidance[guidanceId];
+      if (!guidance) throw new Error(`Unknown user guidance ${guidanceId}.`);
+      if (guidance.version !== expectedVersion) {
+        throw new Error(`User guidance ${guidanceId} version is ${guidance.version}, not ${expectedVersion}.`);
+      }
+      if (guidance.interruptionStatus === "completed") {
+        throw new Error(`User guidance ${guidanceId} interruption is already completed.`);
+      }
+      guidance.interruptionStatus = "completed";
+      break;
+    }
     case "user.guidance_acknowledged": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may acknowledge user guidance.");
@@ -1734,6 +1757,9 @@ export function reduceSchedulerEvent(
       const acknowledgement = parseUserGuidanceAcknowledgement(event.payload);
       const guidance = next.userGuidance[acknowledgement.guidanceId];
       if (!guidance) throw new Error(`Unknown user guidance ${acknowledgement.guidanceId}.`);
+      if (guidance.interruptionStatus !== "completed") {
+        throw new Error(`User guidance ${acknowledgement.guidanceId} interruption must complete before acknowledgement.`);
+      }
       if (guidance.status === "acknowledged") {
         throw new Error(`User guidance ${acknowledgement.guidanceId} is already acknowledged.`);
       }

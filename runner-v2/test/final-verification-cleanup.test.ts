@@ -472,6 +472,47 @@ test("concurrent exact-generation cleanup and guidance retirement share one owne
   } finally { await closeFixture(fixture); }
 });
 
+test("recovery adoption preserves the newer generation workspace and shared lease", async () => {
+  const fixture = await createFixture("guidance-adopts-newer-generation");
+  try {
+    const workspace = await fixture.workspace.create();
+    writeFileSync(join(workspace.path, "new-generation-output.txt"), "owned by the newer generation\n");
+    const ports = new FinalVerificationPortAuthority(fixture.state);
+    const lease = await ports.reserve(fixture.runId, fixture.integration.revision);
+    const cleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      stopRun: async () => undefined,
+      closeBrowserRun: async () => undefined,
+      workspaceManager: fixture.workspace,
+    });
+    await retireInvalidatedFinalVerificationGeneration({
+      cleanup,
+      generation: {
+        generationId: "generation-invalidated",
+        taskId: "verification-invalidated",
+        targetRevision: fixture.integration.revision,
+        executionProfile: {
+          ...emptyFinalVerificationProfile(fixture.integration.revision),
+          portLease: lease,
+        },
+      },
+      currentGeneration: {
+        generationId: "generation-current",
+        executionProfile: {
+          ...emptyFinalVerificationProfile(fixture.integration.revision),
+          portLease: lease,
+        },
+      },
+      releasePortLease: async (ownedLease, targetRevision) =>
+        await ports.release(ownedLease, fixture.runId, targetRevision),
+    });
+    assert.equal(existsSync(workspace.path), true);
+    assert.equal(existsSync(join(workspace.path, "new-generation-output.txt")), true);
+    await ports.validate(lease, fixture.runId, fixture.integration.revision);
+  } finally { await closeFixture(fixture); }
+});
+
 function diagnosticsInput(fixture: Fixture) {
   return {
     generationId: "generation-1",

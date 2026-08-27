@@ -51,9 +51,24 @@ export async function retireInvalidatedFinalVerificationGeneration(input: {
     targetRevision: string;
     executionProfile: { portLease?: unknown };
   };
+  currentGeneration?: {
+    generationId: string;
+    executionProfile: { portLease?: unknown };
+  };
   releasePortLease?(lease: unknown, targetRevision: string): Promise<void>;
 }): Promise<void> {
   const lease = input.generation.executionProfile.portLease;
+  if (input.currentGeneration) {
+    await input.cleanup.quiesceRun();
+    const currentLease = input.currentGeneration.executionProfile.portLease;
+    if (
+      lease && input.releasePortLease &&
+      JSON.stringify(lease) !== JSON.stringify(currentLease)
+    ) {
+      await input.releasePortLease(lease, input.generation.targetRevision);
+    }
+    return;
+  }
   try {
     await input.cleanup.cleanup({
       generationId: input.generation.generationId,
