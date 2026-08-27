@@ -380,7 +380,7 @@ export interface SchedulerStore {
 
 export function assertPendingUserGuidanceAllowsEvent(
   current: SchedulerProjection,
-  event: Pick<SchedulerEvent, "type" | "payload">
+  event: Pick<SchedulerEvent, "type" | "actor" | "payload">
 ): void {
   const hasPendingUserGuidance = Object.values(current.userGuidance).some(
     (guidance) => guidance.status === "submitted"
@@ -395,8 +395,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "user.guidance_acknowledged" ||
     event.type === "architect.question_requested" ||
     event.type === "architect.question_answered" ||
-    event.type === "run.paused" ||
-    event.type === "run.resumed" ||
+    ((event.type === "run.paused" || event.type === "run.resumed") &&
+      event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
     event.type === "provider.health_changed" ||
     event.type === "architect.runtime_assigned" ||

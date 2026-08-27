@@ -11,6 +11,7 @@ import {
   type ArchitectRuntimeDriver,
 } from "../src/build-runtime.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import type { BuildTask } from "../src/task-contracts.js";
 import type { WorkerAssignment, WorkerOutcome } from "../src/task-scheduler.js";
 
@@ -515,6 +516,11 @@ test("the scheduler authority boundary blocks stale review, integration, complet
         category: "tests",
         status: "passed",
       }],
+      ["run.paused", { role: "runner", id: "scheduler" }, {
+        reason: "worker_cancelled",
+        taskId: "task-a",
+      }],
+      ["run.resumed", { role: "worker", id: "stale-worker" }, {}],
     ] as const) {
       assert.throws(() => store.append({
         runId: RUN_ID,
@@ -525,6 +531,25 @@ test("the scheduler authority boundary blocks stale review, integration, complet
         payload,
       }), /user guidance/i);
     }
+
+    assert.doesNotThrow(() => store.append({
+      runId: RUN_ID,
+      type: "run.paused",
+      occurredAt: CLOCK(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "user:pause:pending-guidance",
+      payload: { reason: "user_requested_pause" },
+    }));
+    assert.doesNotThrow(() => store.append({
+      runId: RUN_ID,
+      type: "run.resumed",
+      occurredAt: CLOCK(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "user:resume:pending-guidance",
+      payload: {},
+    }));
+    assert.equal(store.readRun(RUN_ID).at(-1)?.type, "run.resumed");
+    assert.equal(rebuildSchedulerProjection(store.readRun(RUN_ID)).userGuidance["guidance-authority"].status, "submitted");
 
     assert.doesNotThrow(() => store.append({
       runId: RUN_ID,
