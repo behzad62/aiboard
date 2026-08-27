@@ -7,7 +7,7 @@ import test from "node:test";
 import { rebuildSchedulerProjection, type NewSchedulerEvent } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
-import { TaskScheduler } from "../src/task-scheduler.js";
+import { TaskScheduler, type WorkerOutcome } from "../src/task-scheduler.js";
 import { workerSessionId } from "../src/worker-identity.js";
 
 const RUN_ID = "run_user_steering";
@@ -391,6 +391,141 @@ test("revised running work restarts on its new identity and submits new-worker e
     assert.equal(submitted.attempt, 1);
     assert.equal(submitted.assignedWorkerId, "worker_task-active_1_plan_2");
     assert.equal(submitted.changeSetId, "revised-change-set");
+  } finally {
+    store?.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production scheduler persists a distinct running generation before revised same-attempt submission", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-steering-running-generation-"));
+  const database = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database, { evidenceStore });
+  const oldLifecycle = new AbortController();
+  let releaseOldWorker!: (outcome: WorkerOutcome) => void;
+  const oldWorkerOutcome = new Promise<WorkerOutcome>((resolve) => {
+    releaseOldWorker = resolve;
+  });
+  try {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:production-running", {
+      revision: 1,
+      tasks: [{
+        id: "task-production",
+        objective: "Implement the original production intent.",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The production task is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 0,
+      }],
+    });
+    const originalScheduler = new TaskScheduler({
+      runId: RUN_ID,
+      store,
+      driver: { run: async () => await oldWorkerOutcome },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/task-production",
+      lifecycleSignal: () => oldLifecycle.signal,
+      clock: () => "2026-08-27T00:00:01.000Z",
+    });
+    await originalScheduler.tick();
+    const originallyRunning = rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-production"];
+    assert.equal(originallyRunning.status, "running");
+    assert.equal(originallyRunning.attempt, 1);
+    assert.equal(originallyRunning.assignedWorkerId, "worker_task-production_1");
+    assert.equal(
+      store.readRun(RUN_ID).find((event) => event.type === "task.transitioned" && event.payload.status === "running")?.idempotencyKey,
+      "task:task-production:attempt:1:running"
+    );
+
+    oldLifecycle.abort("steering");
+    append(store, "user.guidance_submitted", USER, "production-running:guidance", {
+      guidanceId: "guidance-production-running", text: "Replace the production intent on the active attempt.", version: 1,
+    });
+    append(store, "user.guidance_acknowledged", ARCHITECT, "production-running:guidance:ack", {
+      guidanceId: "guidance-production-running",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The active production attempt must follow the new intent.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Revise the active production attempt.",
+          taskUpdates: [{ taskId: "task-production", action: "revise", objective: "Implement the revised production intent." }],
+        },
+      },
+    });
+    releaseOldWorker({ type: "failed", reason: "The stale lifecycle was aborted." });
+    await originalScheduler.awaitIdle();
+    assert.equal(rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-production"].status, "assigned");
+
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore });
+    const revisedWorkerId = "worker_task-production_1_plan_2";
+    const revisedScheduler = new TaskScheduler({
+      runId: RUN_ID,
+      store,
+      driver: {
+        run: async (assignment) => {
+          assert.equal(assignment.task.status, "running");
+          assert.equal(assignment.workerId, revisedWorkerId);
+          assert.equal(assignment.task.objective, "Implement the revised production intent.");
+          const evidence = evidenceStore.record({
+            runId: RUN_ID,
+            taskId: "task-production",
+            actor: { role: "worker", id: assignment.workerId },
+            fact: {
+              kind: "browser_screenshot",
+              label: "revised production evidence",
+              capturedAt: "2026-08-27T00:00:02.000Z",
+              screenshotArtifactHash: "e".repeat(64),
+              mediaType: "image/png",
+              byteLength: 16,
+            },
+            createdAt: "2026-08-27T00:00:02.000Z",
+            idempotencyKey: "evidence:production-revised",
+            attempt: 1,
+          });
+          return {
+            type: "submitted",
+            changeSetId: "production-revised-change",
+            criterionEvidenceLinks: [{
+              criterionId: "done",
+              evidenceId: evidence.id,
+              artifactHashes: ["e".repeat(64)],
+              taskId: "task-production",
+              attempt: 1,
+            }],
+          };
+        },
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/task-production",
+      clock: () => "2026-08-27T00:00:03.000Z",
+    });
+    await revisedScheduler.tick();
+    await revisedScheduler.awaitIdle();
+    const submitted = rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-production"];
+    assert.equal(submitted.status, "submitted");
+    assert.equal(submitted.attempt, 1);
+    assert.equal(submitted.changeSetId, "production-revised-change");
+    const revisedEvents = store.readRun(RUN_ID).filter(
+      (event) => event.type === "task.transitioned" &&
+        event.payload.taskId === "task-production" &&
+        (event.payload.status === "running" || event.payload.status === "submitted")
+    );
+    assert.deepEqual(
+      revisedEvents.map((event) => event.idempotencyKey),
+      [
+        "task:task-production:attempt:1:running",
+        `task:task-production:attempt:1:running:worker:${revisedWorkerId}`,
+        `task:task-production:attempt:1:submitted:worker:${revisedWorkerId}`,
+      ]
+    );
   } finally {
     store?.close();
     evidenceStore.close();

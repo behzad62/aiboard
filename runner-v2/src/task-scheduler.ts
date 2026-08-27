@@ -6,7 +6,10 @@ import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
-import { standardWorkerId } from "./worker-identity.js";
+import {
+  isSteeringReassignedWorkerId,
+  standardWorkerId,
+} from "./worker-identity.js";
 
 export interface WorkerAssignment {
   runId: string;
@@ -133,7 +136,7 @@ export class TaskScheduler {
           if (task.status === "assigned") {
             this.transition(task.id, "running", task.attempt, {
               ...workspacePatch(allocation),
-            });
+            }, task.assignedWorkerId);
             projection = this.projection();
           }
           this.dispatch(projection.tasks[task.id], workspacePath);
@@ -167,8 +170,8 @@ export class TaskScheduler {
           attempt,
           assignedWorkerId: workerId,
           ...workspacePatch(allocation),
-        });
-        this.transition(taskId, "running", attempt, workspacePatch(allocation));
+        }, workerId);
+        this.transition(taskId, "running", attempt, workspacePatch(allocation), workerId);
         this.dispatch(this.projection().tasks[taskId], workspacePath);
       }
     } finally {
@@ -248,7 +251,7 @@ export class TaskScheduler {
               })),
             }
           : {}),
-      });
+      }, workerId);
       return;
     }
     if (outcome.type === "guidance") {
@@ -282,24 +285,43 @@ export class TaskScheduler {
     }
     this.transition(taskId, "failed", attempt, {
       failureReason: outcome.reason,
-    });
+    }, workerId);
   }
 
   private transition(
     taskId: string,
     status: BuildTask["status"],
     attempt: number,
-    patch: Record<string, unknown>
+    patch: Record<string, unknown>,
+    workerId?: string
   ): void {
     this.store.append({
       runId: this.runId,
       type: "task.transitioned",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "scheduler" },
-      idempotencyKey: `task:${taskId}:attempt:${attempt}:${status}`,
+      idempotencyKey: taskTransitionIdempotencyKey(
+        taskId,
+        attempt,
+        status,
+        workerId
+      ),
       payload: { taskId, status, patch },
     });
   }
+}
+
+function taskTransitionIdempotencyKey(
+  taskId: string,
+  attempt: number,
+  status: BuildTask["status"],
+  workerId?: string
+): string {
+  const legacyKey = `task:${taskId}:attempt:${attempt}:${status}`;
+  return workerId !== undefined &&
+    isSteeringReassignedWorkerId(taskId, attempt, workerId)
+    ? `${legacyKey}:worker:${workerId}`
+    : legacyKey;
 }
 
 function normalizeWorkspace(
