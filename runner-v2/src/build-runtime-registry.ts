@@ -32,6 +32,11 @@ export interface BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string
   ): Promise<SchedulerProjection>;
+  selectVerifierRuntime(
+    runId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection>;
   selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,
@@ -174,6 +179,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
     return this.require(runId).selectArchitectHandoff(runtimeId, idempotencyKey);
+  }
+
+  async selectVerifierRuntime(
+    runId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    return this.require(runId).selectVerifierRuntime(runtimeId, idempotencyKey);
   }
 
   async selectProjectHandoff(

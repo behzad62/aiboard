@@ -336,6 +336,19 @@ export class NativeBuildManager implements BuildControlPlane {
     );
   }
 
+  async selectVerifierRuntime(
+    runId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    const handle = this.require(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
   async selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,

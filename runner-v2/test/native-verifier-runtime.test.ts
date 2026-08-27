@@ -55,7 +55,83 @@ const candidates: AgentRuntimeCandidate[] = [
     capabilities: ["code"],
     priority: 2,
   },
+  {
+    runtimeId: "fallback:verifier",
+    providerId: "fallback",
+    modelId: "fallback-verifier",
+    capabilities: ["code"],
+    priority: 3,
+  },
 ];
+
+test("typed user selection constrains verifier routing to the preferred candidate", async () => {
+  const fixture = createFixture("preferred", [{
+    blocks: [{ type: "text", text: "Selected inspection complete." }],
+    stopReason: "end_turn",
+  }]);
+  try {
+    const result = await fixture.runtime.inspect({
+      ...verifierRequest("run_preferred"),
+      preferredRuntimeId: "fallback:verifier",
+    });
+    assert.equal(result.status, "inspected");
+    assert.equal(result.runtimeId, "fallback:verifier");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("restart excludes a provider-failed pending verifier session and selects fallback", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("provider-fallback", [{
+    blocks: [{ type: "text", text: "Fallback inspection complete." }],
+    stopReason: "end_turn",
+  }], TARGET_REVISION, authority);
+  const sessionId = "verifier:provider-failed-session";
+  try {
+    authority.requestReview({
+      runId: "run_provider_fallback",
+      reviewId: "review-provider-failed",
+      targetRevision: TARGET_REVISION,
+      finalVerificationGenerationId: "final_generation_1",
+      runtime: {
+        runtimeId: "google:verifier",
+        providerId: "google",
+        modelId: "verifier",
+        modelIdentity: "verifier",
+        sessionId,
+      },
+      excludedModels: [{
+        source: "architect",
+        runtimeId: "openai:architect",
+        modelIdentity: "architect",
+      }],
+      criteria: [{ taskId: "task_ui", criterionId: "criterion_ui" }],
+      occurredAt: "2026-08-27T00:00:00.000Z",
+    });
+    await fixture.sessions.create({
+      sessionId,
+      runId: "run_provider_fallback",
+      actor: { role: "verifier", id: "google:verifier" },
+      occurredAt: "2026-08-27T00:00:00.000Z",
+    });
+    fixture.sessions.suspend(
+      sessionId,
+      "provider_error",
+      "provider unavailable",
+      "2026-08-27T00:00:01.000Z",
+    );
+
+    const result = await fixture.runtime.inspect(
+      verifierRequest("run_provider_fallback"),
+    );
+    assert.equal(result.status, "suspended");
+    assert.equal(result.runtimeId, "fallback:verifier");
+    assert.notEqual(result.runtimeId, "google:verifier");
+  } finally {
+    fixture.close();
+  }
+});
 
 test("verifier receives complete revision-bound context in a separate read-only session", async () => {
   const fixture = createFixture("context", [{
@@ -363,8 +439,11 @@ function createFixture(
     runtime: new NativeVerifierRuntime({
       router,
       candidates,
-      models: new Map([["google:verifier", model]]),
-      verifierRuntimeIds: ["google:verifier"],
+      models: new Map([
+        ["google:verifier", model],
+        ["fallback:verifier", model],
+      ]),
+      verifierRuntimeIds: ["google:verifier", "fallback:verifier"],
       sessions,
       artifacts,
       evidenceStore,

@@ -47,6 +47,7 @@ export interface VerifierSelectionInput {
   candidateRuntimeIds: readonly string[];
   architectRuntimeId: string;
   acceptedChangeAuthorRuntimeIds: readonly string[];
+  excludedRuntimeIds?: ReadonlySet<string>;
 }
 
 export type VerifierSelection =
@@ -195,6 +196,7 @@ export class RuntimeRouter {
     const runtime = this.eligible(required).find(
       (candidate) =>
         allowedRuntimeIds.has(candidate.runtimeId) &&
+        !input.excludedRuntimeIds?.has(candidate.runtimeId) &&
         !excludedModelIdentities.has(canonicalModelIdentity(candidate.modelId))
     );
     return runtime

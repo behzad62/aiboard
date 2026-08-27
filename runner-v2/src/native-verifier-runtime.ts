@@ -108,6 +108,7 @@ export interface NativeVerifierInspectionRequest {
   readonly changes: readonly VerifierChangeSnapshot[];
   readonly finalVerification: VerifierFinalVerificationSnapshot;
   readonly riskReasons: readonly BuildRiskReason[];
+  readonly preferredRuntimeId?: string;
   readonly providerRetryDeadlineMs?: number;
   readonly signal?: AbortSignal;
 }
@@ -196,11 +197,43 @@ export class NativeVerifierRuntime {
     const authorRuntimeIds = [
       ...new Set(request.changes.map((change) => change.authorRuntimeId)),
     ];
+    if (
+      request.preferredRuntimeId &&
+      !this.options.verifierRuntimeIds.includes(request.preferredRuntimeId)
+    ) {
+      throw new Error(
+        `Preferred verifier runtime ${request.preferredRuntimeId} is not configured for this Build.`,
+      );
+    }
+    const excludedRuntimeIds = new Set<string>();
+    const pendingReview = this.options.verdictAuthority?.currentReview(request.runId);
+    if (
+      !request.preferredRuntimeId &&
+      pendingReview?.status === "requested"
+    ) {
+      try {
+        const pendingSession = await this.options.sessions.load(
+          pendingReview.runtime.sessionId,
+        );
+        if (
+          pendingSession.status === "suspended" &&
+          pendingSession.suspensionReason === "provider_error"
+        ) {
+          excludedRuntimeIds.add(pendingReview.runtime.runtimeId);
+        }
+      } catch {
+        // A crash may persist the review request before session creation. In
+        // that window the same runtime must recover the exact pending review.
+      }
+    }
     const selection = this.options.router.selectVerifier({
       requiredCapabilities: ["code"],
-      candidateRuntimeIds: this.options.verifierRuntimeIds,
+      candidateRuntimeIds: request.preferredRuntimeId
+        ? [request.preferredRuntimeId]
+        : this.options.verifierRuntimeIds,
       architectRuntimeId: request.architectRuntimeId,
       acceptedChangeAuthorRuntimeIds: authorRuntimeIds,
+      excludedRuntimeIds,
     });
     if (selection.status === "unavailable") {
       return {

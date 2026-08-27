@@ -561,6 +561,28 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "verifier-handoff" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<ArchitectHandoffBody>(request);
+        if (
+          !isNonEmptyString(body.runtimeId) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        sendJson(
+          response,
+          200,
+          await this.requireBuilds().selectVerifierRuntime(
+            runId,
+            body.runtimeId,
+            body.idempotencyKey,
+          ),
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "project-handoff" &&
         request.method === "POST"
       ) {

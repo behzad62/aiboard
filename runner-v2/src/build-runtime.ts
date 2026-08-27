@@ -1116,6 +1116,18 @@ export class BuildRuntime {
         : {}),
       signal: this.activeLifecycleSignal(),
     });
+    const afterVerification = this.projection();
+    if (
+      afterVerification.integrationRevision !== targetRevision ||
+      afterVerification.finalVerification?.current?.generationId !==
+        finalVerification.generationId ||
+      afterVerification.buildRisk?.current?.targetRevision !== targetRevision ||
+      Object.values(afterVerification.userGuidance).some(
+        (guidance) => guidance.status === "submitted",
+      )
+    ) {
+      return { status: "progressed", action: "verifier_invalidated" };
+    }
     if (result.status === "verdict_submitted") {
       const durable = this.projection().verifier?.current;
       if (

@@ -612,6 +612,46 @@ test("unavailable independent verification creates a typed user-selection pause"
   }
 });
 
+test("guidance invalidation during verifier execution suppresses stale selection pause", async () => {
+  const fixture = createFixture("runtime-guidance-invalidation");
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        fixture.store.append(event(
+          "user.guidance_submitted",
+          "guidance:during-verifier",
+          {
+            guidanceId: "guidance-during-verifier",
+            text: "Change the public API before completion.",
+            version: 1,
+            interruptionProtocolVersion: 1,
+          },
+          { role: "user", id: "local-user" },
+        ));
+        return { status: "suspended", reason: "cancelled" };
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      assert.fail("Stale completion must not run after guidance.");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    const invalidated = await runtime.step();
+    assert.equal(invalidated.status, "progressed");
+    assert.equal(invalidated.action, "verifier_invalidated");
+    assert.equal(runtime.projection().verifierSelection, undefined);
+    assert.equal(runtime.projection().finalVerification?.current, undefined);
+    assert.equal(
+      runtime.projection().userGuidance["guidance-during-verifier"]?.status,
+      "submitted",
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 test("provider failure supersedes a pending review with an independent fallback", async () => {
   const fixture = createFixture("runtime-provider-fallback");
   let calls = 0;

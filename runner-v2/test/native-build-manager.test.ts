@@ -2018,6 +2018,7 @@ test("lifecycle mutations wait during live compaction and pass two recomputes el
   let resumeCalls = 0;
   let pauseCalls = 0;
   let architectHandoffCalls = 0;
+  let verifierSelectionCalls = 0;
   const manager = new NativeBuildManager({
     specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
     runArtifactCompaction: async (operation) => await operation(),
@@ -2047,6 +2048,10 @@ test("lifecycle mutations wait during live compaction and pass two recomputes el
           },
           selectArchitectHandoff: () => {
             architectHandoffCalls += 1;
+            return projection;
+          },
+          selectVerifierRuntime: () => {
+            verifierSelectionCalls += 1;
             return projection;
           },
           runUntilBlocked: async () => {
@@ -2085,16 +2090,23 @@ test("lifecycle mutations wait during live compaction and pass two recomputes el
       "chatgpt:gpt-5.4",
       "handoff-during-gc"
     );
+    const selectingVerifier = manager.selectVerifierRuntime(
+      "run_paused",
+      "fallback:verifier",
+      "verifier-during-gc",
+    );
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(resumeCalls, 0);
     assert.equal(pauseCalls, 0);
     assert.equal(architectHandoffCalls, 0);
+    assert.equal(verifierSelectionCalls, 0);
     releaseFirstCompact();
     await manager.awaitIdle("run_settled");
-    await Promise.all([resuming, pausing, selecting]);
+    await Promise.all([resuming, pausing, selecting, selectingVerifier]);
     assert.equal(resumeCalls, 1);
     assert.equal(pauseCalls, 1);
     assert.equal(architectHandoffCalls, 1);
+    assert.equal(verifierSelectionCalls, 1);
     assert.equal(pausedCompactCalls, 1);
   } finally {
     releaseFirstCompact();

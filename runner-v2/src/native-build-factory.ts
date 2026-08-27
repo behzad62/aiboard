@@ -13,8 +13,10 @@ import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import {
   BuildRuntime,
   type FinalVerificationCheckDriver,
+  type IndependentVerifierDriver,
   type IntegrationRuntimeDriver,
 } from "./build-runtime.js";
+import type { AgentSessionProjection } from "./agent-session-store.js";
 import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
 import type { ModelCostEstimator } from "./budgeted-model.js";
 import type {
@@ -45,6 +47,10 @@ import {
   type NativeModelUsageRuntime,
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
+import {
+  NativeVerifierRuntime,
+  type NativeVerifierInspectionRequest,
+} from "./native-verifier-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
@@ -64,7 +70,10 @@ import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import {
   rebuildSchedulerProjection,
   type SchedulerEvent,
+  type SchedulerProjection,
+  type BuildRiskAssessmentProjection,
 } from "./scheduler-store.js";
+import type { BuildRiskAssessmentInput } from "./risk-policy.js";
 import {
   SkillCatalog,
   type SharedSkillRoot,
@@ -76,6 +85,8 @@ import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
+import type { ToolLedgerEvent } from "./tool-ledger.js";
+import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
 
@@ -199,6 +210,20 @@ export class NativeBuildFactory {
       runId: spec.runId,
       integrationManager,
     });
+    const verifierWorkspace = new VerificationWorkspaceManager({
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+      kind: "independent-verifier",
+    });
+    if (
+      schedulerEvents.length > 0 &&
+      rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
+        "submitted"
+    ) {
+      await verifierWorkspace.cleanup();
+    }
     const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
@@ -220,6 +245,7 @@ export class NativeBuildFactory {
       health,
     });
     const architectRouter = new RuntimeRouter({ candidates, health });
+    const verifierRouter = new RuntimeRouter({ candidates, health });
     const skillCatalog = new SkillCatalog({
       projectRoot: this.options.projectRoot,
       sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
@@ -288,6 +314,94 @@ export class NativeBuildFactory {
       browserBackend: this.browserBackend,
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
     });
+    const nativeVerifier = new NativeVerifierRuntime({
+      router: verifierRouter,
+      candidates,
+      models,
+      verifierRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      workspaceManager: {
+        workspaceKind: "independent-verifier",
+        create: async (targetRevision) =>
+          await verifierWorkspace.create(targetRevision),
+      },
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      verdictAuthority: new SchedulerVerifierVerdictAuthority(schedulerStore),
+    });
+    const independentVerifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      assessRisk: async ({ projection }) => deriveNativeVerifierRiskInput({
+        projection,
+        sessions: await sessions.listRun(spec.runId),
+        schedulerEvents: schedulerStore.readRun(spec.runId),
+        toolEvents: ledger.listRun(spec.runId),
+        stricterQualification: false,
+      }),
+      verify: async (request) => {
+        const result = await nativeVerifier.inspect(
+          buildNativeVerifierInspectionRequest({
+            runId: spec.runId,
+            objective: spec.objective,
+            architectRuntimeId:
+              request.projection.runtime.architect.runtimeId ??
+              spec.architectRuntimeId,
+            projection: request.projection,
+            sessions: await sessions.listRun(spec.runId),
+            risk: request.risk,
+            ...(request.preferredRuntimeId
+              ? { preferredRuntimeId: request.preferredRuntimeId }
+              : {}),
+            ...(request.signal ? { signal: request.signal } : {}),
+            providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+              spec.budgetLimits.maxActiveMs,
+              budgetLedger.snapshot(spec.runId).effective.activeMs,
+              Date.now(),
+            ),
+          }),
+        );
+        if (
+          (result.status === "verdict_submitted" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `verifier:${result.runtimeId}`,
+            );
+          }
+        }
+        if (result.status === "verdict_submitted") {
+          await verifierWorkspace.cleanup();
+          return { status: "verdict_submitted" };
+        }
+        if (result.status === "unavailable") {
+          return { status: "unavailable", reason: result.reason };
+        }
+        if (result.status === "suspended") {
+          return {
+            status: "suspended",
+            reason: result.reason,
+            runtimeId: result.runtimeId,
+            ...(result.error ? { error: result.error } : {}),
+          };
+        }
+        return {
+          status: "suspended",
+          reason: `unexpected_verifier_result:${result.status}`,
+        };
+      },
+    };
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -396,6 +510,7 @@ export class NativeBuildFactory {
           await finalVerificationPorts.release(profile.portLease, spec.runId, profile.targetRevision);
         }
       },
+      independentVerifier,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {
@@ -541,6 +656,7 @@ export class NativeBuildFactory {
           [
             () => sessions.compactRun(spec.runId),
             () => workspaceManager.cleanup(),
+            () => verifierWorkspace.cleanup(),
             () => integrationManager.cleanup(),
           ],
           spec.runId
@@ -610,6 +726,213 @@ export function integrationInitializationModeFromEvents(
     : "active";
 }
 
+export function deriveNativeVerifierRiskInput(input: {
+  projection: SchedulerProjection;
+  sessions: readonly AgentSessionProjection[];
+  schedulerEvents: readonly SchedulerEvent[];
+  toolEvents: readonly ToolLedgerEvent[];
+  stricterQualification: boolean;
+}): BuildRiskAssessmentInput {
+  const accepted = acceptedChangeSessions(input.projection, input.sessions);
+  const toolEffects = input.toolEvents.filter(
+    (event) => event.type === "tool.started" || event.type === "tool.retry_started",
+  );
+  return {
+    architectDeclaration: "low",
+    stricterQualification: input.stricterQualification,
+    kernelFacts: {
+      destructiveEffects: toolEffects.some(
+        (event) => event.access?.destructive === true,
+      ),
+      credentialEffects: toolEffects.some(
+        (event) => event.access?.credentialChange === true,
+      ),
+      externalWriteEffects:
+        accepted.some((session) =>
+          (session.changeSet?.externalEffects.length ?? 0) > 0
+        ) ||
+        toolEffects.some(
+          (event) =>
+            event.effect === "external" ||
+            event.access?.external === true ||
+            event.outsideWorkspace === true,
+        ),
+      integrationConflict: input.schedulerEvents.some(
+        (event) =>
+          event.type === "task.transitioned" &&
+          event.payload.status === "integration_resolution",
+      ),
+      changedPaths: [...new Set(accepted.flatMap(
+        (session) => session.changeSet?.changedPaths ?? [],
+      ))].sort(),
+    },
+  };
+}
+
+export function buildNativeVerifierInspectionRequest(input: {
+  runId: string;
+  objective: string;
+  architectRuntimeId: string;
+  projection: SchedulerProjection;
+  sessions: readonly AgentSessionProjection[];
+  risk: BuildRiskAssessmentProjection;
+  preferredRuntimeId?: string;
+  providerRetryDeadlineMs?: number;
+  signal?: AbortSignal;
+}): NativeVerifierInspectionRequest {
+  const integrationRevision = input.projection.integrationRevision;
+  const finalVerification = input.projection.finalVerification?.current;
+  if (
+    !integrationRevision || !finalVerification ||
+    finalVerification.state !== "current" ||
+    finalVerification.targetRevision !== integrationRevision ||
+    finalVerification.submissionResult?.green !== true ||
+    input.risk.state !== "current" ||
+    input.risk.targetRevision !== integrationRevision
+  ) {
+    throw new Error(
+      "Native verifier context requires current risk and green final verification for the integration revision.",
+    );
+  }
+  const reviews = Object.values(input.projection.reviewHistory ?? {})
+    .flatMap((history) => history)
+    .concat(
+      Object.entries(input.projection.reviewHistory ?? {}).length === 0
+        ? Object.values(input.projection.reviews)
+        : [],
+    )
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      (left.attempt ?? 0) - (right.attempt ?? 0)
+    );
+  const guidance = [
+    ...Object.values(input.projection.userGuidance).map((item) => ({
+      id: item.guidanceId,
+      kind: "user_guidance" as const,
+      version: item.version,
+      text: item.text,
+    })),
+    ...Object.values(input.projection.guidance)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.requestId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+    ...Object.values(input.projection.architectQuestions)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.questionId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+  ].sort((left, right) => left.id.localeCompare(right.id));
+  const changes = acceptedChangeSessions(input.projection, input.sessions)
+    .map((session) => {
+      const changeSet = session.changeSet!;
+      return {
+        taskId: changeSet.taskId,
+        attempt: input.projection.tasks[changeSet.taskId]?.attempt ?? 1,
+        changeSetId: changeSet.id,
+        authorRuntimeId: session.actor.id,
+        baselineRevision: changeSet.baselineRevision,
+        taskRevision: changeSet.taskRevision,
+        changedPaths: [...changeSet.changedPaths],
+        diffArtifactHash: changeSet.diffArtifactHash,
+      };
+    })
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      left.changeSetId.localeCompare(right.changeSetId)
+    );
+  return {
+    runId: input.runId,
+    objective: input.objective,
+    targetRevision: integrationRevision,
+    architectRuntimeId: input.architectRuntimeId,
+    criteria: Object.values(input.projection.tasks)
+      .filter(
+        (task) =>
+          task.status !== "cancelled" &&
+          task.kind !== "final_verification",
+      )
+      .flatMap((task) => (task.acceptanceCriteria ?? []).map((criterion) => ({
+        taskId: task.id,
+        taskTitle: task.objective,
+        criterion: { ...criterion },
+      })))
+      .sort((left, right) =>
+        left.taskId.localeCompare(right.taskId) ||
+        left.criterion.id.localeCompare(right.criterion.id)
+      ),
+    reviews: reviews.map((review) => ({
+      taskId: review.taskId,
+      attempt: review.attempt ?? input.projection.tasks[review.taskId]?.attempt ?? 1,
+      status: review.status,
+      ...(review.summary ? { summary: review.summary } : {}),
+      evidenceArtifactHashes: [...review.evidenceArtifactHashes],
+      ...(review.criterionVerdicts
+        ? {
+            criterionVerdicts: review.criterionVerdicts.map((verdict) => ({
+              ...verdict,
+              evidenceIds: [...verdict.evidenceIds],
+              ...(verdict.artifactHashes
+                ? { artifactHashes: [...verdict.artifactHashes] }
+                : {}),
+            })),
+          }
+        : {}),
+    })),
+    guidance,
+    changes,
+    finalVerification: {
+      generationId: finalVerification.generationId,
+      targetRevision: finalVerification.targetRevision,
+      green: finalVerification.submissionResult.green,
+      checks: finalVerification.submissionResult.checks.map((check) => ({
+        ...check,
+        evidenceIds: [...check.evidenceIds],
+        facts: check.facts.map((fact) => structuredClone(fact)),
+        issues: [],
+      })),
+    },
+    riskReasons: input.risk.assessment.reasons.map((reason) => ({
+      ...reason,
+      evidence: [...reason.evidence],
+    })),
+    ...(input.preferredRuntimeId
+      ? { preferredRuntimeId: input.preferredRuntimeId }
+      : {}),
+    ...(input.providerRetryDeadlineMs !== undefined
+      ? { providerRetryDeadlineMs: input.providerRetryDeadlineMs }
+      : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+  };
+}
+
+function acceptedChangeSessions(
+  projection: SchedulerProjection,
+  sessions: readonly AgentSessionProjection[],
+): AgentSessionProjection[] {
+  const acceptedIds = new Set(
+    Object.values(projection.tasks)
+      .filter(
+        (task) => task.status === "integrated" && Boolean(task.changeSetId),
+      )
+      .map((task) => task.changeSetId!),
+  );
+  return sessions.filter(
+    (session) =>
+      session.actor.role === "worker" &&
+      Boolean(session.changeSet) &&
+      acceptedIds.has(session.changeSet!.id) &&
+      projection.tasks[session.changeSet!.taskId]?.changeSetId ===
+        session.changeSet!.id,
+  );
+}
+
 function summarizeToolCalls(
   events: ReturnType<SqliteToolLedger["listRun"]>
 ): BuildToolObservation[] {
@@ -659,6 +982,29 @@ export function providerHealthFromSchedulerEvents(
   return Object.values(
     rebuildSchedulerProjection(events).runtime.providerHealth
   ).filter(isProviderHealthState);
+}
+
+function persistProviderHealth(
+  store: SqliteSchedulerStore,
+  runId: string,
+  state: ProviderHealthState,
+  source: string,
+): void {
+  store.append({
+    runId,
+    type: "provider.health_changed",
+    occurredAt: new Date(state.updatedAt).toISOString(),
+    actor: { role: "runner", id: "runtime-router" },
+    idempotencyKey: [
+      "provider-health",
+      source,
+      state.providerId,
+      state.updatedAt,
+      state.consecutiveFailures,
+      state.status,
+    ].join(":"),
+    payload: { state: { ...state } },
+  });
 }
 
 function selectConfigs(

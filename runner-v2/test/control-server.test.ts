@@ -693,6 +693,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     lastSequence: 1,
   };
   let projectHandoffChoice = "";
+  let verifierRuntimeChoice = "";
   let benchmarkContinuations = 0;
   let buildStatus: "running" | "paused" = "running";
   const builds = {
@@ -831,6 +832,10 @@ test("native Build projections and pump controls are runner-owned API routes", a
       return { ...projection, status: buildStatus };
     },
     selectArchitectHandoff: () => projection,
+    selectVerifierRuntime: async (_runId: string, runtimeId: string) => {
+      verifierRuntimeChoice = runtimeId;
+      return projection;
+    },
     selectProjectHandoff: async (_runId: string, choice: "keep_integration_branch" | "apply_to_project") => {
       projectHandoffChoice = choice;
       return {
@@ -1051,6 +1056,19 @@ test("native Build projections and pump controls are runner-owned API routes", a
     );
     assert.equal(continued.status, 200);
     assert.equal(benchmarkContinuations, 1);
+
+    const verifierSelection = await fetch(
+      `${url}/v2/runs/run_1/build/verifier-handoff`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runtimeId: "fallback:verifier",
+          idempotencyKey: "verifier:fallback",
+        }),
+      }),
+    );
+    assert.equal(verifierSelection.status, 200);
+    assert.equal(verifierRuntimeChoice, "fallback:verifier");
 
     const handoff = await fetch(
       `${url}/v2/runs/run_1/build/project-handoff`,
