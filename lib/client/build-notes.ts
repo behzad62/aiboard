@@ -29,6 +29,13 @@ export function resolveBuildGuidanceIdentity(
   return { text: trimmed, guidanceId: identity, idempotencyKey: identity };
 }
 
+export function preserveEditedBuildNoteDraft(
+  currentDraft: string,
+  submittedDraft: string,
+): string {
+  return currentDraft === submittedDraft ? "" : currentDraft;
+}
+
 export function classifyBuildNoteDelivery(
   discussion: Pick<Discussion, "nativeBuildRunId">,
   projection: Pick<NativeBuildProjection, "runId" | "status"> | null,
@@ -38,6 +45,28 @@ export function classifyBuildNoteDelivery(
     return "native_unknown";
   }
   return projection.status === "completed" ? "follow_up" : "native_active";
+}
+
+export async function resolveBuildNoteSubmissionRoute(
+  discussion: Pick<Discussion, "nativeBuildRunId">,
+  projection: NativeBuildProjection | null,
+  loadNativeProjection: () => Promise<NativeBuildProjection>,
+): Promise<{
+  mode: Exclude<BuildNoteDeliveryMode, "native_unknown">;
+  projection: NativeBuildProjection | null;
+}> {
+  let currentProjection = projection;
+  let mode = classifyBuildNoteDelivery(discussion, currentProjection);
+  if (mode === "native_unknown") {
+    currentProjection = await loadNativeProjection();
+    mode = classifyBuildNoteDelivery(discussion, currentProjection);
+  }
+  if (mode === "native_unknown") {
+    throw new Error(
+      `Runner returned Build ${currentProjection?.runId ?? "unknown"}, which does not match the saved Runner V2 Build ${discussion.nativeBuildRunId ?? "unknown"}. Reconnect Runner V2 before sending guidance or files.`,
+    );
+  }
+  return { mode, projection: currentProjection };
 }
 
 export function nativeBuildAttachmentNotice(mode: BuildNoteDeliveryMode): string | null {

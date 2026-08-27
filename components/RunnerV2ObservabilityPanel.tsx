@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -168,6 +168,31 @@ export type RunnerQuestionAnswerCallback = (
   idempotencyKey: string,
 ) => Promise<void>;
 
+export interface ArchitectQuestionAnswerGate {
+  questionKey: string | null;
+  generation: number;
+}
+
+function architectQuestionKey(question: RunnerSteeringQuestion | undefined): string | null {
+  return question ? `${question.questionId}:version:${question.version}` : null;
+}
+
+export function createArchitectQuestionAnswerGate(
+  question: RunnerSteeringQuestion | undefined,
+): ArchitectQuestionAnswerGate {
+  return { questionKey: architectQuestionKey(question), generation: 0 };
+}
+
+export function alignArchitectQuestionAnswerGate(
+  gate: ArchitectQuestionAnswerGate,
+  question: RunnerSteeringQuestion | undefined,
+): void {
+  const nextKey = architectQuestionKey(question);
+  if (gate.questionKey === nextKey) return;
+  gate.questionKey = nextKey;
+  gate.generation += 1;
+}
+
 export async function submitRunnerArchitectQuestionAnswer(
   question: RunnerSteeringQuestion,
   answer: string,
@@ -191,6 +216,29 @@ export async function submitRunnerArchitectQuestionAnswer(
         : "Runner did not accept this answer. Refresh the Build state and try again.",
     };
   }
+}
+
+export async function submitGuardedRunnerArchitectQuestionAnswer(
+  gate: ArchitectQuestionAnswerGate,
+  question: RunnerSteeringQuestion,
+  answer: string,
+  onAnswerQuestion: RunnerQuestionAnswerCallback,
+): Promise<{
+  current: boolean;
+  result: Awaited<ReturnType<typeof submitRunnerArchitectQuestionAnswer>>;
+}> {
+  alignArchitectQuestionAnswerGate(gate, question);
+  const request = { questionKey: gate.questionKey, generation: gate.generation + 1 };
+  gate.generation = request.generation;
+  const result = await submitRunnerArchitectQuestionAnswer(
+    question,
+    answer,
+    onAnswerQuestion,
+  );
+  return {
+    current: gate.questionKey === request.questionKey && gate.generation === request.generation,
+    result,
+  };
 }
 
 export function RunnerQuestionAnswerError({ message }: { message: string | null }) {
@@ -685,6 +733,8 @@ export function RunnerV2SteeringPanel({
   const [answer, setAnswer] = useState("");
   const [answerPending, setAnswerPending] = useState(false);
   const [answerError, setAnswerError] = useState<string | null>(null);
+  const answerGateRef = useRef(createArchitectQuestionAnswerGate(question));
+  alignArchitectQuestionAnswerGate(answerGateRef.current, question);
   useEffect(() => {
     setAnswer("");
     setAnswerPending(false);
@@ -698,11 +748,14 @@ export function RunnerV2SteeringPanel({
     if (!question || !onAnswerQuestion || !trimmed || answerPending) return;
     setAnswerPending(true);
     setAnswerError(null);
-    const result = await submitRunnerArchitectQuestionAnswer(
+    const completed = await submitGuardedRunnerArchitectQuestionAnswer(
+      answerGateRef.current,
       question,
       trimmed,
       onAnswerQuestion,
     );
+    if (!completed.current) return;
+    const { result } = completed;
     if (result.ok) {
       setAnswer("");
     } else {

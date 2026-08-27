@@ -3,16 +3,22 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { BuildNoteDraftField } from "../components/BuildNoteDraftField";
 import {
   architectQuestionAnswerIdempotencyKey,
+  alignArchitectQuestionAnswerGate,
+  createArchitectQuestionAnswerGate,
   RunnerQuestionAnswerError,
   RunnerV2SteeringPanel,
   runnerSteeringLedgerView,
+  submitGuardedRunnerArchitectQuestionAnswer,
   submitRunnerArchitectQuestionAnswer,
 } from "../components/RunnerV2ObservabilityPanel";
 import {
   classifyBuildNoteDelivery,
   nativeBuildAttachmentNotice,
+  preserveEditedBuildNoteDraft,
+  resolveBuildNoteSubmissionRoute,
   resolveBuildGuidanceIdentity,
 } from "../lib/client/build-notes";
 import type { NativeBuildProjection } from "../lib/client/runner-v2";
@@ -216,6 +222,15 @@ assert.match(steeringMarkup, /Which contract is authoritative/);
 assert.match(steeringMarkup, /Authority decision/);
 assert.doesNotMatch(steeringMarkup, /Old question/);
 assert.match(steeringMarkup, /Answer decision/);
+const noteFieldMarkup = renderToStaticMarkup(
+  <BuildNoteDraftField
+    value="Keep the existing contract."
+    onChange={() => undefined}
+    onSubmit={() => undefined}
+  />,
+);
+assert.match(noteFieldMarkup, /<label[^>]*for="build-note-guidance"[^>]*>Guidance text<\/label>/);
+assert.match(noteFieldMarkup, /<textarea[^>]*id="build-note-guidance"/);
 
 const discussionSource = readFileSync(
   "app/discussion/discussion-client.tsx",
@@ -238,6 +253,84 @@ assert.match(
 );
 
 async function main(): Promise<void> {
+  for (const outcome of ["success", "failure"] as const) {
+    const gate = createArchitectQuestionAnswerGate(ledger.activeQuestion!);
+    let release!: () => void;
+    const deferred = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lateCompletion = submitGuardedRunnerArchitectQuestionAnswer(
+      gate,
+      ledger.activeQuestion!,
+      "Answer for question one.",
+      async () => {
+        await deferred;
+        if (outcome === "failure") throw new Error("Late question-one failure.");
+      },
+    );
+    const questionTwo = {
+      questionId: "question-two",
+      question: "New decision?",
+      version: 3,
+      decisionLabel: "Requirement conflict",
+    };
+    alignArchitectQuestionAnswerGate(gate, questionTwo);
+    let currentDraft = "Draft answer for question two.";
+    let currentError: string | null = null;
+    release();
+    const completed = await lateCompletion;
+    if (completed.current) {
+      if (completed.result.ok) currentDraft = "";
+      else currentError = completed.result.error;
+    }
+    assert.equal(completed.current, false);
+    assert.equal(currentDraft, "Draft answer for question two.");
+    assert.equal(currentError, null);
+  }
+
+  let slowDraft = "Original guidance";
+  let releaseDelivery!: () => void;
+  const deliveryGate = new Promise<void>((resolve) => {
+    releaseDelivery = resolve;
+  });
+  const slowDelivery = (async () => {
+    const submittedDraft = slowDraft;
+    await deliveryGate;
+    slowDraft = preserveEditedBuildNoteDraft(slowDraft, submittedDraft);
+  })();
+  slowDraft = "New guidance typed while Runner is responding";
+  releaseDelivery();
+  await slowDelivery;
+  assert.equal(slowDraft, "New guidance typed while Runner is responding");
+  assert.equal(
+    preserveEditedBuildNoteDraft("Unchanged guidance", "Unchanged guidance"),
+    "",
+  );
+
+  store.__resetClientStoreForTests();
+  store.insertDiscussion(discussion);
+  let attachmentSaves = 0;
+  await assert.rejects(
+    async () => {
+      const resolved = await resolveBuildNoteSubmissionRoute(
+        discussion,
+        null,
+        async () => ({ ...projection, runId: "different-run" }),
+      );
+      if (resolved.mode !== "native_active") {
+        attachmentSaves += 1;
+        api.addBuildNote(discussion.id, "This mismatched run must never receive the note.");
+      }
+    },
+    /does not match the saved Runner V2 Build/i,
+  );
+  assert.equal(attachmentSaves, 0);
+  assert.equal(store.getMessagesForDiscussion(discussion.id).length, 0);
+  assert.deepEqual(
+    require("../lib/client/build-notes").drainBuildNotes(discussion.id),
+    [],
+  );
+
   const answerCalls: unknown[][] = [];
   const accepted = await submitRunnerArchitectQuestionAnswer(
     ledger.activeQuestion!,

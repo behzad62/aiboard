@@ -15,6 +15,7 @@ import {
   type TimelineMessage,
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
+import { BuildNoteDraftField } from "@/components/BuildNoteDraftField";
 import {
   RunnerV2ObservabilityPanel,
   RunnerV2SteeringPanel,
@@ -93,6 +94,8 @@ import {
 import {
   classifyBuildNoteDelivery,
   nativeBuildAttachmentNotice,
+  preserveEditedBuildNoteDraft,
+  resolveBuildNoteSubmissionRoute,
   resolveBuildGuidanceIdentity,
   type BuildGuidanceDeliveryIdentity,
 } from "@/lib/client/build-notes";
@@ -1400,28 +1403,34 @@ function DiscussionPageInner() {
   // Active native Builds receive durable text guidance. Browser-memory notes
   // remain only for legacy execution and finished follow-up passes.
   const submitNote = async () => {
-    const note = noteDraft.trim();
+    const submittedDraft = noteDraft;
+    const note = submittedDraft.trim();
     if (!note && noteFiles.length === 0) return;
     if (noteSending) return;
 
     setNoteSending(true);
     try {
-      let resolvedProjection = nativeProjection;
-      let deliveryMode = noteDeliveryMode;
-      if (deliveryMode === "native_unknown") {
-        if (
-          !discussion?.runnerUrl ||
-          !discussion.runnerToken ||
-          !discussion.nativeBuildRunId
-        ) {
-          throw new Error("Reconnect Runner V2 before sending guidance or starting a follow-up Build.");
-        }
-        resolvedProjection = await getNativeBuild(
-          { url: discussion.runnerUrl, token: discussion.runnerToken },
-          discussion.nativeBuildRunId,
-        );
-        setNativeProjection(resolvedProjection);
-        deliveryMode = classifyBuildNoteDelivery(discussion, resolvedProjection);
+      if (!discussion) throw new Error("Discussion not found.");
+      const resolvedRoute = await resolveBuildNoteSubmissionRoute(
+        discussion,
+        nativeProjection,
+        async () => {
+          if (
+            !discussion.runnerUrl ||
+            !discussion.runnerToken ||
+            !discussion.nativeBuildRunId
+          ) {
+            throw new Error("Reconnect Runner V2 before sending guidance or starting a follow-up Build.");
+          }
+          return await getNativeBuild(
+            { url: discussion.runnerUrl, token: discussion.runnerToken },
+            discussion.nativeBuildRunId,
+          );
+        },
+      );
+      const deliveryMode = resolvedRoute.mode;
+      if (resolvedRoute.projection !== nativeProjection) {
+        setNativeProjection(resolvedRoute.projection);
       }
 
       if (deliveryMode === "native_active") {
@@ -1460,7 +1469,7 @@ function DiscussionPageInner() {
               },
             ]);
         noteDeliveryIdentityRef.current = null;
-        setNoteDraft("");
+        setNoteDraft((current) => preserveEditedBuildNoteDraft(current, submittedDraft));
         setNoteFiles([]);
         setError(null);
         return;
@@ -1493,7 +1502,7 @@ function DiscussionPageInner() {
       }
 
       const saved = addBuildNote(id, noteForArchitect);
-      setNoteDraft("");
+      setNoteDraft((current) => preserveEditedBuildNoteDraft(current, submittedDraft));
       setNoteFiles([]);
       setMessages((prev) => [
         ...prev,
@@ -2039,18 +2048,10 @@ function DiscussionPageInner() {
             )}
             <div className="mt-2 space-y-2">
               <div className="flex items-end gap-2">
-                <textarea
+                <BuildNoteDraftField
                   value={noteDraft}
-                  onChange={(e) => setNoteDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault();
-                      void submitNote();
-                    }
-                  }}
-                  rows={2}
-                  placeholder="e.g. Use Postgres instead of SQLite, and add a dark-mode toggle..."
-                  className="flex-1 resize-y rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onChange={setNoteDraft}
+                  onSubmit={() => void submitNote()}
                 />
                 <Button
                   size="sm"
