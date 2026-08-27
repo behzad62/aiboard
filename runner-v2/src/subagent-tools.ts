@@ -32,6 +32,7 @@ import { createSkillTools } from "./skill-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 
 interface SpawnSubagentInput {
@@ -70,6 +71,7 @@ export interface SubagentToolsOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  language?: LanguageIntelligenceProvider;
 }
 
 export function createSubagentTools(
@@ -163,7 +165,7 @@ function spawnSubagentTool(
           : {}),
       });
       const repository = new RepositoryIntelligence();
-      const language = new TypeScriptIntelligence(repository);
+      const language = options.language ?? new TypeScriptIntelligence(repository);
       for (const tool of createFilesystemTools({
         artifacts: options.artifacts,
         repository,

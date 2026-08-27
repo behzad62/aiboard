@@ -9,7 +9,10 @@ import { ProviderTransportError } from "../src/account-runner-model.js";
 import { buildArchitectContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createBrowserTools, type BrowserBackend } from "../src/browser-tools.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
+import { LanguageProviderRouter } from "../src/language-provider-router.js";
+import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import {
   NativeArchitectRuntime,
   PlanOnlyInspectionRuntime,
@@ -453,13 +456,63 @@ test("Architect provider failure pauses for user-selected handoff before plannin
   const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
   const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
   const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  let language: LanguageProviderRouter | undefined;
   try {
+    const capabilityRegistry = new CapabilityRegistry([{
+      manifest: {
+        apiVersion: 1,
+        id: "fixture.architect",
+        name: "Architect fixture",
+        version: "1.0.0",
+        entry: "index.mjs",
+        capabilities: ["tools", "context"],
+      },
+      instance: {
+        capabilities: () => ({
+          tools: [{
+            definition: {
+              name: "fixture.architect.inspect",
+              description: "Inspect fixture architecture",
+              inputSchema: { type: "object" },
+              readOnly: true,
+              effect: "none",
+            },
+            validate: () => ({ ok: true as const, value: {} }),
+            execute: async () => ({ content: [], isError: false }),
+          }],
+          contextContributors: [{
+            id: "architect-context",
+            kind: "fixture",
+            priority: 850,
+            maxBytes: 1_024,
+            contribute: async () => ({ content: "EXTENSION_ARCHITECT_CONTEXT" }),
+          }],
+          languageProviders: [],
+        }),
+        start: async () => undefined,
+        close: async () => undefined,
+      },
+    }]);
     const candidates: AgentRuntimeCandidate[] = [
       { runtimeId: "primary:architect", providerId: "primary", modelId: "architect", capabilities: ["code"], priority: 1 },
       { runtimeId: "fallback:architect", providerId: "fallback", modelId: "architect", capabilities: ["code"], priority: 2 },
     ];
     const health = new ProviderHealthRegistry();
+    language = new LanguageProviderRouter({
+      builtInProvider: fixtureLanguageProvider(),
+      extensionProviders: [],
+      configuredServers: [],
+    });
     const fallback = new ScriptedModel([
+      {
+        blocks: [{
+          type: "tool_call",
+          callId: "fixture_definition",
+          name: "code.definition",
+          arguments: { path: "AGENTS.md", line: 1, column: 1 },
+        }],
+        stopReason: "tool_calls",
+      },
       {
         blocks: [{
           type: "tool_call",
@@ -504,12 +557,14 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       projectId: "project_1",
       projectRoot: project,
       objective: "Build the requested feature.",
+      capabilityRegistry,
+      language,
       providerRetryRuntime: {
         now: () => 0,
         random: () => 0.5,
         sleep: async () => undefined,
       },
-    });
+    } as ConstructorParameters<typeof NativeArchitectRuntime>[0]);
     const runtime = new BuildRuntime({
       runId: "run_1",
       store: scheduler,
@@ -552,6 +607,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     assert.equal(architectTools.has("fs.search"), true);
     assert.equal(architectTools.has("git.diff"), true);
     assert.equal(architectTools.has("research.fetch"), true);
+    assert.equal(architectTools.has("fixture.architect.inspect"), true);
     for (const name of [
       "repo.manifest",
       "repo.map",
@@ -568,6 +624,15 @@ test("Architect provider failure pauses for user-selected handoff before plannin
         .join("\n"),
       /Keep the API stable/
     );
+    assert.match(
+      fallback.requests[0].messages
+        .map((message) => (typeof message.content === "string" ? message.content : ""))
+        .join("\n"),
+      /EXTENSION_ARCHITECT_CONTEXT/,
+    );
+    assert.deepEqual(language.auditRecords().map((record) => record.providerId), [
+      "fixture.language",
+    ]);
 
     const onlyCandidate = candidates[0];
     const deadlineHealth = new ProviderHealthRegistry();
@@ -666,6 +731,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       ["primary:architect"]
     );
   } finally {
+    await language?.close();
     sessions.close();
     scheduler.close();
     evidence.close();
@@ -673,6 +739,27 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function fixtureLanguageProvider(): LanguageIntelligenceProvider {
+  return {
+    descriptor: {
+      id: "fixture.language",
+      displayName: "Fixture language",
+      extensions: [".fixture", ".md"],
+      rootMarkers: [],
+      priority: 1,
+    },
+    workspaceSymbols: async () => ({ status: "ok", results: [], truncated: false }),
+    definition: async () => ({
+      status: "ok",
+      results: [{ path: "fixture", line: 1, column: 1, preview: "fixture" }],
+      truncated: false,
+    }),
+    references: async () => ({ status: "ok", results: [], truncated: false }),
+    diagnostics: async () => ({ status: "ok", results: [], truncated: false }),
+    close: async () => undefined,
+  };
+}
 
 test("Plan-only rejects forged mutating browser and MCP calls even under Full access", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-plan-only-tools-"));

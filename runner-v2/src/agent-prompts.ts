@@ -56,6 +56,10 @@ export interface BuildWorkerContextInput {
 }
 
 export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack {
+  return new ContextAssembler(input.limits).assemble(workerContextSections(input));
+}
+
+export function workerContextSections(input: BuildWorkerContextInput): ContextSection[] {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("current-task", "task", JSON.stringify(input.task, null, 2)),
@@ -113,7 +117,7 @@ export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack 
   for (const [index, history] of input.recentHistory.entries()) {
     sections.push(optional(`history:${index + 1}`, "history", 100, history));
   }
-  return new ContextAssembler(input.limits).assemble(sections);
+  return sections;
 }
 
 export interface BuildArchitectContextInput {
@@ -179,6 +183,12 @@ export function buildVerifierContext(
 export function buildArchitectContext(
   input: BuildArchitectContextInput
 ): ContextPack {
+  return new ContextAssembler(input.limits).assemble(architectContextSections(input));
+}
+
+export function architectContextSections(
+  input: BuildArchitectContextInput,
+): ContextSection[] {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("build-objective", "user-intent", input.objective),
@@ -256,7 +266,7 @@ export function buildArchitectContext(
   for (const [index, history] of input.recentHistory.entries()) {
     sections.push(optional(`history:${index + 1}`, "history", 100, history));
   }
-  return new ContextAssembler(input.limits).assemble(sections);
+  return sections;
 }
 
 function required(id: string, kind: string, content: string): ContextSection {

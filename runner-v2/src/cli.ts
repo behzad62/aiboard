@@ -12,6 +12,10 @@ import { NativeBuildManager } from "./native-build-manager.js";
 import { McpManager, type McpServerSpec } from "./mcp-tools.js";
 import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
+import {
+  emptyRunnerCapabilitiesConfig,
+  loadRunnerCapabilitiesConfig,
+} from "./runner-capabilities-config.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
@@ -28,6 +32,7 @@ interface CliOptions {
   token: string;
   mcpServers: McpServerSpec[];
   allowOrigins: string[];
+  capabilitiesConfigPath?: string;
 }
 
 interface RunnerResources {
@@ -57,6 +62,17 @@ async function main(): Promise<void> {
         "invalid_state_directory: Runner state must be outside the project directory."
       );
     }
+    if (
+      options.capabilitiesConfigPath &&
+      isInside(options.projectPath, options.capabilitiesConfigPath)
+    ) {
+      throw new Error(
+        "invalid_capabilities_config: Runner capabilities configuration must be outside the project directory."
+      );
+    }
+    const capabilitiesConfig = options.capabilitiesConfigPath
+      ? await loadRunnerCapabilitiesConfig(options.capabilitiesConfigPath)
+      : emptyRunnerCapabilitiesConfig();
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 
@@ -88,6 +104,7 @@ async function main(): Promise<void> {
       providerConfigs,
       mcpManager,
       permissions,
+      capabilitiesConfig,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
@@ -270,7 +287,15 @@ function parseArguments(args: string[]): CliOptions {
       index += 1;
       continue;
     }
-  if (!["--project", "--state-dir", "--port", "--token"].includes(flag)) {
+    if (
+      ![
+        "--project",
+        "--state-dir",
+        "--port",
+        "--token",
+        "--capabilities-config",
+      ].includes(flag)
+    ) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
     }
     const value = args[index + 1];
@@ -286,6 +311,10 @@ function parseArguments(args: string[]): CliOptions {
 
   const projectPath = requiredAbsolutePath(values, "--project");
   const stateDirectory = requiredAbsolutePath(values, "--state-dir");
+  const capabilitiesConfigPath = optionalAbsolutePath(
+    values,
+    "--capabilities-config",
+  );
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
@@ -302,6 +331,7 @@ function parseArguments(args: string[]): CliOptions {
     token,
     mcpServers,
     allowOrigins,
+    ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
   };
 }
 
@@ -336,6 +366,7 @@ function printHelp(): void {
     "  --state-dir <path>      Absolute path to runner state. Must be outside project. (required)",
     "  --port <number>         TCP port to bind (0 = random). Default 0.",
     "  --token <string>        Authentication token. Auto-generated if omitted.",
+    "  --capabilities-config <path>  Absolute trusted JSON configuration outside the project.",
     "  --mcp <name=command>    Register MCP server; can be repeated.",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
     "                         Defaults to loopback origins + aiboard.me.",
@@ -343,6 +374,7 @@ function printHelp(): void {
     "",
     "Examples:",
     "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --port 8787",
+    "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --capabilities-config C:\\path\\to\\runner-capabilities.json",
     "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --allow-origin https://aiboard.me",
     "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --allow-origin https://aiboard.me,https://127.0.0.1:8787",
     "",
@@ -394,6 +426,18 @@ function writeReadableStartupSummary(
 function requiredAbsolutePath(values: Map<string, string>, flag: string): string {
   const value = values.get(flag);
   if (!value) throw new Error(`invalid_arguments: ${flag} is required.`);
+  if (!isAbsolute(value)) {
+    throw new Error(`invalid_arguments: ${flag} must be an absolute path.`);
+  }
+  return resolve(value);
+}
+
+function optionalAbsolutePath(
+  values: Map<string, string>,
+  flag: string,
+): string | undefined {
+  const value = values.get(flag);
+  if (value === undefined) return undefined;
   if (!isAbsolute(value)) {
     throw new Error(`invalid_arguments: ${flag} must be an absolute path.`);
   }

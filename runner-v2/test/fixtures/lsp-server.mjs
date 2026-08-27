@@ -16,7 +16,9 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => process.exit(shutdownRequested ? 0 : 1));
 process.on("SIGTERM", () => process.exit(143));
 process.on("exit", (code) => {
-  const marker = process.env.LSP_FIXTURE_EXIT_FILE;
+  const markerArgument = process.argv.indexOf("--fixture-exit-file");
+  const marker = process.env.LSP_FIXTURE_EXIT_FILE ||
+    (markerArgument >= 0 ? process.argv[markerArgument + 1] : undefined);
   if (marker) {
     try {
       writeFileSync(marker, JSON.stringify({ code, shutdownRequested, pid: process.pid }));

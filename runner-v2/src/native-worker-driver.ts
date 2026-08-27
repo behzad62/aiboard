@@ -3,7 +3,11 @@ import type {
   AgentProviderRetryEvent,
   AgentSuspensionReason,
 } from "./agent-loop.js";
-import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
+import {
+  buildWorkerContext,
+  workerContextSections,
+  type PromptEvidence,
+} from "./agent-prompts.js";
 import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -17,9 +21,11 @@ import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
-import type { ContextLimits } from "./context-assembler.js";
+import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import type { CapabilityRegistry } from "./capability-registry.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import { assembleContextWithExtensions } from "./extension-runtime.js";
 import { runGit } from "./git-command.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { discoverProjectInstructions } from "./project-context.js";
@@ -43,6 +49,7 @@ import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
 import { resolveWorkerSessionId } from "./worker-identity.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type {
   RunnerProviderRetryRuntime,
 } from "./provider-call-retry.js";
@@ -77,6 +84,8 @@ export interface NativeWorkerDriverOptions {
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
   providerRetryRuntime?: RunnerProviderRetryRuntime;
+  capabilityRegistry?: CapabilityRegistry;
+  language?: LanguageIntelligenceProvider;
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -133,7 +142,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             : {}),
         }
       );
-      const context = await this.workerContext(assignment, workspace.path);
+      const context = await this.workerContext(
+        assignment,
+        workspace.path,
+        sessionId,
+      );
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
@@ -265,6 +278,10 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.managedProcesses
           ? { managedProcesses: this.options.managedProcesses }
           : {}),
+        ...(this.options.capabilityRegistry
+          ? { capabilityRegistry: this.options.capabilityRegistry }
+          : {}),
+        ...(this.options.language ? { language: this.options.language } : {}),
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);
@@ -427,7 +444,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
 
   private async workerContext(
     assignment: WorkerAssignment,
-    workspacePath: string
+    workspacePath: string,
+    sessionId: string,
   ) {
     const [instructions, skillMetadata, repositorySnapshot] = await Promise.all([
       discoverProjectInstructions({
@@ -469,7 +487,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         summary: evidenceFactSummary(record.fact),
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
-    return buildWorkerContext({
+    const input = {
       limits: this.contextLimits,
       task: projection.tasks[assignment.task.id],
       guidance,
@@ -479,7 +497,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       repositorySnapshot,
       evidence,
       recentHistory: [],
-    });
+    };
+    if (!this.options.capabilityRegistry) return buildWorkerContext(input);
+    return (await assembleContextWithExtensions({
+      registry: this.options.capabilityRegistry,
+      assembler: new ContextAssembler(this.contextLimits),
+      baseSections: workerContextSections(input),
+      request: {
+        runId: assignment.runId,
+        sessionId,
+        actor: { role: "worker", id: assignment.workerId },
+        objective: assignment.task.objective,
+        workspacePath,
+        taskId: assignment.task.id,
+        signal: assignment.signal ?? new AbortController().signal,
+      },
+      artifacts: this.options.artifacts,
+    })).pack;
   }
 }
 

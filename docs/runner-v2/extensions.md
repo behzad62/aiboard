@@ -1,0 +1,60 @@
+# Runner V2 extensions and language servers
+
+Runner V2 can load trusted, local extensions and configured language servers. They add capabilities to a single Runner process; they do not replace the scheduler, worktree isolation, integration, verification, permission checks, budgets, evidence, or user handoff.
+
+## Enable trusted capabilities
+
+Create a JSON file outside the project directory, then start Runner V2 with its absolute path:
+
+```powershell
+npm run runner:v2 -- --project C:\work\my-project --state-dir C:\runner-state --capabilities-config C:\runner-config\capabilities.json
+```
+
+The configuration is deliberately strict. It must be a regular, non-symbolic JSON file; extension paths must be absolute; unknown fields are rejected; and the Runner never reads this configuration from environment variables. Keep secrets out of this file. Provider credentials continue to use Runner's encrypted provider configuration.
+
+```json
+{
+  "version": 1,
+  "extensions": [
+    "C:\\runner-extensions\\my-extension"
+  ],
+  "languageServers": [
+    {
+      "id": "python.pyright",
+      "displayName": "Pyright",
+      "extensions": [".py", ".pyi"],
+      "rootMarkers": ["pyproject.toml", "pyrightconfig.json"],
+      "priority": 100,
+      "languageId": "python",
+      "command": "C:\\Tools\\node\\pyright-langserver.cmd",
+      "args": ["--stdio"],
+      "requestTimeoutMs": 10000,
+      "shutdownTimeoutMs": 2000,
+      "restartLimit": 1,
+      "maxFrameBytes": 4194304,
+      "maxPendingRequests": 128,
+      "maxDocumentBytes": 1048576
+    }
+  ]
+}
+```
+
+`version`, `extensions`, and `languageServers` are required. Each language-server entry requires `id`, `displayName`, `extensions`, `rootMarkers`, `priority`, `languageId`, `command`, and `args`; the timeout, restart, and size limits are optional bounded tuning values. An empty pair of arrays disables optional capabilities while retaining the built-in TypeScript/JavaScript provider (`builtin.typescript`).
+
+## Extension package contract
+
+Each allowlisted directory contains a `runner-extension.json` manifest and a contained ESM entry module. The manifest declares API version `1`, a stable extension ID, name, version, entry path, and one or more capabilities: `tools`, `context`, or `language_intelligence`.
+
+The module exports `createExtension()`, returning an instance with synchronous `capabilities()` plus asynchronous `start(context)` and `close()` methods. `start` receives only the extension ID, an extension-private state directory outside the project, and an abort signal. It never receives scheduler, workspace, integration, permission, budget, evidence, or completion stores.
+
+Ordinary extension tools are registered through the same governed `ToolBroker` as native tools. They therefore receive permission decisions, budget limits, artifact handling, durable tool-ledger events, and an `extensionId` attribution. Extensions cannot register lifecycle/completion tools or any name already owned by Runner V2 or configured MCP tools.
+
+Context contributors return bounded optional text. Runner V2 calls them through the existing `ContextAssembler`; contributor byte limits, timeouts, artifact references, and the prompt's global limits still apply.
+
+## Language routing and cleanup
+
+`code.workspace_symbols`, `code.definition`, `code.references`, and `code.diagnostics` keep their existing names and response shapes. For each query, Runner selects a provider by file extension, then a matching root marker, then configured priority. Extension language providers and configured stdio LSP servers participate in the same routing table.
+
+The run's observability snapshot records loaded extension manifests, configured provider metadata, and bounded language-route audit records. Runner owns configured LSP processes. During run cleanup it stops owned language providers before closing extension instances, in reverse startup order; an extension/provider startup failure also closes everything that began successfully.
+
+Use only maintained Node.js 22.x or 24.x lines when operating Runner V2. No exact Node patch release is required; Node 22 must be at least 22.13.0 for `node:sqlite`.

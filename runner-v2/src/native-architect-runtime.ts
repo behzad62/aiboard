@@ -11,6 +11,7 @@ import {
 } from "./agent-loop.js";
 import {
   buildArchitectContext,
+  architectContextSections,
   type ArchitectReviewSubmission,
   type PromptEvidence,
 } from "./agent-prompts.js";
@@ -31,7 +32,8 @@ import type {
   ArchitectActionRequest,
   ArchitectRuntimeDriver,
 } from "./build-runtime.js";
-import type { ContextLimits } from "./context-assembler.js";
+import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import type { CapabilityRegistry } from "./capability-registry.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
@@ -60,6 +62,11 @@ import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import {
+  assembleContextWithExtensions,
+  registerExtensionCapabilities,
+} from "./extension-runtime.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
   AgentProtocolError,
@@ -100,6 +107,8 @@ export interface NativeArchitectRuntimeOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  capabilityRegistry?: CapabilityRegistry;
+  language?: LanguageIntelligenceProvider;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
 }
 
@@ -208,7 +217,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         : {}),
     });
     const repository = new RepositoryIntelligence();
-    const language = new TypeScriptIntelligence(repository);
+    const language = this.options.language ?? new TypeScriptIntelligence(repository);
     for (const tool of createFilesystemTools({
       artifacts: this.options.artifacts,
       repository,
@@ -259,6 +268,9 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       for (const tool of createMcpTools(this.options.mcpManager, this.options.artifacts)) {
         extras.register(tool);
       }
+    }
+    if (this.options.capabilityRegistry) {
+      registerExtensionCapabilities(this.options.capabilityRegistry, extras);
     }
     const inspectionTools = this.options.runPolicy === "plan_only"
       ? new PlanOnlyInspectionRuntime(extras)
@@ -503,11 +515,12 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         summary: `${record.taskId}: ${evidenceFactSummary(record.fact)}`,
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
-    return buildArchitectContext({
-      limits: this.options.contextLimits ?? {
+    const limits = this.options.contextLimits ?? {
         maxBytes: 512 * 1024,
         maxEstimatedTokens: 128 * 1024,
-      },
+      };
+    const input = {
+      limits,
       objective: this.options.objective,
       reason: request.reason,
       projection,
@@ -517,7 +530,28 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       memories,
       evidence,
       recentHistory: [],
-    });
+    };
+    if (!this.options.capabilityRegistry) return buildArchitectContext(input);
+    return (await assembleContextWithExtensions({
+      registry: this.options.capabilityRegistry,
+      assembler: new ContextAssembler(limits),
+      baseSections: architectContextSections(input),
+      request: {
+        runId: request.runId,
+        sessionId: request.context.sessionId,
+        actor: request.context.actor,
+        objective: this.options.objective,
+        workspacePath: request.context.workspacePath ?? architectInspectionWorkspace(
+          request.reason,
+          projection,
+          this.options.projectRoot,
+          this.options.canonicalProjectRoot,
+        ),
+        ...("taskId" in request.reason ? { taskId: request.reason.taskId } : {}),
+        signal: request.context.signal ?? new AbortController().signal,
+      },
+      artifacts: this.options.artifacts,
+    })).pack;
   }
 
   private async reviewSubmission(

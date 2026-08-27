@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { dirname, resolve } from "node:path";
@@ -10,6 +11,7 @@ import type { AgentModel } from "./agent-contracts.js";
 import type { ModelCostBasisSnapshot } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
+import { CapabilityRegistry } from "./capability-registry.js";
 import {
   BuildRuntime,
   type FinalVerificationCheckDriver,
@@ -41,6 +43,7 @@ import {
   validateOwnedFinalVerificationCleanupReceipt,
 } from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
+import { LanguageProviderRouter } from "./language-provider-router.js";
 import { ManagedProcessService } from "./managed-process.js";
 import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
 import {
@@ -55,12 +58,19 @@ import {
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
-import type { McpManager } from "./mcp-tools.js";
+import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type {
   ProviderConfigStore,
   RunnerProviderConfig,
 } from "./provider-config-store.js";
+import { LocalPluginLoader, type LoadedRunnerExtensions } from "./plugin-loader.js";
+import {
+  emptyRunnerCapabilitiesConfig,
+  type RunnerCapabilitiesConfig,
+} from "./runner-capabilities-config.js";
+import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
+import { RepositoryIntelligence } from "./repository-intelligence.js";
 import {
   providerUsageConfig,
   resolvedProviderBillingBasis,
@@ -87,6 +97,7 @@ import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import type { ToolLedgerEvent } from "./tool-ledger.js";
+import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
@@ -97,6 +108,7 @@ export interface NativeBuildFactoryOptions {
   providerConfigs: ProviderConfigStore;
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
+  capabilitiesConfig?: RunnerCapabilitiesConfig;
   baselineFor(runId: string): string;
   skillRoots?: readonly SharedSkillRoot[];
 }
@@ -129,6 +141,22 @@ export class NativeBuildFactory {
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
+    await mkdir(runRoot, { recursive: true });
+    const runCapabilities = await createNativeRunCapabilities({
+      config: this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig(),
+      projectDirectory: this.options.projectRoot,
+      stateDirectory: runRoot,
+      reservedToolNames: [
+        ...RUNNER_BUILTIN_TOOL_NAMES,
+        ...(this.options.mcpManager
+          ? createMcpTools(this.options.mcpManager, this.artifacts).map(
+              (tool) => tool.definition.name,
+            )
+          : []),
+      ],
+    });
+    let runCapabilitiesTransferred = false;
+    try {
     const baselineRevision = this.options.baselineFor(spec.runId);
     const selected = selectRuntimeCandidates(
       this.options.providerConfigs.load(),
@@ -267,6 +295,8 @@ export class NativeBuildFactory {
       memoryStore: this.memoryStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
+      capabilityRegistry: runCapabilities.registry,
+      language: runCapabilities.language,
       budgetLedger,
       modelCostEstimators,
       modelCostBases,
@@ -299,6 +329,8 @@ export class NativeBuildFactory {
       canonicalProjectRoot: integrationManager.path,
       objective: spec.objective,
       runPolicy: spec.runPolicy,
+      capabilityRegistry: runCapabilities.registry,
+      language: runCapabilities.language,
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -545,6 +577,7 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
     });
     let closed = false;
+    runCapabilitiesTransferred = true;
     return {
       runtime,
       finalVerificationCleanup,
@@ -627,6 +660,11 @@ export class NativeBuildFactory {
             integrationRevision: integrationManager.revision,
             commits: await integrationManager.history(50),
           },
+          capabilities: {
+            extensions: runCapabilities.registry.manifests(),
+            languageProviders: runCapabilities.language.providerMetadata(),
+            languageRoutes: runCapabilities.language.auditRecords(),
+          },
           finalVerification: projectFinalVerificationObservability(
             schedulerProjection,
             diagnostics,
@@ -659,6 +697,7 @@ export class NativeBuildFactory {
         await cleanupSettledNativeBuild(
           () => this.managedProcesses.stopRun(spec.runId),
           [
+            () => runCapabilities.close(),
             () => sessions.compactRun(spec.runId),
             () => workspaceManager.cleanup(),
             () => verifierWorkspace.cleanup(),
@@ -667,16 +706,23 @@ export class NativeBuildFactory {
           spec.runId
         );
       },
-      close: () => {
+      close: async () => {
         if (closed) return;
         closed = true;
-        budgetLedger.close();
-        evidenceStore.close();
-        ledger.close();
-        sessions.close();
-        schedulerStore.close();
+        try {
+          await runCapabilities.close();
+        } finally {
+          budgetLedger.close();
+          evidenceStore.close();
+          ledger.close();
+          sessions.close();
+          schedulerStore.close();
+        }
       },
     };
+    } finally {
+      if (!runCapabilitiesTransferred) await runCapabilities.close();
+    }
   }
 
   async close(): Promise<void> {
@@ -694,6 +740,104 @@ export class NativeBuildFactory {
 
   async prepareArtifactCleanup(): Promise<void> {
     await this.artifactReachability.prepareReachabilityIndex();
+  }
+}
+
+interface NativeRunCapabilitiesOptions {
+  config: RunnerCapabilitiesConfig;
+  projectDirectory: string;
+  stateDirectory: string;
+  reservedToolNames: readonly string[];
+}
+
+interface ClosableLanguageProvider {
+  close(): Promise<void>;
+}
+
+class NativeRunCapabilities {
+  private closePromise?: Promise<void>;
+
+  constructor(
+    readonly registry: CapabilityRegistry,
+    readonly language: LanguageProviderRouter,
+    private readonly extensions?: LoadedRunnerExtensions,
+  ) {}
+
+  async close(): Promise<void> {
+    this.closePromise ??= closeCapabilityResources(
+      [this.language],
+      this.extensions,
+    );
+    return await this.closePromise;
+  }
+}
+
+async function createNativeRunCapabilities(
+  options: NativeRunCapabilitiesOptions,
+): Promise<NativeRunCapabilities> {
+  const builtInLanguage = new TypeScriptIntelligence(
+    new RepositoryIntelligence(),
+  );
+  let extensions: LoadedRunnerExtensions | undefined;
+  let language: LanguageProviderRouter | undefined;
+  try {
+    if (options.config.extensions.length > 0) {
+      extensions = await new LocalPluginLoader({
+        pluginDirectories: options.config.extensions,
+        projectDirectory: options.projectDirectory,
+        stateDirectory: options.stateDirectory,
+        reservedToolNames: options.reservedToolNames,
+      }).load();
+    }
+    const registry = extensions?.registry ?? new CapabilityRegistry([], {
+      reservedToolNames: options.reservedToolNames,
+    });
+    language = new LanguageProviderRouter({
+      builtInProvider: builtInLanguage,
+      extensionProviders: registry.languageProviders(),
+      configuredServers: options.config.languageServers,
+    });
+    return new NativeRunCapabilities(registry, language, extensions);
+  } catch (error) {
+    try {
+      await closeCapabilityResources(
+        [language ?? builtInLanguage],
+        extensions,
+      );
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Runner capability startup failed and cleanup reported errors.",
+      );
+    }
+    throw error;
+  }
+}
+
+async function closeCapabilityResources(
+  languageProviders: readonly ClosableLanguageProvider[],
+  extensions: LoadedRunnerExtensions | undefined,
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const provider of languageProviders) {
+    try {
+      await provider.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (extensions) {
+    try {
+      await extensions.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      "One or more Runner capabilities failed to close.",
+    );
   }
 }
 

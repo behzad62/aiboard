@@ -8,6 +8,7 @@ import test from "node:test";
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import {
   NativeWorkerDriver,
@@ -224,6 +225,31 @@ test("native worker fails over with the same session, context, tools, and eviden
       { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 1 },
       { runtimeId: "fallback:code", providerId: "fallback", modelId: "code", capabilities: ["code"], priority: 2 },
     ];
+    const capabilityRegistry = new CapabilityRegistry([{
+      manifest: {
+        apiVersion: 1,
+        id: "fixture.native-worker-context",
+        name: "Native Worker Context Fixture",
+        version: "1.0.0",
+        entry: "index.mjs",
+        capabilities: ["context"],
+      },
+      instance: {
+        capabilities: () => ({
+          tools: [],
+          contextContributors: [{
+            id: "native-worker-context",
+            kind: "fixture",
+            priority: 850,
+            maxBytes: 1_024,
+            contribute: async () => ({ content: "EXTENSION_NATIVE_WORKER_CONTEXT" }),
+          }],
+          languageProviders: [],
+        }),
+        start: async () => undefined,
+        close: async () => undefined,
+      },
+    }]);
     const health = new ProviderHealthRegistry();
     const driver = new NativeWorkerDriver({
       schedulerStore: scheduler,
@@ -249,6 +275,7 @@ test("native worker fails over with the same session, context, tools, and eviden
       memoryStore: memory,
       projectId: "project_1",
       projectRoot: project,
+      capabilityRegistry,
       providerRetryRuntime: {
         now: () => 0,
         random: () => 0.5,
@@ -298,6 +325,7 @@ test("native worker fails over with the same session, context, tools, and eviden
     assert.match(contextText, /Run focused tests first/);
     assert.match(contextText, /focused testing evidence/);
     assert.match(contextText, /newline-terminated text/);
+    assert.match(contextText, /EXTENSION_NATIVE_WORKER_CONTEXT/);
     assert.equal(evidence.list({ runId: "run_1", taskId: "task_a" }).length, 1);
   } finally {
     sessions?.close();

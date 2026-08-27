@@ -13,6 +13,7 @@ import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
+import type { CapabilityRegistry } from "./capability-registry.js";
 import { createCodeIntelligenceTools } from "./code-intelligence-tools.js";
 import {
   createChangeSet,
@@ -43,6 +44,8 @@ import type { ManagedProcessService } from "./managed-process.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import { registerExtensionCapabilities } from "./extension-runtime.js";
 import type {
   ToolInvocationLedger,
   ToolLedgerEvent,
@@ -87,6 +90,8 @@ export interface RunWorkerTaskOptions {
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
+  capabilityRegistry?: CapabilityRegistry;
+  language?: LanguageIntelligenceProvider;
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
@@ -149,7 +154,7 @@ export async function runWorkerTask(
       : {}),
   });
   const repository = new RepositoryIntelligence();
-  const language = new TypeScriptIntelligence(repository);
+  const language = options.language ?? new TypeScriptIntelligence(repository);
   for (const tool of createFilesystemTools({
     artifacts: options.artifacts,
     repository,
@@ -260,6 +265,7 @@ export async function runWorkerTask(
       : {}),
     ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+    language,
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;
@@ -346,6 +352,9 @@ export async function runWorkerTask(
     });
     return producedChangeSet;
   }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined }));
+  if (options.capabilityRegistry) {
+    registerExtensionCapabilities(options.capabilityRegistry, broker);
+  }
 
   const toolRuntime = options.budgetLedger
     ? new BudgetedToolRuntime({

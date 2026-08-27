@@ -31,6 +31,62 @@ export const PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES = Object.freeze([
   "upgrade_acceptance_contract",
 ] as const);
 
+/**
+ * Names owned by Runner V2 rather than an extension. Dynamic MCP names are
+ * added by the factory at startup, before extension manifests are accepted.
+ */
+export const RUNNER_BUILTIN_TOOL_NAMES = Object.freeze([
+  ...PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES,
+  "artifact.read",
+  "browser.click",
+  "browser.close",
+  "browser.drag",
+  "browser.events",
+  "browser.fill",
+  "browser.navigate",
+  "browser.open",
+  "browser.screenshot",
+  "browser.snapshot",
+  "browser.wheel",
+  "code.definition",
+  "code.diagnostics",
+  "code.references",
+  "code.workspace_symbols",
+  "fs.delete",
+  "fs.list",
+  "fs.move",
+  "fs.patch",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "fs.write",
+  "git.commit",
+  "git.diff",
+  "git.log",
+  "git.push",
+  "git.remotes",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+  "list_memory_proposals",
+  "list_skills",
+  "process.list",
+  "process.poll",
+  "process.run",
+  "process.signal",
+  "process.start",
+  "propose_project_memory",
+  "recall_project_memory",
+  "read_skill",
+  "repo.manifest",
+  "repo.map",
+  "research.fetch",
+  "run_evidence_command",
+  "search_session_history",
+  "spawn_readonly_subagent",
+  "spawn_subagent",
+] as const);
+
 export type RunnerExtensionCapabilityKind =
   | "tools"
   | "context"

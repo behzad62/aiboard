@@ -13,7 +13,10 @@ import type {
 } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
 import { captureGitBaseline } from "../src/git-baseline.js";
+import { LanguageProviderRouter } from "../src/language-provider-router.js";
+import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
@@ -54,6 +57,161 @@ const browserEvidenceBackend: BrowserBackend = {
   async closeRun() {},
   async closeAll() {},
 };
+
+test("worker runtime exposes extension tools through the governed live broker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-extension-live-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_extension",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_extension",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_extension");
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    let executions = 0;
+    const capabilities = new CapabilityRegistry([{
+      manifest: {
+        apiVersion: 1,
+        id: "fixture.worker",
+        name: "Worker fixture",
+        version: "1.0.0",
+        entry: "index.mjs",
+        capabilities: ["tools"],
+      },
+      instance: {
+        capabilities: () => ({
+          tools: [{
+            definition: {
+              name: "fixture.inspect",
+              description: "Inspect the fixture",
+              inputSchema: { type: "object", additionalProperties: false },
+              readOnly: true,
+              effect: "none",
+            },
+            validate: () => ({ ok: true as const, value: {} }),
+            execute: async () => {
+              executions += 1;
+              return { content: [{ type: "json" as const, value: { ok: true } }], isError: false };
+            },
+          }],
+          contextContributors: [],
+          languageProviders: [],
+        }),
+        start: async () => undefined,
+        close: async () => undefined,
+      },
+    }]);
+    const model = new ScriptedModel([
+      toolTurn("extension_call", "fixture.inspect", {}),
+      new Error("stop after governed extension call"),
+    ]);
+    const result = await runWorkerTask({
+      model,
+      runId: "run_extension",
+      sessionId: "session_extension",
+      taskId: "task_extension",
+      actorId: "worker_extension",
+      permissionProfile: "full",
+      workspace,
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      initialMessages: [{ id: "task", role: "user", content: "Inspect the extension." }],
+      capabilityRegistry: capabilities,
+    });
+    assert.equal(result.loop.status, "suspended");
+    assert.equal(executions, 1);
+    assert.equal(model.requests[0]?.tools.some((tool) => tool.name === "fixture.inspect"), true);
+    assert.deepEqual(
+      ledger.listRun("run_extension")
+        .filter((event) => event.callId === "extension_call")
+        .map((event) => event.extensionId),
+      ["fixture.worker", "fixture.worker"],
+    );
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("worker runtime routes code tools through the supplied shared language router", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-language-live-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.fixture"), "value\n");
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  const language = new LanguageProviderRouter({
+    builtInProvider: fixtureLanguageProvider(),
+    extensionProviders: [],
+    configuredServers: [],
+  });
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_language",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_language",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_language");
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    const result = await runWorkerTask({
+      model: new ScriptedModel([
+        toolTurn("definition", "code.definition", {
+          path: "value.fixture",
+          line: 1,
+          column: 1,
+        }),
+        new Error("stop after language query"),
+      ]),
+      runId: "run_language",
+      sessionId: "session_language",
+      taskId: "task_language",
+      actorId: "worker_language",
+      permissionProfile: "full",
+      workspace,
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      initialMessages: [{ id: "task", role: "user", content: "Find the fixture definition." }],
+      language,
+    } as Parameters<typeof runWorkerTask>[0]);
+    assert.equal(result.loop.status, "suspended");
+    assert.deepEqual(language.auditRecords().map((record) => record.providerId), ["fixture.language"]);
+  } finally {
+    await language.close();
+    sessions?.close();
+    ledger?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
 
 test("worker inspects, edits, tests, diffs, restarts, and submits a typed change set", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-worker-runtime-"));
@@ -421,6 +579,7 @@ test("worker subagent edits the shared task workspace and returns without parent
   let sessions: SqliteAgentSessionStore | undefined;
   let ledger: SqliteToolLedger | undefined;
   let evidenceStore: SqliteEvidenceStore | undefined;
+  let language: LanguageProviderRouter | undefined;
   try {
     const baseline = await captureGitBaseline({
       projectPath: project,
@@ -441,6 +600,11 @@ test("worker subagent edits the shared task workspace and returns without parent
     sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
     ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
     evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    language = new LanguageProviderRouter({
+      builtInProvider: fixtureLanguageProvider(),
+      extensionProviders: [],
+      configuredServers: [],
+    });
     const requests: AgentModelRequest[] = [];
     const managedProcesses = new ManagedProcessService({
       stateDirectory: join(state, "managed-processes"),
@@ -453,6 +617,12 @@ test("worker subagent edits the shared task workspace and returns without parent
         if (request.sessionId.includes(":subagent:")) {
           subagentTurn += 1;
           return subagentTurn === 1
+            ? toolTurn("subagent-definition", "code.definition", {
+                path: "value.txt",
+                line: 1,
+                column: 1,
+              })
+            : subagentTurn === 2
             ? toolTurn("subagent-edit", "fs.patch", {
                 path: "value.txt",
                 expectedSha256: expectedHash,
@@ -499,6 +669,7 @@ test("worker subagent edits the shared task workspace and returns without parent
       sessions,
       evidenceStore,
       managedProcesses,
+      language,
       initialMessages: [
         { id: "system", role: "system", content: "Delegate, verify, and submit." },
       ],
@@ -522,6 +693,13 @@ test("worker subagent edits the shared task workspace and returns without parent
     assert.equal(childTools.has("submit_task"), false);
     assert.equal(childTools.has("git.commit"), false);
     assert.equal(childTools.has("spawn_subagent"), false, "subagent depth is bounded to one");
+    assert.deepEqual(language.auditRecords().map((record) => ({
+      providerId: record.providerId,
+      operation: record.operation,
+    })), [
+      { providerId: "fixture.language", operation: "definition" },
+      { providerId: "fixture.language", operation: "diagnostics" },
+    ]);
     const parentSession = await sessions.load("session_subagent_parent");
     const spawnResult = parentSession.checkpoint?.messages.find((message) =>
       message.role === "tool" &&
@@ -531,6 +709,7 @@ test("worker subagent edits the shared task workspace and returns without parent
     );
     assert.ok(spawnResult, "structured subagent findings are durable in the parent checkpoint");
   } finally {
+    await language?.close();
     sessions?.close();
     ledger?.close();
     evidenceStore?.close();
@@ -631,5 +810,26 @@ function toolTurn(callId: string, name: string, args: unknown): ModelTurn {
   return {
     blocks: [{ type: "tool_call", callId, name, arguments: args }],
     stopReason: "tool_calls",
+  };
+}
+
+function fixtureLanguageProvider(): LanguageIntelligenceProvider {
+  return {
+    descriptor: {
+      id: "fixture.language",
+      displayName: "Fixture language",
+      extensions: [".fixture", ".txt"],
+      rootMarkers: [],
+      priority: 1,
+    },
+    workspaceSymbols: async () => ({ status: "ok", results: [], truncated: false }),
+    definition: async () => ({
+      status: "ok",
+      results: [{ path: "value.fixture", line: 1, column: 1, preview: "value" }],
+      truncated: false,
+    }),
+    references: async () => ({ status: "ok", results: [], truncated: false }),
+    diagnostics: async () => ({ status: "ok", results: [], truncated: false }),
+    close: async () => undefined,
   };
 }

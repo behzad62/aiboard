@@ -7,7 +7,12 @@ import type { BudgetProjection } from "./budget-ledger.js";
 import type { EvidenceRecord } from "./evidence-store.js";
 import type { ManagedProcessObservation } from "./managed-process.js";
 import type { IntegrationCommit } from "./integration-manager.js";
+import type {
+  LanguageProviderAuditMetadata,
+  LanguageRouteAuditRecord,
+} from "./language-provider-router.js";
 import type { ProjectMemoryEntry } from "./project-memory.js";
+import type { RunnerExtensionManifest } from "./runner-extension.js";
 import type { SkillMetadata } from "./skill-catalog.js";
 import type {
   FinalVerificationGenerationProjection,
@@ -137,6 +142,12 @@ export interface BuildToolObservation {
   errorCode?: string;
 }
 
+export interface BuildCapabilitiesObservation {
+  extensions: RunnerExtensionManifest[];
+  languageProviders: LanguageProviderAuditMetadata[];
+  languageRoutes: LanguageRouteAuditRecord[];
+}
+
 export type BuildTranscriptPage = AgentTranscriptPage;
 
 export interface BuildObservabilitySnapshot {
@@ -156,6 +167,7 @@ export interface BuildObservabilitySnapshot {
     integrationRevision: string;
     commits: IntegrationCommit[];
   };
+  capabilities?: BuildCapabilitiesObservation;
   finalVerification?: FinalVerificationObservability;
   independentVerifier?: IndependentVerifierObservability;
 }
