@@ -165,6 +165,46 @@ test("plan_final_verification is idempotent and rejects a conflicting current pl
   }
 });
 
+test("runner-owned final-verification planning cannot bypass pending user guidance", async () => {
+  const fixture = createFixture();
+  const tools = new ToolRegistry();
+  for (const tool of createArchitectTools({
+    store: fixture.store,
+    finalVerificationPlanAvailable: true,
+    finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
+  })) tools.register(tool);
+  try {
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-27T00:00:00.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance-before-final-plan",
+      payload: {
+        guidanceId: "guidance-before-final-plan",
+        text: "Reconcile this before final verification planning.",
+        version: 1,
+      },
+    });
+    const result = await invokePlan(
+      tools,
+      {
+        runId: RUN_ID,
+        sessionId: "architect:test",
+        actor: { role: "architect", id: "architect-test" },
+      },
+      "stale-final-plan",
+      finalVerificationPlan(),
+    );
+    assert.equal(result.isError, true);
+    assert.match(result.error?.message ?? "", /user guidance/i);
+    assert.equal(runtimeProjection(fixture.store).finalVerification?.current, undefined);
+  } finally {
+    fixture.store.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("Architect context exposes the canonical revision and verification generation state", () => {
   const fixture = createFixture();
   try {
@@ -233,6 +273,68 @@ test("a kernel final-verification task is excluded from worker scheduling", asyn
     );
     assert.equal(finalTasks.length, 1);
     assert.equal(finalTasks[0].status, "planned");
+  } finally {
+    fixture.store.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("guidance cancellation of a rejecting final-check driver does not create a pump error or durable stale check", async () => {
+  const fixture = createFixture();
+  const tools = new ToolRegistry();
+  for (const tool of createArchitectTools({
+    store: fixture.store,
+    finalVerificationPlanAvailable: true,
+    finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
+  })) tools.register(tool);
+  let checkStarted!: () => void;
+  const started = new Promise<void>((resolve) => { checkStarted = resolve; });
+  try {
+    const planned = await invokePlan(
+      tools,
+      {
+        runId: RUN_ID,
+        sessionId: "architect:test",
+        actor: { role: "architect", id: "architect-test" },
+      },
+      "plan-for-steering-cancel",
+      finalVerificationPlan(),
+    );
+    assert.equal(planned.isError, false, planned.error?.message ?? "plan failed");
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      store: fixture.store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      finalVerificationDriver: {
+        executeCheck: async (input) => {
+          checkStarted();
+          return await new Promise((_, reject) => {
+            input.signal?.addEventListener("abort", () => {
+              reject(input.signal?.reason ?? new DOMException("cancelled", "AbortError"));
+            }, { once: true });
+          });
+        },
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+    });
+    const active = runtime.step();
+    await started;
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-final-check",
+      text: "Reconcile this before accepting verification output.",
+      version: 1,
+      idempotencyKey: "guidance:final-check",
+    });
+    assert.deepEqual(await active, {
+      status: "progressed",
+      action: "final_verification_interrupted",
+    });
+    const current = runtime.projection().finalVerification?.current;
+    assert.equal(current?.completedChecks?.length ?? 0, 0);
+    assert.equal(runtime.projection().status, "running");
   } finally {
     fixture.store.close();
     rmSync(fixture.root, { recursive: true, force: true });

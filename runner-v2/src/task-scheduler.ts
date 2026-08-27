@@ -207,12 +207,17 @@ export class TaskScheduler {
     };
     const operation = Promise.resolve()
       .then(async () => await this.driver.run(assignment))
-      .then((outcome) => this.recordOutcome(task.id, task.attempt, outcome))
+      .then((outcome) => {
+        if (assignment.signal?.aborted) return;
+        this.recordOutcome(task.id, task.attempt, outcome);
+      })
       .catch((error: unknown) =>
-        this.recordOutcome(task.id, task.attempt, {
-          type: "failed",
-          reason: error instanceof Error ? error.message : String(error),
-        })
+        assignment.signal?.aborted
+          ? undefined
+          : this.recordOutcome(task.id, task.attempt, {
+              type: "failed",
+              reason: error instanceof Error ? error.message : String(error),
+            })
       )
       .finally(() => {
         this.active.delete(task.id);

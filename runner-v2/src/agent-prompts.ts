@@ -148,9 +148,12 @@ export function buildArchitectContext(
       JSON.stringify(
         {
           status: input.projection.status,
+          initialObjective: input.projection.initialObjective ?? input.objective,
           planRevision: input.projection.planRevision,
           tasks: input.projection.tasks,
           guidance: input.projection.guidance,
+          userGuidance: input.projection.userGuidance,
+          userGuidanceVersion: input.projection.userGuidanceVersion,
           reviews: input.projection.reviews,
           integrationRevision: input.projection.integrationRevision,
           finalVerification: input.projection.finalVerification ?? null,

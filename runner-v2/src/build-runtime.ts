@@ -38,6 +38,7 @@ import type { ArtifactStore } from "./artifact-store.js";
 export type ArchitectActionReason =
   | { type: "plan_required" }
   | { type: "acceptance_contract_upgrade_required" }
+  | { type: "user_guidance_required"; guidanceId: string; version: number }
   | { type: "guidance_required"; requestId: string; taskId: string }
   | { type: "review_required"; taskId: string; changeSetId: string }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
@@ -144,6 +145,7 @@ export interface FinalVerificationCleanupDriver {
 
 export interface BuildRuntimeOptions {
   runId: string;
+  initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
   store: SchedulerStore;
   workerDriver: WorkerRuntimeDriver;
@@ -172,6 +174,7 @@ export interface BuildStepResult {
 export class BuildRuntime {
   readonly id: string;
   private readonly runId: string;
+  private readonly initialObjective?: string;
   private readonly store: SchedulerStore;
   private readonly scheduler: TaskScheduler;
   private readonly architectDriver: ArchitectRuntimeDriver;
@@ -194,6 +197,7 @@ export class BuildRuntime {
   constructor(options: BuildRuntimeOptions) {
     this.id = options.runId;
     this.runId = options.runId;
+    this.initialObjective = options.initialObjective;
     this.store = options.store;
     this.architectDriver = options.architectDriver;
     this.integrationDriver = options.integrationDriver;
@@ -209,6 +213,7 @@ export class BuildRuntime {
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
+    this.initializeRun();
     this.configureRunPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
@@ -316,6 +321,36 @@ export class BuildRuntime {
     return this.projection();
   }
 
+  submitUserGuidance(input: {
+    guidanceId: string;
+    text: string;
+    version: number;
+    idempotencyKey: string;
+  }): SchedulerProjection {
+    if (this.projection().status === "completed") {
+      throw new Error("A completed Build cannot receive in-flight user guidance.");
+    }
+    const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
+    const appended = this.store.append({
+      runId: this.runId,
+      type: "user.guidance_submitted",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: input.idempotencyKey,
+      payload: {
+        guidanceId: input.guidanceId,
+        text: input.text,
+        version: input.version,
+      },
+    });
+    if (appended.sequence > sequenceBefore) {
+      this.lifecycleController.abort(
+        new DOMException(`Build ${this.runId} received user guidance.`, "AbortError")
+      );
+    }
+    return this.projection();
+  }
+
   selectProjectHandoff(
     choice: ProjectHandoffChoice,
     result: {
@@ -409,6 +444,16 @@ export class BuildRuntime {
     if (projection.planRevision === 0) {
       await this.runArchitect({ type: "plan_required" }, projection);
       return this.afterArchitect("plan_required");
+    }
+
+    const pendingGuidance = firstPendingUserGuidance(projection);
+    if (pendingGuidance) {
+      await this.runArchitect({
+        type: "user_guidance_required",
+        guidanceId: pendingGuidance.guidanceId,
+        version: pendingGuidance.version,
+      }, projection);
+      return this.afterArchitect("user_guidance_required");
     }
 
     const openGuidance = Object.values(projection.guidance)
@@ -750,6 +795,7 @@ export class BuildRuntime {
         throw new Error("Final verification execution requires a FinalVerificationCheckDriver.");
       }
       let result: FinalVerificationCheckExecution;
+      const signal = this.activeLifecycleSignal();
       try {
         result = await this.finalVerificationDriver.executeCheck({
           runId: this.runId,
@@ -760,9 +806,21 @@ export class BuildRuntime {
           plan: generation.plan,
           category: pending.category,
           executionProfile: generation.executionProfile,
-          signal: this.activeLifecycleSignal(),
+          signal,
         });
+        if (signal.aborted) {
+          return {
+            status: this.projection().status === "paused" ? "paused" : "progressed",
+            action: "final_verification_interrupted",
+          };
+        }
       } catch (error) {
+        if (signal.aborted) {
+          return {
+            status: this.projection().status === "paused" ? "paused" : "progressed",
+            action: "final_verification_interrupted",
+          };
+        }
         if (!this.isCurrentGeneration(generation)) {
           return { status: "progressed", action: "final_verification_invalidated" };
         }
@@ -947,16 +1005,37 @@ export class BuildRuntime {
       current.targetRevision === generation.targetRevision;
   }
 
-  private ensureInitialized(): void {
-    if (this.store.readRun(this.runId).length > 0) return;
+  private initializeRun(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length > 0) {
+      const durableObjective = rebuildSchedulerProjection(events).initialObjective;
+      if (
+        durableObjective !== undefined &&
+        this.initialObjective !== undefined &&
+        durableObjective !== this.initialObjective
+      ) {
+        throw new Error(
+          "The durable initial objective does not match the Build specification."
+        );
+      }
+      return;
+    }
     this.store.append({
       runId: this.runId,
       type: "run.initialized",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: "run-initialized",
-      payload: {},
+      payload: {
+        ...(this.initialObjective !== undefined
+          ? { objective: this.initialObjective }
+          : {}),
+      },
     });
+  }
+
+  private ensureInitialized(): void {
+    this.initializeRun();
   }
 
   private async runArchitect(
@@ -1064,6 +1143,12 @@ function firstTask(
   return Object.values(projection.tasks)
     .filter((task) => task.status === status)
     .sort((left, right) => left.id.localeCompare(right.id))[0];
+}
+
+function firstPendingUserGuidance(projection: SchedulerProjection) {
+  return Object.values(projection.userGuidance)
+    .filter((guidance) => guidance.status === "submitted")
+    .sort((left, right) => left.version - right.version)[0];
 }
 
 function emptyProjection(runId: string): SchedulerProjection {

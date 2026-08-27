@@ -178,6 +178,39 @@ test("scheduler threads the active lifecycle signal and absolute retry deadline"
   }
 });
 
+test("an aborted active worker cannot persist a stale outcome or consume another attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-steering-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const driver = new DeferredDriver();
+  const controller = new AbortController();
+  try {
+    store.append(planEvent("run_1", [task("a")]));
+    const scheduler = new TaskScheduler({
+      runId: "run_1",
+      store,
+      driver,
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/a",
+      lifecycleSignal: () => controller.signal,
+    });
+    await scheduler.tick();
+    assert.equal(scheduler.projection().tasks.a.attempt, 1);
+
+    controller.abort(new DOMException("User guidance arrived.", "AbortError"));
+    driver.resolve("a", { type: "submitted", changeSetId: "stale-change-set" });
+    await scheduler.awaitIdle();
+
+    const projection = scheduler.projection();
+    assert.equal(projection.status, "running");
+    assert.equal(projection.tasks.a.status, "running");
+    assert.equal(projection.tasks.a.attempt, 1);
+    assert.equal(projection.tasks.a.changeSetId, undefined);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function planEvent(runId: string, tasks: BuildTask[]) {
   return {
     runId,

@@ -331,6 +331,17 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       this.requireHandoff(request.runId, failure.message, ["code"], runtimeId);
       return;
     }
+    if (
+      result.status === "suspended" &&
+      result.reason === "cancelled" &&
+      Object.values(
+        rebuildSchedulerProjection(
+          this.options.schedulerStore.readRun(request.runId)
+        ).userGuidance
+      ).some((guidance) => guidance.status === "submitted")
+    ) {
+      return;
+    }
     const reason =
       result.status === "suspended"
         ? result.reason === "protocol_error"
@@ -348,14 +359,26 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   }
 
   private ensureInitialized(runId: string): void {
-    if (this.options.schedulerStore.readRun(runId).length > 0) return;
+    const events = this.options.schedulerStore.readRun(runId);
+    if (events.length > 0) {
+      const durableObjective = rebuildSchedulerProjection(events).initialObjective;
+      if (
+        durableObjective !== undefined &&
+        durableObjective !== this.options.objective
+      ) {
+        throw new Error(
+          "The durable initial objective does not match the native Architect configuration."
+        );
+      }
+      return;
+    }
     this.options.schedulerStore.append({
       runId,
       type: "run.initialized",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "native-architect-runtime" },
       idempotencyKey: "run-initialized",
-      payload: {},
+      payload: { objective: this.options.objective },
     });
   }
 

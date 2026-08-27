@@ -1054,6 +1054,31 @@ export function reduceSchedulerEvent(
   if (event.runId !== current.runId || event.sequence !== current.lastSequence + 1) {
     throw new Error(`Scheduler event ${event.eventId} has invalid run ordering.`);
   }
+  const hasPendingUserGuidance = Object.values(current.userGuidance).some(
+    (guidance) => guidance.status === "submitted"
+  );
+  if (hasPendingUserGuidance) {
+    const initialPlanMayConsumeGuidance =
+      event.type === "plan.created" && current.planRevision === 0;
+    if (
+      event.actor.role === "architect" &&
+      event.type !== "user.guidance_acknowledged" &&
+      event.type !== "architect.question_requested" &&
+      !initialPlanMayConsumeGuidance
+    ) {
+      throw new Error(
+        "Pending user guidance must be acknowledged before other Architect lifecycle progress."
+      );
+    }
+    if (
+      event.type === "task.transitioned" &&
+      event.payload.status === "submitted"
+    ) {
+      throw new Error(
+        "A stale worker submission cannot advance while user guidance is pending."
+      );
+    }
+  }
   const next: SchedulerProjection = {
     ...current,
     tasks: { ...current.tasks },

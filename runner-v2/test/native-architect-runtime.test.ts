@@ -18,6 +18,7 @@ import {
   prioritizedArchitectCapabilities,
 } from "../src/native-architect-runtime.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
+import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { createMcpTools, type McpManager } from "../src/mcp-tools.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
@@ -167,6 +168,184 @@ test("Architect reviews inspect the submitted attempt workspace instead of the p
     ),
     "C:/runner/integration/run",
   );
+});
+
+test("Native Architect steering cancellation does not create a user-decision pause", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-architect-steering-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const objective = "Build\nthis exact application.  ";
+  try {
+    scheduler.append({
+      runId: "run-steering-cancel",
+      type: "run.initialized",
+      occurredAt: "2026-08-27T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { objective },
+    });
+    scheduler.append({
+      runId: "run-steering-cancel",
+      type: "plan.created",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "plan",
+      payload: { revision: 1, tasks: [{
+        id: "task-a",
+        objective: "Implement A",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "A is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned",
+        attempt: 0,
+      }] },
+    });
+    scheduler.append({
+      runId: "run-steering-cancel",
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-27T00:00:02.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance",
+      payload: { guidanceId: "guidance-1", text: "Keep the public API stable.", version: 1 },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const steeringModel = new ScriptedModel([{
+      blocks: [],
+      stopReason: "cancelled",
+    }]);
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, steeringModel]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-steering",
+      projectRoot: project,
+      objective,
+    });
+    const projection = rebuildSchedulerProjection(scheduler.readRun("run-steering-cancel"));
+    await architect.run({
+      runId: "run-steering-cancel",
+      reason: { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
+      projection,
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run-steering-cancel",
+        sessionId: "architect:run-steering-cancel",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const recovered = rebuildSchedulerProjection(scheduler.readRun("run-steering-cancel"));
+    assert.equal(recovered.status, "running");
+    assert.equal(recovered.pauseReason, undefined);
+    assert.equal(scheduler.readRun("run-steering-cancel").some((event) => event.type === "run.paused"), false);
+    assert.equal(recovered.initialObjective, objective);
+    const steeringContext = steeringModel.requests[0].messages
+      .map((message) => typeof message.content === "string" ? message.content : "")
+      .join("\n");
+    assert.match(steeringContext, /Keep the public API stable/);
+    assert.match(steeringContext, /Build\\nthis exact application/);
+
+    const mismatchHealth = new ProviderHealthRegistry();
+    const mismatchedArchitect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health: mismatchHealth }),
+      health: mismatchHealth,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([{
+        blocks: [],
+        stopReason: "cancelled",
+      }])]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-mismatch",
+      projectRoot: project,
+      objective: `${objective}changed`,
+    });
+    await assert.rejects(() => mismatchedArchitect.run({
+      runId: "run-steering-cancel",
+      reason: { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
+      projection: recovered,
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run-steering-cancel",
+        sessionId: "architect:run-steering-cancel:mismatch",
+        actor: { role: "architect", id: "architect" },
+      },
+    }), /durable initial objective.*does not match/i);
+
+    const directObjective = "Direct native initialization\nkeeps\tthese bytes.  ";
+    const directHealth = new ProviderHealthRegistry();
+    const directArchitect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health: directHealth }),
+      health: directHealth,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([{
+        blocks: [],
+        stopReason: "cancelled",
+      }])]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-direct-init",
+      projectRoot: project,
+      objective: directObjective,
+    });
+    await directArchitect.run({
+      runId: "run-direct-native-init",
+      reason: { type: "plan_required" },
+      projection: {
+        ...projection,
+        runId: "run-direct-native-init",
+        userGuidance: {},
+        userGuidanceVersion: 0,
+      },
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run-direct-native-init",
+        sessionId: "architect:run-direct-native-init",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const directEvents = scheduler.readRun("run-direct-native-init");
+    assert.equal(directEvents[0].type, "run.initialized");
+    assert.equal(directEvents[0].payload.objective, directObjective);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Architect provider failure pauses for user-selected handoff before planning", async () => {

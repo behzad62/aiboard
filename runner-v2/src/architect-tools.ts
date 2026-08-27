@@ -1370,6 +1370,20 @@ function appendEvent(
   lifecycle: NonNullable<ToolExecutionOutput["lifecycle"]>
 ): ToolExecutionOutput {
   try {
+    const projection = rebuildSchedulerProjection(store.readRun(event.runId));
+    if (
+      Object.values(projection.userGuidance).some(
+        (guidance) => guidance.status === "submitted"
+      ) &&
+      event.type !== "user.guidance_acknowledged" &&
+      event.type !== "architect.question_requested" &&
+      !(event.type === "plan.created" && projection.planRevision === 0)
+    ) {
+      return errorOutput(
+        "user_guidance_requires_acknowledgement",
+        "Pending user guidance must be acknowledged before other Architect lifecycle progress."
+      );
+    }
     const appended = store.append(event);
     return {
       content: [{ type: "json", value: appended }],
