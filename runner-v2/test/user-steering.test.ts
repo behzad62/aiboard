@@ -163,14 +163,45 @@ test("P3.1 invalid reconciliation and whitespace-only steering fields roll back 
       ["architect.question_requested", ARCHITECT, { questionId: "question-1", question: " \n", version: 1 }],
       ["architect.question_answered", USER, { questionId: "question-1", expectedVersion: 1, answer: " " }],
       ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: " ", evidenceIds: ["evidence-1"] } }],
-      ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: "Reason", evidenceIds: [" "] } }],
-      ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: "Reason", evidenceIds: ["evidence-1"], unexpected: true } }],
       ["user.guidance_acknowledged", ARCHITECT, { guidanceId: "guidance-1", expectedVersion: 1, resolution: { type: "plan_reconciled", rationale: "Reason", planReconciliation: [] } }],
     ];
     for (const [type, actor, payload] of whitespaceCases) {
       assert.throws(() => append(store, type, actor, `whitespace:${type}:${JSON.stringify(payload)}`, payload), /required|nonblank|unknown/i);
     }
     assert.deepEqual(rebuildSchedulerProjection(store.readRun(RUN_ID)), afterInvalid);
+  });
+});
+
+test("P3.1 rejects whitespace-only no-plan-change evidence IDs atomically", () => {
+  withSubmittedGuidance((store) => {
+    const before = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:evidence-id-whitespace", {
+      guidanceId: "guidance-1",
+      expectedVersion: 1,
+      resolution: {
+        type: "no_plan_change",
+        rationale: "The current plan already covers this request.",
+        evidenceIds: [" \t"],
+      },
+    }), /nonblank strings/i);
+    assert.deepEqual(rebuildSchedulerProjection(store.readRun(RUN_ID)), before);
+  });
+});
+
+test("P3.1 rejects unknown nested acknowledgement-resolution fields atomically", () => {
+  withSubmittedGuidance((store) => {
+    const before = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:resolution-unexpected", {
+      guidanceId: "guidance-1",
+      expectedVersion: 1,
+      resolution: {
+        type: "no_plan_change",
+        rationale: "The current plan already covers this request.",
+        evidenceIds: ["evidence-1"],
+        unexpected: true,
+      },
+    }), /unknown user-steering payload field/i);
+    assert.deepEqual(rebuildSchedulerProjection(store.readRun(RUN_ID)), before);
   });
 });
 
@@ -252,6 +283,16 @@ function seedPlan(store: SqliteSchedulerStore): void {
       acceptanceCriteriaVersion: 1,
       attempt: 0,
     }],
+  });
+}
+
+function withSubmittedGuidance(run: (store: SqliteSchedulerStore) => void): void {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    append(store, "user.guidance_submitted", USER, "guidance:one", {
+      guidanceId: "guidance-1", text: "Use keyboard navigation.", version: 1,
+    });
+    run(store);
   });
 }
 
