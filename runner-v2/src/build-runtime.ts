@@ -1079,7 +1079,31 @@ export class BuildRuntime {
       currentReview?.status === "submitted" &&
       currentReview.verdict?.satisfied === false
     ) {
-      return { status: "idle", action: "verifier_repair_required" };
+      if (currentReview.repairTaskIds?.length) return undefined;
+      const unsatisfiedCriteria = currentReview.verdict.criterionVerdicts
+        .filter((criterion) => criterion.verdict === "unsatisfied")
+        .map((criterion) => ({
+          taskId: criterion.taskId,
+          criterionId: criterion.criterionId,
+          rationale: criterion.rationale,
+          evidenceIds: [...criterion.evidenceIds],
+        }));
+      await this.runArchitect({
+        type: "verifier_repair_plan_required",
+        reviewId: currentReview.reviewId,
+        targetRevision: currentReview.targetRevision,
+        unsatisfiedCriteria,
+      }, projection);
+      const repaired = this.projection().verifier?.current;
+      if (
+        repaired?.reviewId !== currentReview.reviewId ||
+        !repaired.repairTaskIds?.length
+      ) {
+        throw new Error(
+          "Architect returned from verifier_repair_plan_required without a typed action.",
+        );
+      }
+      return this.afterArchitect("verifier_repair_plan_required");
     }
 
     const result = await driver.verify({
@@ -1282,6 +1306,8 @@ export class BuildRuntime {
         reason.type === "final_verification_review_required",
       finalVerificationRepairPlanAvailable:
         reason.type === "final_verification_repair_plan_required",
+      verifierRepairPlanAvailable:
+        reason.type === "verifier_repair_plan_required",
       architectAction: {
         reason,
         sequence: projection.lastSequence,

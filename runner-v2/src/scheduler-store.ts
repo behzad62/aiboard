@@ -64,6 +64,7 @@ import {
   parseVerifierReviewRequest,
   parseVerifierVerdict,
   sameVerifierReview,
+  type VerifierCriterionReference,
   type VerifierProjection,
 } from "./verifier-contracts.js";
 import {
@@ -132,7 +133,8 @@ export type SchedulerEventType =
   | "verifier.selection_required"
   | "verifier.selection_selected"
   | "verifier.review_requested"
-  | "verifier.verdict_submitted";
+  | "verifier.verdict_submitted"
+  | "verifier.repairs_planned";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -590,6 +592,11 @@ export function architectLifecycleEventMatchesReason(
         event.payload.finalVerificationTaskId === reason.finalVerificationTaskId &&
         event.payload.generationId === reason.generationId &&
         event.payload.targetRevision === reason.targetRevision;
+    case "verifier_repair_plan_required":
+      return event.actor.role === "architect" &&
+        event.type === "verifier.repairs_planned" &&
+        event.payload.reviewId === reason.reviewId &&
+        event.payload.targetRevision === reason.targetRevision;
     case "task_failure_resolution_required":
       return event.actor.role === "architect" &&
         ((event.type === "task.revised" && event.payload.taskId === reason.taskId) ||
@@ -614,6 +621,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "final_verification.generation_created",
     "final_verification.review_decided",
     "final_verification.repairs_planned",
+    "verifier.repairs_planned",
     "task.revised",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
@@ -672,6 +680,26 @@ function architectActionReasonIsApplicable(
       return current?.taskId === reason.finalVerificationTaskId &&
         current.generationId === reason.generationId &&
         current.targetRevision === reason.targetRevision;
+    }
+    case "verifier_repair_plan_required": {
+      const current = projection.verifier?.current;
+      if (
+        current?.state !== "current" ||
+        current.status !== "submitted" ||
+        current.verdict?.satisfied !== false ||
+        current.reviewId !== reason.reviewId ||
+        current.targetRevision !== reason.targetRevision ||
+        projection.integrationRevision !== reason.targetRevision
+      ) return false;
+      const unsatisfied = current.verdict.criterionVerdicts
+        .filter((criterion) => criterion.verdict === "unsatisfied")
+        .map((criterion) => ({
+          taskId: criterion.taskId,
+          criterionId: criterion.criterionId,
+          rationale: criterion.rationale,
+          evidenceIds: [...criterion.evidenceIds],
+        }));
+      return sameValue(unsatisfied, reason.unsatisfiedCriteria);
     }
     case "task_failure_resolution_required": {
       const task = projection.tasks[reason.taskId];
@@ -1030,6 +1058,24 @@ export function validateSchedulerEvidenceEvent(
     });
     if (records.length !== uniqueEvidenceIds.length) {
       throw new Error("Verifier verdict cites missing or foreign evidence.");
+    }
+    return;
+  }
+  if (event.type === "verifier.repairs_planned") {
+    if (!Array.isArray(event.payload.tasks)) {
+      throw new Error("Verifier repair plan is invalid.");
+    }
+    const evidenceIds = event.payload.tasks.flatMap((candidate) => {
+      if (!isRecord(candidate)) throw new Error("Verifier repair task is invalid.");
+      return stringArray(candidate, "evidenceIds");
+    });
+    const uniqueEvidenceIds = [...new Set(evidenceIds)];
+    const records = evidenceStore.getByIds({
+      runId: event.runId,
+      ids: uniqueEvidenceIds,
+    });
+    if (records.length !== uniqueEvidenceIds.length) {
+      throw new Error("Verifier repair plan cites missing or foreign evidence.");
     }
     return;
   }
@@ -1733,6 +1779,13 @@ export function reduceSchedulerEvent(
       recordVerifierVerdict(next, event, event.occurredAt);
       break;
     }
+    case "verifier.repairs_planned": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may plan verifier repairs.");
+      }
+      createVerifierRepairTasks(next, event.payload);
+      break;
+    }
     case "task.revised": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
@@ -1753,7 +1806,11 @@ export function reduceSchedulerEvent(
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
       if (
         task.kind === "verification_repair" &&
-        (Object.hasOwn(patch, "verificationRepair") || Object.hasOwn(patch, "kind"))
+        (
+          Object.hasOwn(patch, "verificationRepair") ||
+          Object.hasOwn(patch, "verifierRepair") ||
+          Object.hasOwn(patch, "kind")
+        )
       ) {
         throw new Error("Verification repair provenance and kind are immutable.");
       }
@@ -1826,8 +1883,18 @@ export function reduceSchedulerEvent(
       if (
         status === "cancelled" &&
         task.kind === "verification_repair" &&
-        task.verificationRepair?.sourceGenerationId ===
-          next.finalVerification?.current?.generationId
+        (
+          Boolean(
+            task.verificationRepair &&
+            task.verificationRepair.sourceGenerationId ===
+              next.finalVerification?.current?.generationId,
+          ) ||
+          Boolean(
+            task.verifierRepair &&
+            task.verifierRepair.sourceReviewId ===
+              next.verifier?.current?.reviewId,
+          )
+        )
       ) {
         throw new Error(
           "A current-generation verification repair cannot be cancelled; integrate or durably replace it.",
@@ -3303,6 +3370,137 @@ function recordVerifierVerdict(
   projection.verifier!.current = submitted;
 }
 
+function createVerifierRepairTasks(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = projection.verifier?.current;
+  if (
+    !current || current.state !== "current" ||
+    current.status !== "submitted" || current.verdict?.satisfied !== false ||
+    current.reviewId !== requiredString(payload, "reviewId") ||
+    current.targetRevision !== requiredString(payload, "targetRevision") ||
+    current.targetRevision !== projection.integrationRevision
+  ) {
+    throw new Error(
+      "Verifier repairs require the current unsatisfied revision-bound verdict.",
+    );
+  }
+  const revision = requiredNumber(payload, "revision");
+  if (revision !== projection.planRevision + 1) {
+    throw new Error("Verifier repair plan revision is stale.");
+  }
+  if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
+    throw new Error("Verifier repairs require at least one task.");
+  }
+  const unsatisfied = current.verdict.criterionVerdicts.filter(
+    (criterion) => criterion.verdict === "unsatisfied",
+  );
+  const byCriterion = new Map(
+    unsatisfied.map((criterion) => [verifierCriterionKey(criterion), criterion]),
+  );
+  const assigned = new Set<string>();
+  const tasks = payload.tasks.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Verifier repair task is invalid.");
+    if (!Array.isArray(candidate.criteria) || candidate.criteria.length === 0) {
+      throw new Error("Verifier repair task requires rejected criteria.");
+    }
+    const criteria: VerifierCriterionReference[] = candidate.criteria.map(
+      (value) => {
+        if (!isRecord(value)) throw new Error("Verifier repair criterion is invalid.");
+        return {
+          taskId: requiredString(value, "taskId"),
+          criterionId: requiredString(value, "criterionId"),
+        };
+      },
+    );
+    for (const criterion of criteria) {
+      const key = verifierCriterionKey(criterion);
+      if (!byCriterion.has(key) || assigned.has(key)) {
+        throw new Error(
+          `Verifier repair criterion ${criterion.taskId}:${criterion.criterionId} is satisfied, unknown, or duplicated.`,
+        );
+      }
+      assigned.add(key);
+    }
+    if (!Array.isArray(candidate.acceptanceCriteria)) {
+      throw new Error("Verifier repair task requires acceptance criteria.");
+    }
+    const acceptanceCriteria = candidate.acceptanceCriteria as AcceptanceCriterion[];
+    const criteriaValidation = validateAcceptanceCriteria(acceptanceCriteria);
+    if (!criteriaValidation.valid) {
+      throw new Error(
+        `Verifier repair acceptance criteria are invalid: ${criteriaValidation.issues.join(" ")}`,
+      );
+    }
+    const evidenceIds = stringArray(candidate, "evidenceIds");
+    const expectedEvidence = [...new Set(criteria.flatMap((criterion) =>
+      byCriterion.get(verifierCriterionKey(criterion))?.evidenceIds ?? []
+    ))].sort();
+    if (!sameValue([...evidenceIds].sort(), expectedEvidence)) {
+      throw new Error(
+        "Verifier repair task must cite exactly the rejected criteria evidence.",
+      );
+    }
+    const requiredCapabilities = stringArray(candidate, "requiredCapabilities");
+    if (
+      requiredCapabilities.length === 0 ||
+      requiredCapabilities.some((capability) => !capability.trim())
+    ) {
+      throw new Error("Verifier repair task requires non-empty capabilities.");
+    }
+    return {
+      id: requiredString(candidate, "id"),
+      kind: "verification_repair" as const,
+      objective: requiredString(candidate, "objective"),
+      dependencies: stringArray(candidate, "dependencies"),
+      status: "planned" as const,
+      requiredCapabilities,
+      acceptanceCriteria: acceptanceCriteria.map((criterion) => ({ ...criterion })),
+      acceptanceCriteriaVersion: 1,
+      attempt: 0,
+      verifierRepair: {
+        sourceReviewId: current.reviewId,
+        targetRevision: current.targetRevision,
+        criteria: criteria.map((criterion) => ({ ...criterion })),
+        evidenceIds: [...expectedEvidence],
+      },
+    } satisfies BuildTask;
+  });
+  if (assigned.size !== byCriterion.size) {
+    throw new Error(
+      "Verifier repair tasks must cover every unsatisfied criterion exactly once.",
+    );
+  }
+  if (current.repairTaskIds) {
+    const existing = current.repairTaskIds.map((id) => projection.tasks[id]);
+    if (sameValue(existing, tasks)) return;
+    throw new Error("Verifier repairs already have a conflicting durable plan.");
+  }
+  for (const task of tasks) {
+    if (projection.tasks[task.id]) throw new Error(`Duplicate task ${task.id}.`);
+    if (task.dependencies.includes(projection.finalVerification?.current?.taskId ?? "")) {
+      throw new Error("Verifier repairs cannot depend on the kernel verification task.");
+    }
+  }
+  const validation = validateTaskGraph(
+    [...Object.values(projection.tasks), ...tasks],
+    { requireAcceptanceCriteria: true },
+  );
+  if (!validation.valid) {
+    throw new Error(
+      `Verifier repair plan is invalid: ${validation.issues.map((issue) => issue.message).join(" ")}`,
+    );
+  }
+  for (const task of tasks) projection.tasks[task.id] = task;
+  current.repairTaskIds = tasks.map((task) => task.id);
+  projection.planRevision = revision;
+}
+
+function verifierCriterionKey(criterion: VerifierCriterionReference): string {
+  return `${criterion.taskId}\u0000${criterion.criterionId}`;
+}
+
 function parseVerificationRepairSource(
   payload: Record<string, unknown>,
   current: FinalVerificationGenerationProjection,
@@ -4091,8 +4289,18 @@ function applyPlanReconciliation(
     if (update.action === "cancel") {
       if (
         task.kind === "verification_repair" &&
-        task.verificationRepair?.sourceGenerationId ===
-          projection.finalVerification?.current?.generationId
+        (
+          Boolean(
+            task.verificationRepair &&
+            task.verificationRepair.sourceGenerationId ===
+              projection.finalVerification?.current?.generationId,
+          ) ||
+          Boolean(
+            task.verifierRepair &&
+            task.verifierRepair.sourceReviewId ===
+              projection.verifier?.current?.reviewId,
+          )
+        )
       ) {
         throw new Error(
           "A current-generation verification repair cannot be cancelled during reconciliation.",
@@ -4648,6 +4856,15 @@ function cloneBuildTask(task: BuildTask): BuildTask {
       : {}),
     ...(task.verificationPlan
       ? { verificationPlan: planFinalVerification(task.verificationPlan) }
+      : {}),
+    ...(task.verifierRepair
+      ? {
+          verifierRepair: {
+            ...task.verifierRepair,
+            criteria: task.verifierRepair.criteria.map((criterion) => ({ ...criterion })),
+            evidenceIds: [...task.verifierRepair.evidenceIds],
+          },
+        }
       : {}),
     ...(task.conflictPaths ? { conflictPaths: [...task.conflictPaths] } : {}),
   };

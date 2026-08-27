@@ -35,6 +35,13 @@ export interface VerificationRepairProvenance {
     | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
 }
 
+export interface VerifierRepairProvenance {
+  sourceReviewId: string;
+  targetRevision: string;
+  criteria: Array<{ taskId: string; criterionId: string }>;
+  evidenceIds: string[];
+}
+
 export interface BuildTask {
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */
@@ -69,6 +76,7 @@ export interface BuildTask {
   verificationSubmissionId?: string;
   verificationReviewId?: string;
   verificationRepair?: VerificationRepairProvenance;
+  verifierRepair?: VerifierRepairProvenance;
 }
 
 export type FinalVerificationTask = Omit<

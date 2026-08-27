@@ -591,7 +591,8 @@ export function architectInspectionWorkspace(
   if (
     reason.type === "final_verification_plan_required" ||
     reason.type === "final_verification_review_required" ||
-    reason.type === "final_verification_repair_plan_required"
+    reason.type === "final_verification_repair_plan_required" ||
+    reason.type === "verifier_repair_plan_required"
   ) {
     return canonicalProjectRoot?.trim() || projectRoot;
   }

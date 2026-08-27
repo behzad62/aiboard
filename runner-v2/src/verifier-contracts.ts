@@ -48,6 +48,7 @@ export interface VerifierReviewProjection {
   invalidatedByRevision?: string;
   invalidatedByGuidanceId?: string;
   supersededByReviewId?: string;
+  repairTaskIds?: string[];
   verdict?: VerifierVerdictProjection;
 }
 
@@ -184,6 +185,9 @@ export function cloneVerifierReview(
     runtime: { ...review.runtime },
     excludedModels: review.excludedModels.map((excluded) => ({ ...excluded })),
     criteria: review.criteria.map((criterion) => ({ ...criterion })),
+    ...(review.repairTaskIds
+      ? { repairTaskIds: [...review.repairTaskIds] }
+      : {}),
     ...(review.verdict
       ? {
           verdict: {

@@ -67,22 +67,33 @@ export function validateTaskGraph(
       continue;
     }
     if (task.kind === "verification_repair") {
-      if (
-        !task.verificationRepair ||
-        !task.verificationRepair.sourceGenerationId.trim() ||
-        !task.verificationRepair.finalVerificationTaskId.trim() ||
-        !validVerificationRepairSource(task.verificationRepair.source) ||
-        !task.verificationRepair.targetRevision.trim() ||
-        task.verificationRepair.categories.length === 0 ||
-        new Set(task.verificationRepair.categories).size !== task.verificationRepair.categories.length
-      ) {
+      const hasFinalProvenance = Boolean(
+        task.verificationRepair &&
+        !task.verifierRepair &&
+        task.verificationRepair.sourceGenerationId.trim() &&
+        task.verificationRepair.finalVerificationTaskId.trim() &&
+        validVerificationRepairSource(task.verificationRepair.source) &&
+        task.verificationRepair.targetRevision.trim() &&
+        task.verificationRepair.categories.length > 0 &&
+        new Set(task.verificationRepair.categories).size ===
+          task.verificationRepair.categories.length,
+      );
+      const hasVerifierProvenance = Boolean(
+        task.verifierRepair &&
+        !task.verificationRepair &&
+        validVerifierRepairProvenance(task.verifierRepair),
+      );
+      if (!hasFinalProvenance && !hasVerifierProvenance) {
         issues.push({
           code: "invalid_final_verification_task",
           taskId: task.id,
           message: `Verification repair task ${task.id} has invalid provenance.`,
         });
       }
-    } else if (task.verificationRepair !== undefined) {
+    } else if (
+      task.verificationRepair !== undefined ||
+      task.verifierRepair !== undefined
+    ) {
       issues.push({
         code: "invalid_final_verification_task",
         taskId: task.id,
@@ -179,7 +190,11 @@ export function applyTaskTransition(
 ): BuildTask {
   if (
     task.kind === "verification_repair" &&
-    (Object.hasOwn(patch, "verificationRepair") || Object.hasOwn(patch, "kind"))
+    (
+      Object.hasOwn(patch, "verificationRepair") ||
+      Object.hasOwn(patch, "verifierRepair") ||
+      Object.hasOwn(patch, "kind")
+    )
   ) {
     throw new Error("Verification repair provenance and kind are immutable.");
   }
@@ -249,6 +264,26 @@ export function applyTaskTransition(
       : {}),
     status,
   };
+}
+
+function validVerifierRepairProvenance(
+  provenance: import("./task-contracts.js").VerifierRepairProvenance,
+): boolean {
+  const criterionKeys = provenance.criteria.map(
+    (criterion) => `${criterion.taskId}\u0000${criterion.criterionId}`,
+  );
+  return Boolean(
+    provenance.sourceReviewId.trim() &&
+    provenance.targetRevision.trim() &&
+    provenance.criteria.length > 0 &&
+    provenance.criteria.every(
+      (criterion) => criterion.taskId.trim() && criterion.criterionId.trim(),
+    ) &&
+    new Set(criterionKeys).size === criterionKeys.length &&
+    provenance.evidenceIds.length > 0 &&
+    provenance.evidenceIds.every((evidenceId) => evidenceId.trim()) &&
+    new Set(provenance.evidenceIds).size === provenance.evidenceIds.length
+  );
 }
 
 function validVerificationRepairSource(

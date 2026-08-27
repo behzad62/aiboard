@@ -773,6 +773,202 @@ test("restart with a durable positive verdict does not invoke the verifier again
   }
 });
 
+test("negative verdict creates exact Architect-owned verifier repair work", async () => {
+  const fixture = createFixture("runtime-negative-repair");
+  let repairCalls = 0;
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        appendVerifierRequest(fixture.store);
+        const verdicts = completeVerdicts(fixture.evidenceIds);
+        verdicts[0] = {
+          ...verdicts[0]!,
+          verdict: "unsatisfied",
+          rationale: "The API behavior is incomplete on the integrated revision.",
+        };
+        fixture.store.append(verdictEvent({ criterionVerdicts: verdicts }));
+        return { status: "verdict_submitted" };
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async (request) => {
+      assert.equal(request.reason.type, "verifier_repair_plan_required");
+      if (request.reason.type !== "verifier_repair_plan_required") return;
+      repairCalls += 1;
+      assert.deepEqual(request.reason.unsatisfiedCriteria, [{
+        taskId: "task-api",
+        criterionId: "shared",
+        rationale: "The API behavior is incomplete on the integrated revision.",
+        evidenceIds: [fixture.evidenceIds[0]!],
+      }]);
+      const result = await request.tools.invoke({
+        type: "tool_call",
+        callId: "plan-verifier-repair",
+        name: "plan_verifier_repairs",
+        arguments: {
+          reviewId: REVIEW_ID,
+          targetRevision: REVISION,
+          tasks: [{
+            id: "repair-verifier-api",
+            objective: "Repair the API behavior rejected by independent verification.",
+            criteria: [{ taskId: "task-api", criterionId: "shared" }],
+            evidenceIds: [fixture.evidenceIds[0]!],
+            dependencies: [],
+            requiredCapabilities: ["code"],
+            acceptanceCriteria: [{
+              id: "repair-api-shared",
+              text: "The independently rejected API behavior is repaired.",
+            }],
+          }],
+        },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "Repair plan failed");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    assert.equal((await runtime.step()).action, "verifier_verdict_submitted");
+    assert.equal((await runtime.step()).action, "verifier_repair_plan_required");
+    const projection = runtime.projection();
+    assert.equal(repairCalls, 1);
+    assert.equal(projection.verifier?.current?.verdict?.satisfied, false);
+    assert.deepEqual(projection.verifier?.current?.repairTaskIds, [
+      "repair-verifier-api",
+    ]);
+    assert.deepEqual(
+      projection.tasks["repair-verifier-api"]?.verifierRepair,
+      {
+        sourceReviewId: REVIEW_ID,
+        targetRevision: REVISION,
+        criteria: [{ taskId: "task-api", criterionId: "shared" }],
+        evidenceIds: [fixture.evidenceIds[0]!],
+      },
+    );
+    assert.equal(projection.tasks["repair-verifier-api"]?.status, "planned");
+    assert.throws(
+      () => fixture.store.append(event(
+        "task.transitioned",
+        "cancel-current-verifier-repair",
+        { taskId: "repair-verifier-api", status: "cancelled" },
+        { role: "architect", id: "openai:architect" },
+      )),
+      /current-generation verification repair cannot be cancelled/i,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("verifier repair kernel rejects incomplete, unrelated, duplicated, forged, or mis-evidenced work", () => {
+  const scenarios: Array<{
+    name: string;
+    mutate(payload: Record<string, unknown>): void;
+    actor?: NewSchedulerEvent["actor"];
+    pattern: RegExp;
+  }> = [
+    {
+      name: "omitted",
+      mutate: () => undefined,
+      pattern: /cover every unsatisfied criterion/i,
+    },
+    {
+      name: "satisfied",
+      mutate: (payload) => {
+        (payload.tasks as Array<Record<string, unknown>>)[0]!.criteria = [{
+          taskId: "task-api",
+          criterionId: "typed",
+        }];
+      },
+      pattern: /satisfied|unknown|duplicated/i,
+    },
+    {
+      name: "duplicate",
+      mutate: (payload) => {
+        const task = (payload.tasks as Array<Record<string, unknown>>)[0]!;
+        payload.tasks = [
+          task,
+          { ...structuredClone(task), id: "repair-duplicate" },
+        ];
+      },
+      pattern: /duplicated/i,
+    },
+    {
+      name: "wrong-evidence",
+      mutate: (payload) => {
+        (payload.tasks as Array<Record<string, unknown>>)[0]!.evidenceIds = [
+          "replace-with-existing-evidence",
+        ];
+      },
+      pattern: /exactly.*evidence|missing|foreign/i,
+    },
+    {
+      name: "wrong-actor",
+      mutate: () => undefined,
+      actor: { role: "runner", id: "forged-architect" },
+      pattern: /only the architect/i,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const fixture = createFixture(`repair-guard-${scenario.name}`);
+    try {
+      appendVerifierRequest(fixture.store);
+      const verdicts = completeVerdicts(fixture.evidenceIds);
+      verdicts[0] = {
+        ...verdicts[0]!,
+        verdict: "unsatisfied",
+        rationale: "The API behavior is incomplete.",
+      };
+      if (scenario.name === "omitted") {
+        verdicts[1] = {
+          ...verdicts[1]!,
+          verdict: "unsatisfied",
+          rationale: "The typed rejection behavior is also incomplete.",
+        };
+      }
+      fixture.store.append(verdictEvent({ criterionVerdicts: verdicts }));
+      const payload: Record<string, unknown> = {
+        reviewId: REVIEW_ID,
+        targetRevision: REVISION,
+        revision: 2,
+        tasks: [{
+          id: "repair-api",
+          objective: "Repair the rejected API behavior.",
+          criteria: [{ taskId: "task-api", criterionId: "shared" }],
+          evidenceIds: [fixture.evidenceIds[0]!],
+          dependencies: [],
+          requiredCapabilities: ["code"],
+          acceptanceCriteria: [{
+            id: "repair-api",
+            text: "The rejected API behavior is repaired.",
+          }],
+        }],
+      };
+      scenario.mutate(payload);
+      if (scenario.name === "wrong-evidence") {
+        (payload.tasks as Array<Record<string, unknown>>)[0]!.evidenceIds = [
+          fixture.evidenceIds[1]!,
+        ];
+      }
+      assert.throws(
+        () => fixture.store.append(event(
+          "verifier.repairs_planned",
+          `verifier-repair:${scenario.name}`,
+          payload,
+          scenario.actor ?? { role: "architect", id: "openai:architect" },
+        )),
+        scenario.pattern,
+      );
+      assert.equal(
+        rebuildSchedulerProjection(fixture.store.readRun(RUN_ID))
+          .verifier?.current?.repairTaskIds,
+        undefined,
+      );
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
 interface Fixture {
   root: string;
   database: string;

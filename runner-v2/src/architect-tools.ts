@@ -54,6 +54,7 @@ export interface ArchitectToolsOptions {
   finalVerificationPlanAvailable?: boolean;
   finalVerificationReviewAvailable?: boolean;
   finalVerificationRepairPlanAvailable?: boolean;
+  verifierRepairPlanAvailable?: boolean;
   evidenceStore?: EvidenceStore;
   architectAction?: {
     reason: ArchitectActionReason;
@@ -159,6 +160,22 @@ interface PlanVerificationRepairsInput {
   tasks: VerificationRepairTaskInput[];
 }
 
+interface VerifierRepairTaskInput {
+  id: string;
+  objective: string;
+  criteria: Array<{ taskId: string; criterionId: string }>;
+  evidenceIds: string[];
+  dependencies: string[];
+  requiredCapabilities: string[];
+  acceptanceCriteria: AcceptanceCriterion[];
+}
+
+interface PlanVerifierRepairsInput {
+  reviewId: string;
+  targetRevision: string;
+  tasks: VerifierRepairTaskInput[];
+}
+
 export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
@@ -201,13 +218,16 @@ export function createArchitectTools(
   const repairPlanning = options.finalVerificationRepairPlanAvailable
     ? [...verification, planVerificationRepairsTool(options.store, clock)]
     : verification;
+  const verifierRepairPlanning = options.verifierRepairPlanAvailable
+    ? [...repairPlanning, planVerifierRepairsTool(options.store, clock)]
+    : repairPlanning;
   if (options.runPolicy === "plan_only") {
     return options.planOnlyCompletionAvailable
-      ? [...repairPlanning, completeRunTool(options.store, clock, "plan_only")]
-      : repairPlanning;
+      ? [...verifierRepairPlanning, completeRunTool(options.store, clock, "plan_only")]
+      : verifierRepairPlanning;
   }
   return [
-    ...repairPlanning,
+    ...verifierRepairPlanning,
     reconcilePlanTool(options.store, clock),
     reviewTaskTool(options.store, clock, options.evidenceStore),
     requestIntegrationTool(options.store, clock),
@@ -429,6 +449,203 @@ function repairPlanMatches(
       JSON.stringify(task.acceptanceCriteria) === JSON.stringify(candidate.acceptanceCriteria) &&
       JSON.stringify(task.verificationRepair?.categories) === JSON.stringify(candidate.categories) &&
       JSON.stringify(task.verificationRepair?.evidenceIds) === JSON.stringify(candidate.evidenceIds);
+  });
+}
+
+function planVerifierRepairsTool(
+  store: SchedulerStore,
+  clock: () => string,
+): NativeTool<PlanVerifierRepairsInput> {
+  return lifecycleTool({
+    name: "plan_verifier_repairs",
+    description:
+      "Atomically create narrowly scoped worker tasks for every criterion rejected by the current independent verifier",
+    schema: objectSchema({
+      reviewId: { type: "string", minLength: 1 },
+      targetRevision: { type: "string", minLength: 1 },
+      tasks: {
+        type: "array",
+        minItems: 1,
+        items: objectSchema({
+          id: { type: "string", minLength: 1 },
+          objective: { type: "string", minLength: 1 },
+          criteria: {
+            type: "array",
+            minItems: 1,
+            items: objectSchema({
+              taskId: { type: "string", minLength: 1 },
+              criterionId: { type: "string", minLength: 1 },
+            }, ["taskId", "criterionId"]),
+          },
+          evidenceIds: { type: "array", items: { type: "string", minLength: 1 } },
+          dependencies: { type: "array", items: { type: "string", minLength: 1 } },
+          requiredCapabilities: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", minLength: 1 },
+          },
+          acceptanceCriteria: {
+            type: "array",
+            minItems: 1,
+            items: criterionSchema(),
+          },
+        }, [
+          "id",
+          "objective",
+          "criteria",
+          "evidenceIds",
+          "dependencies",
+          "requiredCapabilities",
+          "acceptanceCriteria",
+        ]),
+      },
+    }, ["reviewId", "targetRevision", "tasks"]),
+    validate: validateVerifierRepairPlan,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const current = projection.verifier?.current;
+      if (
+        !current || current.state !== "current" ||
+        current.status !== "submitted" || current.verdict?.satisfied !== false ||
+        current.reviewId !== input.reviewId ||
+        current.targetRevision !== input.targetRevision ||
+        projection.integrationRevision !== input.targetRevision
+      ) {
+        return errorOutput(
+          "stale_verifier_repair_plan",
+          "Verifier repairs must reference the current unsatisfied independent verdict.",
+        );
+      }
+      if (current.repairTaskIds) {
+        if (verifierRepairPlanMatches(
+          projection.tasks,
+          current.repairTaskIds,
+          input.tasks,
+        )) {
+          return {
+            content: [{
+              type: "json",
+              value: { repairTaskIds: [...current.repairTaskIds] },
+            }],
+            isError: false,
+            lifecycle: {
+              type: "architect_action",
+              action: "verification_repairs_planned",
+              referenceId: current.reviewId,
+            },
+          };
+        }
+        return errorOutput(
+          "conflicting_verifier_repair_plan",
+          "Verifier repairs already have a conflicting durable plan.",
+        );
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "verifier.repairs_planned",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `verifier-repairs:${current.reviewId}`,
+        payload: {
+          reviewId: input.reviewId,
+          targetRevision: input.targetRevision,
+          revision: projection.planRevision + 1,
+          tasks: input.tasks.map((task) => ({
+            ...task,
+            criteria: task.criteria.map((criterion) => ({ ...criterion })),
+            evidenceIds: [...task.evidenceIds],
+            dependencies: [...task.dependencies],
+            requiredCapabilities: [...task.requiredCapabilities],
+            acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+          })),
+        },
+      }, {
+        type: "architect_action",
+        action: "verification_repairs_planned",
+        referenceId: current.reviewId,
+      });
+    },
+  });
+}
+
+function validateVerifierRepairPlan(
+  input: unknown,
+): ValidationResult<PlanVerifierRepairsInput> {
+  return validateObject(input, (value) => {
+    if (
+      !nonEmpty(value.reviewId) || !nonEmpty(value.targetRevision) ||
+      !Array.isArray(value.tasks) || value.tasks.length === 0
+    ) return null;
+    const tasks: VerifierRepairTaskInput[] = [];
+    for (const candidate of value.tasks) {
+      if (
+        !isRecord(candidate) || !nonEmpty(candidate.id) ||
+        !nonEmpty(candidate.objective) || !Array.isArray(candidate.criteria) ||
+        candidate.criteria.length === 0
+      ) return null;
+      const criteria: Array<{ taskId: string; criterionId: string }> = [];
+      for (const item of candidate.criteria) {
+        if (!isRecord(item) || !nonEmpty(item.taskId) || !nonEmpty(item.criterionId)) {
+          return null;
+        }
+        criteria.push({ taskId: item.taskId, criterionId: item.criterionId });
+      }
+      const criterionKeys = criteria.map(
+        (criterion) => `${criterion.taskId}\u0000${criterion.criterionId}`,
+      );
+      const evidenceIds = stringList(candidate.evidenceIds);
+      const dependencies = stringList(candidate.dependencies);
+      const requiredCapabilities = stringList(candidate.requiredCapabilities);
+      const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+      if (
+        new Set(criterionKeys).size !== criterionKeys.length ||
+        !evidenceIds || new Set(evidenceIds).size !== evidenceIds.length ||
+        !dependencies || !requiredCapabilities || requiredCapabilities.length === 0 ||
+        !acceptanceCriteria
+      ) return null;
+      tasks.push({
+        id: candidate.id,
+        objective: candidate.objective,
+        criteria: criteria.sort((left, right) =>
+          left.taskId.localeCompare(right.taskId) ||
+          left.criterionId.localeCompare(right.criterionId)
+        ),
+        evidenceIds: [...evidenceIds].sort(),
+        dependencies: [...dependencies].sort(),
+        requiredCapabilities: [...requiredCapabilities].sort(),
+        acceptanceCriteria,
+      });
+    }
+    if (new Set(tasks.map((task) => task.id)).size !== tasks.length) return null;
+    return {
+      reviewId: value.reviewId,
+      targetRevision: value.targetRevision,
+      tasks: tasks.sort((left, right) => left.id.localeCompare(right.id)),
+    };
+  }, "current verifier provenance and at least one valid scoped repair task are required");
+}
+
+function verifierRepairPlanMatches(
+  tasks: Record<string, BuildTask>,
+  ids: readonly string[],
+  proposed: readonly VerifierRepairTaskInput[],
+): boolean {
+  if (ids.length !== proposed.length) return false;
+  return proposed.every((candidate) => {
+    const task = tasks[candidate.id];
+    return task?.kind === "verification_repair" &&
+      task.objective === candidate.objective &&
+      JSON.stringify(task.dependencies) === JSON.stringify(candidate.dependencies) &&
+      JSON.stringify(task.requiredCapabilities) ===
+        JSON.stringify(candidate.requiredCapabilities) &&
+      JSON.stringify(task.acceptanceCriteria) ===
+        JSON.stringify(candidate.acceptanceCriteria) &&
+      JSON.stringify(task.verifierRepair?.criteria) ===
+        JSON.stringify(candidate.criteria) &&
+      JSON.stringify(task.verifierRepair?.evidenceIds) ===
+        JSON.stringify(candidate.evidenceIds);
   });
 }
 

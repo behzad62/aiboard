@@ -70,6 +70,17 @@ export type ArchitectActionReason =
       failedCategories: string[];
       evidenceIds: string[];
     }
+  | {
+      type: "verifier_repair_plan_required";
+      reviewId: string;
+      targetRevision: string;
+      unsatisfiedCriteria: Array<{
+        taskId: string;
+        criterionId: string;
+        rationale: string;
+        evidenceIds: string[];
+      }>;
+    }
   | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
   | { type: "integration_resolution_required"; taskId: string };
 
@@ -307,6 +318,42 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
         source,
         failedCategories: requiredTextArray(reason, "failedCategories"),
         evidenceIds: requiredTextArray(reason, "evidenceIds"),
+      };
+    }
+    case "verifier_repair_plan_required": {
+      exact(["reviewId", "targetRevision", "unsatisfiedCriteria"]);
+      if (
+        !Array.isArray(reason.unsatisfiedCriteria) ||
+        reason.unsatisfiedCriteria.length === 0
+      ) {
+        throw new Error("Verifier repair reason requires unsatisfied criteria.");
+      }
+      const unsatisfiedCriteria = reason.unsatisfiedCriteria.map((candidate) => {
+        if (
+          typeof candidate !== "object" || candidate === null ||
+          Array.isArray(candidate)
+        ) {
+          throw new Error("Verifier repair criterion is invalid.");
+        }
+        const criterion = candidate as Record<string, unknown>;
+        assertExactKeys(criterion, [
+          "taskId",
+          "criterionId",
+          "rationale",
+          "evidenceIds",
+        ]);
+        return {
+          taskId: requiredText(criterion, "taskId"),
+          criterionId: requiredText(criterion, "criterionId"),
+          rationale: requiredText(criterion, "rationale"),
+          evidenceIds: requiredTextArray(criterion, "evidenceIds"),
+        };
+      });
+      return {
+        type,
+        reviewId: text("reviewId"),
+        targetRevision: text("targetRevision"),
+        unsatisfiedCriteria,
       };
     }
     case "task_failure_resolution_required":
