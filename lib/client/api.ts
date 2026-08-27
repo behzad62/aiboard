@@ -47,6 +47,10 @@ import {
   stopDiscussion,
 } from "./engine";
 import { queueBuildNote } from "./build-notes";
+import {
+  submitNativeBuildUserGuidance,
+  type NativeBuildProjection,
+} from "./runner-v2";
 import { normalizeBuildTasksForResume } from "@/lib/orchestrator/build";
 import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 
@@ -125,6 +129,75 @@ export function addBuildNote(
   };
   insertMessage(message);
   return { id: message.id, round };
+}
+
+export interface NativeBuildNoteIdentity {
+  guidanceId: string;
+  idempotencyKey: string;
+}
+
+/**
+ * Deliver text to an active Runner V2 Build, then record the user timeline
+ * receipt. The deterministic message identity prevents a transport retry from
+ * creating duplicate browser messages, and this path never touches the legacy
+ * in-memory note queue.
+ */
+export async function submitNativeBuildNote(
+  discussionId: string,
+  note: string,
+  identity: NativeBuildNoteIdentity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{
+  projection: NativeBuildProjection;
+  message: { id: string; round: number };
+}> {
+  const discussion = getDiscussionById(discussionId);
+  if (
+    !discussion ||
+    discussion.mode !== "build" ||
+    !discussion.nativeBuildRunId ||
+    !discussion.runnerUrl ||
+    !discussion.runnerToken
+  ) {
+    throw new Error("This discussion is not connected to an active Runner V2 Build.");
+  }
+  const trimmed = note.trim();
+  if (!trimmed) throw new Error("The note is empty.");
+  if (!identity.guidanceId.trim() || !identity.idempotencyKey.trim()) {
+    throw new Error("The guidance delivery identity is missing.");
+  }
+
+  const projection = await submitNativeBuildUserGuidance(
+    { url: discussion.runnerUrl, token: discussion.runnerToken },
+    discussion.nativeBuildRunId,
+    {
+      guidanceId: identity.guidanceId,
+      text: trimmed,
+      idempotencyKey: identity.idempotencyKey,
+    },
+    fetchImpl,
+  );
+  const messageId = `native-guidance:${identity.guidanceId}`;
+  const existing = getMessagesForDiscussion(discussionId).find(
+    (message) => message.id === messageId,
+  );
+  if (existing) {
+    return { projection, message: { id: existing.id, round: existing.round } };
+  }
+  const round = getMessagesForDiscussion(discussionId).reduce(
+    (max, message) => Math.max(max, message.round),
+    0,
+  );
+  insertMessage({
+    id: messageId,
+    discussionId,
+    round,
+    modelId: "user",
+    role: "user",
+    content: trimmed,
+    createdAt: new Date().toISOString(),
+  });
+  return { projection, message: { id: messageId, round } };
 }
 
 /**

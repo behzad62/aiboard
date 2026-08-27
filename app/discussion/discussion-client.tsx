@@ -15,7 +15,10 @@ import {
   type TimelineMessage,
 } from "@/components/DiscussionTimeline";
 import { BuildRunStats } from "@/components/BuildRunStats";
-import { RunnerV2ObservabilityPanel } from "@/components/RunnerV2ObservabilityPanel";
+import {
+  RunnerV2ObservabilityPanel,
+  RunnerV2SteeringPanel,
+} from "@/components/RunnerV2ObservabilityPanel";
 import {
   EMPTY_BUILD_CONTEXT_PANEL_STATE,
   reduceBuildContextPanelState,
@@ -84,8 +87,15 @@ import {
   runDiscussion as runClientDiscussion,
   setDiscussionRunner,
   stopDiscussion,
+  submitNativeBuildNote,
   updateDiscussionConfig,
 } from "@/lib/client/api";
+import {
+  classifyBuildNoteDelivery,
+  nativeBuildAttachmentNotice,
+  resolveBuildGuidanceIdentity,
+  type BuildGuidanceDeliveryIdentity,
+} from "@/lib/client/build-notes";
 import { saveAttachmentFile } from "@/lib/client/settings-api";
 import {
   applyDiscussionLiveStatus,
@@ -114,6 +124,7 @@ import {
   requestProjectPermission,
 } from "@/lib/client/project-fs";
 import {
+  answerNativeArchitectQuestion,
   commandNativeRun,
   decideNativePermission,
   getNativeBuild,
@@ -303,6 +314,7 @@ function DiscussionPageInner() {
   const streamingRef = useRef<Map<string, string>>(new Map());
   const nativeTranscriptRef = useRef<NativeBuildTranscriptAttachment | null>(null);
   const nativeAttachmentControllerRef = useRef<{ wake: () => void } | null>(null);
+  const noteDeliveryIdentityRef = useRef<BuildGuidanceDeliveryIdentity | null>(null);
   const discussionRef = useRef<Discussion | null>(discussion);
   discussionRef.current = discussion;
   const noteFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -320,6 +332,16 @@ function DiscussionPageInner() {
       discussion.runnerToken,
     ]);
   }, [id, discussion?.id, discussion?.mode, discussion?.runnerUrl, discussion?.runnerToken]);
+  const noteDeliveryMode = useMemo(
+    () => discussion
+      ? classifyBuildNoteDelivery(discussion, nativeProjection)
+      : "memory_queue",
+    [discussion, nativeProjection],
+  );
+  const noteAttachmentNotice = nativeBuildAttachmentNotice(noteDeliveryMode);
+  useEffect(() => {
+    if (noteAttachmentNotice) setNoteFiles([]);
+  }, [noteAttachmentNotice]);
 
   const requestNotificationPermission = useCallback(async () => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -1342,6 +1364,29 @@ function DiscussionPageInner() {
     }
   };
 
+  const handleArchitectQuestionAnswer = async (
+    questionId: string,
+    version: number,
+    answer: string,
+    idempotencyKey: string,
+  ) => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) {
+      throw new Error("This Build is not connected to Runner V2.");
+    }
+    const projection = await answerNativeArchitectQuestion(
+      { url: discussion.runnerUrl, token: discussion.runnerToken },
+      discussion.nativeBuildRunId,
+      questionId,
+      { expectedVersion: version, answer, idempotencyKey },
+    );
+    setNativeProjection(projection);
+    nativeAttachmentControllerRef.current?.wake();
+  };
+
   const handleNoteFileSelection = (files: FileList | null) => {
     const selected = Array.from(files ?? []);
     if (selected.length === 0) return;
@@ -1352,18 +1397,76 @@ function DiscussionPageInner() {
     setNoteFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Send a note to the Architect: queued for its next plan/review/summary
-  // turn. If the build already finished (or stopped/failed), kick off a
-  // follow-up pass so the note actually gets acted on.
+  // Active native Builds receive durable text guidance. Browser-memory notes
+  // remain only for legacy execution and finished follow-up passes.
   const submitNote = async () => {
     const note = noteDraft.trim();
     if (!note && noteFiles.length === 0) return;
     if (noteSending) return;
 
     setNoteSending(true);
-    let saved: { id: string; round: number };
-    let noteForArchitect = note;
     try {
+      let resolvedProjection = nativeProjection;
+      let deliveryMode = noteDeliveryMode;
+      if (deliveryMode === "native_unknown") {
+        if (
+          !discussion?.runnerUrl ||
+          !discussion.runnerToken ||
+          !discussion.nativeBuildRunId
+        ) {
+          throw new Error("Reconnect Runner V2 before sending guidance or starting a follow-up Build.");
+        }
+        resolvedProjection = await getNativeBuild(
+          { url: discussion.runnerUrl, token: discussion.runnerToken },
+          discussion.nativeBuildRunId,
+        );
+        setNativeProjection(resolvedProjection);
+        deliveryMode = classifyBuildNoteDelivery(discussion, resolvedProjection);
+      }
+
+      if (deliveryMode === "native_active") {
+        if (noteFiles.length > 0) {
+          throw new Error(
+            "Only text guidance is sent to this Runner V2 Build now. Remove the files or start a new follow-up Build.",
+          );
+        }
+        if (!note) throw new Error("Enter text guidance for the active Runner V2 Build.");
+        const identity = resolveBuildGuidanceIdentity(
+          noteDeliveryIdentityRef.current,
+          note,
+          () => crypto.randomUUID(),
+        );
+        noteDeliveryIdentityRef.current = identity;
+        const delivered = await submitNativeBuildNote(
+          id,
+          note,
+          {
+            guidanceId: identity.guidanceId,
+            idempotencyKey: identity.idempotencyKey,
+          },
+        );
+        setNativeProjection(delivered.projection);
+        nativeAttachmentControllerRef.current?.wake();
+        setMessages((previous) => previous.some((message) => message.id === delivered.message.id)
+          ? previous
+          : [
+              ...previous,
+              {
+                id: delivered.message.id,
+                round: delivered.message.round,
+                modelId: "user",
+                modelName: "Your guidance",
+                content: note,
+              },
+            ]);
+        noteDeliveryIdentityRef.current = null;
+        setNoteDraft("");
+        setNoteFiles([]);
+        setError(null);
+        return;
+      }
+
+      let noteForArchitect = note;
       let addedAttachments: AttachmentSummary[] = [];
       if (noteFiles.length > 0) {
         const savedAttachments = await Promise.all(
@@ -1389,39 +1492,43 @@ function DiscussionPageInner() {
         noteForArchitect = note ? `${note}\n\n${fileNote}` : fileNote;
       }
 
-      saved = addBuildNote(id, noteForArchitect);
+      const saved = addBuildNote(id, noteForArchitect);
+      setNoteDraft("");
+      setNoteFiles([]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: saved.id,
+          round: saved.round,
+          modelId: "user",
+          modelName: "Your note",
+          content: noteForArchitect,
+        },
+      ]);
+      if (
+        deliveryMode === "follow_up" ||
+        status === "completed" ||
+        status === "stopped" ||
+        status === "failed"
+      ) {
+        const continued = continueDiscussion(id, true);
+        if (continued) setDiscussion(continued);
+        notifiedRef.current = false;
+        setFinalResult(null);
+        setError(null);
+        setBuildStopReport(null);
+        setBuildToolReviewReport(null);
+        setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
+        setNativeObservability(null);
+        setNativeProjection(null);
+        startedRef.current = false;
+        setStatus("pending");
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't add the note");
+      setError(err instanceof Error ? err.message : "Couldn't send the guidance");
+    } finally {
       setNoteSending(false);
-      return;
     }
-    setNoteDraft("");
-    setNoteFiles([]);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: saved.id,
-        round: saved.round,
-        modelId: "user",
-        modelName: "Your note",
-        content: noteForArchitect,
-      },
-    ]);
-    if (status === "completed" || status === "stopped" || status === "failed") {
-      const continued = continueDiscussion(id, true);
-      if (continued) setDiscussion(continued);
-      notifiedRef.current = false;
-      setFinalResult(null);
-      setError(null);
-      setBuildStopReport(null);
-      setBuildToolReviewReport(null);
-      setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
-      setNativeObservability(null);
-      setNativeProjection(null);
-      startedRef.current = false;
-      setStatus("pending");
-    }
-    setNoteSending(false);
   };
 
   // Export the whole conversation — meta, every round's responses, and the
@@ -1900,6 +2007,13 @@ function DiscussionPageInner() {
         <BuildToolReviewPanel report={buildToolReviewReport} />
       )}
 
+      {discussion.mode === "build" && discussion.nativeBuildRunId && (
+        <RunnerV2SteeringPanel
+          projection={nativeProjection}
+          onAnswerQuestion={handleArchitectQuestionAnswer}
+        />
+      )}
+
       {discussion.mode === "build" &&
         status !== "loading" &&
         status !== "locked" &&
@@ -1910,10 +2024,19 @@ function DiscussionPageInner() {
               <p className="text-sm font-medium">Note to the Architect</p>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {isActive
-                ? "Picked up at the Architect's next planning or review step - use it to steer the build while it runs."
-                : "The build is finished - sending a note starts a follow-up pass in which the Architect addresses it."}
+              {noteDeliveryMode === "native_active"
+                ? "Send durable text guidance to the current Runner V2 Build. The steering ledger shows when the Architect acknowledges it."
+                : noteDeliveryMode === "native_unknown"
+                  ? "Runner state is still loading. Sending checks the durable Build before choosing current-run guidance or a follow-up pass."
+                  : isActive
+                    ? "Picked up at the Architect's next planning or review step - use it to steer the build while it runs."
+                    : "The build is finished - sending a note starts a follow-up pass in which the Architect addresses it."}
             </p>
+            {noteAttachmentNotice && (
+              <p className="mt-2 rounded-md border border-blue-300/70 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
+                {noteAttachmentNotice}
+              </p>
+            )}
             <div className="mt-2 space-y-2">
               <div className="flex items-end gap-2">
                 <textarea
@@ -1933,51 +2056,60 @@ function DiscussionPageInner() {
                   size="sm"
                   onClick={() => void submitNote()}
                   disabled={
-                    noteSending || (!noteDraft.trim() && noteFiles.length === 0)
+                    noteSending || (
+                      !noteDraft.trim() &&
+                      (noteAttachmentNotice !== null || noteFiles.length === 0)
+                    )
                   }
                 >
-                  {noteSending ? "Sending..." : "Send note"}
+                  {noteSending
+                    ? "Sending..."
+                    : noteDeliveryMode === "native_active" || noteDeliveryMode === "native_unknown"
+                      ? "Send guidance"
+                      : "Send note"}
                 </Button>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  ref={noteFileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(event) => {
-                    handleNoteFileSelection(event.currentTarget.files);
-                    event.currentTarget.value = "";
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => noteFileInputRef.current?.click()}
-                  disabled={noteSending}
-                >
-                  <Paperclip className="h-4 w-4" />
-                  Attach files
-                </Button>
-                {noteFiles.map((file, index) => (
-                  <span
-                    key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
-                    className="inline-flex max-w-full items-center gap-2 rounded-full border bg-muted px-3 py-1 text-xs text-muted-foreground"
+              {!noteAttachmentNotice && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={noteFileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      handleNoteFileSelection(event.currentTarget.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => noteFileInputRef.current?.click()}
+                    disabled={noteSending}
                   >
-                    <span className="truncate">{file.name}</span>
-                    <button
-                      type="button"
-                      className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() => removeNoteFile(index)}
-                      aria-label={`Remove ${file.name}`}
-                      disabled={noteSending}
+                    <Paperclip className="h-4 w-4" />
+                    Attach files
+                  </Button>
+                  {noteFiles.map((file, index) => (
+                    <span
+                      key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
+                      className="inline-flex max-w-full items-center gap-2 rounded-full border bg-muted px-3 py-1 text-xs text-muted-foreground"
                     >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
+                      <span className="truncate">{file.name}</span>
+                      <button
+                        type="button"
+                        className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => removeNoteFile(index)}
+                        aria-label={`Remove ${file.name}`}
+                        disabled={noteSending}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

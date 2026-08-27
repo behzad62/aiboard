@@ -9,7 +9,7 @@
   "scripts": {
     "publish-downloads": "node scripts/publish-downloads.mjs",
     "runner:v2": "tsx runner-v2/src/cli.ts --",
-    "test:runner-v2": "tsx --test runner-v2/test/*.test.ts && tsx scripts/test-runner-v2-client.mts && tsx scripts/test-native-build-policy.mts && tsx scripts/test-native-build-policy-ui.tsx && tsx scripts/test-native-build-cutover.mts && tsx scripts/test-native-build-pause-gates.mts && tsx scripts/test-native-model-usage.mts && tsx scripts/test-build-live-state.mts && tsx scripts/test-build-transcript-panel.mts && tsx scripts/test-native-build-files.mts && tsx scripts/test-build-run-stats.mts && tsx scripts/test-runner-v2-observability.mts",
+    "test:runner-v2": "tsx --test runner-v2/test/*.test.ts && tsx scripts/test-runner-v2-client.mts && tsx scripts/test-native-build-policy.mts && tsx scripts/test-native-build-policy-ui.tsx && tsx scripts/test-native-build-cutover.mts && tsx scripts/test-native-build-pause-gates.mts && tsx scripts/test-native-model-usage.mts && tsx scripts/test-build-live-state.mts && tsx scripts/test-build-transcript-panel.mts && tsx scripts/test-native-build-files.mts && tsx scripts/test-build-run-stats.mts && tsx scripts/test-native-build-steering-ui.tsx && tsx scripts/test-runner-v2-observability.mts",
     "typecheck:runner-v2": "tsc -p runner-v2/tsconfig.json --noEmit",
     "predev": "npm run publish-downloads",
     "dev": "next dev --turbopack",

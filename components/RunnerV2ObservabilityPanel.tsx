@@ -136,6 +136,112 @@ export interface RunnerAcceptanceCriterionSummary {
   };
 }
 
+const ARCHITECT_DECISION_LABELS = {
+  authority_decision: "Authority decision",
+  destructive_action: "Destructive action",
+  requirement_conflict: "Requirement conflict",
+  external_dependency: "External dependency",
+  control_weakening: "Control weakening",
+  repair_budget_exhausted: "Repair budget exhausted",
+} as const;
+
+export type GuidanceReceiptStatus = "complete" | "current" | "pending";
+
+export function architectQuestionAnswerIdempotencyKey(
+  questionId: string,
+  version: number,
+): string {
+  return `architect-question:${questionId}:version:${version}:answer`;
+}
+
+export interface RunnerSteeringQuestion {
+  questionId: string;
+  question: string;
+  version: number;
+  decisionLabel: string;
+}
+
+export type RunnerQuestionAnswerCallback = (
+  questionId: string,
+  version: number,
+  answer: string,
+  idempotencyKey: string,
+) => Promise<void>;
+
+export async function submitRunnerArchitectQuestionAnswer(
+  question: RunnerSteeringQuestion,
+  answer: string,
+  onAnswerQuestion: RunnerQuestionAnswerCallback,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const trimmed = answer.trim();
+  if (!trimmed) return { ok: false, error: "Enter your decision before sending it." };
+  try {
+    await onAnswerQuestion(
+      question.questionId,
+      question.version,
+      trimmed,
+      architectQuestionAnswerIdempotencyKey(question.questionId, question.version),
+    );
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error
+        ? error.message
+        : "Runner did not accept this answer. Refresh the Build state and try again.",
+    };
+  }
+}
+
+export function RunnerQuestionAnswerError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p role="alert" className="text-xs font-medium text-red-700 dark:text-red-300">
+      {message}
+    </p>
+  );
+}
+
+export function runnerSteeringLedgerView(projection: NativeBuildProjection | null) {
+  const guidance = Object.values(projection?.userGuidance ?? {})
+    .sort((left, right) => left.version - right.version)
+    .map((item) => ({
+      guidanceId: item.guidanceId,
+      text: item.text,
+      version: item.version,
+      state: item.status,
+      acknowledgementRationale: item.resolution?.rationale,
+      receipt: item.status === "acknowledged"
+        ? ([
+            { label: "Sent to Runner", status: "complete" },
+            { label: "Waiting for Architect", status: "complete" },
+            { label: "Acknowledged", status: "complete" },
+          ] as const)
+        : ([
+            { label: "Sent to Runner", status: "complete" },
+            { label: "Waiting for Architect", status: "current" },
+            { label: "Acknowledged", status: "pending" },
+          ] as const),
+    }));
+  const questionId = projection?.blockingArchitectQuestionId;
+  const question = questionId
+    ? projection?.architectQuestions?.[questionId]
+    : undefined;
+  return {
+    guidance,
+    activeQuestion: question?.status === "open" && question.resumeStatus !== "superseded"
+      ? {
+          questionId: question.questionId,
+          question: question.question,
+          version: question.version,
+          decisionLabel: question.decisionKind
+            ? ARCHITECT_DECISION_LABELS[question.decisionKind]
+            : "User decision",
+        }
+      : undefined,
+  };
+}
+
 export interface RunnerAcceptanceTaskSummary {
   taskId: string;
   title: string;
@@ -560,6 +666,158 @@ export function runnerUserFacingObservability(
     ...(verificationSeal ? { verificationSeal } : {}),
     problems,
   };
+}
+
+export function RunnerV2SteeringPanel({
+  projection,
+  onAnswerQuestion,
+}: {
+  projection: NativeBuildProjection | null;
+  onAnswerQuestion?: (
+    questionId: string,
+    version: number,
+    answer: string,
+    idempotencyKey: string,
+  ) => Promise<void>;
+}) {
+  const view = runnerSteeringLedgerView(projection);
+  const question = view.activeQuestion;
+  const [answer, setAnswer] = useState("");
+  const [answerPending, setAnswerPending] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  useEffect(() => {
+    setAnswer("");
+    setAnswerPending(false);
+    setAnswerError(null);
+  }, [question?.questionId, question?.version]);
+
+  if (view.guidance.length === 0 && !question) return null;
+
+  const submitAnswer = async () => {
+    const trimmed = answer.trim();
+    if (!question || !onAnswerQuestion || !trimmed || answerPending) return;
+    setAnswerPending(true);
+    setAnswerError(null);
+    const result = await submitRunnerArchitectQuestionAnswer(
+      question,
+      trimmed,
+      onAnswerQuestion,
+    );
+    if (result.ok) {
+      setAnswer("");
+    } else {
+      setAnswerError(result.error);
+    }
+    setAnswerPending(false);
+  };
+
+  return (
+    <section aria-labelledby="runner-steering-title" className="space-y-3">
+      {question && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 shadow-sm dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 id="runner-steering-title" className="text-sm font-semibold">
+                  Architect needs your decision
+                </h2>
+                <Badge variant="outline" className="border-amber-400/70 font-mono text-[0.65rem]">
+                  {question.decisionLabel} · v{question.version}
+                </Badge>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed">{question.question}</p>
+              <form
+                className="mt-3 space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitAnswer();
+                }}
+              >
+                <label htmlFor={`architect-answer-${question.questionId}`} className="text-xs font-medium">
+                  Your decision
+                </label>
+                <textarea
+                  id={`architect-answer-${question.questionId}`}
+                  value={answer}
+                  onChange={(event) => setAnswer(event.target.value)}
+                  rows={2}
+                  className="w-full resize-y rounded-md border border-amber-300 bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                  placeholder="State the decision the Architect should follow."
+                  disabled={answerPending}
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs opacity-75">Runner applies this answer to this exact question version.</p>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={!answer.trim() || answerPending || !onAnswerQuestion}
+                  >
+                    {answerPending ? "Sending decision…" : "Answer decision"}
+                  </Button>
+                </div>
+                <RunnerQuestionAnswerError message={answerError} />
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {view.guidance.length > 0 && (
+        <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-2">
+            <MessageSquareText className="h-4 w-4 text-primary" />
+            <div>
+              <h2 id={question ? undefined : "runner-steering-title"} className="text-sm font-semibold">
+                Steering ledger
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Durable text guidance recorded by Runner V2.
+              </p>
+            </div>
+          </div>
+          <ol className="mt-3 space-y-3">
+            {view.guidance.map((item) => (
+              <li key={item.guidanceId} className="rounded-md border bg-muted/10 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm leading-relaxed">{item.text}</p>
+                  <span className={`font-mono text-[0.65rem] ${
+                    item.state === "acknowledged" ? "text-emerald-600 dark:text-emerald-400" : "text-blue-600 dark:text-blue-400"
+                  }`}>
+                    guidance v{item.version}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-1.5 sm:grid-cols-3" aria-label="Durable guidance receipt">
+                  {item.receipt.map((step) => (
+                    <div
+                      key={step.label}
+                      className={`flex items-center gap-2 rounded border px-2.5 py-1.5 text-[0.7rem] ${
+                        step.status === "complete"
+                          ? "border-emerald-300/70 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
+                          : step.status === "current"
+                            ? "border-blue-300/70 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+                            : "border-border bg-muted/30 text-muted-foreground"
+                      }`}
+                    >
+                      {step.status === "complete"
+                        ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                        : <CircleDot className="h-3.5 w-3.5 shrink-0" />}
+                      <span>{step.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {item.acknowledgementRationale && (
+                  <p className="mt-2 border-l-2 border-emerald-400 pl-2 text-xs leading-relaxed text-muted-foreground">
+                    {item.acknowledgementRationale}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export function RunnerV2ObservabilityPanel({
