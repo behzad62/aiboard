@@ -8,6 +8,28 @@ import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 export const RUNNER_EXTENSION_API_VERSION = 1 as const;
 export const RUNNER_EXTENSION_MANIFEST_FILE = "runner-extension.json";
 export const RUNNER_EXTENSION_CONTEXT_MAX_BYTES = 64 * 1024;
+export const PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES = Object.freeze([
+  "acknowledge_user_guidance",
+  "answer_guidance",
+  "ask_architect",
+  "ask_user",
+  "challenge_guidance",
+  "complete_run",
+  "plan_final_verification",
+  "plan_tasks",
+  "plan_verification_repairs",
+  "plan_verifier_repairs",
+  "reconcile_plan",
+  "request_integration",
+  "return_to_parent",
+  "review_final_verification",
+  "review_task",
+  "revise_task",
+  "submit_final_verification",
+  "submit_task",
+  "submit_verifier_verdict",
+  "upgrade_acceptance_contract",
+] as const);
 
 export type RunnerExtensionCapabilityKind =
   | "tools"
