@@ -49,6 +49,11 @@ import {
   type UserGuidanceAcknowledgementResolution,
   type UserGuidanceItem,
 } from "./user-steering-contracts.js";
+import {
+  isSteeringReassignedWorkerId,
+  steeringReassignedWorkerId,
+  workerSessionId,
+} from "./worker-identity.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -1498,7 +1503,8 @@ export function reduceSchedulerEvent(
             };
       if (resolution.type === "plan_reconciled") {
         applyPlanReconciliation(next, resolution.planReconciliation, {
-          allowInterruptedRunningTasks: true,
+          allowSteeringCheckpoints: true,
+          supersedingGuidanceId: guidance.guidanceId,
         });
       }
       next.userGuidance[guidance.guidanceId] = {
@@ -1960,11 +1966,28 @@ export function reduceSchedulerEvent(
       if (!task || task.attempt !== attempt) {
         throw new Error(`Worker runtime assignment does not match task ${taskId} attempt.`);
       }
+      const sessionId = requiredString(event.payload, "sessionId");
+      if (
+        task.assignedWorkerId !== undefined &&
+        isSteeringReassignedWorkerId(
+          taskId,
+          attempt,
+          task.assignedWorkerId
+        ) &&
+        sessionId !== workerSessionId(
+          current.runId,
+          taskId,
+          attempt,
+          task.assignedWorkerId
+        )
+      ) {
+        throw new Error("A reassigned worker session must match its durable worker identity.");
+      }
       next.runtime.workerAssignments[`${taskId}:${attempt}`] = {
         taskId,
         attempt,
         runtimeId: requiredString(event.payload, "runtimeId"),
-        sessionId: requiredString(event.payload, "sessionId"),
+        sessionId,
       };
       break;
     }
@@ -3016,7 +3039,10 @@ function parseAcceptanceCriteria(
 function applyPlanReconciliation(
   projection: SchedulerProjection,
   reconciliation: PlanReconciliation,
-  options: { allowInterruptedRunningTasks?: boolean } = {}
+  options: {
+    allowSteeringCheckpoints?: boolean;
+    supersedingGuidanceId?: string;
+  } = {}
 ): void {
   if (reconciliation.revision !== projection.planRevision + 1) {
     throw new Error(
@@ -3034,7 +3060,9 @@ function applyPlanReconciliation(
   const candidateTasks = Object.fromEntries(
     Object.entries(projection.tasks).map(([taskId, task]) => [taskId, cloneBuildTask(task)])
   );
-  const interruptedTaskIds = new Set<string>();
+  const sameAttemptSteeringTaskIds = new Set<string>();
+  const reviewsToClear = new Set<string>();
+  const guidanceTaskIdsToSupersede = new Set<string>();
   const runtimeAssignmentKeysToClear = new Set<string>();
   for (const update of reconciliation.taskUpdates) {
     const task = candidateTasks[update.taskId];
@@ -3042,25 +3070,39 @@ function applyPlanReconciliation(
     if (isFinalVerificationTask(task)) {
       throw new Error("Kernel-owned final verification task cannot be reconciled.");
     }
-    const interruptedRunningTask =
-      options.allowInterruptedRunningTasks === true && task.status === "running";
+    const sameAttemptSteeringCheckpoint =
+      options.allowSteeringCheckpoints === true &&
+      (task.status === "running" ||
+        task.status === "assigned" ||
+        task.status === "waiting_guidance");
+    const freshAttemptSteeringCheckpoint =
+      options.allowSteeringCheckpoints === true &&
+      (task.status === "submitted" ||
+        task.status === "architect_review" ||
+        task.status === "approved");
+    const steeringCheckpoint =
+      sameAttemptSteeringCheckpoint || freshAttemptSteeringCheckpoint;
     if (
       task.status !== "planned" &&
       task.status !== "failed" &&
       task.status !== "rejected" &&
-      !interruptedRunningTask
+      !steeringCheckpoint
     ) {
       throw new Error(
         `Task ${update.taskId} must be planned, failed, or rejected before reconciliation.`
       );
     }
-    if (interruptedRunningTask && update.acceptanceCriteria !== undefined) {
+    if (sameAttemptSteeringCheckpoint && update.acceptanceCriteria !== undefined) {
       throw new Error(
         `Task ${update.taskId} acceptance criteria are immutable during its active attempt.`
       );
     }
-    if (interruptedRunningTask) {
-      interruptedTaskIds.add(update.taskId);
+    if (steeringCheckpoint) {
+      if (sameAttemptSteeringCheckpoint) {
+        sameAttemptSteeringTaskIds.add(update.taskId);
+      }
+      reviewsToClear.add(update.taskId);
+      guidanceTaskIdsToSupersede.add(update.taskId);
       runtimeAssignmentKeysToClear.add(`${update.taskId}:${task.attempt}`);
     }
     if (update.action === "cancel") {
@@ -3073,15 +3115,26 @@ function applyPlanReconciliation(
           "A current-generation verification repair cannot be cancelled during reconciliation.",
         );
       }
-      candidateTasks[update.taskId] = {
-        ...applyTaskTransition(task, "cancelled", {
-          assignedWorkerId: undefined,
-          changeSetId: undefined,
-          guidanceRequestId: undefined,
-          failureReason: undefined,
-        }),
+      const cancelledTask = {
+        ...task,
+        status: "cancelled" as const,
+        assignedWorkerId: undefined,
+        changeSetId: undefined,
+        guidanceRequestId: undefined,
+        failureReason: undefined,
         criterionEvidenceLinks: undefined,
       };
+      candidateTasks[update.taskId] = steeringCheckpoint
+        ? cancelledTask
+        : {
+            ...applyTaskTransition(task, "cancelled", {
+              assignedWorkerId: undefined,
+              changeSetId: undefined,
+              guidanceRequestId: undefined,
+              failureReason: undefined,
+            }),
+            criterionEvidenceLinks: undefined,
+          };
       continue;
     }
     if (
@@ -3108,18 +3161,22 @@ function applyPlanReconciliation(
       task.status === "failed" ||
       task.status === "rejected" ||
       (task.status === "planned" && task.attempt > 0);
-    candidateTasks[update.taskId] = interruptedRunningTask
+    candidateTasks[update.taskId] = sameAttemptSteeringCheckpoint
       ? {
           ...task,
           ...patch,
-          status: "running",
-          assignedWorkerId: undefined,
+          status: "assigned",
+          assignedWorkerId: steeringReassignedWorkerId(
+            task.id,
+            task.attempt,
+            reconciliation.revision
+          ),
           changeSetId: undefined,
           criterionEvidenceLinks: undefined,
           guidanceRequestId: undefined,
           failureReason: undefined,
         }
-      : grantsFreshAttempt
+      : freshAttemptSteeringCheckpoint || grantsFreshAttempt
       ? {
           ...task,
           ...patch,
@@ -3143,15 +3200,15 @@ function applyPlanReconciliation(
   }
 
   const tasks = Object.values(candidateTasks);
-  for (const taskId of interruptedTaskIds) {
+  for (const taskId of sameAttemptSteeringTaskIds) {
     const task = candidateTasks[taskId];
-    if (task.status !== "running") continue;
+    if (task.status !== "assigned") continue;
     const unfinishedDependency = task.dependencies.find(
       (dependency) => candidateTasks[dependency]?.status !== "integrated"
     );
     if (unfinishedDependency) {
       throw new Error(
-        `Interrupted running task ${taskId} cannot add unfinished dependency ${unfinishedDependency}.`
+        `Interrupted active task ${taskId} cannot add unfinished dependency ${unfinishedDependency}.`
       );
     }
   }
@@ -3176,8 +3233,25 @@ function applyPlanReconciliation(
   }
 
   projection.tasks = candidateTasks;
+  for (const taskId of reviewsToClear) {
+    delete projection.reviews[taskId];
+  }
   for (const assignmentKey of runtimeAssignmentKeysToClear) {
     delete projection.runtime.workerAssignments[assignmentKey];
+  }
+  if (options.supersedingGuidanceId) {
+    for (const guidance of Object.values(projection.guidance)) {
+      if (
+        guidance.status === "open" &&
+        guidanceTaskIdsToSupersede.has(guidance.taskId)
+      ) {
+        projection.guidance[guidance.requestId] = {
+          ...guidance,
+          status: "answered",
+          answer: `Superseded by acknowledged user guidance ${options.supersedingGuidanceId}.`,
+        };
+      }
+    }
   }
   projection.planRevision = reconciliation.revision;
   if (projection.acceptanceContractStatus !== "legacy_completed") {

@@ -37,6 +37,7 @@ import { createEvidenceTools } from "./evidence-tools.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
+import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -517,43 +518,62 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     request: ArchitectActionRequest,
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ): Promise<ArchitectReviewSubmission | undefined> {
-    if (request.reason.type !== "review_required") return undefined;
-    const task = projection.tasks[request.reason.taskId];
-    if (!task) throw new Error(`Unknown review task ${request.reason.taskId}.`);
-    const session = await this.options.sessions.load(
-      `worker:${request.runId}:${task.id}:${task.attempt}`
+    return await loadArchitectReviewSubmission(
+      this.options.sessions,
+      request.runId,
+      request.reason,
+      projection
     );
-    const changeSet = session.changeSet;
-    if (!changeSet || changeSet.id !== request.reason.changeSetId) {
-      throw new Error(
-        `Submitted change set ${request.reason.changeSetId} is unavailable for review.`
-      );
-    }
-    return {
-      taskId: task.id,
-      attempt: task.attempt,
-      changeSetId: changeSet.id,
-      baselineRevision: changeSet.baselineRevision,
-      taskRevision: changeSet.taskRevision,
-      changedPaths: [...changeSet.changedPaths],
-      diffArtifactHash: changeSet.diffArtifactHash,
-      evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
-      ...(changeSet.acceptanceCriteria
-        ? { acceptanceCriteria: changeSet.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
-        : {}),
-      ...(changeSet.acceptanceCriteriaVersion !== undefined
-        ? { acceptanceCriteriaVersion: changeSet.acceptanceCriteriaVersion }
-        : {}),
-      ...(changeSet.criterionEvidenceLinks
-        ? {
-            criterionEvidenceLinks: changeSet.criterionEvidenceLinks.map((link) => ({
-              ...link,
-              artifactHashes: [...link.artifactHashes],
-            })),
-          }
-        : {}),
-    };
   }
+}
+
+export async function loadArchitectReviewSubmission(
+  sessions: Pick<SqliteAgentSessionStore, "load">,
+  runId: string,
+  reason: ArchitectActionReason,
+  projection: ReturnType<typeof rebuildSchedulerProjection>
+): Promise<ArchitectReviewSubmission | undefined> {
+  if (reason.type !== "review_required") return undefined;
+  const task = projection.tasks[reason.taskId];
+  if (!task) throw new Error(`Unknown review task ${reason.taskId}.`);
+  const sessionId = resolveWorkerSessionId(
+    runId,
+    task.id,
+    task.attempt,
+    task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
+    projection.runtime.workerAssignments[`${task.id}:${task.attempt}`]?.sessionId
+  );
+  const session = await sessions.load(sessionId);
+  const changeSet = session.changeSet;
+  if (!changeSet || changeSet.id !== reason.changeSetId) {
+    throw new Error(
+      `Submitted change set ${reason.changeSetId} is unavailable for review.`
+    );
+  }
+  return {
+    taskId: task.id,
+    attempt: task.attempt,
+    changeSetId: changeSet.id,
+    baselineRevision: changeSet.baselineRevision,
+    taskRevision: changeSet.taskRevision,
+    changedPaths: [...changeSet.changedPaths],
+    diffArtifactHash: changeSet.diffArtifactHash,
+    evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
+    ...(changeSet.acceptanceCriteria
+      ? { acceptanceCriteria: changeSet.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+    ...(changeSet.acceptanceCriteriaVersion !== undefined
+      ? { acceptanceCriteriaVersion: changeSet.acceptanceCriteriaVersion }
+      : {}),
+    ...(changeSet.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: changeSet.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+  };
 }
 
 export function architectInspectionWorkspace(

@@ -42,6 +42,7 @@ import type {
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
+import { resolveWorkerSessionId } from "./worker-identity.js";
 import type {
   RunnerProviderRetryRuntime,
 } from "./provider-call-retry.js";
@@ -96,7 +97,15 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
 
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
     let lifecycleContinuations = 0;
-    let runtimeId = this.persistedRuntime(assignment);
+    const persistedAssignment = this.persistedRuntimeAssignment(assignment);
+    let runtimeId = persistedAssignment?.runtimeId;
+    const sessionId = resolveWorkerSessionId(
+      assignment.runId,
+      assignment.task.id,
+      assignment.attempt,
+      assignment.workerId,
+      persistedAssignment?.sessionId
+    );
     if (!runtimeId) {
       const selection = this.options.router.selectWorker(
         assignment.task.requiredCapabilities
@@ -105,7 +114,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         return { type: "paused", reason: "no_healthy_capability_match" };
       }
       runtimeId = selection.runtime.runtimeId;
-      this.assignRuntime(assignment, runtimeId);
+      this.assignRuntime(assignment, runtimeId, sessionId);
     }
 
     for (;;) {
@@ -125,7 +134,6 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         }
       );
       const context = await this.workerContext(assignment, workspace.path);
-      const sessionId = `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`;
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
@@ -313,7 +321,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           return { type: "paused", reason: "all_worker_runtimes_unavailable" };
         }
         runtimeId = selection.runtime.runtimeId;
-        this.assignRuntime(assignment, runtimeId);
+        this.assignRuntime(assignment, runtimeId, sessionId);
         continue;
       }
       if (result.loop.status === "suspended") {
@@ -346,15 +354,19 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     }
   }
 
-  private persistedRuntime(assignment: WorkerAssignment): string | undefined {
+  private persistedRuntimeAssignment(assignment: WorkerAssignment) {
     const events = this.options.schedulerStore.readRun(assignment.runId);
     if (events.length === 0) return undefined;
     return rebuildSchedulerProjection(events).runtime.workerAssignments[
       `${assignment.task.id}:${assignment.attempt}`
-    ]?.runtimeId;
+    ];
   }
 
-  private assignRuntime(assignment: WorkerAssignment, runtimeId: string): void {
+  private assignRuntime(
+    assignment: WorkerAssignment,
+    runtimeId: string,
+    sessionId: string
+  ): void {
     const existingCount = this.options.schedulerStore
       .readRun(assignment.runId)
       .filter((event) => event.type === "worker.runtime_assigned").length;
@@ -368,7 +380,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         taskId: assignment.task.id,
         attempt: assignment.attempt,
         runtimeId,
-        sessionId: `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`,
+        sessionId,
       },
     });
   }

@@ -45,6 +45,7 @@ import {
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
+import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
@@ -288,13 +289,19 @@ export class NativeBuildFactory {
     });
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
-        const task = rebuildSchedulerProjection(
+        const projection = rebuildSchedulerProjection(
           schedulerStore.readRun(spec.runId)
-        ).tasks[taskId];
-        if (!task) throw new Error(`Unknown integration task ${taskId}.`);
-        const session = await sessions.load(
-          `worker:${spec.runId}:${taskId}:${task.attempt}`
         );
+        const task = projection.tasks[taskId];
+        if (!task) throw new Error(`Unknown integration task ${taskId}.`);
+        const sessionId = resolveWorkerSessionId(
+          spec.runId,
+          taskId,
+          task.attempt,
+          task.assignedWorkerId ?? standardWorkerId(taskId, task.attempt),
+          projection.runtime.workerAssignments[`${taskId}:${task.attempt}`]?.sessionId
+        );
+        const session = await sessions.load(sessionId);
         if (!session.changeSet || session.changeSet.id !== changeSetId) {
           throw new Error(`Submitted change set ${changeSetId} is unavailable.`);
         }

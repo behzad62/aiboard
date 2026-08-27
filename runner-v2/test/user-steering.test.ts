@@ -6,6 +6,9 @@ import test from "node:test";
 
 import { rebuildSchedulerProjection, type NewSchedulerEvent } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { TaskScheduler } from "../src/task-scheduler.js";
+import { workerSessionId } from "../src/worker-identity.js";
 
 const RUN_ID = "run_user_steering";
 const USER = { role: "user" as const, id: "local-user" };
@@ -160,8 +163,14 @@ test("steering acknowledgement can revise or cancel interrupted running attempts
     append(store, "worker.runtime_assigned", { role: "runner", id: "runtime-router" }, "runtime:revise", {
       taskId: "task-revise", attempt: 2, runtimeId: "stale-runtime", sessionId: "stale-session",
     });
+    append(store, "worker.runtime_assigned", { role: "runner", id: "runtime-router" }, "runtime:cancel", {
+      taskId: "task-cancel", attempt: 2, runtimeId: "stale-runtime", sessionId: "stale-cancel-session",
+    });
     append(store, "user.guidance_submitted", USER, "guidance:running", {
       guidanceId: "guidance-running", text: "Revise one active task and cancel the other.", version: 1,
+    });
+    append(store, "user.guidance_submitted", USER, "guidance:running:second", {
+      guidanceId: "guidance-running-second", text: "Revise the first task again before cancelling the second.", version: 2,
     });
 
     append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:running:ack", {
@@ -172,9 +181,32 @@ test("steering acknowledgement can revise or cancel interrupted running attempts
         rationale: "The interrupted work must follow the revised direction.",
         planReconciliation: {
           revision: 2,
-          summary: "Revise and cancel interrupted work.",
+          summary: "First revision of interrupted work.",
           taskUpdates: [
             { taskId: "task-revise", action: "revise", objective: "Implement the revised active task.", requiredCapabilities: ["code", "browser"] },
+            { taskId: "task-cancel", action: "revise", objective: "Implement the temporarily revised second task." },
+          ],
+        },
+      },
+    });
+
+    const afterFirstGuidance = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(afterFirstGuidance.tasks["task-revise"].status, "assigned");
+    assert.equal(afterFirstGuidance.tasks["task-revise"].assignedWorkerId, "worker_task-revise_2_plan_2");
+    assert.equal(afterFirstGuidance.tasks["task-cancel"].status, "assigned");
+    assert.equal(afterFirstGuidance.userGuidance["guidance-running-second"].status, "submitted");
+
+    append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:running:second:ack", {
+      guidanceId: "guidance-running-second",
+      expectedVersion: 2,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The queued guidance supersedes both assigned checkpoints.",
+        planReconciliation: {
+          revision: 3,
+          summary: "Revise the first checkpoint again and cancel the second.",
+          taskUpdates: [
+            { taskId: "task-revise", action: "revise", objective: "Implement the newest active task intent." },
             { taskId: "task-cancel", action: "cancel" },
           ],
         },
@@ -183,17 +215,569 @@ test("steering acknowledgement can revise or cancel interrupted running attempts
 
     const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
     const revised = projection.tasks["task-revise"];
-    assert.equal(revised.status, "running");
+    assert.equal(revised.status, "assigned");
     assert.equal(revised.attempt, 2);
-    assert.equal(revised.objective, "Implement the revised active task.");
+    assert.equal(revised.objective, "Implement the newest active task intent.");
     assert.equal(revised.workspacePath, "C:/work/revise");
-    assert.equal(revised.assignedWorkerId, undefined);
+    assert.equal(revised.assignedWorkerId, "worker_task-revise_2_plan_3");
     assert.equal(revised.changeSetId, undefined);
     assert.equal(revised.criterionEvidenceLinks, undefined);
     assert.equal(revised.failureReason, undefined);
     assert.equal(projection.runtime.workerAssignments["task-revise:2"], undefined);
     assert.equal(projection.tasks["task-cancel"].status, "cancelled");
     assert.equal(projection.tasks["task-cancel"].attempt, 2);
+    assert.equal(projection.tasks["task-cancel"].assignedWorkerId, undefined);
+    assert.equal(projection.runtime.workerAssignments["task-cancel:2"], undefined);
+  });
+});
+
+test("revised running work restarts on its new identity and submits new-worker evidence on the same attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-steering-reassigned-worker-"));
+  const database = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database, { evidenceStore });
+  try {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:active", {
+      revision: 1,
+      tasks: [{
+        id: "task-active",
+        objective: "Implement the old intent.",
+        dependencies: [],
+        status: "running",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The active task is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+        assignedWorkerId: "worker_task-active_1",
+        workspacePath: "C:/work/task-active",
+      }],
+    });
+    append(store, "worker.runtime_assigned", { role: "runner", id: "runtime-router" }, "runtime:old", {
+      taskId: "task-active",
+      attempt: 1,
+      runtimeId: "runtime-old",
+      sessionId: "worker:run_user_steering:task-active:1",
+    });
+    append(store, "user.guidance_submitted", USER, "guidance:active", {
+      guidanceId: "guidance-active", text: "Use the revised browser-capable implementation.", version: 1,
+    });
+    append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:active:ack", {
+      guidanceId: "guidance-active",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The active worker must restart with revised intent.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Revise active work.",
+          taskUpdates: [{
+            taskId: "task-active",
+            action: "revise",
+            objective: "Implement the revised browser-capable intent.",
+            requiredCapabilities: ["code", "browser"],
+          }],
+        },
+      },
+    });
+    const reassigned = rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-active"];
+    assert.equal(reassigned.status, "assigned");
+    assert.equal(reassigned.attempt, 1);
+    assert.equal(reassigned.assignedWorkerId, "worker_task-active_1_plan_2");
+    const newSessionId = workerSessionId(
+      RUN_ID,
+      reassigned.id,
+      reassigned.attempt,
+      reassigned.assignedWorkerId!
+    );
+    assert.notEqual(newSessionId, "worker:run_user_steering:task-active:1");
+    assert.throws(() => append(store!, "worker.runtime_assigned", { role: "runner", id: "runtime-router" }, "runtime:reassigned:stale-session", {
+      taskId: "task-active",
+      attempt: 1,
+      runtimeId: "runtime-browser",
+      sessionId: "worker:run_user_steering:task-active:1",
+    }), /reassigned worker session/i);
+    append(store, "worker.runtime_assigned", { role: "runner", id: "runtime-router" }, "runtime:reassigned", {
+      taskId: "task-active",
+      attempt: 1,
+      runtimeId: "runtime-browser",
+      sessionId: newSessionId,
+    });
+    const staleEvidence = evidenceStore.record({
+      runId: RUN_ID,
+      taskId: "task-active",
+      actor: { role: "worker", id: "worker_task-active_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "stale old-worker evidence",
+        capturedAt: "2026-08-27T00:00:00.000Z",
+        screenshotArtifactHash: "a".repeat(64),
+        mediaType: "image/png",
+        byteLength: 16,
+      },
+      createdAt: "2026-08-27T00:00:00.000Z",
+      idempotencyKey: "evidence:stale-old-worker",
+      attempt: 1,
+    });
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore });
+
+    const recovered = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(recovered.runtime.workerAssignments["task-active:1"].sessionId, newSessionId);
+    const scheduler = new TaskScheduler({
+      runId: RUN_ID,
+      store,
+      driver: {
+        run: async (assignment) => {
+          assert.equal(assignment.workerId, "worker_task-active_1_plan_2");
+          assert.equal(assignment.attempt, 1);
+          assert.equal(assignment.task.objective, "Implement the revised browser-capable intent.");
+          assert.deepEqual(assignment.task.requiredCapabilities, ["code", "browser"]);
+          assert.equal(
+            rebuildSchedulerProjection(store!.readRun(RUN_ID)).runtime.workerAssignments["task-active:1"].sessionId,
+            newSessionId
+          );
+          assert.throws(() => append(store!, "task.transitioned", { role: "runner", id: "scheduler" }, "submit:stale-old-worker", {
+            taskId: "task-active",
+            status: "submitted",
+            patch: {
+              changeSetId: "stale-change-set",
+              criterionEvidenceLinks: [{
+                criterionId: "done",
+                evidenceId: staleEvidence.id,
+                artifactHashes: ["a".repeat(64)],
+                taskId: "task-active",
+                attempt: 1,
+              }],
+            },
+          }), /outside the assigned worker/i);
+          const evidence = evidenceStore.record({
+            runId: RUN_ID,
+            taskId: "task-active",
+            actor: { role: "worker", id: assignment.workerId },
+            fact: {
+              kind: "browser_screenshot",
+              label: "revised worker evidence",
+              capturedAt: "2026-08-27T00:00:01.000Z",
+              screenshotArtifactHash: "b".repeat(64),
+              mediaType: "image/png",
+              byteLength: 16,
+            },
+            createdAt: "2026-08-27T00:00:01.000Z",
+            idempotencyKey: "evidence:revised-worker",
+            attempt: 1,
+          });
+          return {
+            type: "submitted",
+            changeSetId: "revised-change-set",
+            criterionEvidenceLinks: [{
+              criterionId: "done",
+              evidenceId: evidence.id,
+              artifactHashes: ["b".repeat(64)],
+              taskId: "task-active",
+              attempt: 1,
+            }],
+          };
+        },
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/task-active",
+      clock: () => "2026-08-27T00:00:02.000Z",
+    });
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    const submitted = rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-active"];
+    assert.equal(submitted.status, "submitted");
+    assert.equal(submitted.attempt, 1);
+    assert.equal(submitted.assignedWorkerId, "worker_task-active_1_plan_2");
+    assert.equal(submitted.changeSetId, "revised-change-set");
+  } finally {
+    store?.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-changing steering revokes stale approval, preserves history, and schedules revised work on a fresh attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-steering-approved-checkpoint-"));
+  const database = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database, { evidenceStore });
+  try {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:approved", {
+      revision: 1,
+      tasks: [{
+        id: "task-approved",
+        objective: "Implement the old approved intent.",
+        dependencies: [],
+        status: "running",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The implementation is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+        assignedWorkerId: "worker_task-approved_1",
+        workspacePath: "C:/work/task-approved",
+      }],
+    });
+    const evidence = evidenceStore.record({
+      runId: RUN_ID,
+      taskId: "task-approved",
+      actor: { role: "worker", id: "worker_task-approved_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "old approved evidence",
+        capturedAt: "2026-08-27T00:00:00.000Z",
+        screenshotArtifactHash: "c".repeat(64),
+        mediaType: "image/png",
+        byteLength: 16,
+      },
+      createdAt: "2026-08-27T00:00:00.000Z",
+      idempotencyKey: "evidence:approved-old",
+      attempt: 1,
+    });
+    const evidenceLinks = [{
+      criterionId: "done",
+      evidenceId: evidence.id,
+      artifactHashes: ["c".repeat(64)],
+      taskId: "task-approved",
+      attempt: 1,
+    }];
+    append(store, "task.transitioned", { role: "runner", id: "scheduler" }, "approved:submitted", {
+      taskId: "task-approved",
+      status: "submitted",
+      patch: { changeSetId: "old-approved-change", criterionEvidenceLinks: evidenceLinks },
+    });
+    append(store, "review.requested", ARCHITECT, "approved:review-requested", {
+      taskId: "task-approved",
+      evidenceArtifactHashes: ["c".repeat(64)],
+      criterionEvidenceLinks: evidenceLinks,
+    });
+    append(store, "review.decided", ARCHITECT, "approved:review-decided", {
+      taskId: "task-approved",
+      decision: "approved",
+      summary: "The old intent was approved.",
+      evidenceArtifactHashes: ["c".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "done",
+        verdict: "satisfied",
+        rationale: "The old evidence satisfied the old intent.",
+        evidenceIds: [evidence.id],
+        artifactHashes: ["c".repeat(64)],
+      }],
+    });
+    assert.equal(rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-approved"].status, "approved");
+    assert.throws(() => append(store!, "plan.reconciled", ARCHITECT, "approved:generic-bypass", {
+      revision: 2,
+      summary: "Attempt to bypass steering authority.",
+      taskUpdates: [{ taskId: "task-approved", action: "revise", objective: "Bypassed intent." }],
+    }), /planned, failed, or rejected/i);
+
+    append(store, "user.guidance_submitted", USER, "approved:guidance", {
+      guidanceId: "guidance-approved", text: "Replace the approved implementation before integration.", version: 1,
+    });
+    append(store, "user.guidance_acknowledged", ARCHITECT, "approved:guidance:ack", {
+      guidanceId: "guidance-approved",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The approved change set implements stale intent.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Revoke stale approval and schedule fresh work.",
+          taskUpdates: [{
+            taskId: "task-approved",
+            action: "revise",
+            objective: "Implement the newly requested intent.",
+            requiredCapabilities: ["code", "browser"],
+            acceptanceCriteria: [{ id: "done", text: "The newly requested behavior is complete." }],
+          }],
+        },
+      },
+    });
+    const revised = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(revised.tasks["task-approved"].status, "planned");
+    assert.equal(revised.tasks["task-approved"].attempt, 1);
+    assert.equal(revised.tasks["task-approved"].attemptLimit, 2);
+    assert.equal(revised.tasks["task-approved"].acceptanceCriteriaVersion, 2);
+    assert.equal(revised.tasks["task-approved"].acceptanceCriteria?.[0]?.text, "The newly requested behavior is complete.");
+    assert.equal(revised.tasks["task-approved"].assignedWorkerId, undefined);
+    assert.equal(revised.tasks["task-approved"].changeSetId, undefined);
+    assert.equal(revised.tasks["task-approved"].criterionEvidenceLinks, undefined);
+    assert.equal(revised.reviews["task-approved"], undefined);
+    assert.equal(revised.submissionHistory?.["task-approved"]?.length, 1);
+    assert.equal(revised.submissionHistory?.["task-approved"]?.[0]?.acceptanceCriteriaVersion, 1);
+    assert.equal(revised.reviewHistory?.["task-approved"]?.length, 1);
+    assert.equal(revised.reviewHistory?.["task-approved"]?.[0]?.acceptanceCriteriaVersion, 1);
+    assert.throws(() => append(store!, "task.transitioned", ARCHITECT, "approved:stale-integrate", {
+      taskId: "task-approved", status: "integrating", patch: { changeSetId: "old-approved-change" },
+    }), /cannot transition from planned to integrating/i);
+
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore });
+    const replayed = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(replayed.tasks["task-approved"].status, "planned");
+    assert.equal(replayed.submissionHistory?.["task-approved"]?.[0]?.changeSetId, "old-approved-change");
+    assert.equal(replayed.reviewHistory?.["task-approved"]?.[0]?.status, "approved");
+    let dispatched = false;
+    const scheduler = new TaskScheduler({
+      runId: RUN_ID,
+      store,
+      driver: {
+        run: async (assignment) => {
+          dispatched = true;
+          assert.equal(assignment.attempt, 2);
+          assert.equal(assignment.task.objective, "Implement the newly requested intent.");
+          assert.deepEqual(assignment.task.requiredCapabilities, ["code", "browser"]);
+          assert.equal(assignment.task.acceptanceCriteriaVersion, 2);
+          return { type: "failed", reason: "Intent dispatch verified." };
+        },
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/task-approved-attempt-2",
+      clock: () => "2026-08-27T00:00:02.000Z",
+    });
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(dispatched, true);
+    assert.equal(rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks["task-approved"].attempt, 2);
+  } finally {
+    store?.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("steering checkpoint reconciliation covers submitted and architect review while no-change preserves them", () => {
+  for (const status of ["submitted", "architect_review", "approved"] as const) {
+    withStore((store) => {
+      initialize(store, "Build the requested application.");
+      append(store, "plan.created", ARCHITECT, `plan:${status}`, {
+        revision: 1,
+        tasks: [{
+          id: `task-${status}`,
+          objective: `Implement the ${status} intent.`,
+          dependencies: [],
+          status,
+          requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "done", text: "The task is complete." }],
+          acceptanceCriteriaVersion: 1,
+          criterionEvidenceLinks: [{ criterionId: "done", evidenceIds: ["old-evidence"], artifactHashes: [] }],
+          attempt: 1,
+          attemptLimit: 1,
+          assignedWorkerId: `worker_task-${status}_1`,
+          workspacePath: `C:/work/${status}`,
+          changeSetId: `change-${status}`,
+        }],
+      });
+      append(store, "user.guidance_submitted", USER, `guidance:${status}:no-change`, {
+        guidanceId: `guidance-${status}-no-change`, text: "Keep the current implementation.", version: 1,
+      });
+      const before = rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks[`task-${status}`];
+      append(store, "user.guidance_acknowledged", ARCHITECT, `guidance:${status}:no-change:ack`, {
+        guidanceId: `guidance-${status}-no-change`,
+        expectedVersion: 1,
+        resolution: { type: "no_plan_change", rationale: "The checkpoint remains valid.", evidenceIds: ["old-evidence"] },
+      });
+      assert.deepEqual(rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks[`task-${status}`], before);
+    });
+
+    withStore((store) => {
+      initialize(store, "Build the requested application.");
+      append(store, "plan.created", ARCHITECT, `plan:${status}:revised`, {
+        revision: 1,
+        tasks: [{
+          id: `task-${status}`,
+          objective: `Implement the ${status} intent.`,
+          dependencies: [],
+          status,
+          requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "done", text: "The task is complete." }],
+          acceptanceCriteriaVersion: 1,
+          attempt: 1,
+          attemptLimit: 1,
+          assignedWorkerId: `worker_task-${status}_1`,
+          workspacePath: `C:/work/${status}`,
+          changeSetId: `change-${status}`,
+        }],
+      });
+      append(store, "user.guidance_submitted", USER, `guidance:${status}:revised`, {
+        guidanceId: `guidance-${status}-revised`, text: "Replace this implementation.", version: 1,
+      });
+      append(store, "user.guidance_acknowledged", ARCHITECT, `guidance:${status}:revised:ack`, {
+        guidanceId: `guidance-${status}-revised`,
+        expectedVersion: 1,
+        resolution: {
+          type: "plan_reconciled",
+          rationale: "The checkpoint contains stale intent.",
+          planReconciliation: {
+            revision: 2,
+            summary: "Schedule fresh work.",
+            taskUpdates: [{ taskId: `task-${status}`, action: "revise", objective: "Implement fresh intent." }],
+          },
+        },
+      });
+      const revised = rebuildSchedulerProjection(store.readRun(RUN_ID)).tasks[`task-${status}`];
+      assert.equal(revised.status, "planned");
+      assert.equal(revised.attempt, 1);
+      assert.equal(revised.attemptLimit, 2);
+      assert.equal(revised.assignedWorkerId, undefined);
+      assert.equal(revised.changeSetId, undefined);
+    });
+  }
+});
+
+test("steering cancellation clears an architect-review checkpoint without erasing its durable audit trail", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-steering-review-cancel-"));
+  const database = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database, { evidenceStore });
+  try {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:review-cancel", {
+      revision: 1,
+      tasks: [{
+        id: "task-review-cancel",
+        objective: "Implement work that will be cancelled.",
+        dependencies: [],
+        status: "running",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The work is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+        assignedWorkerId: "worker_task-review-cancel_1",
+        workspacePath: "C:/work/review-cancel",
+      }],
+    });
+    const artifactHash = "d".repeat(64);
+    const evidence = evidenceStore.record({
+      runId: RUN_ID,
+      taskId: "task-review-cancel",
+      actor: { role: "worker", id: "worker_task-review-cancel_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "cancelled review evidence",
+        capturedAt: "2026-08-27T00:00:00.000Z",
+        screenshotArtifactHash: artifactHash,
+        mediaType: "image/png",
+        byteLength: 16,
+      },
+      createdAt: "2026-08-27T00:00:00.000Z",
+      idempotencyKey: "evidence:review-cancel",
+      attempt: 1,
+    });
+    const links = [{
+      criterionId: "done",
+      evidenceId: evidence.id,
+      artifactHashes: [artifactHash],
+      taskId: "task-review-cancel",
+      attempt: 1,
+    }];
+    append(store, "task.transitioned", { role: "runner", id: "scheduler" }, "review-cancel:submitted", {
+      taskId: "task-review-cancel",
+      status: "submitted",
+      patch: { changeSetId: "cancelled-change", criterionEvidenceLinks: links },
+    });
+    append(store, "review.requested", ARCHITECT, "review-cancel:requested", {
+      taskId: "task-review-cancel",
+      evidenceArtifactHashes: [artifactHash],
+      criterionEvidenceLinks: links,
+    });
+    append(store, "user.guidance_submitted", USER, "review-cancel:guidance", {
+      guidanceId: "guidance-review-cancel", text: "Cancel this obsolete work.", version: 1,
+    });
+    append(store, "user.guidance_acknowledged", ARCHITECT, "review-cancel:guidance:ack", {
+      guidanceId: "guidance-review-cancel",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The reviewed work is obsolete.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Cancel obsolete reviewed work.",
+          taskUpdates: [{ taskId: "task-review-cancel", action: "cancel" }],
+        },
+      },
+    });
+    const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(projection.tasks["task-review-cancel"].status, "cancelled");
+    assert.equal(projection.tasks["task-review-cancel"].changeSetId, undefined);
+    assert.equal(projection.tasks["task-review-cancel"].criterionEvidenceLinks, undefined);
+    assert.equal(projection.reviews["task-review-cancel"], undefined);
+    assert.equal(projection.submissionHistory?.["task-review-cancel"]?.[0]?.changeSetId, "cancelled-change");
+    assert.equal(store.readRun(RUN_ID).filter((event) => event.type === "review.requested").length, 1);
+    assert.throws(() => append(store!, "task.transitioned", ARCHITECT, "review-cancel:stale-integrate", {
+      taskId: "task-review-cancel", status: "integrating", patch: { changeSetId: "cancelled-change" },
+    }), /cannot transition from cancelled to integrating/i);
+
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore });
+    const replayed = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(replayed.tasks["task-review-cancel"].status, "cancelled");
+    assert.equal(replayed.submissionHistory?.["task-review-cancel"]?.length, 1);
+  } finally {
+    store?.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan-changing steering supersedes blocking worker guidance before redispatch", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:waiting-guidance", {
+      revision: 1,
+      tasks: [{
+        id: "task-waiting",
+        objective: "Implement old guided work.",
+        dependencies: [],
+        status: "running",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The work is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+        assignedWorkerId: "worker_task-waiting_1",
+        workspacePath: "C:/work/waiting",
+      }],
+    });
+    append(store, "guidance.requested", { role: "worker", id: "worker_task-waiting_1" }, "worker-guidance:advisory", {
+      requestId: "worker-guidance-advisory",
+      taskId: "task-waiting",
+      blocking: false,
+      question: "Is the old implementation's optional label acceptable?",
+      evidenceSequence: 1,
+    });
+    append(store, "guidance.requested", { role: "worker", id: "worker_task-waiting_1" }, "worker-guidance:old", {
+      requestId: "worker-guidance-old",
+      taskId: "task-waiting",
+      blocking: true,
+      question: "Should the old implementation use option A?",
+      evidenceSequence: 1,
+    });
+    append(store, "user.guidance_submitted", USER, "waiting:user-guidance", {
+      guidanceId: "guidance-waiting", text: "Replace the old implementation with option B.", version: 1,
+    });
+    append(store, "user.guidance_acknowledged", ARCHITECT, "waiting:user-guidance:ack", {
+      guidanceId: "guidance-waiting",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The user's new direction supersedes the worker's old question.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Revise the waiting attempt.",
+          taskUpdates: [{ taskId: "task-waiting", action: "revise", objective: "Implement option B." }],
+        },
+      },
+    });
+    const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(projection.tasks["task-waiting"].status, "assigned");
+    assert.equal(projection.tasks["task-waiting"].attempt, 1);
+    assert.equal(projection.tasks["task-waiting"].guidanceRequestId, undefined);
+    assert.equal(projection.guidance["worker-guidance-old"].status, "answered");
+    assert.match(projection.guidance["worker-guidance-old"].answer ?? "", /superseded.*guidance-waiting/i);
+    assert.equal(projection.guidance["worker-guidance-advisory"].status, "answered");
+    assert.match(projection.guidance["worker-guidance-advisory"].answer ?? "", /superseded.*guidance-waiting/i);
   });
 });
 

@@ -29,6 +29,12 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { WorkerAssignment } from "../src/task-scheduler.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
+import {
+  resolveWorkerSessionId,
+  standardWorkerId,
+  steeringReassignedWorkerId,
+  workerSessionId,
+} from "../src/worker-identity.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -59,6 +65,24 @@ test("worker model calls carry direct durable role and task attribution", () => 
       sessionId: "worker:run_1:task_1:1",
       taskId: "task_1",
     }
+  );
+});
+
+test("steering reassignment gets a distinct session while ordinary and recovered sessions stay compatible", () => {
+  const ordinaryWorker = standardWorkerId("task_1", 2);
+  const revisedWorker = steeringReassignedWorkerId("task_1", 2, 4);
+  const ordinarySession = workerSessionId("run_1", "task_1", 2, ordinaryWorker);
+  const revisedSession = workerSessionId("run_1", "task_1", 2, revisedWorker);
+  assert.equal(ordinarySession, "worker:run_1:task_1:2");
+  assert.notEqual(revisedSession, ordinarySession);
+  assert.match(revisedSession, /worker_task_1_2_plan_4$/);
+  assert.equal(
+    resolveWorkerSessionId("run_1", "task_1", 2, revisedWorker, revisedSession),
+    revisedSession
+  );
+  assert.equal(
+    resolveWorkerSessionId("run_1", "task_1", 2, ordinaryWorker, "legacy:persisted:session"),
+    "legacy:persisted:session"
   );
 });
 

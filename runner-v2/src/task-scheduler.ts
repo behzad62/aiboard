@@ -6,6 +6,7 @@ import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
+import { standardWorkerId } from "./worker-identity.js";
 
 export interface WorkerAssignment {
   runId: string;
@@ -161,7 +162,7 @@ export class TaskScheduler {
         projection = this.projection();
         if (hasPendingUserGuidance(projection)) return;
         const workspacePath = allocation.path;
-        const workerId = `worker_${taskId}_${attempt}`;
+        const workerId = standardWorkerId(taskId, attempt);
         this.transition(taskId, "assigned", attempt, {
           attempt,
           assignedWorkerId: workerId,
@@ -203,7 +204,7 @@ export class TaskScheduler {
       runId: this.runId,
       task: { ...task },
       attempt: task.attempt,
-      workerId: task.assignedWorkerId ?? `worker_${task.id}_${task.attempt}`,
+      workerId: task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
       workspacePath,
       ...(this.lifecycleSignal ? { signal: this.lifecycleSignal() } : {}),
       ...(providerRetryDeadlineMs !== undefined
@@ -214,12 +215,12 @@ export class TaskScheduler {
       .then(async () => await this.driver.run(assignment))
       .then((outcome) => {
         if (assignment.signal?.aborted) return;
-        this.recordOutcome(task.id, task.attempt, outcome);
+        this.recordOutcome(task.id, task.attempt, assignment.workerId, outcome);
       })
       .catch((error: unknown) =>
         assignment.signal?.aborted
           ? undefined
-          : this.recordOutcome(task.id, task.attempt, {
+          : this.recordOutcome(task.id, task.attempt, assignment.workerId, {
               type: "failed",
               reason: error instanceof Error ? error.message : String(error),
             })
@@ -233,6 +234,7 @@ export class TaskScheduler {
   private recordOutcome(
     taskId: string,
     attempt: number,
+    workerId: string,
     outcome: WorkerOutcome
   ): void {
     if (outcome.type === "submitted") {
@@ -254,7 +256,7 @@ export class TaskScheduler {
         runId: this.runId,
         type: "guidance.requested",
         occurredAt: this.clock(),
-        actor: { role: "worker", id: `worker_${taskId}_${attempt}` },
+        actor: { role: "worker", id: workerId },
         idempotencyKey: `guidance:${outcome.requestId}`,
         payload: {
           requestId: outcome.requestId,

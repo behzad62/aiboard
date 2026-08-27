@@ -15,6 +15,7 @@ import {
   PlanOnlyInspectionRuntime,
   architectInspectionWorkspace,
   architectModelAttribution,
+  loadArchitectReviewSubmission,
   prioritizedArchitectCapabilities,
 } from "../src/native-architect-runtime.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
@@ -108,6 +109,89 @@ test("Architect review context carries the submitted criterion evidence mapping"
   });
   assert.match(context.text, /criterionEvidenceLinks/);
   assert.match(context.text, /evidence_1/);
+});
+
+test("Architect review loads the revised worker session instead of the legacy same-attempt session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-reassigned-review-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  const legacySessionId = "worker:run-review:task-a:1";
+  const revisedSessionId = "worker:run-review:task-a:1:worker_task-a_1_plan_2";
+  try {
+    for (const [sessionId, changeSetId, changedPath] of [
+      [legacySessionId, "legacy-change", "legacy.txt"],
+      [revisedSessionId, "revised-change", "revised.txt"],
+    ] as const) {
+      await sessions.create({
+        sessionId,
+        runId: "run-review",
+        actor: { role: "worker", id: sessionId === revisedSessionId ? "worker_task-a_1_plan_2" : "worker_task-a_1" },
+        occurredAt: "2026-08-27T00:00:00.000Z",
+      });
+      await sessions.submit(sessionId, {
+        id: changeSetId,
+        runId: "run-review",
+        taskId: "task-a",
+        baselineRevision: "a".repeat(40),
+        taskRevision: "b".repeat(40),
+        commits: [],
+        changedPaths: [changedPath],
+        diffArtifactHash: "c".repeat(64),
+        evidenceArtifactHashes: [],
+        externalEffects: [],
+        guidanceIds: [],
+        memoryIds: [],
+        unresolvedConcerns: [],
+      }, "2026-08-27T00:00:01.000Z");
+    }
+    const projection = {
+      runId: "run-review",
+      status: "running",
+      planRevision: 2,
+      tasks: {
+        "task-a": {
+          id: "task-a",
+          objective: "Implement revised intent.",
+          dependencies: [],
+          requiredCapabilities: ["code"],
+          status: "architect_review",
+          attempt: 1,
+          assignedWorkerId: "worker_task-a_1_plan_2",
+          changeSetId: "revised-change",
+        },
+      },
+      guidance: {},
+      userGuidance: {},
+      userGuidanceVersion: 1,
+      architectQuestions: {},
+      architectQuestionVersion: 0,
+      reviews: {},
+      runtime: {
+        providerHealth: {},
+        workerAssignments: {
+          "task-a:1": {
+            taskId: "task-a",
+            attempt: 1,
+            runtimeId: "runtime-revised",
+            sessionId: revisedSessionId,
+          },
+        },
+        architect: {},
+      },
+      lastSequence: 1,
+    } as SchedulerProjection;
+    const submission = await loadArchitectReviewSubmission(
+      sessions,
+      "run-review",
+      { type: "review_required", taskId: "task-a", changeSetId: "revised-change" },
+      projection
+    );
+    assert.equal(submission?.changeSetId, "revised-change");
+    assert.deepEqual(submission?.changedPaths, ["revised.txt"]);
+  } finally {
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Architect skill routing prioritizes the task named by the current action", () => {
