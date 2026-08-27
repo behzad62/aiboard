@@ -46,6 +46,7 @@ const DEPENDENCY_LOCKFILES = new Set([
   "flake.lock",
   "gemfile.lock",
   "go.sum",
+  "gradle.lockfile",
   "mix.lock",
   "npm-shrinkwrap.json",
   "package-lock.json",
@@ -61,6 +62,7 @@ const DEPENDENCY_LOCKFILES = new Set([
 ]);
 
 const INFRASTRUCTURE_FILES = new Set([
+  ".travis.yml",
   ".gitlab-ci.yml",
   ".gitlab-ci.yaml",
   "appveyor.yml",
@@ -96,6 +98,7 @@ const INFRASTRUCTURE_FILES = new Set([
 const SECURITY_TOKENS = new Set([
   "auth",
   "authentication",
+  "authenticator",
   "authorization",
   "authorize",
   "cipher",
@@ -141,7 +144,11 @@ const DATA_FILENAME_TOKENS = new Set([
 ]);
 
 const INFRASTRUCTURE_DIRECTORY_TOKENS = new Set([
+  ".buildkite",
+  ".circleci",
+  "ansible",
   "ci",
+  "cloudformation",
   "deploy",
   "deployment",
   "helm",
@@ -191,7 +198,7 @@ export function assessBuildRisk(input: BuildRiskAssessmentInput): BuildRiskAsses
 
   add(
     "security_auth_crypto_path",
-    normalizedChangedPaths.filter(isSecurityPath),
+    matchingChangedPathEvidence(input.kernelFacts.changedPaths, isSecurityPath),
   );
   add(
     "migration_schema_data_path",
@@ -215,12 +222,24 @@ export function assessBuildRisk(input: BuildRiskAssessmentInput): BuildRiskAsses
 
 function normalizeChangedPaths(paths: readonly string[]): readonly string[] {
   const normalized = paths
-    .map(normalizePath)
+    .map((path) => normalizePath(path))
     .filter((path) => path.length > 0);
   return Object.freeze([...new Set(normalized)].sort());
 }
 
-function normalizePath(path: string): string {
+function matchingChangedPathEvidence(
+  paths: readonly string[],
+  predicate: (path: string) => boolean,
+): readonly string[] {
+  const matching = paths.flatMap((path) => {
+    const classifiedPath = normalizePath(path, true);
+    if (!classifiedPath || !predicate(classifiedPath)) return [];
+    return [normalizePath(path)];
+  });
+  return [...new Set(matching)].sort();
+}
+
+function normalizePath(path: string, preserveCase = false): string {
   const segments: string[] = [];
   for (const segment of path.trim().replaceAll("\\", "/").split("/")) {
     if (!segment || segment === ".") continue;
@@ -228,17 +247,18 @@ function normalizePath(path: string): string {
       segments.pop();
       continue;
     }
-    segments.push(segment.toLowerCase());
+    segments.push(preserveCase ? segment : segment.toLowerCase());
   }
   return segments.join("/");
 }
 
 function isSecurityPath(path: string): boolean {
   const segments = path.split("/");
-  return segments.some((segment) =>
-    SECURITY_TOKENS.has(segment) ||
-    filenameTokens(segment).some((token) => SECURITY_TOKENS.has(token))
-  );
+  return segments.some((segment) => {
+    const normalizedSegment = segment.toLowerCase();
+    return SECURITY_TOKENS.has(normalizedSegment) ||
+      filenameTokens(segment).some((token) => SECURITY_TOKENS.has(token));
+  });
 }
 
 function isMigrationSchemaDataPath(path: string): boolean {
@@ -252,7 +272,13 @@ function isMigrationSchemaDataPath(path: string): boolean {
 }
 
 function isDependencyLockfile(path: string): boolean {
-  return DEPENDENCY_LOCKFILES.has(path.split("/").at(-1) ?? "");
+  const segments = path.split("/");
+  const filename = segments.at(-1) ?? "";
+  return DEPENDENCY_LOCKFILES.has(filename) ||
+    (
+      filename.endsWith(".lockfile") &&
+      segments.slice(0, -1).includes("dependency-locks")
+    );
 }
 
 function isCiDeploymentInfrastructurePath(path: string): boolean {
@@ -278,7 +304,12 @@ function isCiDeploymentInfrastructurePath(path: string): boolean {
 }
 
 function filenameTokens(filename: string): string[] {
-  return stripExtension(filename).split(/[._-]+/).filter(Boolean);
+  return stripExtension(filename)
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[._\s-]+/)
+    .filter(Boolean)
+    .map((token) => token.toLowerCase());
 }
 
 function stripExtension(filename: string): string {

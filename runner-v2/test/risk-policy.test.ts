@@ -146,6 +146,65 @@ test("representative sensitive paths map to stable high-risk reason codes", () =
   }
 });
 
+test("Gradle dependency locks require high-risk verification", () => {
+  for (const path of [
+    "gradle.lockfile",
+    "gradle/dependency-locks/runtimeClasspath.lockfile",
+  ]) {
+    const assessment = assessBuildRisk({
+      ...LOW_RISK_INPUT,
+      kernelFacts: { ...LOW_RISK_INPUT.kernelFacts, changedPaths: [path] },
+    });
+    assert.equal(assessment.risk, "high", path);
+    assert.deepEqual(reasonCodes(assessment), ["dependency_lockfile"], path);
+  }
+});
+
+test("standard CI and infrastructure roots require high-risk verification", () => {
+  for (const path of [
+    ".circleci/config.yml",
+    ".buildkite/pipeline.yml",
+    ".travis.yml",
+    "cloudformation/template.yml",
+    "ansible/playbook.yml",
+  ]) {
+    const assessment = assessBuildRisk({
+      ...LOW_RISK_INPUT,
+      kernelFacts: { ...LOW_RISK_INPUT.kernelFacts, changedPaths: [path] },
+    });
+    assert.equal(assessment.risk, "high", path);
+    assert.deepEqual(
+      reasonCodes(assessment),
+      ["ci_deployment_infrastructure_path"],
+      path,
+    );
+  }
+});
+
+test("compound auth and crypto names are high risk without substring false positives", () => {
+  for (const path of ["src/cryptoBox.ts", "src/authenticator.ts"]) {
+    const assessment = assessBuildRisk({
+      ...LOW_RISK_INPUT,
+      kernelFacts: { ...LOW_RISK_INPUT.kernelFacts, changedPaths: [path] },
+    });
+    assert.equal(assessment.risk, "high", path);
+    assert.deepEqual(reasonCodes(assessment), ["security_auth_crypto_path"], path);
+  }
+
+  for (const path of [
+    "src/cryptocurrency-chart.ts",
+    "src/components/AuthorCard.tsx",
+    "src/authors.ts",
+  ]) {
+    const assessment = assessBuildRisk({
+      ...LOW_RISK_INPUT,
+      kernelFacts: { ...LOW_RISK_INPUT.kernelFacts, changedPaths: [path] },
+    });
+    assert.equal(assessment.risk, "low", path);
+    assert.deepEqual(assessment.reasons, [], path);
+  }
+});
+
 test("normalization, deduplication, and reason ordering are deterministic", () => {
   const paths = [
     ".\\SRC\\AUTH\\session.ts",
