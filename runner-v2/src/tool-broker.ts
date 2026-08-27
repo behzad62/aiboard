@@ -16,6 +16,7 @@ import type {
   ToolResult,
 } from "./agent-contracts.js";
 import type { PermissionProfile } from "./contracts.js";
+import { PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES } from "./runner-extension.js";
 import {
   ToolRegistry,
   type AgentToolRuntime,
@@ -31,6 +32,7 @@ export interface ToolApprovalRequest {
   sessionId: string;
   callId: string;
   toolName: string;
+  extensionId?: string;
   actor: ToolExecutionContext["actor"];
   permissionProfile: PermissionProfile;
   access: ToolAccessRequest;
@@ -41,6 +43,7 @@ export interface ToolApprovalRequest {
 export interface ToolAuditRecord {
   callId: string;
   toolName: string;
+  extensionId?: string;
   runId: string;
   sessionId: string;
   actor: ToolExecutionContext["actor"];
@@ -94,6 +97,7 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
+  private readonly extensionIds = new Map<string, string>();
 
   constructor(options: ToolBrokerOptions) {
     this.permissionProfile = options.permissionProfile;
@@ -118,12 +122,39 @@ export class ToolBroker implements AgentToolRuntime {
   }
 
   register<TInput>(tool: NativeTool<TInput>): void {
+    this.registerAttributed(tool);
+  }
+
+  registerExtensionTool<TInput>(extensionId: string, tool: NativeTool<TInput>): void {
+    if (!/^[a-z][a-z0-9.-]{0,63}$/.test(extensionId)) {
+      throw new Error(`Extension id ${extensionId} is invalid.`);
+    }
+    if (tool.definition.lifecycle === true) {
+      throw new Error(`Extension ${extensionId} cannot register a lifecycle tool.`);
+    }
+    if (
+      (PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES as readonly string[]).includes(
+        tool.definition.name,
+      )
+    ) {
+      throw new Error(
+        `Extension ${extensionId} cannot register protected lifecycle tool ${tool.definition.name}.`,
+      );
+    }
+    this.registerAttributed(tool, extensionId);
+  }
+
+  private registerAttributed<TInput>(
+    tool: NativeTool<TInput>,
+    extensionId?: string,
+  ): void {
     this.registry.register({
       definition: tool.definition,
       validate: tool.validate,
       execute: async (input, context) =>
-        await this.executeAuthorized(tool, input as TInput, context),
+        await this.executeAuthorized(tool, input as TInput, context, extensionId),
     });
+    if (extensionId) this.extensionIds.set(tool.definition.name, extensionId);
   }
 
   definitions(): ToolDefinition[] {
@@ -179,11 +210,13 @@ export class ToolBroker implements AgentToolRuntime {
       decision: "rejected" as const,
       outsideWorkspace: false,
     };
+    const extensionId = this.extensionIds.get(call.name);
     this.decisions.delete(call.callId);
     this.audit.push(
       Object.freeze({
         callId: call.callId,
         toolName: call.name,
+        ...(extensionId ? { extensionId } : {}),
         runId: context.runId,
         sessionId: context.sessionId,
         actor: Object.freeze({ ...context.actor }),
@@ -202,7 +235,8 @@ export class ToolBroker implements AgentToolRuntime {
   private async executeAuthorized<TInput>(
     tool: NativeTool<TInput>,
     input: TInput,
-    context: ToolExecutionContext
+    context: ToolExecutionContext,
+    extensionId?: string,
   ): Promise<ToolExecutionOutput> {
     const toolContext = { ...context, workspacePath: this.workspacePath };
     const callId = context.callId ?? "unknown";
@@ -235,6 +269,7 @@ export class ToolBroker implements AgentToolRuntime {
         sessionId: context.sessionId,
         callId,
         toolName: tool.definition.name,
+        ...(extensionId ? { extensionId } : {}),
         actor: context.actor,
         permissionProfile: this.permissionProfile,
         access,
@@ -269,7 +304,9 @@ export class ToolBroker implements AgentToolRuntime {
     const ledgerFingerprint = toolInvocationFingerprint({
       type: "tool_call",
       callId,
-      name: tool.definition.name,
+      name: extensionId
+        ? `extension:${extensionId}:${tool.definition.name}`
+        : tool.definition.name,
       arguments: input,
     });
     const budgetReservationId = `tool:${context.sessionId}:${callId}`;
@@ -298,6 +335,7 @@ export class ToolBroker implements AgentToolRuntime {
       fingerprint: ledgerFingerprint,
       callId,
       toolName: tool.definition.name,
+      ...(extensionId ? { extensionId } : {}),
       runId: context.runId,
       sessionId: context.sessionId,
       replaySafe: tool.definition.readOnly === true && tool.definition.effect === "none",
@@ -334,7 +372,8 @@ export class ToolBroker implements AgentToolRuntime {
       });
       const output = await this.boundOutput(
         tool.definition.name,
-        await Promise.race([execution, timeoutResult])
+        await Promise.race([execution, timeoutResult]),
+        extensionId,
       );
       this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
       this.settleToolBudget(budgetReservationId);
@@ -407,7 +446,8 @@ export class ToolBroker implements AgentToolRuntime {
 
   private async boundOutput(
     toolName: string,
-    output: ToolExecutionOutput
+    output: ToolExecutionOutput,
+    extensionId?: string,
   ): Promise<ToolExecutionOutput> {
     let changed = false;
     const content: ToolExecutionOutput["content"] = [];
@@ -429,7 +469,9 @@ export class ToolBroker implements AgentToolRuntime {
         ? await this.artifacts.put(
             Buffer.from(serialized),
             structured ? "application/json" : "text/plain",
-            `${toolName}${structured ? " structured" : ""} output`
+            `${extensionId ? `extension ${extensionId}: ` : ""}${toolName}${
+              structured ? " structured" : ""
+            } output`
           )
         : undefined;
       content.push({

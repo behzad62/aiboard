@@ -272,8 +272,11 @@ function snapshotContextContributor(
   if (!/^[a-z][a-z0-9_.-]{0,63}$/.test(input.id)) {
     throw new Error(`Extension context contributor id ${String(input.id)} is invalid.`);
   }
-  if (typeof input.kind !== "string" || !input.kind.trim()) {
-    throw new Error(`Extension context contributor ${input.id} requires a kind.`);
+  if (
+    typeof input.kind !== "string" ||
+    !/^[a-z][a-z0-9_.-]{0,63}$/.test(input.kind)
+  ) {
+    throw new Error(`Extension context contributor ${input.id} has an invalid kind.`);
   }
   if (!Number.isSafeInteger(input.priority) || input.priority < -1_000 || input.priority > 1_000) {
     throw new Error(`Extension context contributor ${input.id} has invalid priority.`);
