@@ -1075,6 +1075,10 @@ function emptyProjection(runId: string): SchedulerProjection {
     planRevision: 0,
     tasks: {},
     guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
     reviews: {},
     runtime: {
       providerHealth: {},

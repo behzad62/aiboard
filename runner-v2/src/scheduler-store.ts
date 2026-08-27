@@ -40,6 +40,14 @@ import {
   assertFinalVerificationCheckSemantics,
   assertFinalVerificationFactSchema,
 } from "./final-verification-semantics.js";
+import {
+  parseArchitectQuestionAnswer,
+  parseArchitectQuestionRequest,
+  parseUserGuidanceAcknowledgement,
+  parseUserGuidanceSubmission,
+  type ArchitectQuestionItem,
+  type UserGuidanceItem,
+} from "./user-steering-contracts.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -62,6 +70,10 @@ export type SchedulerEventType =
   | "guidance.requested"
   | "guidance.answered"
   | "guidance.challenged"
+  | "user.guidance_submitted"
+  | "user.guidance_acknowledged"
+  | "architect.question_requested"
+  | "architect.question_answered"
   | "review.requested"
   | "review.decided"
   | "run.paused"
@@ -322,6 +334,8 @@ export interface FinalVerificationProjection {
 
 export interface SchedulerProjection {
   runId: string;
+  /** Optional for event-log compatibility with runs created before P3.1. */
+  initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
   status: "running" | "paused" | "completed";
   /**
@@ -340,6 +354,11 @@ export interface SchedulerProjection {
   planRevision: number;
   tasks: Record<string, BuildTask>;
   guidance: Record<string, GuidanceProjection>;
+  userGuidance: Record<string, UserGuidanceItem>;
+  userGuidanceVersion: number;
+  architectQuestions: Record<string, ArchitectQuestionItem>;
+  architectQuestionVersion: number;
+  blockingArchitectQuestionId?: string;
   reviews: Record<string, ReviewProjection>;
   /** Completed submissions retained as immutable attempt/version history. */
   submissionHistory?: Record<string, CriterionSubmissionProjection[]>;
@@ -1038,6 +1057,8 @@ export function reduceSchedulerEvent(
     ...current,
     tasks: { ...current.tasks },
     guidance: { ...current.guidance },
+    userGuidance: { ...current.userGuidance },
+    architectQuestions: { ...current.architectQuestions },
     reviews: { ...current.reviews },
     submissionHistory: cloneSubmissionHistory(current.submissionHistory),
     reviewHistory: cloneReviewHistory(current.reviewHistory),
@@ -1380,6 +1401,94 @@ export function reduceSchedulerEvent(
           advanceIntegrationRevision(next, integrationRevision);
         }
       }
+      break;
+    }
+    case "user.guidance_submitted": {
+      if (event.actor.role !== "user") {
+        throw new Error("Only the user may submit user guidance.");
+      }
+      const submission = parseUserGuidanceSubmission(event.payload);
+      if (submission.version !== next.userGuidanceVersion + 1) {
+        throw new Error(
+          `User guidance version must advance from ${next.userGuidanceVersion} to ${next.userGuidanceVersion + 1}.`,
+        );
+      }
+      if (next.userGuidance[submission.guidanceId]) {
+        throw new Error(`Duplicate user guidance ${submission.guidanceId}.`);
+      }
+      next.userGuidance[submission.guidanceId] = {
+        ...submission,
+        status: "submitted",
+      };
+      next.userGuidanceVersion = submission.version;
+      break;
+    }
+    case "user.guidance_acknowledged": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may acknowledge user guidance.");
+      }
+      const acknowledgement = parseUserGuidanceAcknowledgement(event.payload);
+      const guidance = next.userGuidance[acknowledgement.guidanceId];
+      if (!guidance) throw new Error(`Unknown user guidance ${acknowledgement.guidanceId}.`);
+      if (guidance.status === "acknowledged") {
+        throw new Error(`User guidance ${acknowledgement.guidanceId} is already acknowledged.`);
+      }
+      if (acknowledgement.expectedVersion !== guidance.version) {
+        throw new Error(
+          `User guidance ${acknowledgement.guidanceId} version is ${guidance.version}, not ${acknowledgement.expectedVersion}.`,
+        );
+      }
+      next.userGuidance[guidance.guidanceId] = {
+        ...guidance,
+        status: "acknowledged",
+        acknowledgement: acknowledgement.acknowledgement,
+      };
+      break;
+    }
+    case "architect.question_requested": {
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may request a user question.");
+      }
+      const request = parseArchitectQuestionRequest(event.payload);
+      if (next.blockingArchitectQuestionId) {
+        throw new Error(`Architect question ${next.blockingArchitectQuestionId} is already open.`);
+      }
+      if (request.version !== next.architectQuestionVersion + 1) {
+        throw new Error(
+          `Architect question version must advance from ${next.architectQuestionVersion} to ${next.architectQuestionVersion + 1}.`,
+        );
+      }
+      if (next.architectQuestions[request.questionId]) {
+        throw new Error(`Duplicate Architect question ${request.questionId}.`);
+      }
+      next.architectQuestions[request.questionId] = { ...request, status: "open" };
+      next.architectQuestionVersion = request.version;
+      next.blockingArchitectQuestionId = request.questionId;
+      break;
+    }
+    case "architect.question_answered": {
+      if (event.actor.role !== "user") {
+        throw new Error("Only the user may answer an Architect question.");
+      }
+      const answer = parseArchitectQuestionAnswer(event.payload);
+      const question = next.architectQuestions[answer.questionId];
+      if (!question || question.status !== "open") {
+        throw new Error(`Architect question ${answer.questionId} is not open.`);
+      }
+      if (next.blockingArchitectQuestionId !== answer.questionId) {
+        throw new Error(`Architect question ${answer.questionId} is not the active blocking question.`);
+      }
+      if (answer.expectedVersion !== question.version) {
+        throw new Error(
+          `Architect question ${answer.questionId} version is ${question.version}, not ${answer.expectedVersion}.`,
+        );
+      }
+      next.architectQuestions[question.questionId] = {
+        ...question,
+        status: "answered",
+        answer: answer.answer,
+      };
+      delete next.blockingArchitectQuestionId;
       break;
     }
     case "guidance.requested": {
@@ -3147,14 +3256,20 @@ function acceptanceContractStatusForTasks(
 }
 
 function emptySchedulerProjection(event: SchedulerEvent): SchedulerProjection {
+  const initialObjective = event.payload.objective;
   return {
     runId: event.runId,
+    ...(typeof initialObjective === "string" ? { initialObjective } : {}),
     status: "running",
     acceptanceContractStatus: "current",
     acceptanceUpgradeRequiredEventRecorded: false,
     planRevision: 0,
     tasks: {},
     guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
     reviews: {},
     submissionHistory: {},
     reviewHistory: {},
