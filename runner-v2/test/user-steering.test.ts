@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { rebuildSchedulerProjection, type NewSchedulerEvent } from "../src/scheduler-store.js";
@@ -1168,6 +1169,64 @@ test("guidance interruption completion is exact, runner-owned, replay-safe, and 
   });
 });
 
+test("the append boundary rejects unversioned guidance and a new acknowledgement of a legacy pending submission", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-user-steering-legacy-append-"));
+  const databasePath = join(root, "scheduler.sqlite");
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(databasePath, {
+    evidenceStore: FIXTURE_EVIDENCE_STORE,
+  });
+  try {
+    initialize(store, "Immutable objective.");
+    assert.throws(() => store!.append({
+      runId: RUN_ID,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-27T00:00:00.000Z",
+      actor: USER,
+      idempotencyKey: "guidance:unversioned:new",
+      payload: { guidanceId: "guidance-unversioned", text: "Unsafe new submission.", version: 1 },
+    }), /protocol version 1/i);
+    store.close();
+    store = undefined;
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.prepare(`INSERT INTO scheduler_events (
+        event_id, run_id, sequence, event_type, occurred_at, actor_json, idempotency_key, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          "legacy-guidance-event",
+          RUN_ID,
+          2,
+          "user.guidance_submitted",
+          "2026-08-27T00:00:00.000Z",
+          JSON.stringify(USER),
+          "guidance:legacy:pending",
+          JSON.stringify({ guidanceId: "guidance-legacy-pending", text: "Legacy pending guidance.", version: 1 }),
+        );
+    } finally {
+      database.close();
+    }
+
+    store = new SqliteSchedulerStore(databasePath, { evidenceStore: FIXTURE_EVIDENCE_STORE });
+    assert.throws(() => store!.append({
+      runId: RUN_ID,
+      type: "user.guidance_acknowledged",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: ARCHITECT,
+      idempotencyKey: "guidance:legacy:premature-new-ack",
+      payload: {
+        guidanceId: "guidance-legacy-pending",
+        expectedVersion: 1,
+        resolution: { type: "no_plan_change", rationale: "Premature.", evidenceIds: ["evidence-1"] },
+      },
+    }), /interruption must complete/i);
+    assert.equal(store.readRun(RUN_ID).length, 2);
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function initialize(store: SqliteSchedulerStore, objective: string): void {
   append(store, "run.initialized", { role: "runner", id: "runner" }, "initialized", { objective });
 }
@@ -1228,7 +1287,9 @@ function append(
     occurredAt: "2026-08-27T00:00:00.000Z",
     actor,
     idempotencyKey,
-    payload,
+    payload: type === "user.guidance_submitted"
+      ? { ...payload, interruptionProtocolVersion: 1 }
+      : payload,
   });
 }
 

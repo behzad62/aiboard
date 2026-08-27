@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import type { BuildRuntime } from "../src/build-runtime.js";
+import { BuildRuntime } from "../src/build-runtime.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { ArtifactReachabilityGuard } from "../src/artifact-reachability.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
@@ -18,7 +19,12 @@ import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
-import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import {
+  acceptFinalVerificationProfile,
+  emptyFinalVerificationProfile,
+} from "./support/final-verification-profile.js";
 
 const spec: NativeBuildSpec = {
   version: 1,
@@ -37,6 +43,161 @@ const spec: NativeBuildSpec = {
   createdAt: "2026-07-12T00:00:00.000Z",
   idempotencyKey: "build-spec:run_1",
 };
+
+test("recovery upgrades a parent-format acknowledged interruption while adopting a newer verification generation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-legacy-steering-upgrade-"));
+  const schedulerPath = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const initialStore = new SqliteSchedulerStore(schedulerPath, {
+    evidenceStore,
+    validateExecutionProfile: acceptFinalVerificationProfile,
+  });
+  initialStore.close();
+  const evidence = evidenceStore.record({
+    runId: spec.runId,
+    taskId: "architect",
+    actor: { role: "architect", id: "architect_1" },
+    fact: {
+      kind: "browser_screenshot",
+      label: "parent-format steering evidence",
+      capturedAt: spec.createdAt,
+      screenshotArtifactHash: "a".repeat(64),
+      mediaType: "image/png",
+      byteLength: 1,
+    },
+    createdAt: spec.createdAt,
+    idempotencyKey: "legacy-steering-evidence",
+  });
+  const revision = "b".repeat(40);
+  const plan = {
+    checks: (["build", "tests", "runtime_smoke", "browser"] as const).map((category) => ({
+      category,
+      status: "not_applicable" as const,
+      rationale: `The parent fixture has no ${category} entry point.`,
+      repositoryInspection: {
+        paths: ["package.json"],
+        summary: `No ${category} entry point is present.`,
+      },
+    })),
+  };
+  const generation = (generationId: string, taskId: string, planVersion: number) => ({
+    taskId,
+    generationId,
+    targetRevision: revision,
+    planVersion,
+    plan,
+    executionProfile: emptyFinalVerificationProfile(revision),
+  });
+  const parentEvents = [
+    { type: "run.initialized", actor: { role: "runner", id: "runner" }, key: "run:init", payload: { objective: spec.objective } },
+    { type: "run.policy_configured", actor: { role: "runner", id: "runner" }, key: "run:policy", payload: { runPolicy: "finish" } },
+    { type: "plan.created", actor: { role: "architect", id: "architect_1" }, key: "plan:one", payload: { revision: 1, tasks: [] } },
+    { type: "integration.revision_advanced", actor: { role: "runner", id: "integration-manager" }, key: "revision:one", payload: { integrationRevision: revision } },
+    { type: "final_verification.generation_created", actor: { role: "runner", id: "build-runtime" }, key: "generation:a", payload: generation("generation-a", "verification-a", 1) },
+    { type: "user.guidance_submitted", actor: { role: "user", id: "local-user" }, key: "guidance:legacy", payload: { guidanceId: "guidance-legacy", text: "Keep the verified scope.", version: 1 } },
+    {
+      type: "user.guidance_acknowledged", actor: { role: "architect", id: "architect_1" }, key: "guidance:legacy:ack",
+      payload: {
+        guidanceId: "guidance-legacy", expectedVersion: 1,
+        resolution: { type: "no_plan_change", rationale: "Durable evidence proves semantic equivalence.", evidenceIds: [evidence.id] },
+      },
+    },
+    { type: "final_verification.generation_created", actor: { role: "runner", id: "build-runtime" }, key: "generation:b", payload: generation("generation-b", "verification-b", 2) },
+  ];
+  const database = new DatabaseSync(schedulerPath);
+  try {
+    const insert = database.prepare(`INSERT INTO scheduler_events (
+      event_id, run_id, sequence, event_type, occurred_at, actor_json, idempotency_key, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+    parentEvents.forEach((event, index) => insert.run(
+      `legacy-${index + 1}`,
+      spec.runId,
+      index + 1,
+      event.type,
+      spec.createdAt,
+      JSON.stringify(event.actor),
+      event.key,
+      JSON.stringify(event.payload),
+    ));
+  } finally {
+    database.close();
+  }
+
+  const workspaceMarker = join(root, "generation-b-workspace.txt");
+  writeFileSync(workspaceMarker, "owned by generation B\n");
+  let leaseActive = true;
+  let manager: NativeBuildManager | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  try {
+    const savedSpecs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+    savedSpecs.save(spec);
+    savedSpecs.close();
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async () => {
+        scheduler = new SqliteSchedulerStore(schedulerPath, {
+          evidenceStore,
+          validateExecutionProfile: acceptFinalVerificationProfile,
+        });
+        const runtime = new BuildRuntime({
+          runId: spec.runId,
+          initialObjective: spec.objective,
+          runPolicy: "finish",
+          store: scheduler,
+          evidenceStore,
+          workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+          architectDriver: { run: async () => undefined },
+          integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: revision }) },
+          maxConcurrency: 1,
+          workspaceFor: async () => "unused",
+        });
+        return {
+          ...handleProjections(spec.runId), runtime,
+          usage: () => emptyBudget(spec.runId), observability: async () => emptyObservability(spec.runId),
+          projectHandoff: async () => ({ integrationRevision: revision, integrationBranch: "integration", appliedToProject: false }),
+          retireInvalidatedFinalVerification: async (invalidated, current) => {
+            assert.equal(invalidated.generationId, "generation-a");
+            assert.equal(current?.generationId, "generation-b");
+            assert.equal(existsSync(workspaceMarker), true);
+            assert.equal(leaseActive, true);
+          },
+          cleanup: async () => undefined,
+          close: async () => {
+            scheduler?.close();
+            scheduler = undefined;
+          },
+        };
+      },
+    });
+    await manager.recover();
+    const upgraded = manager.projection(spec.runId);
+    assert.equal(upgraded.initialObjective, spec.objective);
+    assert.equal(upgraded.userGuidance["guidance-legacy"].status, "acknowledged");
+    assert.equal(upgraded.userGuidance["guidance-legacy"].interruptionStatus, "completed");
+    assert.equal(upgraded.finalVerification?.current?.generationId, "generation-b");
+    assert.equal(existsSync(workspaceMarker), true);
+    assert.equal(leaseActive, true);
+    assert.equal(manager.events(spec.runId).filter((event) => event.type === "user.guidance_interruption_completed").length, 1);
+    const replayed = await manager.submitUserGuidance(spec.runId, {
+      guidanceId: "guidance-legacy",
+      text: "Keep the verified scope.",
+      version: 1,
+      idempotencyKey: "guidance:legacy",
+    });
+    assert.equal(replayed.userGuidance["guidance-legacy"].interruptionStatus, "completed");
+    assert.equal(manager.events(spec.runId).filter((event) => event.type === "user.guidance_submitted").length, 1);
+    assert.equal(manager.events(spec.runId).filter((event) => event.type === "user.guidance_interruption_completed").length, 1);
+  } finally {
+    leaseActive = false;
+    await manager?.close();
+    if (scheduler) {
+      scheduler.close();
+      scheduler = undefined;
+    }
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("explicit pause quiesces exact run resources without invoking workspace cleanup", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-pause-quiesce-"));

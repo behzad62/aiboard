@@ -761,6 +761,7 @@ function createStoreFixture(
         guidanceId: acceptedGuidance.guidanceId,
         text: acceptedGuidance.text,
         version: acceptedGuidance.version,
+        interruptionProtocolVersion: 1,
       },
     });
     fixture.store.append({

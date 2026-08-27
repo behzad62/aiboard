@@ -111,7 +111,20 @@ test("acknowledged steering creates a fresh verification generation for the same
       occurredAt: "2026-08-26T00:00:05.000Z",
       actor: { role: "user", id: "local-user" },
       idempotencyKey: "guidance:fresh-verification",
-      payload: { guidanceId: "guidance-fresh-verification", text: "Verify the added scope.", version: 1 },
+      payload: {
+        guidanceId: "guidance-fresh-verification",
+        text: "Verify the added scope.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      },
+    });
+    fixture.store.append({
+      runId: RUN_ID,
+      type: "user.guidance_interruption_completed",
+      occurredAt: "2026-08-26T00:00:05.500Z",
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: "guidance:fresh-verification:interrupted",
+      payload: { guidanceId: "guidance-fresh-verification", expectedVersion: 1 },
     });
     fixture.store.append({
       runId: RUN_ID,
@@ -348,6 +361,7 @@ test("runner-owned final-verification planning cannot bypass pending user guidan
       payload: {
         guidanceId: "guidance-before-final-plan",
         text: "Reconcile this before final verification planning.",
+        interruptionProtocolVersion: 1,
         version: 1,
       },
     });

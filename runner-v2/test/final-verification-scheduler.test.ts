@@ -281,7 +281,12 @@ test("durable user guidance invalidates the exact verification generation and su
       occurredAt: "2026-08-26T00:00:10.000Z",
       actor: { role: "user", id: "local-user" },
       idempotencyKey: "guidance:invalidate-verification",
-      payload: { guidanceId: "guidance-verification", text: "Add the requested edge case.", version: 1 },
+      payload: {
+        guidanceId: "guidance-verification",
+        text: "Add the requested edge case.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      },
     });
 
     const invalidated = rebuildSchedulerProjection(fixture.store.readRun(fixture.runId));

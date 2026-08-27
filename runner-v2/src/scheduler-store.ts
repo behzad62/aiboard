@@ -1757,7 +1757,10 @@ export function reduceSchedulerEvent(
       const acknowledgement = parseUserGuidanceAcknowledgement(event.payload);
       const guidance = next.userGuidance[acknowledgement.guidanceId];
       if (!guidance) throw new Error(`Unknown user guidance ${acknowledgement.guidanceId}.`);
-      if (guidance.interruptionStatus !== "completed") {
+      if (
+        guidance.interruptionStatus !== "completed" &&
+        guidance.interruptionProtocolVersion === 1
+      ) {
         throw new Error(`User guidance ${acknowledgement.guidanceId} interruption must complete before acknowledgement.`);
       }
       if (guidance.status === "acknowledged") {

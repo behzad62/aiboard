@@ -321,6 +321,7 @@ export class BuildRuntime {
         guidanceId: input.guidanceId,
         text: input.text,
         version: input.version,
+        interruptionProtocolVersion: 1,
       },
     });
     if (appended.sequence > sequenceBefore) {

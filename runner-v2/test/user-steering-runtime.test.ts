@@ -972,7 +972,12 @@ test("the scheduler authority boundary blocks stale review, integration, complet
       occurredAt: CLOCK(),
       actor: { role: "user", id: "local-user" },
       idempotencyKey: "guidance:authority",
-      payload: { guidanceId: "guidance-authority", text: "Reconcile this first.", version: 1 },
+      payload: {
+        guidanceId: "guidance-authority",
+        text: "Reconcile this first.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      },
     });
     for (const [type, payload] of [
       ["review.decided", { taskId: "task-a" }],

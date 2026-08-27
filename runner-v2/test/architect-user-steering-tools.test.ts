@@ -625,7 +625,16 @@ function append(
       }
     }
   }
-  const appended = store.append({ runId: RUN_ID, type, occurredAt: CLOCK(), actor, idempotencyKey, payload });
+  const appended = store.append({
+    runId: RUN_ID,
+    type,
+    occurredAt: CLOCK(),
+    actor,
+    idempotencyKey,
+    payload: type === "user.guidance_submitted"
+      ? { ...payload, interruptionProtocolVersion: 1 }
+      : payload,
+  });
   if (type === "user.guidance_submitted") {
     const guidanceId = payload.guidanceId;
     const version = payload.version;

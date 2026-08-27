@@ -298,7 +298,12 @@ test("Native Architect steering cancellation does not create a user-decision pau
       occurredAt: "2026-08-27T00:00:02.000Z",
       actor: { role: "user", id: "local-user" },
       idempotencyKey: "guidance",
-      payload: { guidanceId: "guidance-1", text: "Keep the public API stable.", version: 1 },
+      payload: {
+        guidanceId: "guidance-1",
+        text: "Keep the public API stable.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      },
     });
     const candidate: AgentRuntimeCandidate = {
       runtimeId: "test:architect",

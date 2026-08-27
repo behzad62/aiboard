@@ -2,6 +2,8 @@ export interface UserGuidanceSubmission {
   guidanceId: string;
   text: string;
   version: number;
+  /** Absent only on durable submissions written before managed interruption gating. */
+  interruptionProtocolVersion?: 1;
 }
 
 export interface UserGuidanceNoPlanChangeResolution {
@@ -108,11 +110,16 @@ export interface ArchitectQuestionItem extends ArchitectQuestionRequest {
 }
 
 export function parseUserGuidanceSubmission(payload: Record<string, unknown>): UserGuidanceSubmission {
-  assertExactKeys(payload, ["guidanceId", "text", "version"]);
+  assertExactKeys(payload, ["guidanceId", "text", "version", "interruptionProtocolVersion"]);
+  const interruptionProtocolVersion = payload.interruptionProtocolVersion;
+  if (interruptionProtocolVersion !== undefined && interruptionProtocolVersion !== 1) {
+    throw new Error("User guidance interruption protocol version is invalid.");
+  }
   return {
     guidanceId: requiredText(payload, "guidanceId"),
     text: requiredText(payload, "text"),
     version: requiredPositiveInteger(payload, "version"),
+    ...(interruptionProtocolVersion === 1 ? { interruptionProtocolVersion } : {}),
   };
 }
 

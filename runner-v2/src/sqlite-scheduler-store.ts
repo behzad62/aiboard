@@ -109,7 +109,10 @@ export class SqliteSchedulerStore implements SchedulerStore {
         const event = decode(existing);
         if (
           event.type !== input.type ||
-          JSON.stringify(event.payload) !== JSON.stringify(input.payload) ||
+          (
+            JSON.stringify(event.payload) !== JSON.stringify(input.payload) &&
+            !sameLegacyGuidanceSubmissionReplay(event, input)
+          ) ||
           JSON.stringify(event.actor) !== JSON.stringify(input.actor)
         ) {
           throw new Error(
@@ -118,6 +121,23 @@ export class SqliteSchedulerStore implements SchedulerStore {
         }
         this.database.exec("COMMIT");
         return event;
+      }
+      if (
+        input.type === "user.guidance_submitted" &&
+        input.payload.interruptionProtocolVersion !== 1
+      ) {
+        throw new Error("New user guidance requires managed interruption protocol version 1.");
+      }
+      if (input.type === "user.guidance_acknowledged") {
+        const guidanceId = input.payload.guidanceId;
+        const guidance = typeof guidanceId === "string"
+          ? priorProjection?.userGuidance[guidanceId]
+          : undefined;
+        if (guidance && guidance.interruptionStatus !== "completed") {
+          throw new Error(
+            `User guidance ${guidanceId} interruption must complete before acknowledgement.`,
+          );
+        }
       }
       if (
         input.type === "final_verification.generation_created" &&
@@ -202,6 +222,22 @@ export class SqliteSchedulerStore implements SchedulerStore {
   close(): void {
     this.database.close();
   }
+}
+
+function sameLegacyGuidanceSubmissionReplay(
+  existing: SchedulerEvent,
+  input: NewSchedulerEvent,
+): boolean {
+  if (
+    existing.type !== "user.guidance_submitted" ||
+    input.type !== "user.guidance_submitted" ||
+    existing.payload.interruptionProtocolVersion !== undefined ||
+    input.payload.interruptionProtocolVersion !== 1
+  ) {
+    return false;
+  }
+  const { interruptionProtocolVersion: _ignored, ...currentPayload } = input.payload;
+  return JSON.stringify(existing.payload) === JSON.stringify(currentPayload);
 }
 
 function sameGenerationPayload(
