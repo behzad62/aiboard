@@ -55,6 +55,7 @@ assert.deepEqual(
   {
     configuredRuntimeIds: ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
     workerRuntimeIds: ["chatgpt:gpt-5.4"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
   }
 );
 assert.deepEqual(resolveNativeProviderTransport("openai"), {
@@ -87,6 +88,7 @@ assert.deepEqual(
   {
     configuredRuntimeIds: ["chatgpt:gpt-5.5"],
     workerRuntimeIds: ["chatgpt:gpt-5.5"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.5"],
   }
 );
 
@@ -255,6 +257,7 @@ await createNativeBuild(connection, {
     objective: "Build the requested feature.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.5"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.5"],
     maxConcurrency: 2,
     runPolicy: "budgeted",
     budgetLimits: {

@@ -83,6 +83,7 @@ interface CreateRunBody {
     objective: string;
     architectRuntimeId: string;
     workerRuntimeIds: string[];
+    verifierRuntimeIds: string[];
     maxConcurrency: number;
     runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
@@ -361,6 +362,7 @@ export class ControlServer {
             objective: body.build.objective,
             architectRuntimeId: body.build.architectRuntimeId,
             workerRuntimeIds: [...body.build.workerRuntimeIds],
+            verifierRuntimeIds: [...body.build.verifierRuntimeIds],
             maxConcurrency: body.build.maxConcurrency,
             permissionProfile: body.permissionProfile,
             runPolicy: body.build.runPolicy,
@@ -1036,6 +1038,15 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     !Array.isArray(body.workerRuntimeIds) ||
     body.workerRuntimeIds.length < 1 ||
     body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId))
+  ) invalidBody();
+  if (
+    !Array.isArray(body.verifierRuntimeIds) ||
+    body.verifierRuntimeIds.length < 1 ||
+    body.verifierRuntimeIds.some(
+      (runtimeId) =>
+        !isNonEmptyString(runtimeId) || runtimeId !== runtimeId.trim()
+    ) ||
+    new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
   ) invalidBody();
   if (!Number.isSafeInteger(body.maxConcurrency) || body.maxConcurrency < 1) {
     invalidBody();

@@ -991,6 +991,7 @@ function nativeSpec(): NativeBuildSpec {
     objective: "Prove the final completion gate.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.4"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.4"],
     maxConcurrency: 1,
     permissionProfile: "full",
     runPolicy: "finish",

@@ -18,6 +18,7 @@ export interface NativeBuildSpec {
   objective: string;
   architectRuntimeId: string;
   workerRuntimeIds: string[];
+  verifierRuntimeIds: string[];
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
@@ -51,6 +52,22 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     spec.workerRuntimeIds.length < 1 ||
     spec.workerRuntimeIds.some((id) => !id)
   ) throw new Error("Build spec requires at least one worker runtime.");
+  if (
+    !Array.isArray(spec.verifierRuntimeIds) ||
+    spec.verifierRuntimeIds.length < 1
+  ) {
+    throw new Error("Build spec requires at least one verifier runtime.");
+  }
+  if (
+    spec.verifierRuntimeIds.some(
+      (id) => typeof id !== "string" || !id.trim() || id !== id.trim()
+    )
+  ) {
+    throw new Error("Build spec verifier runtime IDs must be non-empty normalized strings.");
+  }
+  if (new Set(spec.verifierRuntimeIds).size !== spec.verifierRuntimeIds.length) {
+    throw new Error("Build spec contains a duplicate verifier runtime.");
+  }
   if (!Number.isSafeInteger(spec.maxConcurrency) || spec.maxConcurrency < 1) {
     throw new Error("Build spec maxConcurrency must be positive.");
   }
@@ -117,12 +134,18 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
 }
 
 export function recoverLegacyBuildSpec(
-  spec: Omit<NativeBuildSpec, "runPolicy">
+  spec: Omit<NativeBuildSpec, "runPolicy" | "verifierRuntimeIds"> &
+    Partial<Pick<NativeBuildSpec, "runPolicy" | "verifierRuntimeIds">>
 ): NativeBuildSpec {
+  const legacyRunPolicy = spec.runPolicy === undefined;
   const recovered: NativeBuildSpec = {
     ...spec,
-    runPolicy: "finish",
-    budgetLimits: {},
+    runPolicy: spec.runPolicy ?? "finish",
+    budgetLimits: legacyRunPolicy ? {} : { ...spec.budgetLimits },
+    verifierRuntimeIds:
+      spec.verifierRuntimeIds === undefined
+        ? [...new Set(spec.workerRuntimeIds)]
+        : [...spec.verifierRuntimeIds],
   };
   validateBuildSpec(recovered);
   return recovered;
@@ -132,6 +155,7 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
   return {
     ...spec,
     workerRuntimeIds: [...spec.workerRuntimeIds],
+    verifierRuntimeIds: [...spec.verifierRuntimeIds],
     budgetLimits: { ...spec.budgetLimits },
     ...(spec.benchmark
       ? {

@@ -285,6 +285,7 @@ test("control API stores provider credentials without returning secrets and prov
             objective: "Build the requested feature.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            verifierRuntimeIds: ["anthropic:claude-code"],
             maxConcurrency: 2,
             runPolicy: "finish",
             budgetLimits: {},
@@ -301,6 +302,7 @@ test("control API stores provider credentials without returning secrets and prov
       objective: "Build the requested feature.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      verifierRuntimeIds: ["anthropic:claude-code"],
       maxConcurrency: 2,
       permissionProfile: "full",
       runPolicy: "finish",
@@ -323,6 +325,7 @@ test("control API stores provider credentials without returning secrets and prov
             objective: "Build within the selected window.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            verifierRuntimeIds: ["chatgpt:gpt-5.5"],
             maxConcurrency: 1,
             runPolicy: "budgeted",
             budgetLimits: {
@@ -341,6 +344,7 @@ test("control API stores provider credentials without returning secrets and prov
       objective: "Build within the selected window.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      verifierRuntimeIds: ["chatgpt:gpt-5.5"],
       maxConcurrency: 1,
       permissionProfile: "guarded",
       runPolicy: "budgeted",
@@ -366,6 +370,7 @@ test("control API stores provider credentials without returning secrets and prov
             objective: "Plan without implementation.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            verifierRuntimeIds: ["chatgpt:gpt-5.5"],
             maxConcurrency: 1,
             runPolicy: "plan_only",
             budgetLimits: {},
@@ -381,6 +386,7 @@ test("control API stores provider credentials without returning secrets and prov
       objective: "Plan without implementation.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      verifierRuntimeIds: ["chatgpt:gpt-5.5"],
       maxConcurrency: 1,
       permissionProfile: "guarded",
       runPolicy: "plan_only",
@@ -431,6 +437,7 @@ test("control API stores provider credentials without returning secrets and prov
               objective: "Reject an invalid policy and limit combination.",
               architectRuntimeId: "chatgpt:gpt-5.5",
               workerRuntimeIds: ["chatgpt:gpt-5.5"],
+              verifierRuntimeIds: ["chatgpt:gpt-5.5"],
               maxConcurrency: 1,
               runPolicy: invalid.runPolicy,
               budgetLimits: invalid.budgetLimits,
@@ -443,6 +450,37 @@ test("control API stores provider credentials without returning secrets and prov
         () => supervisor.getRun(invalid.runId),
         new RegExp(`Unknown run ${invalid.runId}`)
       );
+    }
+    for (const [suffix, verifierRuntimeIds] of [
+      ["empty", []],
+      ["blank", [" "]],
+      ["duplicate", ["chatgpt:gpt-5.5", "chatgpt:gpt-5.5"]],
+    ] as const) {
+      const invalidRunId = `run_invalid_verifiers_${suffix}`;
+      const response = await fetch(
+        `${url}/v2/runs`,
+        authorized({
+          method: "POST",
+          body: JSON.stringify({
+            runId: invalidRunId,
+            projectPath: join(directory, "project"),
+            permissionProfile: "guarded",
+            idempotencyKey: `create:${invalidRunId}`,
+            build: {
+              projectId: "project_native",
+              objective: "Reject malformed verifier candidates.",
+              architectRuntimeId: "chatgpt:gpt-5.5",
+              workerRuntimeIds: ["chatgpt:gpt-5.5"],
+              verifierRuntimeIds,
+              maxConcurrency: 1,
+              runPolicy: "finish",
+              budgetLimits: {},
+            },
+          }),
+        })
+      );
+      assert.equal(response.status, 400, suffix);
+      assert.throws(() => supervisor.getRun(invalidRunId), /Unknown run/);
     }
     assert.equal(created.length, 3);
     const references = await json(await fetch(

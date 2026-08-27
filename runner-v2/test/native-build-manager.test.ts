@@ -33,6 +33,7 @@ const spec: NativeBuildSpec = {
   objective: "Build a reliable application.",
   architectRuntimeId: "chatgpt:gpt-5.5",
   workerRuntimeIds: ["chatgpt:gpt-5.4"],
+  verifierRuntimeIds: ["chatgpt:gpt-5.4"],
   maxConcurrency: 1,
   permissionProfile: "full",
   runPolicy: "budgeted",
@@ -1316,15 +1317,31 @@ test("worker routing excludes Architect-only runtimes from the worker pool", () 
       capabilities: ["*"],
       priority: 1,
     },
+    {
+      runtimeId: "google:gemini-2.5-pro",
+      providerId: "google",
+      modelId: "gemini-2.5-pro",
+      transport: "google",
+      secret: "verifier-secret",
+      capabilities: ["*"],
+      priority: 2,
+    },
   ];
-  const selected = selectRuntimeCandidates(configs, spec);
+  const selected = selectRuntimeCandidates(configs, {
+    ...spec,
+    verifierRuntimeIds: ["google:gemini-2.5-pro"],
+  });
   assert.deepEqual(
     selected.all.map((candidate) => candidate.runtimeId),
-    ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"]
+    ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4", "google:gemini-2.5-pro"]
   );
   assert.deepEqual(
     selected.workers.map((candidate) => candidate.runtimeId),
     ["chatgpt:gpt-5.4"]
+  );
+  assert.deepEqual(
+    selected.verifiers.map((candidate) => candidate.runtimeId),
+    ["google:gemini-2.5-pro"]
   );
 });
 

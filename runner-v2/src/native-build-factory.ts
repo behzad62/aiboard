@@ -665,7 +665,11 @@ function selectConfigs(
   configs: readonly RunnerProviderConfig[],
   spec: NativeBuildSpec
 ): RunnerProviderConfig[] {
-  const required = new Set([spec.architectRuntimeId, ...spec.workerRuntimeIds]);
+  const required = new Set([
+    spec.architectRuntimeId,
+    ...spec.workerRuntimeIds,
+    ...spec.verifierRuntimeIds,
+  ]);
   const selected = configs.filter((config) => required.has(config.runtimeId));
   for (const runtimeId of required) {
     if (!selected.some((config) => config.runtimeId === runtimeId)) {
@@ -682,14 +686,17 @@ export function selectRuntimeCandidates(
   configs: RunnerProviderConfig[];
   all: AgentRuntimeCandidate[];
   workers: AgentRuntimeCandidate[];
+  verifiers: AgentRuntimeCandidate[];
 } {
   const selected = selectConfigs(configs, spec);
   const all = selected.map(toCandidate);
   const workerIds = new Set(spec.workerRuntimeIds);
+  const verifierIds = new Set(spec.verifierRuntimeIds);
   return {
     configs: selected,
     all,
     workers: all.filter((candidate) => workerIds.has(candidate.runtimeId)),
+    verifiers: all.filter((candidate) => verifierIds.has(candidate.runtimeId)),
   };
 }
 

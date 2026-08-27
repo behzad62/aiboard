@@ -19,6 +19,7 @@ const validSpec: NativeBuildSpec = {
   objective: "Validate the native policy contract.",
   architectRuntimeId: "chatgpt:gpt-5.5",
   workerRuntimeIds: ["chatgpt:gpt-5.4"],
+  verifierRuntimeIds: ["anthropic:claude-sonnet-4.5"],
   maxConcurrency: 1,
   permissionProfile: "full",
   runPolicy: "budgeted",
@@ -58,6 +59,21 @@ test("native Build specs enforce policy-specific limit shapes", () => {
     /Budgeted runs require a positive maxEstimatedCostMicros or maxActiveMs/
   );
   assert.throws(
+    () => validateBuildSpec({ ...validSpec, verifierRuntimeIds: [] }),
+    /at least one verifier runtime/i
+  );
+  assert.throws(
+    () => validateBuildSpec({
+      ...validSpec,
+      verifierRuntimeIds: ["anthropic:claude-sonnet-4.5", "anthropic:claude-sonnet-4.5"],
+    }),
+    /duplicate verifier runtime/i
+  );
+  assert.throws(
+    () => validateBuildSpec({ ...validSpec, verifierRuntimeIds: [" "] }),
+    /verifier runtime/i
+  );
+  assert.throws(
     () =>
       validateBuildSpec({
         ...validSpec,
@@ -95,8 +111,10 @@ test("native Build specs validate and clone benchmark command policy", () => {
   const cloned = cloneBuildSpec(benchmarkSpec);
   cloned.benchmark!.allowedCommands.push("npm lint");
   cloned.benchmark!.hiddenPaths.push("secret.json");
+  cloned.verifierRuntimeIds.push("google:gemini-2.5-pro");
   assert.deepEqual(benchmarkSpec.benchmark!.allowedCommands, ["npm test", "node verifier.mjs"]);
   assert.deepEqual(benchmarkSpec.benchmark!.hiddenPaths, ["case-meta.json"]);
+  assert.deepEqual(benchmarkSpec.verifierRuntimeIds, ["anthropic:claude-sonnet-4.5"]);
 });
 
 test("native Build specs recover exactly and idempotently", () => {
@@ -109,6 +127,7 @@ test("native Build specs recover exactly and idempotently", () => {
     objective: "Build a reliable application.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.4", "chatgpt:gpt-5.5"],
+    verifierRuntimeIds: ["anthropic:claude-sonnet-4.5"],
     maxConcurrency: 2,
     permissionProfile: "full" as const,
     runPolicy: "budgeted" as const,
@@ -134,6 +153,63 @@ test("native Build specs recover exactly and idempotently", () => {
     assert.deepEqual(store.get("run_1"), spec);
     assert.deepEqual(store.list(), [spec]);
     store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("P3-era Build specs migrate durable verifier candidates without changing policy", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-p3-"));
+  const database = join(root, "build-specs.sqlite");
+  const p3Spec = {
+    version: 1 as const,
+    runId: "run_p3",
+    projectId: "project_p3",
+    objective: "Recover a pre-verifier build.",
+    architectRuntimeId: "chatgpt:gpt-5.5",
+    workerRuntimeIds: ["chatgpt:gpt-5.4", "anthropic:claude-sonnet-4.5"],
+    maxConcurrency: 2,
+    permissionProfile: "full" as const,
+    runPolicy: "finish" as const,
+    budgetLimits: {},
+    createdAt: "2026-07-12T00:00:00.000Z",
+    idempotencyKey: "build-spec:run_p3",
+  };
+  try {
+    const legacyDatabase = new DatabaseSync(database);
+    legacyDatabase.exec(`
+      CREATE TABLE build_specs (
+        run_id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        spec_json TEXT NOT NULL
+      );
+    `);
+    legacyDatabase
+      .prepare(
+        "INSERT INTO build_specs (run_id, idempotency_key, spec_json) VALUES (?, ?, ?)"
+      )
+      .run(p3Spec.runId, p3Spec.idempotencyKey, JSON.stringify(p3Spec));
+    legacyDatabase.close();
+
+    const store = new SqliteBuildSpecStore(database);
+    try {
+      assert.deepEqual(store.get(p3Spec.runId), {
+        ...p3Spec,
+        verifierRuntimeIds: p3Spec.workerRuntimeIds,
+      });
+    } finally {
+      store.close();
+    }
+
+    const persistedDatabase = new DatabaseSync(database);
+    const persisted = persistedDatabase
+      .prepare("SELECT spec_json FROM build_specs WHERE run_id = ?")
+      .get(p3Spec.runId) as { spec_json: string };
+    persistedDatabase.close();
+    assert.deepEqual(JSON.parse(persisted.spec_json), {
+      ...p3Spec,
+      verifierRuntimeIds: p3Spec.workerRuntimeIds,
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -181,6 +257,7 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
         ...legacySpec,
         runPolicy: "finish",
         budgetLimits: {},
+        verifierRuntimeIds: legacySpec.workerRuntimeIds,
       });
     } finally {
       store.close();
@@ -191,6 +268,7 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
         ...legacySpec,
         runPolicy: "finish",
         budgetLimits: {},
+        verifierRuntimeIds: legacySpec.workerRuntimeIds,
       });
       const persistedDatabase = new DatabaseSync(database);
       const persisted = persistedDatabase
@@ -201,6 +279,7 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
         ...legacySpec,
         runPolicy: "finish",
         budgetLimits: {},
+        verifierRuntimeIds: legacySpec.workerRuntimeIds,
       });
     } finally {
       store.close();

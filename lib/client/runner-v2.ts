@@ -64,6 +64,7 @@ export interface CreateNativeBuildInput {
     objective: string;
     architectRuntimeId: string;
     workerRuntimeIds: string[];
+    verifierRuntimeIds: string[];
     maxConcurrency: number;
     runPolicy: BuildRunPolicy;
     budgetLimits: {

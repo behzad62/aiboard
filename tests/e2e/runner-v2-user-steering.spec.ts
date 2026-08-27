@@ -151,6 +151,7 @@ test.describe("Runner V2 durable user steering", () => {
                 objective: OBJECTIVE,
                 architectRuntimeId: "fixture:architect",
                 workerRuntimeIds: ["fixture:worker"],
+                verifierRuntimeIds: ["fixture:worker"],
                 maxConcurrency: 1,
                 permissionProfile: "full",
                 runPolicy: "finish",

@@ -157,7 +157,7 @@ export async function runNativeBuildDiscussion(
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
   if (!architectRuntimeId) throw new Error("Build mode requires an Architect model.");
-  const { configuredRuntimeIds, workerRuntimeIds } = selectNativeBuildRuntimes(
+  const { configuredRuntimeIds, workerRuntimeIds, verifierRuntimeIds } = selectNativeBuildRuntimes(
     modelIds,
     architectRuntimeId
   );
@@ -188,6 +188,7 @@ export async function runNativeBuildDiscussion(
         objective,
         architectRuntimeId,
         workerRuntimeIds,
+        verifierRuntimeIds,
         maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
         ...nativePolicy,
       },
@@ -384,14 +385,17 @@ export function selectNativeBuildRuntimes(
 ): {
   configuredRuntimeIds: string[];
   workerRuntimeIds: string[];
+  verifierRuntimeIds: string[];
 } {
   const workers = [
     ...new Set(modelIds.filter((runtimeId) => runtimeId !== architectRuntimeId)),
   ];
   if (workers.length === 0) workers.push(architectRuntimeId);
+  const configuredRuntimeIds = [...new Set([architectRuntimeId, ...workers])];
   return {
-    configuredRuntimeIds: [...new Set([architectRuntimeId, ...workers])],
+    configuredRuntimeIds,
     workerRuntimeIds: workers,
+    verifierRuntimeIds: [...configuredRuntimeIds],
   };
 }
 

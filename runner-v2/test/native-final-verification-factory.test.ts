@@ -78,6 +78,7 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
       objective: "Verify a real application.",
       architectRuntimeId: config.runtimeId,
       workerRuntimeIds: [config.runtimeId],
+      verifierRuntimeIds: [config.runtimeId],
       maxConcurrency: 1,
       permissionProfile: "full",
       runPolicy: "finish",

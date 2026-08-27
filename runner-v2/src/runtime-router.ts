@@ -41,6 +41,25 @@ export interface WorkerFailureRouteInput {
   handoff: WorkerHandoffPackage;
 }
 
+export interface VerifierSelectionInput {
+  requiredCapabilities: readonly string[];
+  candidateRuntimeIds: readonly string[];
+  architectRuntimeId: string;
+  acceptedChangeAuthorRuntimeIds: readonly string[];
+}
+
+export type VerifierSelection =
+  | {
+      status: "assigned";
+      runtime: AgentRuntimeCandidate;
+    }
+  | {
+      status: "unavailable";
+      reason: "no_independent_healthy_capability_match";
+      requiredCapabilities: string[];
+      runtime?: undefined;
+    };
+
 export interface RuntimeRouterDecision {
   type: "worker_handoff" | "worker_unavailable";
   fromRuntimeId: string;
@@ -150,6 +169,40 @@ export class RuntimeRouter {
     };
   }
 
+  selectVerifier(input: VerifierSelectionInput): VerifierSelection {
+    const required = unique(input.requiredCapabilities);
+    const allowedRuntimeIds = new Set(input.candidateRuntimeIds);
+    for (const runtimeId of allowedRuntimeIds) {
+      if (!this.byId.has(runtimeId)) {
+        throw new Error(`Unknown verifier candidate runtime ${runtimeId}.`);
+      }
+    }
+    const architect = this.byId.get(input.architectRuntimeId);
+    if (!architect) {
+      throw new Error(`Unknown Architect runtime ${input.architectRuntimeId}.`);
+    }
+    const excludedModelIdentities = new Set([modelIdentity(architect)]);
+    for (const runtimeId of new Set(input.acceptedChangeAuthorRuntimeIds)) {
+      const author = this.byId.get(runtimeId);
+      if (!author) {
+        throw new Error(`Unknown accepted change author runtime ${runtimeId}.`);
+      }
+      excludedModelIdentities.add(modelIdentity(author));
+    }
+    const runtime = this.eligible(required).find(
+      (candidate) =>
+        allowedRuntimeIds.has(candidate.runtimeId) &&
+        !excludedModelIdentities.has(modelIdentity(candidate))
+    );
+    return runtime
+      ? { status: "assigned", runtime: cloneCandidate(runtime) }
+      : {
+          status: "unavailable",
+          reason: "no_independent_healthy_capability_match",
+          requiredCapabilities: required,
+        };
+  }
+
   confirmArchitectHandoff(
     runtimeId: string,
     requiredCapabilities: readonly string[]
@@ -200,6 +253,14 @@ function compareCandidates(
 
 function cloneCandidate(candidate: AgentRuntimeCandidate): AgentRuntimeCandidate {
   return { ...candidate, capabilities: [...candidate.capabilities] };
+}
+
+function modelIdentity(candidate: AgentRuntimeCandidate): string {
+  const qualifiedModelId = candidate.modelId
+    .trim()
+    .toLowerCase()
+    .replaceAll("\\", "/");
+  return qualifiedModelId.split("/").filter(Boolean).at(-1) ?? qualifiedModelId;
 }
 
 function unique(values: readonly string[]): string[] {

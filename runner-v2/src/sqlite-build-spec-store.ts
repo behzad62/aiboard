@@ -86,8 +86,11 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
       .prepare("SELECT run_id, idempotency_key, spec_json FROM build_specs ORDER BY rowid")
       .all() as unknown as SpecRow[];
     const legacy = rows.filter((row) => {
-      const parsed = JSON.parse(row.spec_json) as { runPolicy?: unknown };
-      return parsed.runPolicy === undefined;
+      const parsed = JSON.parse(row.spec_json) as {
+        runPolicy?: unknown;
+        verifierRuntimeIds?: unknown;
+      };
+      return parsed.runPolicy === undefined || parsed.verifierRuntimeIds === undefined;
     });
     if (legacy.length === 0) return;
     this.database.exec("BEGIN IMMEDIATE");
@@ -96,7 +99,10 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
         "UPDATE build_specs SET spec_json = ? WHERE run_id = ? AND spec_json = ?"
       );
       for (const row of legacy) {
-        const stored = JSON.parse(row.spec_json) as Omit<NativeBuildSpec, "runPolicy">;
+        const stored = JSON.parse(row.spec_json) as Omit<
+          NativeBuildSpec,
+          "runPolicy" | "verifierRuntimeIds"
+        > & Partial<Pick<NativeBuildSpec, "runPolicy" | "verifierRuntimeIds">>;
         const migrated = recoverLegacyBuildSpec(stored);
         const result = update.run(JSON.stringify(migrated), row.run_id, row.spec_json);
         if (result.changes !== 1) {
@@ -114,9 +120,9 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
 function decode(row: SpecRow): NativeBuildSpec {
   const stored = JSON.parse(row.spec_json) as Omit<
     NativeBuildSpec,
-    "runPolicy"
-  > & { runPolicy?: NativeBuildSpec["runPolicy"] };
-  if (stored.runPolicy === undefined) {
+    "runPolicy" | "verifierRuntimeIds"
+  > & Partial<Pick<NativeBuildSpec, "runPolicy" | "verifierRuntimeIds">>;
+  if (stored.runPolicy === undefined || stored.verifierRuntimeIds === undefined) {
     return cloneBuildSpec(recoverLegacyBuildSpec(stored));
   }
   const spec = stored as NativeBuildSpec;
