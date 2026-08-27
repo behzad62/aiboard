@@ -110,6 +110,7 @@ export class TaskScheduler {
     try {
       let projection = this.projection();
       if (projection.status !== "running") return;
+      if (hasPendingUserGuidance(projection)) return;
       if (
         projection.acceptanceContractStatus ===
         "acceptance_contract_upgrade_required"
@@ -125,6 +126,8 @@ export class TaskScheduler {
           const allocation = task.workspacePath
             ? { path: task.workspacePath }
             : normalizeWorkspace(await this.workspaceFor(task, task.attempt));
+          projection = this.projection();
+          if (hasPendingUserGuidance(projection)) return;
           const workspacePath = allocation.path;
           if (task.status === "assigned") {
             this.transition(task.id, "running", task.attempt, {
@@ -155,6 +158,8 @@ export class TaskScheduler {
         const allocation = normalizeWorkspace(
           await this.workspaceFor(task, attempt)
         );
+        projection = this.projection();
+        if (hasPendingUserGuidance(projection)) return;
         const workspacePath = allocation.path;
         const workerId = `worker_${taskId}_${attempt}`;
         this.transition(taskId, "assigned", attempt, {
@@ -311,4 +316,10 @@ function workspacePatch(
       ? { workspaceBaselineRevision: allocation.baselineRevision }
       : {}),
   };
+}
+
+function hasPendingUserGuidance(projection: SchedulerProjection): boolean {
+  return Object.values(projection.userGuidance).some(
+    (guidance) => guidance.status === "submitted"
+  );
 }

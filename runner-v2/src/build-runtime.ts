@@ -409,6 +409,17 @@ export class BuildRuntime {
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
     if (projection.status === "paused") return { status: "paused" };
+    if (projection.planRevision > 0) {
+      const pendingGuidance = firstPendingUserGuidance(projection);
+      if (pendingGuidance) {
+        await this.runArchitect({
+          type: "user_guidance_required",
+          guidanceId: pendingGuidance.guidanceId,
+          version: pendingGuidance.version,
+        }, projection);
+        return this.afterArchitect("user_guidance_required");
+      }
+    }
     if (
       projection.acceptanceContractStatus ===
       "acceptance_contract_upgrade_required"
@@ -444,16 +455,6 @@ export class BuildRuntime {
     if (projection.planRevision === 0) {
       await this.runArchitect({ type: "plan_required" }, projection);
       return this.afterArchitect("plan_required");
-    }
-
-    const pendingGuidance = firstPendingUserGuidance(projection);
-    if (pendingGuidance) {
-      await this.runArchitect({
-        type: "user_guidance_required",
-        guidanceId: pendingGuidance.guidanceId,
-        version: pendingGuidance.version,
-      }, projection);
-      return this.afterArchitect("user_guidance_required");
     }
 
     const openGuidance = Object.values(projection.guidance)
@@ -1081,7 +1082,7 @@ export class BuildRuntime {
         runId: this.runId,
         sessionId: `architect:${this.runId}`,
         actor: { role: "architect", id: this.architectId },
-        signal: this.activeLifecycleSignal(),
+        signal: this.activeLifecycleSignal(true),
       },
     });
     const sequenceAfter = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
@@ -1092,10 +1093,12 @@ export class BuildRuntime {
     }
   }
 
-  private activeLifecycleSignal(): AbortSignal {
+  private activeLifecycleSignal(allowPendingGuidanceReset = false): AbortSignal {
+    const projection = this.projection();
     if (
       this.lifecycleController.signal.aborted &&
-      this.projection().status === "running"
+      projection.status === "running" &&
+      (allowPendingGuidanceReset || !firstPendingUserGuidance(projection))
     ) {
       this.lifecycleController = new AbortController();
     }

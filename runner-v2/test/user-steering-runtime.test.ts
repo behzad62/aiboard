@@ -139,6 +139,8 @@ test("guidance appended during an active worker aborts first and suppresses stal
   const root = mkdtempSync(join(tmpdir(), "aiboard-steering-worker-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
   let assignment: WorkerAssignment | undefined;
+  let resumedAssignment: WorkerAssignment | undefined;
+  let workerCalls = 0;
   let resolveWorker!: (outcome: WorkerOutcome) => void;
   let workerStarted!: () => void;
   let guidanceDurableWhenAborted = false;
@@ -151,6 +153,11 @@ test("guidance appended during an active worker aborts first and suppresses stal
       store,
       workerDriver: {
         run: async (input) => {
+          workerCalls += 1;
+          if (workerCalls > 1) {
+            resumedAssignment = input;
+            return { type: "failed", reason: "resume probe complete" };
+          }
           assignment = input;
           input.signal?.addEventListener("abort", () => {
             guidanceDurableWhenAborted = store.readRun(RUN_ID).some(
@@ -166,7 +173,7 @@ test("guidance appended during an active worker aborts first and suppresses stal
         run: async (request) => {
           architectReasons.push(request.reason.type);
           assert.equal(request.reason.type, "user_guidance_required");
-          acknowledge(store, "guidance-worker", 1);
+          acknowledge(store, request.reason.guidanceId, request.reason.version);
         },
       },
       integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
@@ -186,6 +193,12 @@ test("guidance appended during an active worker aborts first and suppresses stal
     assert.equal(assignment?.signal?.aborted, true, "guidance is durable before cancellation is observed");
     assert.equal(guidanceDurableWhenAborted, true);
     assert.equal(runtime.projection().userGuidance["guidance-worker"].status, "submitted");
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-worker-second",
+      text: "Also preserve the existing public API.",
+      version: 2,
+      idempotencyKey: "guidance:worker:second",
+    });
     resolveWorker({ type: "submitted", changeSetId: "stale-change-set" });
     assert.equal((await activeStep).action, "workers_advanced");
 
@@ -195,7 +208,145 @@ test("guidance appended during an active worker aborts first and suppresses stal
     assert.equal(afterWorker.tasks["task-a"].attempt, 1);
     assert.equal(afterWorker.tasks["task-a"].changeSetId, undefined);
     assert.equal((await runtime.step()).action, "user_guidance_required");
-    assert.deepEqual(architectReasons, ["user_guidance_required"]);
+    assert.equal(runtime.projection().userGuidance["guidance-worker-second"].status, "submitted");
+    assert.equal((await runtime.step()).action, "user_guidance_required");
+    assert.deepEqual(architectReasons, ["user_guidance_required", "user_guidance_required"]);
+    assert.equal((await runtime.step()).action, "workers_advanced");
+    assert.equal(workerCalls, 2);
+    assert.equal(resumedAssignment?.attempt, 1);
+    assert.equal(resumedAssignment?.task.objective, "Implement task-a");
+    assert.equal(runtime.projection().tasks["task-a"].attempt, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("guidance arriving during workspace allocation prevents old-intent dispatch and recovers before the same attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-steering-allocation-window-"));
+  const database = join(root, "scheduler.sqlite");
+  let store: SqliteSchedulerStore | undefined = new SqliteSchedulerStore(database);
+  let allocationStarted!: () => void;
+  let releaseAllocation!: () => void;
+  const started = new Promise<void>((resolve) => { allocationStarted = resolve; });
+  const release = new Promise<void>((resolve) => { releaseAllocation = resolve; });
+  let workerCalls = 0;
+  try {
+    seedPlan(store, [task("task-a", "planned")]);
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      store,
+      workerDriver: {
+        run: async () => {
+          workerCalls += 1;
+          return { type: "paused", reason: "stale worker must not start" };
+        },
+      },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => {
+        allocationStarted();
+        await release;
+        return "C:/work/task-a";
+      },
+      clock: CLOCK,
+    });
+    const allocatingStep = runtime.step();
+    await started;
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-allocation",
+      text: "Change direction before this worker starts.",
+      version: 1,
+      idempotencyKey: "guidance:allocation",
+    });
+    releaseAllocation();
+    assert.equal((await allocatingStep).action, "workers_advanced");
+    assert.equal(workerCalls, 0);
+    assert.equal(runtime.projection().status, "running");
+    assert.equal(runtime.projection().tasks["task-a"].status, "planned");
+    assert.equal(runtime.projection().tasks["task-a"].attempt, 0);
+    store.close();
+    store = undefined;
+
+    const recoveredStore = new SqliteSchedulerStore(database);
+    try {
+      const recovered = new BuildRuntime({
+        runId: RUN_ID,
+        store: recoveredStore,
+        workerDriver: {
+          run: async () => {
+            workerCalls += 1;
+            return { type: "paused", reason: "guidance was not prioritized" };
+          },
+        },
+        architectDriver: {
+          run: async (request) => {
+            assert.equal(request.reason.type, "user_guidance_required");
+            acknowledge(recoveredStore, "guidance-allocation", 1);
+          },
+        },
+        integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+        maxConcurrency: 1,
+        workspaceFor: async () => "C:/work/task-a",
+        clock: CLOCK,
+      });
+      assert.equal((await recovered.step()).action, "user_guidance_required");
+      assert.equal(workerCalls, 0);
+      assert.equal(recovered.projection().tasks["task-a"].attempt, 0);
+    } finally {
+      recoveredStore.close();
+    }
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pending guidance preempts a legacy acceptance-contract upgrade without deadlocking", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-steering-legacy-upgrade-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append({
+      runId: RUN_ID,
+      type: "plan.created",
+      occurredAt: CLOCK(),
+      actor: { role: "architect", id: "legacy-architect" },
+      idempotencyKey: "legacy-plan",
+      payload: { revision: 1, tasks: [{
+        id: "legacy-task",
+        objective: "Recover the legacy task.",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        status: "planned",
+        attempt: 0,
+      }] },
+    });
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          assert.equal(request.reason.type, "user_guidance_required");
+          acknowledge(store, "guidance-legacy", 1);
+        },
+      },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+      clock: CLOCK,
+    });
+    runtime.submitUserGuidance({
+      guidanceId: "guidance-legacy",
+      text: "Apply this before upgrading the legacy acceptance contract.",
+      version: 1,
+      idempotencyKey: "guidance:legacy",
+    });
+    assert.equal((await runtime.step()).action, "user_guidance_required");
+    assert.equal(runtime.projection().userGuidance["guidance-legacy"].status, "acknowledged");
+    assert.equal(runtime.events().some((event) => event.type === "acceptance_contract.upgrade_required"), false);
+    assert.equal(runtime.projection().acceptanceContractStatus, "acceptance_contract_upgrade_required");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -336,6 +487,54 @@ test("the scheduler authority boundary blocks stale review, integration, complet
       idempotencyKey: "stale:worker-submission",
       payload: { taskId: "task-a", status: "submitted", patch: { changeSetId: "stale" } },
     }), /stale worker submission|user guidance/i);
+
+    for (const [type, actor, payload] of [
+      ["guidance.requested", { role: "worker", id: "stale-worker" }, {
+        requestId: "stale-guidance",
+        taskId: "task-a",
+        blocking: false,
+        question: "Should stale work continue?",
+        evidenceSequence: 1,
+      }],
+      ["task.transitioned", { role: "runner", id: "scheduler" }, {
+        taskId: "task-a",
+        status: "assigned",
+        patch: { assignedWorkerId: "stale-worker", workspacePath: "C:/stale" },
+      }],
+      ["task.transitioned", { role: "runner", id: "scheduler" }, {
+        taskId: "task-a",
+        status: "failed",
+        patch: { failureReason: "stale worker failure" },
+      }],
+      ["final_verification.generation_created", { role: "runner", id: "final-verification" }, {
+        generationId: "stale-generation",
+        targetRevision: "stale-revision",
+      }],
+      ["final_verification.check_completed", { role: "runner", id: "final-verification" }, {
+        generationId: "stale-generation",
+        category: "tests",
+        status: "passed",
+      }],
+    ] as const) {
+      assert.throws(() => store.append({
+        runId: RUN_ID,
+        type,
+        occurredAt: CLOCK(),
+        actor,
+        idempotencyKey: `stale:${type}:${JSON.stringify(payload)}`,
+        payload,
+      }), /user guidance/i);
+    }
+
+    assert.doesNotThrow(() => store.append({
+      runId: RUN_ID,
+      type: "architect.runtime_assigned",
+      occurredAt: CLOCK(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "recovery:architect-runtime",
+      payload: { runtimeId: "architect-runtime-recovery" },
+    }));
+    assert.equal(store.readRun(RUN_ID).at(-1)?.type, "architect.runtime_assigned");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

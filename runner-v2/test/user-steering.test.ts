@@ -136,6 +136,133 @@ test("P3.1 plan-reconciled acknowledgement atomically changes the plan and survi
   });
 });
 
+test("steering acknowledgement can revise or cancel interrupted running attempts atomically", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:running", {
+      revision: 1,
+      tasks: ["revise", "cancel"].map((suffix) => ({
+        id: `task-${suffix}`,
+        objective: `Implement ${suffix}.`,
+        dependencies: [],
+        status: "running",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: `${suffix} is complete.` }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 2,
+        assignedWorkerId: `worker-${suffix}`,
+        workspacePath: `C:/work/${suffix}`,
+        changeSetId: `stale-${suffix}`,
+        criterionEvidenceLinks: [{ criterionId: "done", evidenceIds: ["stale-evidence"], artifactHashes: ["stale-hash"] }],
+        failureReason: "stale failure",
+      })),
+    });
+    append(store, "worker.runtime_assigned", { role: "runner", id: "runtime-router" }, "runtime:revise", {
+      taskId: "task-revise", attempt: 2, runtimeId: "stale-runtime", sessionId: "stale-session",
+    });
+    append(store, "user.guidance_submitted", USER, "guidance:running", {
+      guidanceId: "guidance-running", text: "Revise one active task and cancel the other.", version: 1,
+    });
+
+    append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:running:ack", {
+      guidanceId: "guidance-running",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "The interrupted work must follow the revised direction.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Revise and cancel interrupted work.",
+          taskUpdates: [
+            { taskId: "task-revise", action: "revise", objective: "Implement the revised active task.", requiredCapabilities: ["code", "browser"] },
+            { taskId: "task-cancel", action: "cancel" },
+          ],
+        },
+      },
+    });
+
+    const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    const revised = projection.tasks["task-revise"];
+    assert.equal(revised.status, "running");
+    assert.equal(revised.attempt, 2);
+    assert.equal(revised.objective, "Implement the revised active task.");
+    assert.equal(revised.workspacePath, "C:/work/revise");
+    assert.equal(revised.assignedWorkerId, undefined);
+    assert.equal(revised.changeSetId, undefined);
+    assert.equal(revised.criterionEvidenceLinks, undefined);
+    assert.equal(revised.failureReason, undefined);
+    assert.equal(projection.runtime.workerAssignments["task-revise:2"], undefined);
+    assert.equal(projection.tasks["task-cancel"].status, "cancelled");
+    assert.equal(projection.tasks["task-cancel"].attempt, 2);
+  });
+});
+
+test("generic plan reconciliation cannot revise a running task outside steering acknowledgement", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    append(store, "plan.created", ARCHITECT, "plan:running", {
+      revision: 1,
+      tasks: [{
+        id: "task-running",
+        objective: "Implement the active task.",
+        dependencies: [],
+        status: "running",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The active task is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+        assignedWorkerId: "worker-running",
+        workspacePath: "C:/work/running",
+      }, {
+        id: "task-unfinished-dependency",
+        objective: "Implement a future dependency.",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The future dependency is complete." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 0,
+      }],
+    });
+    assert.throws(() => append(store, "plan.reconciled", ARCHITECT, "plan:generic-running", {
+      revision: 2,
+      summary: "Attempt an unauthorized active revision.",
+      taskUpdates: [{ taskId: "task-running", action: "revise", objective: "Changed active objective." }],
+    }), /planned, failed, or rejected/i);
+
+    append(store, "user.guidance_submitted", USER, "guidance:active-immutability", {
+      guidanceId: "guidance-active-immutability", text: "Revise the active task safely.", version: 1,
+    });
+    assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:active:criteria", {
+      guidanceId: "guidance-active-immutability",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "Attempt to replace active criteria.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Replace active criteria.",
+          taskUpdates: [{ taskId: "task-running", action: "revise", acceptanceCriteria: [{ id: "new", text: "New criterion." }] }],
+        },
+      },
+    }), /criteria are immutable/i);
+    assert.throws(() => append(store, "user.guidance_acknowledged", ARCHITECT, "guidance:active:dependency", {
+      guidanceId: "guidance-active-immutability",
+      expectedVersion: 1,
+      resolution: {
+        type: "plan_reconciled",
+        rationale: "Attempt to add an unfinished dependency.",
+        planReconciliation: {
+          revision: 2,
+          summary: "Add an unfinished dependency.",
+          taskUpdates: [{ taskId: "task-running", action: "revise", dependencies: ["task-unfinished-dependency"] }],
+        },
+      },
+    }), /cannot add unfinished dependency/i);
+    assert.equal(rebuildSchedulerProjection(store.readRun(RUN_ID)).userGuidance["guidance-active-immutability"].status, "submitted");
+  });
+});
+
 test("P3.1 invalid reconciliation and whitespace-only steering fields roll back atomically", () => {
   withStore((store) => {
     initialize(store, "Build the requested application.");

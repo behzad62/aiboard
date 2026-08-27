@@ -378,6 +378,45 @@ export interface SchedulerStore {
   close(): void;
 }
 
+export function assertPendingUserGuidanceAllowsEvent(
+  current: SchedulerProjection,
+  event: Pick<SchedulerEvent, "type" | "payload">
+): void {
+  const hasPendingUserGuidance = Object.values(current.userGuidance).some(
+    (guidance) => guidance.status === "submitted"
+  );
+  if (!hasPendingUserGuidance) return;
+
+  const taskStatus = event.type === "task.transitioned"
+    ? event.payload.status
+    : undefined;
+  const allowed =
+    event.type === "user.guidance_submitted" ||
+    event.type === "user.guidance_acknowledged" ||
+    event.type === "architect.question_requested" ||
+    event.type === "architect.question_answered" ||
+    event.type === "run.paused" ||
+    event.type === "run.resumed" ||
+    event.type === "provider.retry_scheduled" ||
+    event.type === "provider.health_changed" ||
+    event.type === "architect.runtime_assigned" ||
+    event.type === "architect.handoff_required" ||
+    event.type === "architect.handoff_selected" ||
+    event.type === "acceptance_contract.upgrade_required" ||
+    event.type === "integration.revision_advanced" ||
+    event.type === "final_verification.cleanup_started" ||
+    event.type === "final_verification.cleanup_succeeded" ||
+    event.type === "final_verification.cleanup_failed" ||
+    (event.type === "plan.created" && current.planRevision === 0) ||
+    (event.type === "task.transitioned" &&
+      (taskStatus === "integrated" || taskStatus === "integration_resolution"));
+  if (!allowed) {
+    throw new Error(
+      `Pending user guidance must be acknowledged before ${event.type} may advance the run.`
+    );
+  }
+}
+
 export interface BuildCompletionReadiness {
   ready: boolean;
   issues: string[];
@@ -1054,31 +1093,7 @@ export function reduceSchedulerEvent(
   if (event.runId !== current.runId || event.sequence !== current.lastSequence + 1) {
     throw new Error(`Scheduler event ${event.eventId} has invalid run ordering.`);
   }
-  const hasPendingUserGuidance = Object.values(current.userGuidance).some(
-    (guidance) => guidance.status === "submitted"
-  );
-  if (hasPendingUserGuidance) {
-    const initialPlanMayConsumeGuidance =
-      event.type === "plan.created" && current.planRevision === 0;
-    if (
-      event.actor.role === "architect" &&
-      event.type !== "user.guidance_acknowledged" &&
-      event.type !== "architect.question_requested" &&
-      !initialPlanMayConsumeGuidance
-    ) {
-      throw new Error(
-        "Pending user guidance must be acknowledged before other Architect lifecycle progress."
-      );
-    }
-    if (
-      event.type === "task.transitioned" &&
-      event.payload.status === "submitted"
-    ) {
-      throw new Error(
-        "A stale worker submission cannot advance while user guidance is pending."
-      );
-    }
-  }
+  assertPendingUserGuidanceAllowsEvent(current, event);
   const next: SchedulerProjection = {
     ...current,
     tasks: { ...current.tasks },
@@ -1482,7 +1497,9 @@ export function reduceSchedulerEvent(
               evidenceIds: [...acknowledgement.resolution.evidenceIds],
             };
       if (resolution.type === "plan_reconciled") {
-        applyPlanReconciliation(next, resolution.planReconciliation);
+        applyPlanReconciliation(next, resolution.planReconciliation, {
+          allowInterruptedRunningTasks: true,
+        });
       }
       next.userGuidance[guidance.guidanceId] = {
         ...guidance,
@@ -2998,7 +3015,8 @@ function parseAcceptanceCriteria(
 
 function applyPlanReconciliation(
   projection: SchedulerProjection,
-  reconciliation: PlanReconciliation
+  reconciliation: PlanReconciliation,
+  options: { allowInterruptedRunningTasks?: boolean } = {}
 ): void {
   if (reconciliation.revision !== projection.planRevision + 1) {
     throw new Error(
@@ -3016,20 +3034,34 @@ function applyPlanReconciliation(
   const candidateTasks = Object.fromEntries(
     Object.entries(projection.tasks).map(([taskId, task]) => [taskId, cloneBuildTask(task)])
   );
+  const interruptedTaskIds = new Set<string>();
+  const runtimeAssignmentKeysToClear = new Set<string>();
   for (const update of reconciliation.taskUpdates) {
     const task = candidateTasks[update.taskId];
     if (!task) throw new Error(`Unknown task ${update.taskId}.`);
     if (isFinalVerificationTask(task)) {
       throw new Error("Kernel-owned final verification task cannot be reconciled.");
     }
+    const interruptedRunningTask =
+      options.allowInterruptedRunningTasks === true && task.status === "running";
     if (
       task.status !== "planned" &&
       task.status !== "failed" &&
-      task.status !== "rejected"
+      task.status !== "rejected" &&
+      !interruptedRunningTask
     ) {
       throw new Error(
         `Task ${update.taskId} must be planned, failed, or rejected before reconciliation.`
       );
+    }
+    if (interruptedRunningTask && update.acceptanceCriteria !== undefined) {
+      throw new Error(
+        `Task ${update.taskId} acceptance criteria are immutable during its active attempt.`
+      );
+    }
+    if (interruptedRunningTask) {
+      interruptedTaskIds.add(update.taskId);
+      runtimeAssignmentKeysToClear.add(`${update.taskId}:${task.attempt}`);
     }
     if (update.action === "cancel") {
       if (
@@ -3041,11 +3073,15 @@ function applyPlanReconciliation(
           "A current-generation verification repair cannot be cancelled during reconciliation.",
         );
       }
-      candidateTasks[update.taskId] = applyTaskTransition(task, "cancelled", {
-        assignedWorkerId: undefined,
-        changeSetId: undefined,
-        failureReason: undefined,
-      });
+      candidateTasks[update.taskId] = {
+        ...applyTaskTransition(task, "cancelled", {
+          assignedWorkerId: undefined,
+          changeSetId: undefined,
+          guidanceRequestId: undefined,
+          failureReason: undefined,
+        }),
+        criterionEvidenceLinks: undefined,
+      };
       continue;
     }
     if (
@@ -3072,7 +3108,18 @@ function applyPlanReconciliation(
       task.status === "failed" ||
       task.status === "rejected" ||
       (task.status === "planned" && task.attempt > 0);
-    candidateTasks[update.taskId] = grantsFreshAttempt
+    candidateTasks[update.taskId] = interruptedRunningTask
+      ? {
+          ...task,
+          ...patch,
+          status: "running",
+          assignedWorkerId: undefined,
+          changeSetId: undefined,
+          criterionEvidenceLinks: undefined,
+          guidanceRequestId: undefined,
+          failureReason: undefined,
+        }
+      : grantsFreshAttempt
       ? {
           ...task,
           ...patch,
@@ -3096,6 +3143,18 @@ function applyPlanReconciliation(
   }
 
   const tasks = Object.values(candidateTasks);
+  for (const taskId of interruptedTaskIds) {
+    const task = candidateTasks[taskId];
+    if (task.status !== "running") continue;
+    const unfinishedDependency = task.dependencies.find(
+      (dependency) => candidateTasks[dependency]?.status !== "integrated"
+    );
+    if (unfinishedDependency) {
+      throw new Error(
+        `Interrupted running task ${taskId} cannot add unfinished dependency ${unfinishedDependency}.`
+      );
+    }
+  }
   const validation = validateTaskGraph(tasks);
   if (!validation.valid) {
     throw new Error(
@@ -3117,6 +3176,9 @@ function applyPlanReconciliation(
   }
 
   projection.tasks = candidateTasks;
+  for (const assignmentKey of runtimeAssignmentKeysToClear) {
+    delete projection.runtime.workerAssignments[assignmentKey];
+  }
   projection.planRevision = reconciliation.revision;
   if (projection.acceptanceContractStatus !== "legacy_completed") {
     projection.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
