@@ -1,139 +1,1645 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";
-import type { BoundedOutputSpoolResult, OutputStream } from "./bounded-output-spool.js";
+import type {
+  BoundedOutputSpoolResult,
+  OutputStream,
+} from "./bounded-output-spool.js";
 import type { ChildEnvironmentFactory } from "./child-environment.js";
-import { parseExecutionInvocationIntent, parseProcessOutputDisposition, type ExactPathAccess, type ExecutionInvocationIntent, type GenericProcessResult, type ProcessCleanupStatus, type ProcessOutputDisposition } from "./execution-safety-contracts.js";
-import { getDurableProcessRuntimeWriter, semanticRequestFingerprint, type DurableBackendBinding, type DurableEnvironmentAudit, type DurableProcessRuntimeWriter, type DurableProcessStore, type DurableProcessStoreKernel, type DurableSubprocessRecord, type DurableSubprocessResult } from "./durable-process-store.js";
-import { assertProcessBackendRegistryAuthority, parseProcessEmptyVerification, parseProcessLaunchResult, parseProcessObservation, parseProcessReconciliation, parseProcessReleaseResult, parseProcessSignalResult, reattestProcessBackend, selectProcessBackend, type ConsumedExecutionGrant, type ProcessBackendBinding, type ProcessBackendRegistry, type SelectedProcessBackend } from "./process-backend.js";
+import {
+  parseExecutionInvocationIntent,
+  parseProcessOutputDisposition,
+  type ExactPathAccess,
+  type ExecutionInvocationIntent,
+  type GenericProcessResult,
+  type ProcessCleanupStatus,
+  type ProcessOutputDisposition,
+} from "./execution-safety-contracts.js";
+import {
+  createInMemoryDurableProcessKernel,
+  openSqliteDurableProcessKernel,
+  semanticRequestFingerprint,
+  type DurableBackendBinding,
+  type DurableEnvironmentAudit,
+  type DurableProcessRuntimeWriter,
+  type DurableProcessStore,
+  type DurableProcessStoreKernel,
+  type DurableSubprocessRecord,
+  type DurableSubprocessResult,
+} from "./durable-process-store.js";
+import {
+  adoptProcessBackendAfterRestart,
+  assertProcessBackendRegistryAuthority,
+  parseProcessEmptyVerification,
+  parseProcessLaunchResult,
+  parseProcessObservation,
+  parseProcessReconciliation,
+  parseProcessReleaseResult,
+  parseProcessSignalResult,
+  reattestProcessBackend,
+  selectProcessBackend,
+  type ConsumedExecutionGrant,
+  type ProcessBackendBinding,
+  type ProcessBackendRegistry,
+  type SelectedProcessBackend,
+} from "./process-backend.js";
 
-export type SubprocessRuntimeErrorCode = "launch_not_proven"|"orphaned"|"identity_mismatch"|"backend_unavailable"|"outcome_unknown"|"cleanup_blocked";
-export class SubprocessRuntimeError extends Error { constructor(readonly code:SubprocessRuntimeErrorCode,message:string,options?:ErrorOptions){super(message,options);this.name="SubprocessRuntimeError";} }
-export interface RunnerPrivateExecutionGrantAuthority { bindingDigest(grantId:string):string; consume(grantId:string):unknown }
-export interface SubprocessRuntimeClock { now():Date; sleep(milliseconds:number):Promise<void> }
-export interface ProcessOutputSession { readonly ownerId:string; write(stream:OutputStream,bytes:Uint8Array):Promise<void>; finalize():Promise<BoundedOutputSpoolResult>; cleanup():Promise<void> }
-export interface ProcessOutputFactory { prepare(ownerId:string):Promise<ProcessOutputSession>; reopen(ownerId:string):Promise<ProcessOutputSession> }
-export interface SubprocessRuntimeKernelOptions { readonly registry:ProcessBackendRegistry; readonly storeKernel:DurableProcessStoreKernel; readonly stateKey:Uint8Array; readonly grants:RunnerPrivateExecutionGrantAuthority; readonly clock:SubprocessRuntimeClock; readonly environments:ChildEnvironmentFactory; readonly outputs:ProcessOutputFactory; readonly createLogicalProcessId?:(invocationId:string)=>string; readonly escalationGraceMs?:readonly [number,number] }
-export interface SubprocessInvocation { readonly intent:ExecutionInvocationIntent; readonly grantId:string; readonly ambientEnvironment:Readonly<Record<string,string|undefined>>; readonly explicitEnvironment?:Readonly<Record<string,string|undefined>>; readonly credentialGrantId?:string; readonly signal?:AbortSignal; readonly deadline?:Date }
-export interface ReconciliationOutcome { readonly invocationId:string; readonly state:string }
+export type SubprocessRuntimeErrorCode =
+  | "launch_not_proven"
+  | "orphaned"
+  | "identity_mismatch"
+  | "backend_unavailable"
+  | "outcome_unknown"
+  | "cleanup_blocked";
+export class SubprocessRuntimeError extends Error {
+  constructor(
+    readonly code: SubprocessRuntimeErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "SubprocessRuntimeError";
+  }
+}
+export interface ExecutionGrantController {
+  issue(value: unknown): void;
+  revoke(grantId: string): boolean;
+}
+export interface SubprocessRuntimeClock {
+  now(): Date;
+  sleep(milliseconds: number): Promise<void>;
+}
+export interface ProcessOutputSession {
+  readonly ownerId: string;
+  write(stream: OutputStream, bytes: Uint8Array): Promise<void>;
+  finalize(): Promise<BoundedOutputSpoolResult>;
+  cleanup(): Promise<void>;
+}
+export interface ProcessOutputFactory {
+  prepare(ownerId: string): Promise<ProcessOutputSession>;
+  reopen(ownerId: string): Promise<ProcessOutputSession>;
+}
+export interface SubprocessRuntimeKernelOptions {
+  readonly registry: ProcessBackendRegistry;
+  readonly state:
+    | { readonly kind: "memory" }
+    | { readonly kind: "sqlite"; readonly path: string };
+  readonly stateKey: Uint8Array;
+  readonly clock: SubprocessRuntimeClock;
+  readonly environments: ChildEnvironmentFactory;
+  readonly outputs: ProcessOutputFactory;
+  readonly createLogicalProcessId?: (invocationId: string) => string;
+  readonly escalationGraceMs?: readonly [number, number];
+}
+export interface SubprocessRuntimeKernel {
+  readonly runtime: SubprocessRuntime;
+  readonly grantsController: ExecutionGrantController;
+  readonly readOnlyStore: DurableProcessStore;
+}
+class GrantVault {
+  private readonly values = new Map<string, ConsumedExecutionGrant>();
+  private readonly digests = new Map<string, string>();
+  constructor(private readonly key: Uint8Array) {}
+  issue(value: unknown): void {
+    const grant = parseGrant(value);
+    if (this.values.has(grant.grantId))
+      throw new Error("Execution grant already exists.");
+    this.values.set(grant.grantId, grant);
+    this.digests.set(
+      grant.grantId,
+      createHmac("sha256", this.key).update(canonicalJson(grant)).digest("hex"),
+    );
+  }
+  revoke(id: string): boolean {
+    const safe = safeText(id, "grantId");
+    const active = this.values.delete(safe);
+    if (active) this.digests.delete(safe);
+    return active;
+  }
+  bindingDigest(id: string): string {
+    const digest = this.digests.get(id);
+    if (!digest) throw new Error("Execution grant is invalid.");
+    return digest;
+  }
+  consume(id: string): unknown {
+    const value = this.values.get(id);
+    if (!value) throw new Error("Execution grant is invalid.");
+    this.values.delete(id);
+    return value;
+  }
+}
+export interface SubprocessInvocation {
+  readonly intent: ExecutionInvocationIntent;
+  readonly grantId: string;
+  readonly ambientEnvironment: Readonly<Record<string, string | undefined>>;
+  readonly explicitEnvironment?: Readonly<Record<string, string | undefined>>;
+  readonly credentialGrantId?: string;
+  readonly signal?: AbortSignal;
+  readonly deadline?: Date;
+}
+export interface ReconciliationOutcome {
+  readonly invocationId: string;
+  readonly state: string;
+}
 
-type SnapshotInvocation=SubprocessInvocation;
-interface StopTrigger { readonly reason:"cancelled"|"timed_out" }
-export interface SubprocessRuntime { invoke(value:SubprocessInvocation):Promise<GenericProcessResult>; cancel(invocationId:string):Promise<boolean>; reconcileStartup():Promise<ReconciliationOutcome[]> }
-interface InternalRuntimeOptions { readonly registry:ProcessBackendRegistry; readonly storeKernel:DurableProcessStoreKernel; readonly store:DurableProcessStore; readonly stateKey:Uint8Array; readonly grants:RunnerPrivateExecutionGrantAuthority; readonly clock:SubprocessRuntimeClock; readonly environments:ChildEnvironmentFactory; readonly outputs:ProcessOutputFactory; readonly createLogicalProcessId?:(id:string)=>string; readonly escalationGraceMs?:readonly[number,number] }
+type SnapshotInvocation = SubprocessInvocation;
+interface StopTrigger {
+  readonly reason: "cancelled" | "timed_out";
+}
+export interface SubprocessRuntime {
+  invoke(value: SubprocessInvocation): Promise<GenericProcessResult>;
+  cancel(invocationId: string): Promise<boolean>;
+  reconcileStartup(): Promise<ReconciliationOutcome[]>;
+}
+interface InternalRuntimeOptions {
+  readonly registry: ProcessBackendRegistry;
+  readonly writer: DurableProcessRuntimeWriter;
+  readonly store: DurableProcessStore;
+  readonly stateKey: Uint8Array;
+  readonly grants: GrantVault;
+  readonly clock: SubprocessRuntimeClock;
+  readonly environments: ChildEnvironmentFactory;
+  readonly outputs: ProcessOutputFactory;
+  readonly createLogicalProcessId?: (id: string) => string;
+  readonly escalationGraceMs?: readonly [number, number];
+}
 
 class RunnerSubprocessRuntime implements SubprocessRuntime {
-  private readonly writer:DurableProcessRuntimeWriter; private readonly termination=new Map<string,Promise<void>>(); private readonly createId:(invocationId:string)=>string; private readonly grace:readonly[number,number];
-  constructor(private readonly options:InternalRuntimeOptions){this.writer=getDurableProcessRuntimeWriter(options.storeKernel);this.createId=options.createLogicalProcessId??((id)=>`proc_${id}_${randomUUID()}`);this.grace=options.escalationGraceMs??[250,1000];}
-
-  invoke(value:SubprocessInvocation):Promise<GenericProcessResult>{
-    let request:SnapshotInvocation;try{request=snapshotInvocation(value);}catch(error){return Promise.reject(error);}
-    let grantBindingDigest:string;try{grantBindingDigest=digestText(this.options.grants.bindingDigest(request.grantId));}catch{return Promise.reject(new Error("Execution grant is invalid."));}
-    const requestFingerprint=semanticRequestFingerprint(this.options.stateKey,{intent:request.intent,ambientEnvironment:request.ambientEnvironment,...(request.explicitEnvironment?{explicitEnvironment:request.explicitEnvironment}:{}),...(request.credentialGrantId?{credentialGrantId:request.credentialGrantId}:{}),grantId:request.grantId,grantBindingDigest,...(request.deadline?{deadline:request.deadline.toISOString()}:{}),signalInitiallyAborted:request.signal?.aborted??false});
-    const logicalProcessId=this.createId(request.intent.invocationId);const outputOwnerId=safeOwnerId(`output-${logicalProcessId}`);const ownerId=safeOwnerId(`owner-${randomUUID()}`);let claim;try{claim=this.writer.claim({schemaVersion:2,revision:0,logicalProcessId,invocationId:request.intent.invocationId,runId:request.intent.runId,...(request.intent.taskId?{taskId:request.intent.taskId}:{}),...(request.intent.sessionId?{sessionId:request.intent.sessionId}:{}),requestFingerprint,retryKey:requestFingerprint,ownerId,leaseExpiresAt:new Date(this.options.clock.now().getTime()+300_000).toISOString(),outputOwnerId,outputPrepared:false,state:"prepared",history:[{state:"prepared",at:this.now()}],requiredCapabilities:[...request.intent.requestedCapabilities],environmentAudit:{inheritedNames:[],removedNames:[],explicitSafeNames:[],grantedNames:[]},escalation:[],cleanup:{state:"pending"}});}catch(error){return Promise.reject(error);}
-    if(!claim.won){if(claim.record.result)return Promise.resolve(resultFromRecord(claim.record));return this.observeExisting(claim.record.invocationId);}
-    return this.runClaimed(request,claim.record);
+  private readonly writer: DurableProcessRuntimeWriter;
+  private readonly termination = new Map<string, Promise<void>>();
+  private readonly createId: (invocationId: string) => string;
+  private readonly grace: readonly [number, number];
+  private readonly ownerId = safeOwnerId(`owner-${randomUUID()}`);
+  private readonly leaseMs = 300_000;
+  constructor(private readonly options: InternalRuntimeOptions) {
+    this.writer = options.writer;
+    this.createId =
+      options.createLogicalProcessId ?? ((id) => `proc_${id}_${randomUUID()}`);
+    this.grace = options.escalationGraceMs ?? [250, 1000];
   }
 
-  async cancel(invocationId:string):Promise<boolean>{
-    let record=this.options.store.readByInvocation(invocationId);if(!record||!["prepared","launching","running","stopping","backend_unavailable"].includes(record.state))return false;
-    if(!record.stopIntent)record=this.applyCurrent(record,(revision)=>({type:"request_stop",invocationId,expectedRevision:revision,at:this.now(),reason:"cancelled"}));
-    if(record.state==="prepared"||record.state==="launching")return true;
-    if(!record.backendBinding)return false;
-    try{await this.escalate(record);}catch{return false;}return true;
+  invoke(value: SubprocessInvocation): Promise<GenericProcessResult> {
+    let request: SnapshotInvocation;
+    try {
+      request = snapshotInvocation(value);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    let grantBindingDigest: string;
+    try {
+      grantBindingDigest = digestText(
+        this.options.grants.bindingDigest(request.grantId),
+      );
+    } catch {
+      return Promise.reject(new Error("Execution grant is invalid."));
+    }
+    const requestFingerprint = semanticRequestFingerprint(
+      this.options.stateKey,
+      {
+        intent: request.intent,
+        ambientEnvironment: request.ambientEnvironment,
+        ...(request.explicitEnvironment
+          ? { explicitEnvironment: request.explicitEnvironment }
+          : {}),
+        ...(request.credentialGrantId
+          ? { credentialGrantId: request.credentialGrantId }
+          : {}),
+        grantId: request.grantId,
+        grantBindingDigest,
+        ...(request.deadline
+          ? { deadline: request.deadline.toISOString() }
+          : {}),
+        signalPresent: request.signal !== undefined,
+        signalInitiallyAborted: request.signal?.aborted ?? false,
+      },
+    );
+    const logicalProcessId = this.createId(request.intent.invocationId);
+    const outputOwnerId = safeOwnerId(`output-${logicalProcessId}`);
+    const ownerId = this.ownerId;
+    let claim;
+    try {
+      claim = this.writer.claim({
+        schemaVersion: 2,
+        revision: 0,
+        logicalProcessId,
+        invocationId: request.intent.invocationId,
+        runId: request.intent.runId,
+        ...(request.intent.taskId ? { taskId: request.intent.taskId } : {}),
+        ...(request.intent.sessionId
+          ? { sessionId: request.intent.sessionId }
+          : {}),
+        requestFingerprint,
+        retryKey: requestFingerprint,
+        ownerId,
+        leaseExpiresAt: this.leaseExpiry(),
+        outputOwnerId,
+        outputPrepared: false,
+        state: "prepared",
+        history: [{ state: "prepared", at: this.now() }],
+        requiredCapabilities: [...request.intent.requestedCapabilities],
+        environmentAudit: {
+          inheritedNames: [],
+          removedNames: [],
+          explicitSafeNames: [],
+          grantedNames: [],
+        },
+        escalation: [],
+        cleanup: { state: "pending" },
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (!claim.won) {
+      if (claim.record.result)
+        return Promise.resolve(resultFromRecord(claim.record));
+      return this.observeExisting(claim.record.invocationId);
+    }
+    return this.runClaimed(request, claim.record);
   }
 
-  async reconcileStartup():Promise<ReconciliationOutcome[]>{
-    const outcomes:ReconciliationOutcome[]=[];
-    for(const invocationId of this.options.store.listRowIds()){
-      let snapshot:DurableSubprocessRecord;try{const decoded=this.options.store.readByInvocation(invocationId);if(!decoded)continue;snapshot=decoded;}catch{outcomes.push({invocationId,state:"corrupt"});continue;}
-      if(!["prepared","launching","running","stopping","exited","verifying_empty","backend_unavailable"].includes(snapshot.state))continue;
-      try{await this.reconcileRecord(snapshot);}catch(error){await this.classifyReconciliationFailure(snapshot,error);}
-      let current:DurableSubprocessRecord|undefined;try{current=this.options.store.readByInvocation(snapshot.invocationId);}catch{}outcomes.push({invocationId:snapshot.invocationId,state:current?.state??"corrupt"});
+  async cancel(invocationId: string): Promise<boolean> {
+    let record = this.options.store.readByInvocation(invocationId);
+    if (
+      !record ||
+      ![
+        "prepared",
+        "launching",
+        "running",
+        "stopping",
+        "backend_unavailable",
+      ].includes(record.state)
+    )
+      return false;
+    if (!record.stopIntent)
+      record = this.applyCurrent(record, (revision) => ({
+        type: "request_stop",
+        invocationId,
+        expectedRevision: revision,
+        at: this.now(),
+        reason: "cancelled",
+      }));
+    if (record.state === "prepared" || record.state === "launching")
+      return true;
+    if (!record.backendBinding) return false;
+    try {
+      await this.escalate(record);
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  async reconcileStartup(): Promise<ReconciliationOutcome[]> {
+    const outcomes: ReconciliationOutcome[] = [];
+    for (const invocationId of this.options.store.listRowIds()) {
+      let snapshot: DurableSubprocessRecord;
+      try {
+        const decoded = this.options.store.readByInvocation(invocationId);
+        if (!decoded) continue;
+        snapshot = decoded;
+      } catch {
+        outcomes.push({ invocationId, state: "corrupt" });
+        continue;
+      }
+      if (
+        ![
+          "prepared",
+          "launching",
+          "running",
+          "stopping",
+          "exited",
+          "verifying_empty",
+          "backend_unavailable",
+        ].includes(snapshot.state)
+      )
+        continue;
+      if (
+        snapshot.ownerId !== this.ownerId &&
+        Date.parse(snapshot.leaseExpiresAt) > this.options.clock.now().getTime()
+      ) {
+        outcomes.push({ invocationId, state: "leased" });
+        continue;
+      }
+      try {
+        if (snapshot.ownerId !== this.ownerId)
+          snapshot = this.writer.apply({
+            type: "takeover_lease",
+            invocationId,
+            expectedRevision: snapshot.revision,
+            ownerId: this.ownerId,
+            at: this.now(),
+            leaseExpiresAt: this.leaseExpiry(),
+          });
+        await this.reconcileRecord(snapshot);
+      } catch (error) {
+        await this.classifyReconciliationFailure(snapshot, error);
+      }
+      let current: DurableSubprocessRecord | undefined;
+      try {
+        current = this.options.store.readByInvocation(snapshot.invocationId);
+      } catch {}
+      outcomes.push({
+        invocationId: snapshot.invocationId,
+        state: current?.state ?? "corrupt",
+      });
     }
     return outcomes;
   }
 
-  private async runClaimed(request:SnapshotInvocation,record:DurableSubprocessRecord):Promise<GenericProcessResult>{
-    let output:ProcessOutputSession;try{output=await this.options.outputs.prepare(record.outputOwnerId);}catch{const failed=this.applyFailure(record,"cleanup_blocked","Recoverable output ownership could not be prepared.",{state:"failed",failedAt:this.now(),code:"output_prepare_failed",detail:"Recoverable output ownership could not be prepared."});return resultFromFailure(failed);}
-    let grant:ConsumedExecutionGrant;try{grant=consumeGrant(this.options.grants,request.grantId,request.intent,this.options.clock.now());}catch(error){await output.cleanup().catch(()=>undefined);record=this.current(record.invocationId);this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Execution grant was invalid."});throw error;}
-    let preparedEnvironment;try{preparedEnvironment=this.options.environments.prepare({ambient:request.ambientEnvironment,explicitOverrides:request.explicitEnvironment,runId:request.intent.runId,invocationId:request.intent.invocationId,credentialGrantId:request.credentialGrantId});}catch(error){await output.cleanup().catch(()=>undefined);record=this.current(record.invocationId);this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Child environment preparation failed."});throw error;}
-    const audit:DurableEnvironmentAudit={inheritedNames:[...preparedEnvironment.audit.inheritedNames],removedNames:[...preparedEnvironment.audit.removedNames],explicitSafeNames:[...preparedEnvironment.audit.explicitSafeNames],grantedNames:[...preparedEnvironment.audit.grantedNames]};
-    record=this.current(record.invocationId);record=this.writer.apply({type:"mark_output_prepared",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),environmentAudit:audit});
-    record=this.applyCurrent(record,(revision)=>({type:"mark_launching",invocationId:record.invocationId,expectedRevision:revision,at:this.now()}));
-    let selected:SelectedProcessBackend;try{selected=await selectProcessBackend(this.options.registry,request.intent.requestedCapabilities);}catch(error){await output.cleanup().catch(()=>undefined);this.applyFailure(record,"backend_unavailable","No verified backend satisfies invocation.");throw new SubprocessRuntimeError("backend_unavailable","No verified backend satisfies invocation.",{cause:error});}
-    const stopPromise=this.stopTrigger(request);const launchPromise=this.options.environments.withChildEnvironment(preparedEnvironment.capability,(environment)=>selected.backend.launch({intent:request.intent,grant,environment,outputOwnerId:record.outputOwnerId}));
-    let rawLaunch:unknown;let first:{kind:"launch";value:unknown}|{kind:"stop";stop:StopTrigger};try{first=await Promise.race([Promise.resolve(launchPromise).then((value)=>({kind:"launch" as const,value})),stopPromise.then((stop)=>({kind:"stop" as const,stop}))]);}catch(error){await output.cleanup().catch(()=>undefined);record=this.current(record.invocationId);this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Launch failed before identity was proven."});throw new SubprocessRuntimeError("launch_not_proven","Process launch was not proven.",{cause:error});}
-    if(first.kind==="stop"){record=this.requestStopLatest(record.invocationId,first.stop.reason);try{rawLaunch=await launchPromise;}catch(error){await output.cleanup().catch(()=>undefined);record=this.current(record.invocationId);this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Launch did not return identity."});throw new SubprocessRuntimeError("launch_not_proven","Process launch was not proven.",{cause:error});}}
-    else rawLaunch=first.value;
-    let launch;try{launch=parseProcessLaunchResult(rawLaunch);}catch(error){await output.cleanup().catch(()=>undefined);record=this.current(record.invocationId);this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Malformed launch result."});throw new SubprocessRuntimeError("launch_not_proven","Process launch was not proven.",{cause:error});}
-    const binding:DurableBackendBinding={registryId:selected.registryId,backendId:selected.attestation.backendId,implementationGeneration:selected.implementationGeneration,implementationDigest:selected.implementationDigest,attestationVersion:selected.attestation.attestationVersion,attestationDigest:selected.attestationDigest,...launch};
-    record=this.current(record.invocationId);record=this.writer.apply({type:"bind_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),binding});
-    const observePromise=selected.backend.observe(binding, (stream,bytes)=>output.write(stream,bytes));
+  private async runClaimed(
+    request: SnapshotInvocation,
+    record: DurableSubprocessRecord,
+  ): Promise<GenericProcessResult> {
+    record = this.renew(record);
+    let output: ProcessOutputSession;
     try {
-      if(record.stopIntent){await this.escalate(record);rawLaunch=await observePromise;}
-      else {
-        const race=await Promise.race([Promise.resolve(observePromise).then((value)=>({kind:"observed" as const,value})),stopPromise.then((stop)=>({kind:"stop" as const,stop}))]);
-        if(race.kind==="stop"){record=this.requestStopLatest(record.invocationId,race.stop.reason);await this.escalate(record);rawLaunch=await observePromise;}else rawLaunch=race.value;
+      output = await this.options.outputs.prepare(record.outputOwnerId);
+      record = this.current(record.invocationId);
+      record = this.writer.apply({
+        type: "mark_output_prepared",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+      });
+    } catch (error) {
+      record = this.current(record.invocationId);
+      this.writer.apply({
+        type: "record_output_prepare_failure",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        detail: "Recoverable output ownership could not be prepared.",
+      });
+      throw new SubprocessRuntimeError(
+        "launch_not_proven",
+        "Recoverable output ownership could not be prepared.",
+        { cause: error },
+      );
+    }
+    let grant: ConsumedExecutionGrant;
+    try {
+      grant = consumeGrant(
+        this.options.grants,
+        request.grantId,
+        request.intent,
+        this.options.clock.now(),
+      );
+    } catch (error) {
+      await output.cleanup().catch(() => undefined);
+      record = this.current(record.invocationId);
+      this.writer.apply({
+        type: "fail_launch",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        detail: "Execution grant was invalid.",
+      });
+      throw error;
+    }
+    let preparedEnvironment;
+    try {
+      preparedEnvironment = this.options.environments.prepare({
+        ambient: request.ambientEnvironment,
+        explicitOverrides: request.explicitEnvironment,
+        runId: request.intent.runId,
+        invocationId: request.intent.invocationId,
+        credentialGrantId: request.credentialGrantId,
+      });
+    } catch (error) {
+      await output.cleanup().catch(() => undefined);
+      record = this.current(record.invocationId);
+      this.writer.apply({
+        type: "fail_launch",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        detail: "Child environment preparation failed.",
+      });
+      throw error;
+    }
+    const audit: DurableEnvironmentAudit = {
+      inheritedNames: [...preparedEnvironment.audit.inheritedNames],
+      removedNames: [...preparedEnvironment.audit.removedNames],
+      explicitSafeNames: [...preparedEnvironment.audit.explicitSafeNames],
+      grantedNames: [...preparedEnvironment.audit.grantedNames],
+    };
+    record = this.current(record.invocationId);
+    record = this.writer.apply({
+      type: "record_environment",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      environmentAudit: audit,
+    });
+    record = this.applyCurrent(record, (revision) => ({
+      type: "mark_launching",
+      invocationId: record.invocationId,
+      expectedRevision: revision,
+      at: this.now(),
+    }));
+    let selected: SelectedProcessBackend;
+    try {
+      selected = await selectProcessBackend(
+        this.options.registry,
+        request.intent.requestedCapabilities,
+      );
+    } catch (error) {
+      await output.cleanup().catch(() => undefined);
+      this.applyFailure(
+        record,
+        "backend_unavailable",
+        "No verified backend satisfies invocation.",
+      );
+      throw new SubprocessRuntimeError(
+        "backend_unavailable",
+        "No verified backend satisfies invocation.",
+        { cause: error },
+      );
+    }
+    const stopPromise = this.stopTrigger(request);
+    const launchPromise = this.options.environments.withChildEnvironment(
+      preparedEnvironment.capability,
+      (environment) =>
+        selected.backend.launch(
+          deepFreeze({
+            intent: request.intent,
+            grant,
+            environment: snapshotChildEnvironment(environment),
+            outputOwnerId: record.outputOwnerId,
+          }),
+        ),
+    );
+    let rawLaunch: unknown;
+    let first:
+      { kind: "launch"; value: unknown } | { kind: "stop"; stop: StopTrigger };
+    try {
+      first = await Promise.race([
+        Promise.resolve(launchPromise).then((value) => ({
+          kind: "launch" as const,
+          value,
+        })),
+        stopPromise.then((stop) => ({ kind: "stop" as const, stop })),
+      ]);
+    } catch (error) {
+      await output.cleanup().catch(() => undefined);
+      record = this.current(record.invocationId);
+      this.writer.apply({
+        type: "fail_launch",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        detail: "Launch failed before identity was proven.",
+      });
+      throw new SubprocessRuntimeError(
+        "launch_not_proven",
+        "Process launch was not proven.",
+        { cause: error },
+      );
+    }
+    if (first.kind === "stop") {
+      record = this.requestStopLatest(record.invocationId, first.stop.reason);
+      try {
+        rawLaunch = await launchPromise;
+      } catch (error) {
+        await output.cleanup().catch(() => undefined);
+        record = this.current(record.invocationId);
+        this.writer.apply({
+          type: "fail_launch",
+          invocationId: record.invocationId,
+          expectedRevision: record.revision,
+          at: this.now(),
+          detail: "Launch did not return identity.",
+        });
+        throw new SubprocessRuntimeError(
+          "launch_not_proven",
+          "Process launch was not proven.",
+          { cause: error },
+        );
       }
-    } catch(error) { const current=this.current(record.invocationId);if(["launching","running","stopping","exited","verifying_empty","backend_unavailable"].includes(current.state))this.applyFailure(current,"backend_unavailable","Process observation or termination failed."); throw new SubprocessRuntimeError("backend_unavailable","Process observation or termination failed.",{cause:error}); }
-    let observation;try{observation=parseProcessObservation(rawLaunch);}catch(error){this.applyFailure(this.current(record.invocationId),"backend_unavailable","Malformed process observation.");throw new SubprocessRuntimeError("outcome_unknown","Process observation was malformed.",{cause:error});}
-    record=this.current(record.invocationId);record=this.writer.apply({type:"record_exit",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),observation:{...(observation.exitCode===undefined?{}:{exitCode:observation.exitCode}),...(observation.signal?{signal:observation.signal}:{}),observedAt:this.now()}});
-    return await this.finish(record,output,selected);
+    } else rawLaunch = first.value;
+    let launch;
+    try {
+      launch = parseProcessLaunchResult(rawLaunch);
+    } catch (error) {
+      await output.cleanup().catch(() => undefined);
+      record = this.current(record.invocationId);
+      this.writer.apply({
+        type: "fail_launch",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        detail: "Malformed launch result.",
+      });
+      throw new SubprocessRuntimeError(
+        "launch_not_proven",
+        "Process launch was not proven.",
+        { cause: error },
+      );
+    }
+    const binding: DurableBackendBinding = {
+      registryId: selected.registryId,
+      backendId: selected.attestation.backendId,
+      implementationGeneration: selected.implementationGeneration,
+      implementationDigest: selected.implementationDigest,
+      attestationVersion: selected.attestation.attestationVersion,
+      attestationDigest: selected.attestationDigest,
+      ...launch,
+    };
+    record = this.current(record.invocationId);
+    record = this.writer.apply({
+      type: "bind_launch",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      binding,
+    });
+    const observePromise = selected.backend.observe(binding, (stream, bytes) =>
+      output.write(stream, bytes),
+    );
+    try {
+      if (record.stopIntent) {
+        await this.escalate(record);
+        rawLaunch = await observePromise;
+      } else {
+        const race = await Promise.race([
+          Promise.resolve(observePromise).then((value) => ({
+            kind: "observed" as const,
+            value,
+          })),
+          stopPromise.then((stop) => ({ kind: "stop" as const, stop })),
+        ]);
+        if (race.kind === "stop") {
+          record = this.requestStopLatest(
+            record.invocationId,
+            race.stop.reason,
+          );
+          await this.escalate(record);
+          rawLaunch = await observePromise;
+        } else rawLaunch = race.value;
+      }
+    } catch (error) {
+      const current = this.current(record.invocationId);
+      if (
+        [
+          "launching",
+          "running",
+          "stopping",
+          "exited",
+          "verifying_empty",
+          "backend_unavailable",
+        ].includes(current.state)
+      )
+        this.applyFailure(
+          current,
+          "backend_unavailable",
+          "Process observation or termination failed.",
+        );
+      throw new SubprocessRuntimeError(
+        "backend_unavailable",
+        "Process observation or termination failed.",
+        { cause: error },
+      );
+    }
+    let observation;
+    try {
+      observation = parseProcessObservation(rawLaunch);
+    } catch (error) {
+      this.applyFailure(
+        this.current(record.invocationId),
+        "backend_unavailable",
+        "Malformed process observation.",
+      );
+      throw new SubprocessRuntimeError(
+        "outcome_unknown",
+        "Process observation was malformed.",
+        { cause: error },
+      );
+    }
+    record = this.current(record.invocationId);
+    record = this.writer.apply({
+      type: "record_exit",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      observation: {
+        ...(observation.exitCode === undefined
+          ? {}
+          : { exitCode: observation.exitCode }),
+        ...(observation.signal ? { signal: observation.signal } : {}),
+        observedAt: this.now(),
+      },
+    });
+    return await this.finish(record, output, selected);
   }
 
-  private async finish(record:DurableSubprocessRecord,output:ProcessOutputSession,selected?:SelectedProcessBackend):Promise<GenericProcessResult>{
-    if(record.state==="exited"){let disposition:ProcessOutputDisposition[];try{disposition=outputDisposition(await output.finalize());}catch{await output.cleanup().catch(()=>undefined);const failed=this.applyFailure(record,"cleanup_blocked","Output finalization failed.",{state:"failed",failedAt:this.now(),code:"output_finalize_failed",detail:"Recoverable output could not be finalized."});return resultFromFailure(failed);}record=this.writer.apply({type:"begin_verify",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),output:disposition});}
-    if(record.state!=="verifying_empty")return resultFromFailure(record);
-    const binding=requiredBinding(record);let backend=selected;try{backend=await reattestProcessBackend(this.options.registry,binding);}catch(error){this.applyFailure(record,"backend_unavailable","Backend attestation changed before empty verification.");throw new SubprocessRuntimeError("backend_unavailable","Backend attestation changed.",{cause:error});}
-    let verification;try{verification=parseProcessEmptyVerification(await backend.backend.verifyEmpty(binding));}catch{const failed=this.applyFailure(record,"cleanup_blocked","Malformed empty verification.",{state:"failed",failedAt:this.now(),code:"empty_verification_invalid",detail:"Backend empty verification was invalid."});return resultFromFailure(failed);}
-    const finishedAt=this.now();if(!verification.empty){const failed=this.applyFailure(record,"cleanup_blocked",verification.detail,{state:"failed",failedAt:finishedAt,code:"verified_empty_failed",detail:verification.detail});return resultFromFailure(failed);}
-    try{const fresh=await reattestProcessBackend(this.options.registry,binding);parseProcessReleaseResult(await fresh.backend.release(binding));}catch{const failed=this.applyFailure(record,"cleanup_blocked","Backend release failed.",{state:"failed",failedAt:finishedAt,code:"backend_release_failed",detail:"Backend release was invalid or failed."});return resultFromFailure(failed);}
-    const result=terminalResult(record,finishedAt);const cleanup:ProcessCleanupStatus={state:"verified_empty",verifiedAt:finishedAt,...(verification.proofArtifactId?{proofArtifactId:verification.proofArtifactId}:{})};record=this.writer.apply({type:"complete",invocationId:record.invocationId,expectedRevision:record.revision,at:finishedAt,cleanup,result});return resultFromRecord(record);
+  private async finish(
+    record: DurableSubprocessRecord,
+    output: ProcessOutputSession,
+    selected?: SelectedProcessBackend,
+  ): Promise<GenericProcessResult> {
+    if (record.state === "exited") {
+      let disposition: ProcessOutputDisposition[];
+      try {
+        disposition = outputDisposition(await output.finalize());
+      } catch {
+        await output.cleanup().catch(() => undefined);
+        const failed = this.applyFailure(
+          record,
+          "cleanup_blocked",
+          "Output finalization failed.",
+          {
+            state: "failed",
+            failedAt: this.now(),
+            code: "output_finalize_failed",
+            detail: "Recoverable output could not be finalized.",
+          },
+        );
+        return resultFromFailure(failed);
+      }
+      record = this.writer.apply({
+        type: "begin_verify",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        output: disposition,
+      });
+    }
+    if (record.state !== "verifying_empty") return resultFromFailure(record);
+    let binding = requiredBinding(record);
+    let backend = selected;
+    try {
+      if (!backend) {
+        try {
+          backend = await reattestProcessBackend(
+            this.options.registry,
+            binding,
+          );
+        } catch {
+          backend = await adoptProcessBackendAfterRestart(
+            this.options.registry,
+            binding,
+          );
+          record = this.writer.apply({
+            type: "adopt_backend",
+            invocationId: record.invocationId,
+            expectedRevision: record.revision,
+            at: this.now(),
+            binding: {
+              ...binding,
+              registryId: backend.registryId,
+              implementationGeneration: backend.implementationGeneration,
+              implementationDigest: backend.implementationDigest,
+              attestationVersion: backend.attestation.attestationVersion,
+              attestationDigest: backend.attestationDigest,
+            },
+          });
+          binding = requiredBinding(record);
+        }
+      }
+    } catch (error) {
+      this.applyFailure(
+        record,
+        "backend_unavailable",
+        "Backend attestation changed before empty verification.",
+      );
+      throw new SubprocessRuntimeError(
+        "backend_unavailable",
+        "Backend attestation changed.",
+        { cause: error },
+      );
+    }
+    let verification;
+    try {
+      verification = parseProcessEmptyVerification(
+        await backend.backend.verifyEmpty(binding),
+      );
+    } catch {
+      const failed = this.applyFailure(
+        record,
+        "cleanup_blocked",
+        "Malformed empty verification.",
+        {
+          state: "failed",
+          failedAt: this.now(),
+          code: "empty_verification_invalid",
+          detail: "Backend empty verification was invalid.",
+        },
+      );
+      return resultFromFailure(failed);
+    }
+    const finishedAt = this.now();
+    if (!verification.empty) {
+      const failed = this.applyFailure(
+        record,
+        "cleanup_blocked",
+        verification.detail,
+        {
+          state: "failed",
+          failedAt: finishedAt,
+          code: "verified_empty_failed",
+          detail: verification.detail,
+        },
+      );
+      return resultFromFailure(failed);
+    }
+    try {
+      const fresh = await reattestProcessBackend(
+        this.options.registry,
+        binding,
+      );
+      parseProcessReleaseResult(await fresh.backend.release(binding));
+    } catch {
+      const failed = this.applyFailure(
+        record,
+        "cleanup_blocked",
+        "Backend release failed.",
+        {
+          state: "failed",
+          failedAt: finishedAt,
+          code: "backend_release_failed",
+          detail: "Backend release was invalid or failed.",
+        },
+      );
+      return resultFromFailure(failed);
+    }
+    const result = terminalResult(record, finishedAt);
+    const cleanup: ProcessCleanupStatus = {
+      state: "verified_empty",
+      verifiedAt: finishedAt,
+      ...(verification.proofArtifactId
+        ? { proofArtifactId: verification.proofArtifactId }
+        : {}),
+    };
+    record = this.writer.apply({
+      type: "complete",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: finishedAt,
+      cleanup,
+      result,
+    });
+    return resultFromRecord(record);
   }
 
-  private async escalate(snapshot:DurableSubprocessRecord):Promise<void>{const existing=this.termination.get(snapshot.invocationId);if(existing)return existing;const work=this.runEscalation(snapshot).finally(()=>this.termination.delete(snapshot.invocationId));this.termination.set(snapshot.invocationId,work);return work;}
-private async runEscalation(snapshot:DurableSubprocessRecord):Promise<void>{let record=this.current(snapshot.invocationId);if(record.state==="backend_unavailable"&&record.stopIntent)record=this.applyCurrent(record,(revision)=>({type:"request_stop",invocationId:record.invocationId,expectedRevision:revision,at:this.now(),reason:record.stopIntent!.reason}));else if(record.state==="running"||record.state==="backend_unavailable")record=this.requestStopLatest(record.invocationId,record.stopIntent?.reason??"cancelled");if(record.state!=="stopping"||!record.backendBinding)return;const actions=["interrupt","terminate","force_terminate"] as const;for(let index=0;index<actions.length;index+=1){record=this.current(record.invocationId);if(record.state!=="stopping")return;const action=actions[index]!;const prior=record.escalation.find((entry)=>entry.action===action);if(prior&&prior.outcome!=="requested"){if(prior.outcome==="exited")return;if(index<this.grace.length)await this.options.clock.sleep(this.grace[index]!);continue;}if(!prior){record=this.writer.apply({type:"start_escalation",invocationId:record.invocationId,expectedRevision:record.revision,action,requestedAt:this.now()});}let outcome:"running"|"exited"|"failed"="failed";let detail:string|undefined;try{const selected=await reattestProcessBackend(this.options.registry,record.backendBinding!);outcome=parseProcessSignalResult(await selected.backend.signal(record.backendBinding!,action)).state;}catch(error){detail=error instanceof Error?error.message:"Signal failed";}record=this.current(record.invocationId);record=this.writer.apply({type:"finish_escalation",invocationId:record.invocationId,expectedRevision:record.revision,action,completedAt:this.now(),outcome,...(detail?{detail}:{})});if(outcome==="failed"){this.applyFailure(record,"identity_mismatch","Backend authority could not be freshly revalidated before signal.");throw new SubprocessRuntimeError("identity_mismatch","Backend authority could not be freshly revalidated.");}if(outcome==="exited")return;if(index<this.grace.length)await this.options.clock.sleep(this.grace[index]!);}}
-
-private async reconcileRecord(snapshot:DurableSubprocessRecord):Promise<void>{let record=this.current(snapshot.invocationId);let output:ProcessOutputSession;try{output=record.outputPrepared?await this.options.outputs.reopen(record.outputOwnerId):await this.options.outputs.prepare(record.outputOwnerId);}catch(error){throw new SubprocessRuntimeError("outcome_unknown","Output ownership could not be reopened.",{cause:error});}
-    if(record.state==="prepared"){await output.cleanup();this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Restart found prepared intent."});return;}
-    if(record.state==="launching"){await output.cleanup();this.applyFailure(record,"orphaned","Restart found launch without durable identity.");return;}
-    if(record.state==="exited"||record.state==="verifying_empty"){await this.finish(record,output);return;}
-    if(!record.backendBinding)throw new SubprocessRuntimeError("identity_mismatch","Recoverable process lacks durable identity.");
-    const selected=await reattestProcessBackend(this.options.registry,record.backendBinding);const reconciliation=parseProcessReconciliation(await selected.backend.reconcile(record.backendBinding));
-    if(reconciliation.state==="identity_mismatch"){this.applyFailure(record,"identity_mismatch","Backend reconciliation rejected identity.");return;}
-    if(reconciliation.state==="outcome_unknown"){this.applyFailure(record,"outcome_unknown","Backend reconciliation outcome is unknown.");return;}
-    if(reconciliation.state==="running"){if(record.stopIntent)await this.escalate(record);let observation;try{observation=parseProcessObservation(await selected.backend.observe(record.backendBinding,(stream,bytes)=>output.write(stream,bytes)));}catch(error){throw new SubprocessRuntimeError("outcome_unknown","Recovered observation failed.",{cause:error});}record=this.current(record.invocationId);record=this.writer.apply({type:"record_exit",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),observation:{...(observation.exitCode===undefined?{}:{exitCode:observation.exitCode}),...(observation.signal?{signal:observation.signal}:{}),observedAt:this.now()}});}
-    else {record=this.current(record.invocationId);record=this.writer.apply({type:"record_exit",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),observation:{...(reconciliation.exitCode===undefined?{}:{exitCode:reconciliation.exitCode}),...(reconciliation.signal?{signal:reconciliation.signal}:{}),observedAt:this.now()}});}
-    await this.finish(record,output,selected);
+  private async escalate(snapshot: DurableSubprocessRecord): Promise<void> {
+    const existing = this.termination.get(snapshot.invocationId);
+    if (existing) return existing;
+    const work = this.runEscalation(snapshot).finally(() =>
+      this.termination.delete(snapshot.invocationId),
+    );
+    this.termination.set(snapshot.invocationId, work);
+    return work;
+  }
+  private async runEscalation(
+    snapshot: DurableSubprocessRecord,
+  ): Promise<void> {
+    let record = this.current(snapshot.invocationId);
+    if (record.state === "backend_unavailable" && record.stopIntent)
+      record = this.applyCurrent(record, (revision) => ({
+        type: "request_stop",
+        invocationId: record.invocationId,
+        expectedRevision: revision,
+        at: this.now(),
+        reason: record.stopIntent!.reason,
+      }));
+    else if (
+      record.state === "running" ||
+      record.state === "backend_unavailable"
+    )
+      record = this.requestStopLatest(
+        record.invocationId,
+        record.stopIntent?.reason ?? "cancelled",
+      );
+    if (record.state !== "stopping" || !record.backendBinding) return;
+    const actions = ["interrupt", "terminate", "force_terminate"] as const;
+    for (let index = 0; index < actions.length; index += 1) {
+      record = this.current(record.invocationId);
+      if (record.state !== "stopping") return;
+      const action = actions[index]!;
+      const prior = record.escalation.find((entry) => entry.action === action);
+      if (prior && prior.outcome !== "requested") {
+        if (prior.outcome === "exited") return;
+        if (index < this.grace.length)
+          await this.options.clock.sleep(this.grace[index]!);
+        continue;
+      }
+      if (!prior) {
+        record = this.writer.apply({
+          type: "start_escalation",
+          invocationId: record.invocationId,
+          expectedRevision: record.revision,
+          action,
+          requestedAt: this.now(),
+        });
+      }
+      let outcome: "running" | "exited" | "failed" = "failed";
+      let detail: string | undefined;
+      try {
+        const selected = await reattestProcessBackend(
+          this.options.registry,
+          record.backendBinding!,
+        );
+        outcome = parseProcessSignalResult(
+          await selected.backend.signal(record.backendBinding!, action),
+        ).state;
+      } catch (error) {
+        detail = error instanceof Error ? error.message : "Signal failed";
+      }
+      record = this.current(record.invocationId);
+      record = this.writer.apply({
+        type: "finish_escalation",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        action,
+        completedAt: this.now(),
+        outcome,
+        ...(detail ? { detail } : {}),
+      });
+      if (outcome === "failed") {
+        this.applyFailure(
+          record,
+          "identity_mismatch",
+          "Backend authority could not be freshly revalidated before signal.",
+        );
+        throw new SubprocessRuntimeError(
+          "identity_mismatch",
+          "Backend authority could not be freshly revalidated.",
+        );
+      }
+      if (outcome === "exited") return;
+      if (index < this.grace.length)
+        await this.options.clock.sleep(this.grace[index]!);
+    }
   }
 
-  private async classifyReconciliationFailure(snapshot:DurableSubprocessRecord,error:unknown):Promise<void>{const record=this.options.store.readByInvocation(snapshot.invocationId);if(!record||!["prepared","launching","running","stopping","exited","verifying_empty","backend_unavailable"].includes(record.state))return;try{if(record.state==="prepared")this.writer.apply({type:"fail_launch",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),detail:"Reconciliation failed before launch."});else this.applyFailure(record,"outcome_unknown",error instanceof Error?error.message:"Reconciliation failed.");}catch{}}
-  private requestStopLatest(invocationId:string,reason:"cancelled"|"timed_out"):DurableSubprocessRecord{const record=this.current(invocationId);if(record.stopIntent)return record;return this.applyCurrent(record,(revision)=>({type:"request_stop",invocationId,expectedRevision:revision,at:this.now(),reason}));}
-  private applyCurrent(record:DurableSubprocessRecord,make:(revision:number)=>Parameters<DurableProcessRuntimeWriter["apply"]>[0]):DurableSubprocessRecord{for(let attempt=0;attempt<3;attempt+=1){try{return this.writer.apply(make(record.revision));}catch(error){if(!/revision conflict/i.test(error instanceof Error?error.message:"")||attempt===2)throw error;record=this.current(record.invocationId);}}throw new Error("unreachable");}
-  private applyFailure(record:DurableSubprocessRecord,state:"orphaned"|"identity_mismatch"|"backend_unavailable"|"outcome_unknown"|"cleanup_blocked",detail:string,cleanup?:ProcessCleanupStatus):DurableSubprocessRecord{record=this.current(record.invocationId);const result=state==="cleanup_blocked"?terminalResult(record,this.now(),"cleanup_failed"):undefined;return this.writer.apply({type:"fail",invocationId:record.invocationId,expectedRevision:record.revision,at:this.now(),state,detail,...(cleanup?{cleanup}:{}),...(result?{result}:{})});}
-  private current(id:string):DurableSubprocessRecord{const record=this.options.store.readByInvocation(id);if(!record)throw new Error(`Unknown process invocation ${id}.`);return record;}
-  private async observeExisting(invocationId:string):Promise<GenericProcessResult>{for(let attempt=0;attempt<1000;attempt+=1){const record=this.options.store.readByInvocation(invocationId);if(!record)throw new SubprocessRuntimeError("outcome_unknown","Durable invocation disappeared.");if(record.result)return resultFromRecord(record);if(!["prepared","launching","running","stopping","exited","verifying_empty","backend_unavailable"].includes(record.state))throw new SubprocessRuntimeError("outcome_unknown",`Durable invocation ended in ${record.state}.`);await this.options.clock.sleep(1);}throw new SubprocessRuntimeError("outcome_unknown","Timed out observing the existing durable invocation.");}
-  private now():string{return this.options.clock.now().toISOString();}
-  private stopTrigger(request:SnapshotInvocation):Promise<StopTrigger>{const candidates:Promise<StopTrigger>[]=[];if(request.signal){if(request.signal.aborted)candidates.push(Promise.resolve({reason:"cancelled"}));else candidates.push(new Promise((resolve)=>request.signal!.addEventListener("abort",()=>resolve({reason:"cancelled"}),{once:true})));}if(request.deadline){const delay=Math.max(0,request.deadline.getTime()-this.options.clock.now().getTime());candidates.push(this.options.clock.sleep(delay).then(()=>({reason:"timed_out"})));}return candidates.length?Promise.race(candidates):new Promise(()=>undefined);}
+  private async reconcileRecord(
+    snapshot: DurableSubprocessRecord,
+  ): Promise<void> {
+    let record = this.current(snapshot.invocationId);
+    let output: ProcessOutputSession;
+    try {
+      output = record.outputPrepared
+        ? await this.options.outputs.reopen(record.outputOwnerId)
+        : await this.options.outputs.prepare(record.outputOwnerId);
+      if (!record.outputPrepared) {
+        record = this.writer.apply({
+          type: "mark_output_prepared",
+          invocationId: record.invocationId,
+          expectedRevision: record.revision,
+          at: this.now(),
+        });
+      }
+    } catch (error) {
+      throw new SubprocessRuntimeError(
+        "outcome_unknown",
+        "Output ownership could not be reopened.",
+        { cause: error },
+      );
+    }
+    if (record.state === "prepared") {
+      await output.cleanup();
+      this.writer.apply({
+        type: "fail_launch",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        detail: "Restart found prepared intent.",
+      });
+      return;
+    }
+    if (record.state === "launching") {
+      await output.cleanup();
+      this.applyFailure(
+        record,
+        "orphaned",
+        "Restart found launch without durable identity.",
+      );
+      return;
+    }
+    if (record.state === "exited" || record.state === "verifying_empty") {
+      await this.finish(record, output);
+      return;
+    }
+    if (!record.backendBinding)
+      throw new SubprocessRuntimeError(
+        "identity_mismatch",
+        "Recoverable process lacks durable identity.",
+      );
+    let selected: SelectedProcessBackend;
+    try {
+      selected = await reattestProcessBackend(
+        this.options.registry,
+        record.backendBinding,
+      );
+    } catch {
+      selected = await adoptProcessBackendAfterRestart(
+        this.options.registry,
+        record.backendBinding,
+      );
+      const prior = record.backendBinding;
+      record = this.writer.apply({
+        type: "adopt_backend",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        binding: {
+          ...prior,
+          registryId: selected.registryId,
+          implementationGeneration: selected.implementationGeneration,
+          implementationDigest: selected.implementationDigest,
+          attestationVersion: selected.attestation.attestationVersion,
+          attestationDigest: selected.attestationDigest,
+        },
+      });
+    }
+    const activeBinding = record.backendBinding!;
+    const reconciliation = parseProcessReconciliation(
+      await selected.backend.reconcile(activeBinding),
+    );
+    if (reconciliation.state === "identity_mismatch") {
+      this.applyFailure(
+        record,
+        "identity_mismatch",
+        "Backend reconciliation rejected identity.",
+      );
+      return;
+    }
+    if (reconciliation.state === "outcome_unknown") {
+      this.applyFailure(
+        record,
+        "outcome_unknown",
+        "Backend reconciliation outcome is unknown.",
+      );
+      return;
+    }
+    if (reconciliation.state === "running") {
+      if (record.stopIntent) await this.escalate(record);
+      let observation;
+      try {
+        observation = parseProcessObservation(
+          await selected.backend.observe(activeBinding, (stream, bytes) =>
+            output.write(stream, bytes),
+          ),
+        );
+      } catch (error) {
+        throw new SubprocessRuntimeError(
+          "outcome_unknown",
+          "Recovered observation failed.",
+          { cause: error },
+        );
+      }
+      record = this.current(record.invocationId);
+      record = this.writer.apply({
+        type: "record_exit",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        observation: {
+          ...(observation.exitCode === undefined
+            ? {}
+            : { exitCode: observation.exitCode }),
+          ...(observation.signal ? { signal: observation.signal } : {}),
+          observedAt: this.now(),
+        },
+      });
+    } else {
+      record = this.current(record.invocationId);
+      record = this.writer.apply({
+        type: "record_exit",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        observation: {
+          ...(reconciliation.exitCode === undefined
+            ? {}
+            : { exitCode: reconciliation.exitCode }),
+          ...(reconciliation.signal ? { signal: reconciliation.signal } : {}),
+          observedAt: this.now(),
+        },
+      });
+    }
+    await this.finish(record, output, selected);
+  }
+
+  private async classifyReconciliationFailure(
+    snapshot: DurableSubprocessRecord,
+    error: unknown,
+  ): Promise<void> {
+    const record = this.options.store.readByInvocation(snapshot.invocationId);
+    if (
+      !record ||
+      ![
+        "prepared",
+        "launching",
+        "running",
+        "stopping",
+        "exited",
+        "verifying_empty",
+        "backend_unavailable",
+      ].includes(record.state)
+    )
+      return;
+    try {
+      if (record.state === "prepared")
+        this.writer.apply({
+          type: "fail_launch",
+          invocationId: record.invocationId,
+          expectedRevision: record.revision,
+          at: this.now(),
+          detail: "Reconciliation failed before launch.",
+        });
+      else
+        this.applyFailure(
+          record,
+          "outcome_unknown",
+          error instanceof Error ? error.message : "Reconciliation failed.",
+        );
+    } catch {}
+  }
+  private requestStopLatest(
+    invocationId: string,
+    reason: "cancelled" | "timed_out",
+  ): DurableSubprocessRecord {
+    const record = this.current(invocationId);
+    if (record.stopIntent) return record;
+    return this.applyCurrent(record, (revision) => ({
+      type: "request_stop",
+      invocationId,
+      expectedRevision: revision,
+      at: this.now(),
+      reason,
+    }));
+  }
+  private applyCurrent(
+    record: DurableSubprocessRecord,
+    make: (
+      revision: number,
+    ) => Parameters<DurableProcessRuntimeWriter["apply"]>[0],
+  ): DurableSubprocessRecord {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return this.writer.apply(make(record.revision));
+      } catch (error) {
+        if (
+          !/revision conflict/i.test(
+            error instanceof Error ? error.message : "",
+          ) ||
+          attempt === 2
+        )
+          throw error;
+        record = this.current(record.invocationId);
+      }
+    }
+    throw new Error("unreachable");
+  }
+  private applyFailure(
+    record: DurableSubprocessRecord,
+    state:
+      | "orphaned"
+      | "identity_mismatch"
+      | "backend_unavailable"
+      | "outcome_unknown"
+      | "cleanup_blocked",
+    detail: string,
+    cleanup?: ProcessCleanupStatus,
+  ): DurableSubprocessRecord {
+    record = this.current(record.invocationId);
+    const result =
+      state === "cleanup_blocked"
+        ? terminalResult(record, this.now(), "cleanup_failed")
+        : undefined;
+    return this.writer.apply({
+      type: "fail",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      state,
+      detail,
+      ...(cleanup ? { cleanup } : {}),
+      ...(result ? { result } : {}),
+    });
+  }
+  private current(id: string): DurableSubprocessRecord {
+    const record = this.options.store.readByInvocation(id);
+    if (!record) throw new Error(`Unknown process invocation ${id}.`);
+    return record;
+  }
+  private async observeExisting(
+    invocationId: string,
+  ): Promise<GenericProcessResult> {
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const record = this.options.store.readByInvocation(invocationId);
+      if (!record)
+        throw new SubprocessRuntimeError(
+          "outcome_unknown",
+          "Durable invocation disappeared.",
+        );
+      if (record.result) return resultFromRecord(record);
+      if (
+        ![
+          "prepared",
+          "launching",
+          "running",
+          "stopping",
+          "exited",
+          "verifying_empty",
+          "backend_unavailable",
+        ].includes(record.state)
+      )
+        throw new SubprocessRuntimeError(
+          "outcome_unknown",
+          `Durable invocation ended in ${record.state}.`,
+        );
+      await this.options.clock.sleep(1);
+    }
+    throw new SubprocessRuntimeError(
+      "outcome_unknown",
+      "Timed out observing the existing durable invocation.",
+    );
+  }
+  private now(): string {
+    return this.options.clock.now().toISOString();
+  }
+  private leaseExpiry(): string {
+    return new Date(
+      this.options.clock.now().getTime() + this.leaseMs,
+    ).toISOString();
+  }
+  private renew(record: DurableSubprocessRecord): DurableSubprocessRecord {
+    return this.writer.apply({
+      type: "renew_lease",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      ownerId: this.ownerId,
+      at: this.now(),
+      leaseExpiresAt: this.leaseExpiry(),
+    });
+  }
+  private stopTrigger(request: SnapshotInvocation): Promise<StopTrigger> {
+    const candidates: Promise<StopTrigger>[] = [];
+    if (request.signal) {
+      if (request.signal.aborted)
+        candidates.push(Promise.resolve({ reason: "cancelled" }));
+      else
+        candidates.push(
+          new Promise((resolve) =>
+            request.signal!.addEventListener(
+              "abort",
+              () => resolve({ reason: "cancelled" }),
+              { once: true },
+            ),
+          ),
+        );
+    }
+    if (request.deadline) {
+      const delay = Math.max(
+        0,
+        request.deadline.getTime() - this.options.clock.now().getTime(),
+      );
+      candidates.push(
+        this.options.clock.sleep(delay).then(() => ({ reason: "timed_out" })),
+      );
+    }
+    return candidates.length
+      ? Promise.race(candidates)
+      : new Promise(() => undefined);
+  }
 }
 
-export function createSubprocessRuntimeKernel(options:SubprocessRuntimeKernelOptions):SubprocessRuntime{const registry=assertProcessBackendRegistryAuthority(options.registry);const writer=getDurableProcessRuntimeWriter(options.storeKernel);void writer;if(!(options.stateKey instanceof Uint8Array)||options.stateKey.byteLength<32)throw new Error("Runner state key is invalid.");const grants=Object.freeze({bindingDigest:options.grants.bindingDigest.bind(options.grants),consume:options.grants.consume.bind(options.grants)});const clock=Object.freeze({now:options.clock.now.bind(options.clock),sleep:options.clock.sleep.bind(options.clock)});const environments=Object.freeze({prepare:options.environments.prepare.bind(options.environments),withChildEnvironment:options.environments.withChildEnvironment.bind(options.environments)});const outputs=Object.freeze({prepare:options.outputs.prepare.bind(options.outputs),reopen:options.outputs.reopen.bind(options.outputs)});const internal:InternalRuntimeOptions=Object.freeze({registry,storeKernel:options.storeKernel,store:options.storeKernel.store,stateKey:new Uint8Array(options.stateKey),grants,clock,environments,outputs,...(options.createLogicalProcessId?{createLogicalProcessId:options.createLogicalProcessId}:{}) ,...(options.escalationGraceMs?{escalationGraceMs:Object.freeze([...options.escalationGraceMs]) as readonly[number,number]}:{})});return Object.freeze(new RunnerSubprocessRuntime(internal));}
+export function createSubprocessRuntimeKernel(
+  options: SubprocessRuntimeKernelOptions,
+): SubprocessRuntimeKernel {
+  const safeOptions = strictRecord(
+    options,
+    "runtime kernel options",
+  ) as unknown as SubprocessRuntimeKernelOptions;
+  assertKeys(
+    safeOptions as unknown as Record<string, unknown>,
+    new Set([
+      "registry",
+      "state",
+      "stateKey",
+      "clock",
+      "environments",
+      "outputs",
+      "createLogicalProcessId",
+      "escalationGraceMs",
+    ]),
+    "runtime kernel options",
+  );
+  options = safeOptions;
+  const registry = assertProcessBackendRegistryAuthority(options.registry);
+  const stateKey = new Uint8Array(options.stateKey);
+  const stateObject = strictRecord(options.state, "runtime state");
+  assertKeys(stateObject, new Set(["kind", "path"]), "runtime state");
+  if (stateObject.kind !== "memory" && stateObject.kind !== "sqlite")
+    throw new Error("Runtime state is invalid.");
+  if (stateObject.kind === "memory" && stateObject.path !== undefined)
+    throw new Error("Runtime state is invalid.");
+  if (stateObject.kind === "sqlite" && typeof stateObject.path !== "string")
+    throw new Error("Runtime state is invalid.");
+  const storeKernel =
+    stateObject.kind === "memory"
+      ? createInMemoryDurableProcessKernel(stateKey)
+      : openSqliteDurableProcessKernel(stateObject.path as string, stateKey);
+  const writer = runtimeWriterFromOwnedKernel(storeKernel);
+  void writer;
+  if (
+    !(options.stateKey instanceof Uint8Array) ||
+    options.stateKey.byteLength < 32
+  )
+    throw new Error("Runner state key is invalid.");
+  const grants = new GrantVault(stateKey);
+  const clock = Object.freeze({
+    now: options.clock.now.bind(options.clock),
+    sleep: options.clock.sleep.bind(options.clock),
+  });
+  const environments = Object.freeze({
+    prepare: options.environments.prepare.bind(options.environments),
+    withChildEnvironment: options.environments.withChildEnvironment.bind(
+      options.environments,
+    ),
+  });
+  const outputs = Object.freeze({
+    prepare: options.outputs.prepare.bind(options.outputs),
+    reopen: options.outputs.reopen.bind(options.outputs),
+  });
+  const internal: InternalRuntimeOptions = Object.freeze({
+    registry,
+    writer,
+    store: storeKernel.store,
+    stateKey: new Uint8Array(options.stateKey),
+    grants,
+    clock,
+    environments,
+    outputs,
+    ...(options.createLogicalProcessId
+      ? { createLogicalProcessId: options.createLogicalProcessId }
+      : {}),
+    ...(options.escalationGraceMs
+      ? {
+          escalationGraceMs: Object.freeze([
+            ...options.escalationGraceMs,
+          ]) as readonly [number, number],
+        }
+      : {}),
+  });
+  const runtime = Object.freeze(new RunnerSubprocessRuntime(internal));
+  const grantsController = Object.freeze({
+    issue: (value: unknown) => grants.issue(value),
+    revoke: (id: string) => grants.revoke(id),
+  });
+  return Object.freeze({
+    runtime,
+    grantsController,
+    readOnlyStore: storeKernel.store,
+  });
+}
 
-function snapshotInvocation(value:unknown):SnapshotInvocation{const o=strictRecord(value,"invocation");assertKeys(o,new Set(["intent","grantId","ambientEnvironment","explicitEnvironment","credentialGrantId","signal","deadline"]),"invocation");const intentObject=strictRecord(o.intent,"intent");const intent=deepFreeze(parseExecutionInvocationIntent({...intentObject,arguments:snapshotStrings(intentObject.arguments,"arguments"),requestedCapabilities:snapshotStrings(intentObject.requestedCapabilities,"requestedCapabilities")}));const grantId=safeText(o.grantId,"grantId");const ambientEnvironment=snapshotEnvironment(o.ambientEnvironment);const explicitEnvironment=o.explicitEnvironment===undefined?undefined:snapshotEnvironment(o.explicitEnvironment);const credentialGrantId=o.credentialGrantId===undefined?undefined:safeText(o.credentialGrantId,"credentialGrantId");const signal=o.signal===undefined?undefined:o.signal;if(signal!==undefined&&!(signal instanceof AbortSignal))throw new Error("Invocation signal is invalid.");const deadline=o.deadline===undefined?undefined:o.deadline;if(deadline!==undefined&&(!(deadline instanceof Date)||Number.isNaN(deadline.getTime())))throw new Error("Invocation deadline is invalid.");return Object.freeze({intent,grantId,ambientEnvironment,...(explicitEnvironment?{explicitEnvironment}:{}),...(credentialGrantId?{credentialGrantId}:{}),...(signal?{signal}:{}),...(deadline?{deadline:new Date(deadline)}:{})});}
-function consumeGrant(authority:RunnerPrivateExecutionGrantAuthority,id:string,intent:ExecutionInvocationIntent,now:Date):ConsumedExecutionGrant{let raw:unknown;try{raw=authority.consume(id);}catch{throw new Error("Execution grant is invalid.");}try{const o=strictRecord(raw,"execution grant");assertKeys(o,new Set(["grantId","runId","invocationId","issuedAt","expiresAt","access"]),"execution grant");const access=parseAccess(o.access);const grant:ConsumedExecutionGrant={grantId:safeText(o.grantId,"grantId"),runId:safeText(o.runId,"runId"),invocationId:safeText(o.invocationId,"invocationId"),issuedAt:dateText(o.issuedAt,"issuedAt"),...(o.expiresAt===undefined?{}:{expiresAt:dateText(o.expiresAt,"expiresAt")}),access};if(grant.grantId!==id||grant.runId!==intent.runId||grant.invocationId!==intent.invocationId||Date.parse(grant.issuedAt)>now.getTime()||(grant.expiresAt&&Date.parse(grant.expiresAt)<=now.getTime()))throw new Error();return deepFreeze(grant);}catch{throw new Error("Execution grant is invalid.");}}
-function parseAccess(value:unknown):ExactPathAccess[]{if(!Array.isArray(value))throw new Error();return value.map((entry)=>{const o=strictRecord(entry,"access");assertKeys(o,new Set(["canonicalPath","mode"]),"access");const mode=o.mode;if(mode!=="read"&&mode!=="write"&&mode!=="create")throw new Error();return Object.freeze({canonicalPath:safeText(o.canonicalPath,"canonicalPath"),mode});});}
-function outputDisposition(result:BoundedOutputSpoolResult):ProcessOutputDisposition[]{const root=strictRecord(result,"output result");assertKeys(root,new Set(["streams"]),"output result");if(!Array.isArray(root.streams)||root.streams.length!==2)throw new Error("Output result is invalid.");return root.streams.map((stream)=>{const plain=strictRecord(stream,"output stream");assertKeys(plain,new Set(["stream","tail","tailBytesBase64","tailByteLength","tailDisplayTruncated","totalBytes","truncated","spillBytes","lossyBytes","lossyOutput","lossReason","lossReasons","spillState","spillArtifactId"]),"output stream");if((plain.stream!=="stdout"&&plain.stream!=="stderr")||typeof plain.tail!=="string"||!nonNegative(plain.totalBytes)||typeof plain.truncated!=="boolean"||!nonNegative(plain.spillBytes)||!nonNegative(plain.lossyBytes)||typeof plain.lossyOutput!=="boolean"||!Array.isArray(plain.lossReasons)||typeof plain.spillState!=="string")throw new Error("Output result is invalid.");return parseProcessOutputDisposition({stream:plain.stream,tail:plain.tail,totalBytes:plain.totalBytes,truncated:plain.truncated,...(plain.spillArtifactId===undefined?{}:{spillArtifactId:plain.spillArtifactId}),spillBytes:plain.spillBytes,lossyBytes:plain.lossyBytes});});}
-function terminalResult(record:DurableSubprocessRecord,finishedAt:string,forced?:DurableSubprocessResult["outcome"]):DurableSubprocessResult{const outcome=record.stopIntent?.reason??forced??"exited";return {outcome,...(record.observation?.exitCode===undefined?{}:{exitCode:record.observation.exitCode}),...(record.observation?.signal?{signal:record.observation.signal}:{}),...(record.backendBinding?{startedAt:record.backendBinding.startedAt}:{}),finishedAt};}
-function resultFromFailure(record:DurableSubprocessRecord):GenericProcessResult{if(!record.result)throw new SubprocessRuntimeError("outcome_unknown",`Durable invocation ended in ${record.state} without a result.`);return {logicalProcessId:record.logicalProcessId,...record.result,output:record.output??[],cleanup:record.cleanup};}
-function resultFromRecord(record:DurableSubprocessRecord):GenericProcessResult{if(!record.result)throw new SubprocessRuntimeError("outcome_unknown","Durable process result is unavailable.");return {logicalProcessId:record.logicalProcessId,...record.result,output:record.output??[],cleanup:record.cleanup};}
-function requiredBinding(record:DurableSubprocessRecord):ProcessBackendBinding{if(!record.backendBinding)throw new SubprocessRuntimeError("identity_mismatch","Durable backend identity is missing.");return record.backendBinding;}
-function strictRecord(value:unknown,label:string):Record<string,unknown>{if(typeof value!=="object"||value===null||Array.isArray(value)||nodeTypes.isProxy(value))throw new Error(`${label} is invalid.`);const proto=Object.getPrototypeOf(value);if(proto!==Object.prototype&&proto!==null)throw new Error(`${label} is invalid.`);const descriptors=Object.getOwnPropertyDescriptors(value);const result=Object.create(null) as Record<string,unknown>;for(const key of Reflect.ownKeys(descriptors)){if(typeof key!=="string"||!("value" in descriptors[key]!))throw new Error(`${label} is invalid.`);result[key]=descriptors[key]!.value;}return result;}
-function assertKeys(object:Record<string,unknown>,allowed:Set<string>,label:string):void{const unknown=Object.keys(object).find((key)=>!allowed.has(key));if(unknown)throw new Error(`Unknown ${label} field ${unknown}.`);}
-function snapshotStrings(value:unknown,label:string):string[]{if(!Array.isArray(value)||value.some((entry)=>typeof entry!=="string"))throw new Error(`${label} is invalid.`);return Object.freeze([...value]) as unknown as string[];}
-function snapshotEnvironment(value:unknown):Readonly<Record<string,string|undefined>>{const o=strictRecord(value,"environment");const result=Object.create(null) as Record<string,string|undefined>;for(const [key,entry] of Object.entries(o)){if(typeof entry!=="string"&&entry!==undefined)throw new Error("Environment is invalid.");result[key]=entry as string|undefined;}return Object.freeze(result);}
-function safeText(value:unknown,label:string):string{if(typeof value!=="string"||!value.trim())throw new Error(`${label} is invalid.`);return value;}
-function dateText(value:unknown,label:string):string{const text=safeText(value,label);if(Number.isNaN(Date.parse(text)))throw new Error(`${label} is invalid.`);return text;}
-function safeOwnerId(value:string):string{if(!/^[A-Za-z0-9._-]{1,160}$/.test(value))throw new Error("Output owner id is invalid.");return value;}
-function nonNegative(value:unknown):value is number{return Number.isSafeInteger(value)&&(value as number)>=0;}
-function digestText(value:unknown):string{if(typeof value!=="string"||!/^[a-f0-9]{64}$/.test(value))throw new Error("Digest is invalid.");return value;}
-function deepFreeze<T>(value:T):T{if(value&&typeof value==="object"){Object.freeze(value);for(const child of Object.values(value as Record<string,unknown>))deepFreeze(child);}return value;}
+function snapshotInvocation(value: unknown): SnapshotInvocation {
+  const o = strictRecord(value, "invocation");
+  assertKeys(
+    o,
+    new Set([
+      "intent",
+      "grantId",
+      "ambientEnvironment",
+      "explicitEnvironment",
+      "credentialGrantId",
+      "signal",
+      "deadline",
+    ]),
+    "invocation",
+  );
+  const intentObject = strictRecord(o.intent, "intent");
+  const intent = deepFreeze(
+    parseExecutionInvocationIntent({
+      ...intentObject,
+      arguments: snapshotStrings(intentObject.arguments, "arguments"),
+      requestedCapabilities: snapshotStrings(
+        intentObject.requestedCapabilities,
+        "requestedCapabilities",
+      ),
+    }),
+  );
+  const grantId = safeText(o.grantId, "grantId");
+  const ambientEnvironment = snapshotEnvironment(o.ambientEnvironment);
+  const explicitEnvironment =
+    o.explicitEnvironment === undefined
+      ? undefined
+      : snapshotEnvironment(o.explicitEnvironment);
+  const credentialGrantId =
+    o.credentialGrantId === undefined
+      ? undefined
+      : safeText(o.credentialGrantId, "credentialGrantId");
+  const signal = o.signal === undefined ? undefined : o.signal;
+  if (signal !== undefined && !(signal instanceof AbortSignal))
+    throw new Error("Invocation signal is invalid.");
+  const deadline = o.deadline === undefined ? undefined : o.deadline;
+  if (
+    deadline !== undefined &&
+    (!(deadline instanceof Date) || Number.isNaN(deadline.getTime()))
+  )
+    throw new Error("Invocation deadline is invalid.");
+  return Object.freeze({
+    intent,
+    grantId,
+    ambientEnvironment,
+    ...(explicitEnvironment ? { explicitEnvironment } : {}),
+    ...(credentialGrantId ? { credentialGrantId } : {}),
+    ...(signal ? { signal } : {}),
+    ...(deadline ? { deadline: new Date(deadline) } : {}),
+  });
+}
+function consumeGrant(
+  authority: GrantVault,
+  id: string,
+  intent: ExecutionInvocationIntent,
+  now: Date,
+): ConsumedExecutionGrant {
+  let raw: unknown;
+  try {
+    raw = authority.consume(id);
+  } catch {
+    throw new Error("Execution grant is invalid.");
+  }
+  try {
+    const grant = parseGrant(raw);
+    if (
+      grant.grantId !== id ||
+      grant.runId !== intent.runId ||
+      grant.invocationId !== intent.invocationId ||
+      Date.parse(grant.issuedAt) > now.getTime() ||
+      (grant.expiresAt && Date.parse(grant.expiresAt) <= now.getTime())
+    )
+      throw new Error();
+    return grant;
+  } catch {
+    throw new Error("Execution grant is invalid.");
+  }
+}
+function parseGrant(raw: unknown): ConsumedExecutionGrant {
+  const o = strictRecord(raw, "execution grant");
+  assertKeys(
+    o,
+    new Set([
+      "grantId",
+      "runId",
+      "invocationId",
+      "issuedAt",
+      "expiresAt",
+      "access",
+    ]),
+    "execution grant",
+  );
+  const access = parseAccess(o.access);
+  const grant: ConsumedExecutionGrant = {
+    grantId: safeText(o.grantId, "grantId"),
+    runId: safeText(o.runId, "runId"),
+    invocationId: safeText(o.invocationId, "invocationId"),
+    issuedAt: dateText(o.issuedAt, "issuedAt"),
+    ...(o.expiresAt === undefined
+      ? {}
+      : { expiresAt: dateText(o.expiresAt, "expiresAt") }),
+    access,
+  };
+  return deepFreeze(grant);
+}
+function parseAccess(value: unknown): ExactPathAccess[] {
+  if (!Array.isArray(value)) throw new Error();
+  return value.map((entry) => {
+    const o = strictRecord(entry, "access");
+    assertKeys(o, new Set(["canonicalPath", "mode"]), "access");
+    const mode = o.mode;
+    if (mode !== "read" && mode !== "write" && mode !== "create")
+      throw new Error();
+    return Object.freeze({
+      canonicalPath: safeText(o.canonicalPath, "canonicalPath"),
+      mode,
+    });
+  });
+}
+function outputDisposition(
+  result: BoundedOutputSpoolResult,
+): ProcessOutputDisposition[] {
+  const root = strictRecord(result, "output result");
+  assertKeys(root, new Set(["streams"]), "output result");
+  if (!Array.isArray(root.streams) || root.streams.length !== 2)
+    throw new Error("Output result is invalid.");
+  return root.streams.map((stream) => {
+    const plain = strictRecord(stream, "output stream");
+    assertKeys(
+      plain,
+      new Set([
+        "stream",
+        "tail",
+        "tailBytesBase64",
+        "tailByteLength",
+        "tailDisplayTruncated",
+        "totalBytes",
+        "truncated",
+        "spillBytes",
+        "lossyBytes",
+        "lossyOutput",
+        "lossReason",
+        "lossReasons",
+        "spillState",
+        "spillArtifactId",
+      ]),
+      "output stream",
+    );
+    if (
+      (plain.stream !== "stdout" && plain.stream !== "stderr") ||
+      typeof plain.tail !== "string" ||
+      !nonNegative(plain.totalBytes) ||
+      typeof plain.truncated !== "boolean" ||
+      !nonNegative(plain.spillBytes) ||
+      !nonNegative(plain.lossyBytes) ||
+      typeof plain.lossyOutput !== "boolean" ||
+      !Array.isArray(plain.lossReasons) ||
+      typeof plain.spillState !== "string"
+    )
+      throw new Error("Output result is invalid.");
+    return parseProcessOutputDisposition({
+      stream: plain.stream,
+      tail: plain.tail,
+      totalBytes: plain.totalBytes,
+      truncated: plain.truncated,
+      ...(plain.spillArtifactId === undefined
+        ? {}
+        : { spillArtifactId: plain.spillArtifactId }),
+      spillBytes: plain.spillBytes,
+      lossyBytes: plain.lossyBytes,
+    });
+  });
+}
+function terminalResult(
+  record: DurableSubprocessRecord,
+  finishedAt: string,
+  forced?: DurableSubprocessResult["outcome"],
+): DurableSubprocessResult {
+  const outcome = record.stopIntent?.reason ?? forced ?? "exited";
+  return {
+    outcome,
+    ...(record.observation?.exitCode === undefined
+      ? {}
+      : { exitCode: record.observation.exitCode }),
+    ...(record.observation?.signal
+      ? { signal: record.observation.signal }
+      : {}),
+    ...(record.backendBinding
+      ? { startedAt: record.backendBinding.startedAt }
+      : {}),
+    finishedAt,
+  };
+}
+function resultFromFailure(
+  record: DurableSubprocessRecord,
+): GenericProcessResult {
+  if (!record.result)
+    throw new SubprocessRuntimeError(
+      "outcome_unknown",
+      `Durable invocation ended in ${record.state} without a result.`,
+    );
+  return {
+    logicalProcessId: record.logicalProcessId,
+    ...record.result,
+    output: record.output ?? [],
+    cleanup: record.cleanup,
+  };
+}
+function resultFromRecord(
+  record: DurableSubprocessRecord,
+): GenericProcessResult {
+  if (!record.result)
+    throw new SubprocessRuntimeError(
+      "outcome_unknown",
+      "Durable process result is unavailable.",
+    );
+  return {
+    logicalProcessId: record.logicalProcessId,
+    ...record.result,
+    output: record.output ?? [],
+    cleanup: record.cleanup,
+  };
+}
+function requiredBinding(
+  record: DurableSubprocessRecord,
+): ProcessBackendBinding {
+  if (!record.backendBinding)
+    throw new SubprocessRuntimeError(
+      "identity_mismatch",
+      "Durable backend identity is missing.",
+    );
+  return record.backendBinding;
+}
+function strictRecord(value: unknown, label: string): Record<string, unknown> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    nodeTypes.isProxy(value)
+  )
+    throw new Error(`${label} is invalid.`);
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null)
+    throw new Error(`${label} is invalid.`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const result = Object.create(null) as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string" || !("value" in descriptors[key]!))
+      throw new Error(`${label} is invalid.`);
+    result[key] = descriptors[key]!.value;
+  }
+  return result;
+}
+function assertKeys(
+  object: Record<string, unknown>,
+  allowed: Set<string>,
+  label: string,
+): void {
+  const unknown = Object.keys(object).find((key) => !allowed.has(key));
+  if (unknown) throw new Error(`Unknown ${label} field ${unknown}.`);
+}
+function snapshotStrings(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))
+    throw new Error(`${label} is invalid.`);
+  return Object.freeze([...value]) as unknown as string[];
+}
+function snapshotEnvironment(
+  value: unknown,
+): Readonly<Record<string, string | undefined>> {
+  const o = strictRecord(value, "environment");
+  const result = Object.create(null) as Record<string, string | undefined>;
+  for (const [key, entry] of Object.entries(o)) {
+    if (typeof entry !== "string" && entry !== undefined)
+      throw new Error("Environment is invalid.");
+    result[key] = entry as string | undefined;
+  }
+  return Object.freeze(result);
+}
+function snapshotChildEnvironment(
+  value: unknown,
+): Readonly<Record<string, string>> {
+  const snapshot = snapshotEnvironment(value);
+  for (const entry of Object.values(snapshot))
+    if (entry === undefined) throw new Error("Child environment is invalid.");
+  return snapshot as Readonly<Record<string, string>>;
+}
+function safeText(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`${label} is invalid.`);
+  return value;
+}
+function dateText(value: unknown, label: string): string {
+  const text = safeText(value, label);
+  if (Number.isNaN(Date.parse(text))) throw new Error(`${label} is invalid.`);
+  return text;
+}
+function safeOwnerId(value: string): string {
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(value))
+    throw new Error("Output owner id is invalid.");
+  return value;
+}
+function nonNegative(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+function digestText(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+    throw new Error("Digest is invalid.");
+  return value;
+}
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .sort()
+      .filter((key) => o[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(o[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function runtimeWriterFromOwnedKernel(
+  kernel: DurableProcessStoreKernel,
+): DurableProcessRuntimeWriter {
+  for (const key of Object.getOwnPropertySymbols(kernel)) {
+    const value = Object.getOwnPropertyDescriptor(kernel, key)?.value as
+      Partial<DurableProcessRuntimeWriter> | undefined;
+    if (
+      value &&
+      typeof value.claim === "function" &&
+      typeof value.apply === "function"
+    )
+      return value as DurableProcessRuntimeWriter;
+  }
+  throw new Error("Durable process kernel authority is invalid.");
+}
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>))
+      deepFreeze(child);
+  }
+  return value;
+}
