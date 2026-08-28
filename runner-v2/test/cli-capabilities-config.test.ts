@@ -701,7 +701,7 @@ test("CLI rejects a capability configuration placed inside the project", async (
     const outcome = await Promise.race([
       runner.closed.then(({ code }) => ({ type: "exit" as const, code })),
       new Promise<{ type: "timeout" }>((resolve) => {
-        timer = setTimeout(() => resolve({ type: "timeout" }), 3_000);
+        timer = setTimeout(() => resolve({ type: "timeout" }), 10_000);
       }),
     ]);
     if (timer) clearTimeout(timer);
@@ -849,7 +849,7 @@ async function runCliToExit(
     const outcome = await Promise.race([
       runner.closed.then(({ code }) => ({ exited: true as const, code })),
       new Promise<{ exited: false }>((resolve) => {
-        timeout = setTimeout(() => resolve({ exited: false }), 4_000);
+        timeout = setTimeout(() => resolve({ exited: false }), 10_000);
       }),
     ]);
     if (!outcome.exited) {

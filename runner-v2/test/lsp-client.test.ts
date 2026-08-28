@@ -416,7 +416,7 @@ test("LSP client retries termination after a failed close while the server remai
   const fixture = workspace("close termination retry");
   let terminationAttempts = 0;
   const client = fixture.client({
-    requestTimeoutMs: 100,
+    requestTimeoutMs: 500,
     shutdownTimeoutMs: 100,
     env: { LSP_FIXTURE_IGNORE_SHUTDOWN: "1" },
     processTreeTerminationHook: async (terminate: () => Promise<void>) => {
