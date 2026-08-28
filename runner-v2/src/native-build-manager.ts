@@ -77,8 +77,19 @@ export interface NativeBuildManagerOptions {
   prepareArtifactCleanup?(): Promise<void>;
 }
 
+type NativeBuildHandleShutdownPhase =
+  | "status_pending"
+  | "settled_cleanup_pending"
+  | "ready_for_teardown"
+  | "teardown_started";
+
+interface NativeBuildHandleShutdownState {
+  phase: NativeBuildHandleShutdownPhase;
+}
+
 export class NativeBuildManager implements BuildControlPlane {
   private readonly handles = new Map<string, NativeBuildRuntimeHandle>();
+  private readonly handleShutdown = new Map<string, NativeBuildHandleShutdownState>();
   private readonly pumps = new Map<string, Promise<void>>();
   private readonly settledRuns = new Set<string>();
   private operationQueue = Promise.resolve();
@@ -496,26 +507,9 @@ export class NativeBuildManager implements BuildControlPlane {
     await this.serialized(async () => {
       const failures: unknown[] = [];
       for (const [runId, handle] of [...this.handles.entries()]) {
-        let cleanupComplete = true;
-        let handleClosed = false;
-        if (!handle.historical && handle.runtime.projection().status === "completed") {
-          try {
-            await this.cleanupSettledRun(runId, handle);
-          } catch (error) {
-            failures.push(error);
-            cleanupComplete = false;
-          }
-        }
-        if (cleanupComplete) {
-          try {
-            await handle.close();
-            handleClosed = true;
-          } catch (error) {
-            failures.push(error);
-          }
-        }
-        if (cleanupComplete && handleClosed) {
+        if (await this.closeHandle(runId, handle, failures)) {
           this.handles.delete(runId);
+          this.handleShutdown.delete(runId);
         }
       }
       if (!this.specsClosed) {
@@ -530,6 +524,44 @@ export class NativeBuildManager implements BuildControlPlane {
         throw new AggregateError(failures, "Could not close native Build resources.");
       }
     });
+  }
+
+  private async closeHandle(
+    runId: string,
+    handle: NativeBuildRuntimeHandle,
+    failures: unknown[],
+  ): Promise<boolean> {
+    const shutdown = this.handleShutdown.get(runId) ?? { phase: "status_pending" };
+    this.handleShutdown.set(runId, shutdown);
+    if (shutdown.phase === "status_pending") {
+      try {
+        shutdown.phase = !handle.historical && handle.runtime.projection().status === "completed"
+          ? "settled_cleanup_pending"
+          : "ready_for_teardown";
+      } catch (error) {
+        failures.push(error);
+        shutdown.phase = "ready_for_teardown";
+      }
+    }
+    if (shutdown.phase === "settled_cleanup_pending") {
+      try {
+        await this.cleanupSettledRun(runId, handle);
+        shutdown.phase = "ready_for_teardown";
+      } catch (error) {
+        failures.push(error);
+        return false;
+      }
+    }
+    if (shutdown.phase === "ready_for_teardown") {
+      shutdown.phase = "teardown_started";
+    }
+    try {
+      await handle.close();
+      return true;
+    } catch (error) {
+      failures.push(error);
+      return false;
+    }
   }
 
   private async ensureRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {

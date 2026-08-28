@@ -2620,6 +2620,8 @@ test("manager close shares failures then retries only the handle that still owns
   let failedExtensions: LoadedRunnerExtensions | undefined;
   let manager: NativeBuildManager | undefined;
   let childPid = 0;
+  let failedProjectionCalls = 0;
+  let failedTeardownStarted = false;
   try {
     successExtensions = await new LocalPluginLoader({
       pluginDirectories: [successPlugin],
@@ -2644,15 +2646,32 @@ test("manager close shares failures then retries only the handle that still owns
     ]);
     manager = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
-      createRuntime: async (input) => ({
-        ...handleProjections(input.runId),
-        runtime: fakeRuntime(input.runId),
-        usage: () => emptyBudget(input.runId),
-        observability: async () => emptyObservability(input.runId),
-        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
-        cleanup: () => undefined,
-        close: async () => await handles.get(input.runId)!.close(),
-      }),
+      createRuntime: async (input) => {
+        const runtime = fakeRuntime(input.runId);
+        return {
+          ...handleProjections(input.runId),
+          runtime: {
+            ...runtime,
+            projection: () => {
+              if (input.runId === "run_failed") {
+                failedProjectionCalls += 1;
+                if (failedTeardownStarted) {
+                  throw new Error("projection unavailable after teardown began");
+                }
+              }
+              return runtime.projection();
+            },
+          } as BuildRuntime,
+          usage: () => emptyBudget(input.runId),
+          observability: async () => emptyObservability(input.runId),
+          projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+          cleanup: () => undefined,
+          close: async () => {
+            if (input.runId === "run_failed") failedTeardownStarted = true;
+            await handles.get(input.runId)!.close();
+          },
+        };
+      },
       shouldAutoRun: () => false,
       onPumpError: () => undefined,
       onPumpResult: () => undefined,
@@ -2692,6 +2711,7 @@ test("manager close shares failures then retries only the handle that still owns
     );
     assert.deepEqual(readdirSync(join(successState, "extension-executions")), []);
     assert.deepEqual(readdirSync(join(failedState, "extension-executions")), []);
+    assert.equal(failedProjectionCalls, 2);
     manager = undefined;
     successExtensions = undefined;
     failedExtensions = undefined;
@@ -2701,6 +2721,65 @@ test("manager close shares failures then retries only the handle that still owns
     await successExtensions?.close().catch(() => undefined);
     if (childPid > 0 && processExistsForManagerTest(childPid)) {
       process.kill(childPid, "SIGKILL");
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("manager close aggregates projection failure but still closes the reachable handle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-projection-close-"));
+  let projectionCalls = 0;
+  let closeCalls = 0;
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  const manager = new NativeBuildManager({
+    specs,
+    createRuntime: async (input) => ({
+      ...handleProjections(input.runId),
+      runtime: {
+        ...fakeRuntime(input.runId),
+        projection: () => {
+          projectionCalls += 1;
+          if (projectionCalls > 1) {
+            throw new Error("injected shutdown projection failure");
+          }
+          return fakeRuntime(input.runId).projection();
+        },
+      } as BuildRuntime,
+      usage: () => emptyBudget(input.runId),
+      observability: async () => emptyObservability(input.runId),
+      projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+      cleanup: () => undefined,
+      close: () => {
+        closeCalls += 1;
+      },
+    }),
+    shouldAutoRun: () => false,
+    onPumpError: () => undefined,
+    onPumpResult: () => undefined,
+  });
+  try {
+    await manager.create({
+      ...spec,
+      runId: "run_projection_failure",
+      idempotencyKey: "manager-close-projection-failure",
+    });
+    await assert.rejects(
+      manager.close(),
+      (error: unknown) => error instanceof AggregateError &&
+        error.errors.some((failure) => /shutdown projection failure/i.test(String(failure))),
+    );
+    assert.equal(projectionCalls, 2);
+    assert.equal(closeCalls, 1);
+
+    await manager.close();
+    assert.equal(projectionCalls, 2);
+    assert.equal(closeCalls, 1);
+  } finally {
+    await manager.close().catch(() => undefined);
+    try {
+      specs.close();
+    } catch {
+      // The manager owns the store in the green path; the red path needs this release.
     }
     rmSync(root, { recursive: true, force: true });
   }
