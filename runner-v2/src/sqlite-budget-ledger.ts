@@ -35,17 +35,22 @@ interface BudgetRow {
 
 export interface SqliteBudgetLedgerOptions {
   limitsFor: (scopeId: string) => BudgetLimits;
+  /** Opens an existing durable ledger without schema or journal mutations. */
+  readOnly?: boolean;
 }
 
 export class SqliteBudgetLedger implements BudgetLedger {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
   private readonly limitsFor: SqliteBudgetLedgerOptions["limitsFor"];
   private readonly projections = new Map<string, BudgetProjection>();
 
   constructor(databasePath: string, options: SqliteBudgetLedgerOptions) {
     this.limitsFor = options.limitsFor;
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS budget_events (

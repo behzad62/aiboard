@@ -56,20 +56,25 @@ interface RetainedCheckpoint {
 }
 
 export interface SqliteAgentSessionStoreOptions {
+  /** Opens an existing durable store without schema or transcript-projection writes. */
+  readOnly?: boolean;
   /** Return true only after global proof and idempotent physical deletion complete. */
   deleteArtifactIfGloballyUnreachable?: (hash: string) => Promise<boolean>;
 }
 
 export class SqliteAgentSessionStore {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
 
   constructor(
     databasePath: string,
     private readonly artifacts: ArtifactStore,
     private readonly options: SqliteAgentSessionStoreOptions = {}
   ) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS agent_session_events (
@@ -291,7 +296,7 @@ export class SqliteAgentSessionStore {
   }
 
   async transcript(runId: string, afterSequence = 0): Promise<AgentTranscriptPage> {
-    await this.ensureTranscriptProjection(runId);
+    if (!this.readOnly) await this.ensureTranscriptProjection(runId);
     const rows = this.database
       .prepare(
         `SELECT id, session_id, actor_json, sequence, ordinal, occurred_at, text
@@ -321,6 +326,7 @@ export class SqliteAgentSessionStore {
   }
 
   async compactRun(runId: string): Promise<void> {
+    if (this.readOnly) throw new Error("A read-only agent session store cannot compact transcripts.");
     await this.ensureTranscriptProjection(runId);
     const sessionIds = this.createdEvents(runId).map((event) => event.sessionId);
     const retained: RetainedCheckpoint[] = [];

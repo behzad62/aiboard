@@ -25,12 +25,20 @@ interface EvidenceRow {
   attempt: number | null;
 }
 
+export interface SqliteEvidenceStoreOptions {
+  /** Opens an existing durable store without schema or migration writes. */
+  readOnly?: boolean;
+}
+
 export class SqliteEvidenceStore implements EvidenceStore {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
 
-  constructor(databasePath: string) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+  constructor(databasePath: string, options: SqliteEvidenceStoreOptions = {}) {
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     try {
       this.database.exec(`
         PRAGMA journal_mode = WAL;

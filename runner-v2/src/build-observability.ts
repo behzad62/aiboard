@@ -13,6 +13,7 @@ import type {
 } from "./language-provider-router.js";
 import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { RunnerExtensionManifest } from "./runner-extension.js";
+import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
 import type { SkillMetadata } from "./skill-catalog.js";
 import type {
   FinalVerificationGenerationProjection,
@@ -147,6 +148,11 @@ export interface BuildCapabilitiesObservation {
   extensions: RunnerExtensionManifest[];
   languageProviders: LanguageProviderAuditMetadata[];
   languageRoutes: LanguageRouteAuditRecord[];
+  /**
+   * Immutable identities captured when the Build was created. Terminal
+   * historical handles expose this without loading extension or server code.
+   */
+  historicalContract?: RunnerCapabilityContract;
 }
 
 export type BuildTranscriptPage = AgentTranscriptPage;

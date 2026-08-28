@@ -21,12 +21,20 @@ interface EventRow {
   payload_json: string | null;
 }
 
+export interface SqliteToolLedgerOptions {
+  /** Opens an existing durable ledger without schema or journal mutations. */
+  readOnly?: boolean;
+}
+
 export class SqliteToolLedger implements ToolInvocationLedger {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
 
-  constructor(databasePath: string) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+  constructor(databasePath: string, options: SqliteToolLedgerOptions = {}) {
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS tool_events (

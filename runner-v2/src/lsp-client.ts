@@ -103,6 +103,8 @@ interface OpenDocument {
   languageId: string;
   version: number;
   text: string;
+  synchronizationGeneration: number;
+  acceptsVersionlessDiagnostics: boolean;
 }
 
 interface ProcessSession {
@@ -184,6 +186,7 @@ export class LspClient {
   private closePromise?: Promise<void>;
   private nextRequestId = 1;
   private nextGeneration = 1;
+  private nextDocumentSynchronizationGeneration = 1;
   private starts = 0;
   private restarts = 0;
   private state: LspClientStats["state"] = "idle";
@@ -327,6 +330,8 @@ export class LspClient {
       languageId: input.languageId,
       version: input.version,
       text: input.text,
+      synchronizationGeneration: this.nextDocumentSynchronizationGeneration++,
+      acceptsVersionlessDiagnostics: false,
     };
     this.documents.set(uri, document);
     try {
@@ -338,6 +343,10 @@ export class LspClient {
           text: input.text,
         },
       });
+      this.authorizeVersionlessDiagnostics(
+        uri,
+        document.synchronizationGeneration,
+      );
     } catch (error) {
       this.documents.delete(uri);
       this.diagnostics.delete(uri);
@@ -375,6 +384,8 @@ export class LspClient {
       ...current,
       version: input.version,
       text: input.text,
+      synchronizationGeneration: this.nextDocumentSynchronizationGeneration++,
+      acceptsVersionlessDiagnostics: false,
     };
     const priorDiagnostics = this.diagnostics.get(uri);
     this.documents.set(uri, next);
@@ -384,6 +395,10 @@ export class LspClient {
         textDocument: { uri, version: input.version },
         contentChanges: [{ text: input.text }],
       });
+      this.authorizeVersionlessDiagnostics(
+        uri,
+        next.synchronizationGeneration,
+      );
     } catch (error) {
       this.documents.set(uri, current);
       if (priorDiagnostics) this.diagnostics.set(uri, priorDiagnostics);
@@ -661,15 +676,26 @@ export class LspClient {
       session.diagnosticSupport = negotiatedDiagnosticSupport(initialized.capabilities);
       await this.notifyOnSession(session, "initialized", {});
       session.initialized = true;
-      for (const document of this.documents.values()) {
+      for (const document of [...this.documents.values()]) {
+        const reopened: OpenDocument = {
+          ...document,
+          synchronizationGeneration: this.nextDocumentSynchronizationGeneration++,
+          acceptsVersionlessDiagnostics: false,
+        };
+        this.documents.set(reopened.uri, reopened);
+        this.diagnostics.delete(reopened.uri);
         await this.notifyOnSession(session, "textDocument/didOpen", {
           textDocument: {
-            uri: document.uri,
-            languageId: document.languageId,
-            version: document.version,
-            text: document.text,
+            uri: reopened.uri,
+            languageId: reopened.languageId,
+            version: reopened.version,
+            text: reopened.text,
           },
         });
+        this.authorizeVersionlessDiagnostics(
+          reopened.uri,
+          reopened.synchronizationGeneration,
+        );
       }
       this.state = "running";
     } catch (error) {
@@ -1043,15 +1069,29 @@ export class LspClient {
     if (method !== "textDocument/publishDiagnostics" || !isObject(params)) return;
     if (typeof params.uri !== "string" || !Array.isArray(params.diagnostics)) return;
     const document = this.documents.get(params.uri);
-    if (!document || !Number.isSafeInteger(params.version) || params.version !== document.version) {
+    if (!document) return;
+    const version = params.version === undefined
+      ? document.acceptsVersionlessDiagnostics
+        ? document.version
+        : undefined
+      : Number.isSafeInteger(params.version) && params.version === document.version
+        ? params.version
+        : undefined;
+    if (version === undefined) {
       return;
     }
     this.diagnostics.set(params.uri, {
       uri: params.uri,
-      version: params.version as number,
+      version,
       diagnostics: structuredClone(params.diagnostics),
     });
     this.settleDiagnosticWaiters(params.uri);
+  }
+
+  private authorizeVersionlessDiagnostics(uri: string, synchronizationGeneration: number): void {
+    const document = this.documents.get(uri);
+    if (!document || document.synchronizationGeneration !== synchronizationGeneration) return;
+    this.documents.set(uri, { ...document, acceptsVersionlessDiagnostics: true });
   }
 
   private publishedDiagnosticsForVersion(

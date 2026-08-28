@@ -2703,6 +2703,109 @@ test("recovery rejects an active missing capability contract before constructing
   }
 });
 
+test("terminal legacy Builds retain read-only historical projections without constructing a live runtime", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-historical-read-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  let liveRuntimeConstructed = 0;
+  let recoveryValidationCalls = 0;
+  let historicalHandles = 0;
+  const projection: SchedulerProjection = {
+    ...fakeRuntime("run_1").projection(),
+    status: "completed",
+    lastSequence: 7,
+  };
+  const historicalRuntime = {
+    ...fakeRuntime("run_1"),
+    projection: () => projection,
+    events: (afterSequence = 0) => afterSequence < 7
+      ? [{
+          eventId: "historical-event",
+          runId: "run_1",
+          sequence: 7,
+          type: "run.completed" as const,
+          occurredAt: spec.createdAt,
+          actor: { role: "runner" as const, id: "historical" },
+          idempotencyKey: "historical-completed",
+          payload: {},
+        }]
+      : [],
+    step: async () => {
+      throw new Error("Historical Builds are read-only.");
+    },
+    runUntilBlocked: async () => {
+      throw new Error("Historical Builds are read-only.");
+    },
+  } as unknown as BuildRuntime;
+  const manager = new NativeBuildManager({
+    specs,
+    shouldRecoverSpec: () => false,
+    validateRecoveredSpec: async () => {
+      recoveryValidationCalls += 1;
+      throw new Error("terminal historical reads must not validate live capabilities");
+    },
+    createRuntime: async () => {
+      liveRuntimeConstructed += 1;
+      throw new Error("terminal historical reads must not construct a live runtime");
+    },
+    createHistoricalRuntime: async () => {
+      historicalHandles += 1;
+      return {
+        runtime: historicalRuntime,
+        usage: () => ({ ...emptyBudget("run_1"), lastSequence: 3 }),
+        observability: async () => ({
+          ...emptyObservability("run_1"),
+          events: historicalRuntime.events(),
+        }),
+        transcript: async () => ({
+          turns: [{
+            id: "turn-1",
+            sessionId: "architect:1",
+            actor: { role: "architect", id: "architect_1" },
+            sequence: 4,
+            ordinal: 1,
+            occurredAt: spec.createdAt,
+            text: "Historical transcript",
+          }],
+          cursor: 4,
+        }),
+        files: async () => ({
+          source: "integration",
+          revision: "a".repeat(40),
+          appliedToProject: false,
+          omittedFileCount: 0,
+          files: [{ path: "historical.txt", content: "preserved\n" }],
+        }),
+        compact: () => undefined,
+        projectHandoff: async () => {
+          throw new Error("Historical Builds are read-only.");
+        },
+        cleanup: () => undefined,
+        close: () => undefined,
+        historical: true,
+      };
+    },
+  });
+  try {
+    specs.save({ ...spec, capabilityContract: undefined });
+
+    await manager.recover();
+
+    assert.equal(liveRuntimeConstructed, 0);
+    assert.equal(recoveryValidationCalls, 0);
+    assert.equal(historicalHandles, 1);
+    assert.equal(manager.projection("run_1").status, "completed");
+    assert.equal(manager.usage("run_1").lastSequence, 3);
+    assert.equal((await manager.observability("run_1")).events.length, 1);
+    assert.equal((await manager.transcript("run_1")).turns[0]?.text, "Historical transcript");
+    assert.equal((await manager.files("run_1")).files[0]?.content, "preserved\n");
+    assert.equal(manager.events("run_1").length, 1);
+    await assert.rejects(manager.step("run_1"), /read-only/i);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("new Builds persist a runner-prepared capability contract before runtime construction", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-capability-stamp-"));
   const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));

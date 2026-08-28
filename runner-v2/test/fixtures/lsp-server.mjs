@@ -6,6 +6,7 @@ let rootUri = "";
 let clientProcessId = null;
 let shutdownRequested = false;
 let outputQueue = Promise.resolve();
+let diagnosticPublication = Promise.resolve();
 const documents = new Map();
 const cancellations = [];
 const blocked = new Set();
@@ -108,7 +109,7 @@ async function handle(message) {
       text: document.text,
       languageId: document.languageId,
     });
-    await publishDiagnostics(document.uri, document.version);
+    await queuePublishDiagnostics(document.uri, document.version);
     return;
   }
   if (method === "textDocument/didChange") {
@@ -124,7 +125,7 @@ async function handle(message) {
       return;
     }
     documents.set(document.uri, { ...current, version: document.version, text });
-    await publishDiagnostics(document.uri, document.version);
+    await queuePublishDiagnostics(document.uri, document.version);
     return;
   }
   if (method === "textDocument/didClose") {
@@ -203,6 +204,11 @@ async function handle(message) {
       cancellations: [...cancellations],
       requests: [...requests],
     });
+    return;
+  }
+  if (method === "fixture/diagnosticBarrier") {
+    await diagnosticPublication;
+    await respond(message.id, { published: true });
     return;
   }
   if (method === "fixture/block") {
@@ -295,11 +301,27 @@ function diagnostics(uri) {
 async function publishDiagnostics(uri, version) {
   await notify("textDocument/publishDiagnostics", {
     uri,
-    version: process.env.LSP_FIXTURE_PUBLISH_STALE_VERSION === "1"
-      ? Math.max(0, version - 1)
-      : version,
+    ...(process.env.LSP_FIXTURE_PUBLISH_WITHOUT_VERSION === "1"
+      ? {}
+      : {
+          version: process.env.LSP_FIXTURE_PUBLISH_STALE_VERSION === "1"
+            ? Math.max(0, version - 1)
+            : version,
+        }),
     diagnostics: diagnostics(uri),
   });
+  if (process.env.LSP_FIXTURE_PUBLISH_OUT_OF_ORDER_STALE_VERSION === "1") {
+    await notify("textDocument/publishDiagnostics", {
+      uri,
+      version: Math.max(0, version - 1),
+      diagnostics: diagnostics(uri),
+    });
+  }
+}
+
+function queuePublishDiagnostics(uri, version) {
+  diagnosticPublication = diagnosticPublication.then(() => publishDiagnostics(uri, version));
+  return diagnosticPublication;
 }
 
 function range(startLine, startCharacter, endLine, endCharacter) {

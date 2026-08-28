@@ -238,6 +238,68 @@ test("LSP client force-closes a server that does not answer shutdown", async () 
   }
 });
 
+test("LSP client accepts versionless publish diagnostics for a synchronized document", async () => {
+  const fixture = workspace("versionless publish diagnostics");
+  const client = fixture.client({
+    publishDiagnosticsWaitTimeoutMs: 80,
+    env: {
+      LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
+      LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: "1",
+    },
+  });
+  try {
+    await client.openDocument({
+      path: fixture.file,
+      languageId: "python",
+      version: 1,
+      text: "value = 1\n",
+    });
+    const published = await client.waitForPublishedDiagnostics(
+      client.documentUri(fixture.file),
+      1,
+    );
+    assert.ok(published, "standard versionless publishDiagnostics was not accepted");
+    assert.equal(published.version, 1);
+  } finally {
+    await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
+test("LSP client rejects explicit stale diagnostics after a versionless current publish", async () => {
+  const fixture = workspace("versionless stale diagnostics");
+  const client = fixture.client({
+    publishDiagnosticsWaitTimeoutMs: 80,
+    env: {
+      LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
+      LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: "1",
+      LSP_FIXTURE_PUBLISH_OUT_OF_ORDER_STALE_VERSION: "1",
+    },
+  });
+  const uri = client.documentUri(fixture.file);
+  try {
+    await client.openDocument({
+      path: fixture.file,
+      languageId: "python",
+      version: 1,
+      text: "value = 1\n",
+    });
+    await client.request("fixture/diagnosticBarrier", {});
+    assert.equal(client.publishedDiagnostics(uri)?.version, 1);
+
+    await client.updateDocument({
+      path: fixture.file,
+      version: 2,
+      text: "value = 2\n",
+    });
+    await client.request("fixture/diagnosticBarrier", {});
+    assert.equal(client.publishedDiagnostics(uri)?.version, 2);
+  } finally {
+    await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
 test("LSP client shutdown owns and terminates language-server descendants", async () => {
   const fixture = workspace("descendant Ω");
   const descendantMarker = join(fixture.root, "descendant.pid");

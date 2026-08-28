@@ -238,7 +238,7 @@ test("CLI accepts a valid external capability configuration before listening", a
   }
 });
 
-test("CLI fails an active legacy Build without a capability contract before recovery runtime startup", async () => {
+test("CLI rejects an active legacy Build without a capability contract before listening", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-missing-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -275,25 +275,22 @@ test("CLI fails an active legacy Build without a capability contract before reco
   specs.close();
   supervisor.close();
 
-  let runner: TrackedCliChild | undefined;
   try {
-    runner = spawnCli(project, state, config, token);
-    const readiness = await awaitCliReadiness(runner);
-    const response = await fetch(`${readiness.url}/v2/runs/${runId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const body = await response.json() as { state?: unknown; stopReason?: unknown };
-
-    assert.equal(response.status, 200);
-    assert.equal(body.state, "failed");
-    assert.equal(body.stopReason, "capability-contract:capability_contract_missing");
+    const outcome = await runCliToExit(project, state, config, token);
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /active Build recovery requires a persisted Runner capability contract/i);
+    const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+    try {
+      const run = recovered.getRun(runId);
+      assert.equal(run.state, "failed");
+      assert.equal(run.stopReason, "capability-contract:capability_contract_missing");
+    } finally {
+      recovered.close();
+    }
     assert.equal(existsSync(join(state, "builds", runId)), false);
   } finally {
-    try {
-      if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
-    } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -357,7 +354,7 @@ test("CLI keeps a terminal legacy Build readable without recovering it against c
   }
 });
 
-test("CLI fails an active Build when its persisted extension contract no longer matches", async () => {
+test("CLI rejects a changed active extension before evaluating or starting it", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-mutated-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -365,6 +362,7 @@ test("CLI fails an active Build when its persisted extension contract no longer 
   const config = join(root, "runner-capabilities.json");
   const runId = "mutated_capability_contract";
   const token = "cli-capability-mutated-token";
+  const sideEffectLog = join(root, "extension-side-effects.log");
   mkdirSync(project);
   mkdirSync(state);
   writeExtension(extension, {
@@ -392,7 +390,28 @@ test("CLI fails an active Build when its persisted extension contract no longer 
     extensions: [extension],
     languageServers: [],
   });
-  writeFileSync(join(extension, "index.mjs"), "// changed after the Build was persisted\n", { flag: "a" });
+  writeFileSync(join(extension, "index.mjs"), `
+    import { appendFileSync } from "node:fs";
+    appendFileSync(${JSON.stringify(sideEffectLog)}, "evaluated\\n");
+    export function createExtension() {
+      return {
+        capabilities: () => ({
+          tools: [{
+            definition: { name: "fixture.cli.contract.inspect", description: "Inspect", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+            validate: () => ({ ok: true, value: {} }),
+            execute: async () => ({ content: [], isError: false }),
+          }],
+          contextContributors: [],
+          languageProviders: [],
+        }),
+        start: async () => {
+          appendFileSync(${JSON.stringify(sideEffectLog)}, "started\\n");
+          throw new Error("changed extension start should not run");
+        },
+        close: async () => appendFileSync(${JSON.stringify(sideEffectLog)}, "closed\\n"),
+      };
+    }
+  `);
   const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
   const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
   supervisor.createRun({
@@ -421,25 +440,107 @@ test("CLI fails an active Build when its persisted extension contract no longer 
   specs.close();
   supervisor.close();
 
-  let runner: TrackedCliChild | undefined;
   try {
-    runner = spawnCli(project, state, config, token);
-    const readiness = await awaitCliReadiness(runner);
-    const response = await fetch(`${readiness.url}/v2/runs/${runId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const body = await response.json() as { state?: unknown; stopReason?: unknown };
-
-    assert.equal(response.status, 200);
-    assert.equal(body.state, "failed");
-    assert.equal(body.stopReason, "capability-contract:capability_contract_mismatch");
+    const outcome = await runCliToExit(project, state, config, token);
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /capability.*configuration differs/i);
+    assert.doesNotMatch(outcome.stderr, /changed extension start should not run/i);
+    assert.equal(existsSync(sideEffectLog), false);
+    const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+    try {
+      const run = recovered.getRun(runId);
+      assert.equal(run.state, "failed");
+      assert.equal(run.stopReason, "capability-contract:capability_contract_mismatch");
+    } finally {
+      recovered.close();
+    }
     assert.equal(existsSync(join(state, "builds", runId)), false);
   } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CLI rejects a syntactically invalid changed active extension before preflight", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-syntax-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const extension = join(root, "extension");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "syntax_mutated_capability_contract";
+  const token = "cli-capability-syntax-token";
+  mkdirSync(project);
+  mkdirSync(state);
+  writeExtension(extension, {
+    id: "fixture.cli.syntax",
+    module: `
+      export function createExtension() {
+        return {
+          capabilities: () => ({
+            tools: [{
+              definition: { name: "fixture.cli.syntax.inspect", description: "Inspect", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+              validate: () => ({ ok: true, value: {} }),
+              execute: async () => ({ content: [], isError: false }),
+            }],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async () => undefined,
+          close: async () => undefined,
+        };
+      }
+    `,
+  });
+  writeCapabilitiesConfig(config, [extension]);
+  const capabilityContract = await createRunnerCapabilityContract({
+    extensions: [extension],
+    languageServers: [],
+  });
+  writeFileSync(join(extension, "index.mjs"), "export function createExtension( {\n");
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+  const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
+  supervisor.createRun({
+    runId,
+    projectPath: project,
+    permissionProfile: "project",
+    idempotencyKey: `create:${runId}`,
+  });
+  specs.save({
+    version: 2,
+    runId,
+    projectId: "project_1",
+    objective: "Do not parse a mismatched extension during recovery.",
+    architectRuntimeId: "fixture:architect",
+    workerRuntimeIds: ["fixture:worker"],
+    verifierRuntimeIds: ["fixture:worker"],
+    alwaysRequireIndependentVerifier: false,
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    runPolicy: "finish",
+    budgetLimits: {},
+    createdAt: "2026-08-28T00:00:00.000Z",
+    idempotencyKey: `build:${runId}`,
+    capabilityContract,
+  });
+  specs.close();
+  supervisor.close();
+
+  try {
+    const outcome = await runCliToExit(project, state, config, token);
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /capability.*configuration differs/i);
+    assert.doesNotMatch(outcome.stderr, /syntaxerror|unexpected token/i);
+    const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
     try {
-      if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
+      const run = recovered.getRun(runId);
+      assert.equal(run.state, "failed");
+      assert.equal(run.stopReason, "capability-contract:capability_contract_mismatch");
     } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      recovered.close();
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

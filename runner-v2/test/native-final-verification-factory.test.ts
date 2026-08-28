@@ -71,7 +71,7 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
   let scheduler: SqliteSchedulerStore | undefined;
   try {
-    handle = await factory.create({
+    handle = await factory.create(await factory.prepareSpec({
       version: 2,
       runId,
       projectId: "fixture-project",
@@ -86,7 +86,7 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
       budgetLimits: {},
       createdAt: "2026-08-26T00:00:00.000Z",
       idempotencyKey: "native-factory-verification",
-    });
+    }));
     const runRoot = join(state, "builds", safeSegment(runId));
     const ports = new FinalVerificationPortAuthority(state);
     const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId, portAuthority: ports });

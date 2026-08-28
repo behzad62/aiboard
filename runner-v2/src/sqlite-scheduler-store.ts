@@ -33,6 +33,8 @@ interface EventRow {
 }
 
 export interface SqliteSchedulerStoreOptions {
+  /** Opens an existing durable store without schema or journal mutations. */
+  readOnly?: boolean;
   /**
    * Required whenever a run carries acceptance-evidence events. It may be
    * omitted only for deterministic legacy runs that contain no such events;
@@ -53,18 +55,21 @@ export interface SqliteSchedulerStoreOptions {
 
 export class SqliteSchedulerStore implements SchedulerStore {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
   private readonly evidenceStore?: EvidenceStore;
   private readonly artifacts?: Pick<ArtifactStore, "verifySync">;
   private readonly validateCleanupReceipt?: SqliteSchedulerStoreOptions["validateCleanupReceipt"];
   private readonly validateExecutionProfile?: SqliteSchedulerStoreOptions["validateExecutionProfile"];
 
   constructor(databasePath: string, options: SqliteSchedulerStoreOptions = {}) {
+    this.readOnly = options.readOnly ?? false;
     this.evidenceStore = options.evidenceStore;
     this.artifacts = options.artifacts;
     this.validateCleanupReceipt = options.validateCleanupReceipt;
     this.validateExecutionProfile = options.validateExecutionProfile;
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS scheduler_events (

@@ -26,6 +26,8 @@ import type { FinalVerificationCleanupController } from "./final-verification-cl
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
+  /** A durable terminal projection with no mutable runtime authority. */
+  historical?: true;
   usage(): NativeBuildUsageProjection;
   observability(): Promise<BuildObservabilitySnapshot>;
   transcript(afterSequence?: number): Promise<BuildTranscriptPage>;
@@ -51,6 +53,8 @@ export interface NativeBuildManagerOptions {
   validateRecoveredSpec?(spec: NativeBuildSpec): Promise<void>;
   /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
   shouldRecoverSpec?(spec: NativeBuildSpec): boolean | Promise<boolean>;
+  /** Opens storage-backed terminal projections without constructing a live runtime. */
+  createHistoricalRuntime?(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
   /** Records a durable recovery validation failure without starting the rejected Build. */
   onRecoverySpecError?(runId: string, error: unknown): void;
   shouldAutoRun?(runId: string): boolean;
@@ -87,6 +91,7 @@ export class NativeBuildManager implements BuildControlPlane {
       for (const spec of this.options.specs.list()) {
         try {
           if (this.options.shouldRecoverSpec && !await this.options.shouldRecoverSpec(spec)) {
+            await this.ensureHistoricalRuntime(spec);
             continue;
           }
           await this.options.validateRecoveredSpec?.(spec);
@@ -241,6 +246,7 @@ export class NativeBuildManager implements BuildControlPlane {
     this.assertOpen();
     if (this.pumps.has(runId)) return;
     const handle = this.require(runId);
+    if (handle.historical) return;
     const projection = handle.runtime.projection();
     if (
       projection.status !== "running" &&
@@ -461,7 +467,7 @@ export class NativeBuildManager implements BuildControlPlane {
       this.handles.clear();
       const failures: unknown[] = [];
       for (const handle of handles) {
-        if (handle.runtime.projection().status === "completed") {
+        if (!handle.historical && handle.runtime.projection().status === "completed") {
           try {
             await this.cleanupSettledRun(handle.runtime.id, handle);
           } catch (error) {
@@ -486,6 +492,21 @@ export class NativeBuildManager implements BuildControlPlane {
     const existing = this.handles.get(spec.runId);
     if (existing) return existing;
     const handle = await this.options.createRuntime(spec);
+    if (handle.runtime.id !== spec.runId) {
+      await handle.close();
+      throw new Error(`Build runtime identity mismatch for ${spec.runId}.`);
+    }
+    this.handles.set(spec.runId, handle);
+    return handle;
+  }
+
+  private async ensureHistoricalRuntime(
+    spec: NativeBuildSpec,
+  ): Promise<NativeBuildRuntimeHandle | undefined> {
+    const existing = this.handles.get(spec.runId);
+    if (existing) return existing;
+    if (!this.options.createHistoricalRuntime) return undefined;
+    const handle = await this.options.createHistoricalRuntime(spec);
     if (handle.runtime.id !== spec.runId) {
       await handle.close();
       throw new Error(`Build runtime identity mismatch for ${spec.runId}.`);
@@ -776,7 +797,7 @@ export class NativeBuildManager implements BuildControlPlane {
   private async compactEligibleRuns(): Promise<void> {
     await this.compactRuns(
       [...this.handles.entries()].filter(
-        ([, handle]) => handle.runtime.projection().status !== "running"
+        ([, handle]) => !handle.historical && handle.runtime.projection().status !== "running"
       )
     );
   }

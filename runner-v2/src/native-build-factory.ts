@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import { AccountRunnerModel } from "./account-runner-model.js";
 import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
-import type { ModelCostBasisSnapshot } from "./budget-ledger.js";
+import {
+  rebuildBudgetProjection,
+  type ModelCostBasisSnapshot,
+} from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { CapabilityRegistry } from "./capability-registry.js";
@@ -70,8 +74,11 @@ import {
   type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
 import {
-  createRunnerCapabilityContract,
+  cloneRunnerCapabilityContract,
+  createRunnerCapabilityContractSnapshot,
+  runnerCapabilitySnapshotExtensionDirectories,
   validateRunnerCapabilityContract,
+  validateRunnerCapabilityContractSnapshot,
 } from "./runner-capability-contract.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
@@ -146,9 +153,13 @@ export class NativeBuildFactory {
 
   async prepareSpec(spec: NativeBuildSpec): Promise<NativeBuildSpec> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    const config = this.capabilitiesConfig();
     return {
       ...cloneBuildSpec(spec),
-      capabilityContract: await createRunnerCapabilityContract(this.capabilitiesConfig()),
+      capabilityContract: await createRunnerCapabilityContractSnapshot(
+        config,
+        this.options.stateDirectory,
+      ),
     };
   }
 
@@ -159,13 +170,25 @@ export class NativeBuildFactory {
 
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
-    if (spec.capabilityContract) {
-      await this.validateRecoveryCapabilityContract(spec);
+    if (!spec.capabilityContract) {
+      throw new Error("Native Build runtime requires a Runner-prepared capability contract.");
     }
+    await this.validateRecoveryCapabilityContract(spec);
+    await validateRunnerCapabilityContractSnapshot(
+      spec.capabilityContract,
+      this.options.stateDirectory,
+    );
+    const capabilitiesConfig = this.capabilitiesConfig();
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     await mkdir(runRoot, { recursive: true });
     const runCapabilities = await createNativeRunCapabilities({
-      config: this.capabilitiesConfig(),
+      config: {
+        ...capabilitiesConfig,
+        extensions: runnerCapabilitySnapshotExtensionDirectories(
+          spec.capabilityContract,
+          this.options.stateDirectory,
+        ),
+      },
       projectDirectory: this.options.projectRoot,
       stateDirectory: runRoot,
       reservedToolNames: [
@@ -749,6 +772,217 @@ export class NativeBuildFactory {
 
   private capabilitiesConfig(): RunnerCapabilitiesConfig {
     return this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig();
+  }
+
+  /**
+   * Reopens only durable records for a terminal Build. It deliberately does
+   * not load capability code, construct models, or start owned processes.
+   */
+  async createHistorical(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
+    let evidenceStore: SqliteEvidenceStore | undefined;
+    let ledger: SqliteToolLedger | undefined;
+    let sessions: SqliteAgentSessionStore | undefined;
+    let budgetLedger: SqliteBudgetLedger | undefined;
+    let schedulerStore: SqliteSchedulerStore | undefined;
+    try {
+      const evidencePath = join(runRoot, "evidence.sqlite");
+      const ledgerPath = join(runRoot, "tools.sqlite");
+      const sessionsPath = join(runRoot, "sessions.sqlite");
+      const budgetPath = join(runRoot, "budget.sqlite");
+      const schedulerPath = join(runRoot, "scheduler.sqlite");
+      if (hasHistoricalStore(evidencePath)) {
+        evidenceStore = new SqliteEvidenceStore(evidencePath, { readOnly: true });
+      }
+      if (hasHistoricalStore(ledgerPath)) {
+        ledger = new SqliteToolLedger(ledgerPath, { readOnly: true });
+      }
+      if (hasHistoricalStore(sessionsPath)) {
+        sessions = new SqliteAgentSessionStore(sessionsPath, this.artifacts, { readOnly: true });
+      }
+      if (hasHistoricalStore(budgetPath)) {
+        budgetLedger = new SqliteBudgetLedger(budgetPath, {
+          limitsFor: () => spec.budgetLimits,
+          readOnly: true,
+        });
+      }
+      if (hasHistoricalStore(schedulerPath)) {
+        schedulerStore = new SqliteSchedulerStore(schedulerPath, {
+          evidenceStore,
+          artifacts: this.artifacts,
+          readOnly: true,
+        });
+      }
+      let integrationManager: IntegrationManager | undefined;
+      const historicalIntegrationManager = (): IntegrationManager => {
+        integrationManager ??= new IntegrationManager({
+          repositoryRoot: this.options.projectRoot,
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          baselineRevision: this.options.baselineFor(spec.runId),
+          initializationMode: "cleanup-only",
+        });
+        return integrationManager;
+      };
+      const readEvents = (afterSequence = 0): SchedulerEvent[] =>
+        schedulerStore?.readRun(spec.runId, afterSequence) ?? [];
+      const budgetProjection = () =>
+        budgetLedger?.snapshot(spec.runId) ?? rebuildBudgetProjection(spec.runId, []);
+      const projection = () => historicalSchedulerProjection(
+        spec,
+        readEvents(),
+      );
+      const readOnlyError = (): never => {
+        throw new Error(`Historical Build ${spec.runId} is read-only.`);
+      };
+      const runtime = {
+        id: spec.runId,
+        projection,
+        events: (afterSequence = 0) => readEvents(afterSequence),
+        step: async () => readOnlyError(),
+        runUntilBlocked: async () => readOnlyError(),
+        pause: () => readOnlyError(),
+        resume: () => readOnlyError(),
+        continue: () => readOnlyError(),
+        selectArchitectHandoff: () => readOnlyError(),
+        selectVerifierRuntime: () => readOnlyError(),
+        submitUserGuidance: () => readOnlyError(),
+        submitManagedUserGuidance: () => readOnlyError(),
+        completeManagedUserGuidanceInterruption: () => readOnlyError(),
+        answerArchitectQuestion: () => readOnlyError(),
+        selectProjectHandoff: () => readOnlyError(),
+      } as unknown as BuildRuntime;
+      let closed = false;
+      return {
+        runtime,
+        historical: true,
+        usage: () => {
+          const budget = budgetProjection();
+          return {
+            ...budget,
+            attributedModelReservationCount: Object.values(budget.reservations).filter(
+              (reservation) => reservation.kind === "model" && reservation.attribution,
+            ).length,
+            models: [],
+          };
+        },
+        observability: async (): Promise<BuildObservabilitySnapshot> => {
+          const schedulerEvents = readEvents();
+          const schedulerProjection = historicalSchedulerProjection(spec, schedulerEvents);
+          const agentSessions = sessions ? await sessions.listRun(spec.runId) : [];
+          const toolCalls = ledger ? summarizeToolCalls(ledger.listRun(spec.runId)) : [];
+          const finalGeneration = schedulerProjection.finalVerification?.current;
+          const diagnostics = finalGeneration
+            ? await loadFinalVerificationDiagnostics({
+                stateDirectory: this.options.stateDirectory,
+                runId: spec.runId,
+                expectedRunSegment: safeSegment(spec.runId),
+                diagnosticsPath: finalGeneration.cleanup?.diagnosticsPath,
+                generationId: finalGeneration.generationId,
+                taskId: finalGeneration.taskId,
+                targetRevision: finalGeneration.targetRevision,
+              })
+            : undefined;
+          const integrationRevision = schedulerProjection.projectHandoff?.integrationRevision
+            ?? schedulerProjection.integrationRevision;
+          return {
+            runId: spec.runId,
+            budget: budgetProjection(),
+            toolCallCount: toolCalls.length,
+            agents: agentSessions.map((session) => ({
+              sessionId: session.sessionId,
+              actor: { ...session.actor },
+              status: session.status,
+              turns: session.checkpoint?.turns ?? 0,
+              ...(session.suspensionReason
+                ? { suspensionReason: session.suspensionReason }
+                : {}),
+              ...(session.error ? { error: session.error } : {}),
+              ...(session.changeSetId ? { changeSetId: session.changeSetId } : {}),
+              lastSequence: session.lastSequence,
+            })),
+            tools: toolCalls.slice(-1_000),
+            evidence: evidenceStore?.list({ runId: spec.runId, limit: 1_000 }) ?? [],
+            memories: [],
+            skills: [],
+            processes: [],
+            providers: Object.values(schedulerProjection.runtime.providerHealth),
+            events: schedulerEvents.slice(-1_000),
+            git: {
+              integrationBranch: schedulerProjection.projectHandoff?.integrationBranch ?? "",
+              integrationRevision: integrationRevision ?? "",
+              commits: integrationRevision
+                ? await historicalIntegrationManager().historicalHistory(integrationRevision)
+                : [],
+            },
+            ...(spec.capabilityContract
+              ? {
+                  capabilities: {
+                    extensions: [],
+                    languageProviders: [],
+                    languageRoutes: [],
+                    historicalContract: cloneRunnerCapabilityContract(spec.capabilityContract),
+                  },
+                }
+              : {}),
+            finalVerification: projectFinalVerificationObservability(
+              schedulerProjection,
+              diagnostics,
+            ),
+            independentVerifier:
+              projectIndependentVerifierObservability(schedulerProjection),
+          };
+        },
+        transcript: async (afterSequence = 0) =>
+          sessions
+            ? await sessions.transcript(spec.runId, afterSequence)
+            : { turns: [], cursor: afterSequence },
+        files: async () => {
+          const schedulerProjection = projection();
+          const handoff = schedulerProjection.projectHandoff;
+          const integrationRevision = handoff?.integrationRevision
+            ?? schedulerProjection.integrationRevision;
+          if (!integrationRevision && !(handoff?.appliedToProject && handoff.projectRevision)) {
+            return {
+              source: "integration",
+              revision: "",
+              appliedToProject: false,
+              omittedFileCount: 0,
+              files: [],
+            };
+          }
+          return await historicalIntegrationManager().historicalFiles({
+            integrationRevision,
+            appliedToProject: handoff?.appliedToProject,
+            projectRevision: handoff?.projectRevision,
+          });
+        },
+        compact: () => undefined,
+        projectHandoff: async () => readOnlyError(),
+        cleanup: () => undefined,
+        close: () => {
+          if (closed) return;
+          closed = true;
+          schedulerStore?.close();
+          budgetLedger?.close();
+          sessions?.close();
+          ledger?.close();
+          evidenceStore?.close();
+        },
+      };
+    } catch (error) {
+      try {
+        schedulerStore?.close();
+        budgetLedger?.close();
+        sessions?.close();
+        ledger?.close();
+        evidenceStore?.close();
+      } catch {
+        // Preserve the original historical-read opening failure.
+      }
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -1414,4 +1648,43 @@ function safeSegment(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "run";
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+}
+
+/**
+ * Historical readers never bootstrap a database. A terminal Build may predate
+ * one of these optional stores, in which case callers receive the equivalent
+ * empty projection while the path remains absent.
+ */
+function hasHistoricalStore(path: string): boolean {
+  try {
+    const metadata = statSync(path);
+    if (metadata.isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  throw new Error(`Historical Runner store ${path} must be a regular file.`);
+}
+
+function historicalSchedulerProjection(
+  spec: NativeBuildSpec,
+  events: readonly SchedulerEvent[],
+): SchedulerProjection {
+  if (events.length > 0) return rebuildSchedulerProjection(events);
+  return {
+    runId: spec.runId,
+    initialObjective: spec.objective,
+    runPolicy: spec.runPolicy,
+    status: "completed",
+    planRevision: 0,
+    tasks: {},
+    guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 0,
+  };
 }

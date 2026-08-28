@@ -6,9 +6,16 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
+import { ArtifactStore } from "../src/artifact-store.js";
 import { NativeBuildFactory } from "../src/native-build-factory.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
+import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
@@ -28,7 +35,7 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
       languageServers: [configuredServer("fixture.configured")],
     });
 
-    handle = await factory.create(buildSpec("capability_metadata"));
+    handle = await factory.create(await factory.prepareSpec(buildSpec("capability_metadata")));
     assert.equal(
       existsSync(join(runRoot(fixture.state, "capability_metadata"), "extensions", "fixture.factory", "started.txt")),
       true,
@@ -108,6 +115,106 @@ test("NativeBuildFactory persists and validates a capability contract before rec
   }
 });
 
+test("NativeBuildFactory rejects an active contract when a local extension helper changes", async () => {
+  const fixture = createFixture("helper-dependency-contract");
+  let factory: NativeBuildFactory | undefined;
+  try {
+    writeHelperExtension(fixture.extension, "trusted");
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId: "capability_helper_dependency_contract",
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [],
+    });
+    const prepared = await factory.prepareSpec(
+      buildSpec("capability_helper_dependency_contract"),
+    );
+
+    writeFileSync(join(fixture.extension, "helper.mjs"), 'export const marker = "changed";\n');
+
+    await assert.rejects(
+      factory.validateRecoveryCapabilityContract(prepared),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_mismatch",
+    );
+  } finally {
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory fails closed when an active legacy capability contract lacks an immutable closure", async () => {
+  const fixture = createFixture("legacy-capability-contract");
+  let factory: NativeBuildFactory | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId: "capability_legacy_contract",
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [],
+    });
+    const prepared = await factory.prepareSpec(buildSpec("capability_legacy_contract"));
+    const legacy = legacyContract(prepared.capabilityContract!);
+
+    await assert.rejects(
+      factory.validateRecoveryCapabilityContract({
+        ...prepared,
+        capabilityContract: legacy,
+      }),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_missing",
+    );
+  } finally {
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory loads an extension snapshot after source replacement following validation", async () => {
+  const fixture = createFixture("extension-snapshot-replacement");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  try {
+    writeHelperExtension(fixture.extension, "trusted");
+    const runId = "capability_extension_snapshot_replacement";
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [],
+    });
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    const validate = factory.validateRecoveryCapabilityContract.bind(factory);
+    factory.validateRecoveryCapabilityContract = async (spec) => {
+      await validate(spec);
+      writeFileSync(join(fixture.extension, "helper.mjs"), 'export const marker = "replaced";\n');
+    };
+
+    handle = await factory.create(prepared);
+
+    assert.equal(
+      readFileSync(
+        join(runRoot(fixture.state, runId), "extensions", "fixture.factory", "snapshot-marker.txt"),
+        "utf8",
+      ),
+      "trusted\n",
+    );
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
 test("NativeBuildFactory snapshot preserves attribution for a live extension tool call", async () => {
   const fixture = createFixture("extension-tool-observation");
   let factory: NativeBuildFactory | undefined;
@@ -123,7 +230,7 @@ test("NativeBuildFactory snapshot preserves attribution for a live extension too
       extensions: [fixture.extension],
       languageServers: [],
     });
-    handle = await factory.create(buildSpec(runId));
+    handle = await factory.create(await factory.prepareSpec(buildSpec(runId)));
 
     const options = factoryWorkerOptions(handle);
     const workspace = await options.workspaceManager.createTaskWorkspace("extension_audit");
@@ -181,7 +288,9 @@ test("NativeBuildFactory closes extension language providers before their extens
       languageServers: [],
     });
 
-    handle = await factory.create(buildSpec("capability_extension_language_close"));
+    handle = await factory.create(
+      await factory.prepareSpec(buildSpec("capability_extension_language_close")),
+    );
     await handle.close();
     await handle.close();
     handle = undefined;
@@ -217,7 +326,9 @@ test("NativeBuildFactory closes extension providers before instances when langua
       languageServers: [configuredServer("fixture.duplicate")],
     });
 
-    const outcome = await factory.create(buildSpec("capability_atomic")).then(
+    const outcome = await factory.create(
+      await factory.prepareSpec(buildSpec("capability_atomic")),
+    ).then(
       (created) => ({ created }),
       (error: unknown) => ({ error }),
     );
@@ -252,7 +363,9 @@ test("NativeBuildFactory reserves built-in tool names before any extension start
       languageServers: [],
     });
 
-    const outcome = await factory.create(buildSpec("capability_reserved")).then(
+    const outcome = await factory.create(
+      await factory.prepareSpec(buildSpec("capability_reserved")),
+    ).then(
       (created) => ({ created }),
       (error: unknown) => ({ error }),
     );
@@ -297,6 +410,116 @@ test("NativeBuildFactory leaves provider configuration cleanup to the CLI when r
   } finally {
     if (providerConfigsClosed === 0) options.providerConfigs.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("NativeBuildFactory serves a terminal legacy Build from read-only durable stores", async () => {
+  const fixture = createFixture("historical-terminal");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    const runId = "capability_historical_terminal";
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    const root = runRoot(fixture.state, runId);
+    mkdirSync(root, { recursive: true });
+    const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+    const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+    const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+    const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+    const budget = new SqliteBudgetLedger(join(root, "budget.sqlite"), {
+      limitsFor: () => ({}),
+    });
+    const scheduler = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+      evidenceStore: evidence,
+      artifacts,
+    });
+    scheduler.close();
+    budget.close();
+    sessions.close();
+    ledger.close();
+    evidence.close();
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [configuredServer("fixture.historical")],
+    });
+
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    handle = await factory.createHistorical(prepared);
+
+    assert.equal(handle.runtime.projection().status, "completed");
+    assert.equal(handle.usage().scopeId, runId);
+    const snapshot = await handle.observability();
+    assert.equal(snapshot.runId, runId);
+    assert.deepEqual(snapshot.capabilities?.historicalContract, {
+      version: prepared.capabilityContract!.version,
+      extensionClosureVersion: prepared.capabilityContract!.extensionClosureVersion,
+      digest: prepared.capabilityContract!.digest,
+      builtin: prepared.capabilityContract!.builtin,
+      extensions: prepared.capabilityContract!.extensions,
+      languageServers: prepared.capabilityContract!.languageServers,
+    });
+    assert.deepEqual(await handle.transcript(), { turns: [], cursor: 0 });
+    assert.deepEqual(await handle.files(), {
+      source: "integration",
+      revision: "",
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+    });
+    assert.deepEqual(handle.runtime.events(), []);
+    await assert.rejects(handle.runtime.step(), /read-only/i);
+    assert.equal(
+      existsSync(join(root, "extensions", "fixture.factory", "started.txt")),
+      false,
+    );
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory keeps missing terminal stores absent and projects empty read-only history", async () => {
+  const fixture = createFixture("historical-missing-stores");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    const runId = "capability_historical_missing_stores";
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [],
+      languageServers: [],
+    });
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    const root = runRoot(fixture.state, runId);
+    assert.equal(existsSync(root), false);
+
+    handle = await factory.createHistorical(prepared);
+
+    assert.equal(handle.runtime.projection().status, "completed");
+    assert.equal(handle.usage().scopeId, runId);
+    assert.deepEqual((await handle.observability()).events, []);
+    assert.deepEqual(await handle.transcript(), { turns: [], cursor: 0 });
+    assert.deepEqual(await handle.files(), {
+      source: "integration",
+      revision: "",
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+    });
+    assert.equal(existsSync(root), false);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
   }
 });
 
@@ -425,6 +648,65 @@ function extensionModuleSource(
     "}",
     "",
   ].join("\n");
+}
+
+function writeHelperExtension(extension: string, marker: string): void {
+  writeFileSync(join(extension, "runner-extension.json"), JSON.stringify({
+    apiVersion: 1,
+    id: "fixture.factory",
+    name: "Factory Fixture",
+    version: "1.0.0",
+    entry: "index.mjs",
+    capabilities: [],
+  }, null, 2));
+  writeFileSync(join(extension, "helper.mjs"), `export const marker = ${JSON.stringify(marker)};\n`);
+  writeFileSync(
+    join(extension, "index.mjs"),
+    [
+      'import { writeFile } from "node:fs/promises";',
+      'import { join } from "node:path";',
+      'import { marker } from "./helper.mjs";',
+      "export function createExtension() {",
+      "  return {",
+      "    capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),",
+      "    start: async (context) => {",
+      '      await writeFile(join(context.stateDirectory, "snapshot-marker.txt"), `${marker}\\n`);',
+      "    },",
+      "    close: async () => {},",
+      "  };",
+      "}",
+      "",
+    ].join("\n"),
+  );
+}
+
+function legacyContract(contract: RunnerCapabilityContract): RunnerCapabilityContract {
+  const legacy = {
+    version: contract.version,
+    builtin: { ...contract.builtin },
+    extensions: contract.extensions.map(({ closureDigest: _closureDigest, ...extension }) => ({
+      ...extension,
+      capabilities: [...extension.capabilities],
+    })),
+    languageServers: contract.languageServers.map((server) => ({ ...server })),
+  };
+  return {
+    ...legacy,
+    digest: createHash("sha256").update(stableJson(legacy)).digest("hex"),
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
+  }
+  throw new Error("unsupported fixture value");
 }
 
 function runRoot(stateDirectory: string, runId: string): string {

@@ -19,8 +19,12 @@ import { SqlitePermissionStore } from "./permission-store.js";
 import {
   emptyRunnerCapabilitiesConfig,
   loadRunnerCapabilitiesConfig,
+  type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
-import { RunnerCapabilityContractError } from "./runner-capability-contract.js";
+import {
+  RunnerCapabilityContractError,
+  validateRunnerCapabilityContract,
+} from "./runner-capability-contract.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
 import type { RunState } from "./contracts.js";
@@ -90,6 +94,11 @@ async function main(): Promise<void> {
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
     );
     resources.supervisor = supervisor;
+    await validateActiveRecoveryCapabilityContracts(
+      supervisor,
+      capabilitiesConfig,
+      options.stateDirectory,
+    );
     const providerConfigs = new EncryptedProviderConfigStore(
       join(options.stateDirectory, "provider-configs.enc"),
       options.token
@@ -142,6 +151,7 @@ async function main(): Promise<void> {
         join(options.stateDirectory, "build-specs.sqlite")
       ),
       createRuntime: (spec) => buildFactory.create(spec),
+      createHistoricalRuntime: (spec) => buildFactory.createHistorical(spec),
       prepareSpec: (spec) => buildFactory.prepareSpec(spec),
       shouldRecoverSpec: (spec) =>
         !isTerminalRunState(supervisor.getRun(spec.runId).state),
@@ -276,6 +286,39 @@ function syncAutonomousBuildLifecycle(
 
 function isTerminalRunState(state: RunState): boolean {
   return state === "stopped" || state === "completed" || state === "failed";
+}
+
+async function validateActiveRecoveryCapabilityContracts(
+  supervisor: RunSupervisor,
+  capabilitiesConfig: RunnerCapabilitiesConfig,
+  stateDirectory: string,
+): Promise<void> {
+  const specs = new SqliteBuildSpecStore(join(stateDirectory, "build-specs.sqlite"));
+  const failures: unknown[] = [];
+  try {
+    for (const spec of specs.list()) {
+      const run = supervisor.getRun(spec.runId);
+      if (isTerminalRunState(run.state)) continue;
+      try {
+        await validateRunnerCapabilityContract(
+          spec.capabilityContract,
+          capabilitiesConfig,
+        );
+      } catch (error) {
+        recordCapabilityContractRecoveryFailure(supervisor, spec.runId, error);
+        failures.push(error);
+      }
+    }
+  } finally {
+    specs.close();
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      "Runner startup rejected active Build capability contracts.",
+    );
+  }
 }
 
 function recordCapabilityContractRecoveryFailure(

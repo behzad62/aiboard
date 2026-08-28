@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
 import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import {
+  dirname,
   isAbsolute,
   join,
   parse,
@@ -21,8 +32,11 @@ import type {
 
 export const RUNNER_CAPABILITY_CONTRACT_VERSION = 1 as const;
 
+const EXTENSION_CLOSURE_VERSION = 1 as const;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
+const MAX_EXTENSION_FILES = 4_096;
+const MAX_EXTENSION_BYTES = 64 * 1024 * 1024;
 const BUILTIN_TYPESCRIPT_IDENTITY = "runner-v2/typescript-intelligence@1";
 
 export type RunnerCapabilityContractErrorCode =
@@ -48,6 +62,8 @@ export interface RunnerCapabilityExtensionContract {
   capabilities: string[];
   manifestDigest: string;
   entryDigest: string;
+  /** Present only in immutable-snapshot contracts created by current Runner V2. */
+  closureDigest?: string;
 }
 
 export interface RunnerCapabilityLanguageServerContract {
@@ -57,6 +73,11 @@ export interface RunnerCapabilityLanguageServerContract {
 
 export interface RunnerCapabilityContract {
   version: typeof RUNNER_CAPABILITY_CONTRACT_VERSION;
+  /**
+   * Older durable contracts omit this field. They remain readable for
+   * historical projections but cannot recover an active Build.
+   */
+  extensionClosureVersion?: typeof EXTENSION_CLOSURE_VERSION;
   builtin: {
     id: "builtin.typescript";
     identity: string;
@@ -66,6 +87,21 @@ export interface RunnerCapabilityContract {
   digest: string;
 }
 
+interface CapturedExtensionFile {
+  path: string;
+  source: Buffer;
+}
+
+interface CapturedExtension {
+  contract: RunnerCapabilityExtensionContract;
+  files: readonly CapturedExtensionFile[];
+}
+
+interface CapturedRunnerCapabilities {
+  contract: RunnerCapabilityContract;
+  extensions: readonly CapturedExtension[];
+}
+
 /**
  * Captures the identity of executable Runner capabilities without persisting
  * configuration arguments or environment values in the durable Build spec.
@@ -73,33 +109,20 @@ export interface RunnerCapabilityContract {
 export async function createRunnerCapabilityContract(
   config: RunnerCapabilitiesConfig,
 ): Promise<RunnerCapabilityContract> {
-  const extensions = await Promise.all(
-    config.extensions.map(async (directory) => await captureExtension(directory)),
-  );
-  extensions.sort((left, right) => left.id.localeCompare(right.id));
-  assertUnique(extensions.map((extension) => extension.id), "extension");
+  return (await captureRunnerCapabilities(config)).contract;
+}
 
-  const languageServers = config.languageServers
-    .map((server) => ({
-      id: server.descriptor.id,
-      descriptorDigest: digest(canonicalLanguageServer(server)),
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  assertUnique(languageServers.map((server) => server.id), "language server");
-
-  const payload = {
-    version: RUNNER_CAPABILITY_CONTRACT_VERSION,
-    builtin: {
-      id: "builtin.typescript" as const,
-      identity: BUILTIN_TYPESCRIPT_IDENTITY,
-    },
-    extensions,
-    languageServers,
-  };
-  return {
-    ...payload,
-    digest: digest(payload),
-  };
+/**
+ * Captures extension bytes once, persists an immutable content-addressed copy
+ * outside the project, and returns the durable contract naming that snapshot.
+ */
+export async function createRunnerCapabilityContractSnapshot(
+  config: RunnerCapabilitiesConfig,
+  stateDirectory: string,
+): Promise<RunnerCapabilityContract> {
+  const captured = await captureRunnerCapabilities(config);
+  await persistRunnerCapabilitySnapshot(captured, stateDirectory);
+  return captured.contract;
 }
 
 export async function validateRunnerCapabilityContract(
@@ -113,6 +136,7 @@ export async function validateRunnerCapabilityContract(
     );
   }
   assertRunnerCapabilityContract(expected);
+  assertCurrentExtensionClosure(expected);
   const actual = await createRunnerCapabilityContract(config);
   if (actual.digest !== expected.digest) {
     throw new RunnerCapabilityContractError(
@@ -122,12 +146,55 @@ export async function validateRunnerCapabilityContract(
   }
 }
 
+/** Verifies the immutable snapshot before a runtime imports any extension code. */
+export async function validateRunnerCapabilityContractSnapshot(
+  contract: RunnerCapabilityContract,
+  stateDirectory: string,
+): Promise<void> {
+  assertRunnerCapabilityContract(contract);
+  assertCurrentExtensionClosure(contract);
+  if (contract.extensions.length === 0) return;
+  try {
+    await assertSnapshotAtRoot(
+      contract,
+      runnerCapabilitySnapshotRoot(contract, stateDirectory),
+    );
+  } catch (error) {
+    if (error instanceof RunnerCapabilityContractError) throw error;
+    throw new RunnerCapabilityContractError(
+      "capability_contract_mismatch",
+      "The active Build's immutable extension capability snapshot is unavailable or differs from its persisted contract.",
+      { cause: error },
+    );
+  }
+}
+
+/** Snapshot plugin roots for LocalPluginLoader; only current contracts can use them. */
+export function runnerCapabilitySnapshotExtensionDirectories(
+  contract: RunnerCapabilityContract,
+  stateDirectory: string,
+): string[] {
+  assertRunnerCapabilityContract(contract);
+  assertCurrentExtensionClosure(contract);
+  const root = runnerCapabilitySnapshotRoot(contract, stateDirectory);
+  return contract.extensions.map((extension, index) =>
+    join(root, "extensions", snapshotExtensionDirectoryName(index, extension)),
+  );
+}
+
 export function assertRunnerCapabilityContract(
   value: unknown,
 ): asserts value is RunnerCapabilityContract {
   if (!isObject(value) || value.version !== RUNNER_CAPABILITY_CONTRACT_VERSION) {
     throw invalidContract("Runner capability contract version is invalid.");
   }
+  if (
+    value.extensionClosureVersion !== undefined &&
+    value.extensionClosureVersion !== EXTENSION_CLOSURE_VERSION
+  ) {
+    throw invalidContract("Runner capability contract extension closure version is invalid.");
+  }
+  const currentClosure = value.extensionClosureVersion === EXTENSION_CLOSURE_VERSION;
   if (!isObject(value.builtin) ||
       value.builtin.id !== "builtin.typescript" ||
       value.builtin.identity !== BUILTIN_TYPESCRIPT_IDENTITY) {
@@ -149,7 +216,10 @@ export function assertRunnerCapabilityContract(
         !Array.isArray(extension.capabilities) ||
         extension.capabilities.some((capability) => typeof capability !== "string") ||
         !isDigest(extension.manifestDigest) ||
-        !isDigest(extension.entryDigest)) {
+        !isDigest(extension.entryDigest) ||
+        (currentClosure
+          ? !isDigest(extension.closureDigest)
+          : extension.closureDigest !== undefined)) {
       throw invalidContract("Runner capability contract extension entry is invalid.");
     }
     extensionIds.push(extension.id);
@@ -160,6 +230,7 @@ export function assertRunnerCapabilityContract(
       capabilities: [...extension.capabilities],
       manifestDigest: extension.manifestDigest,
       entryDigest: extension.entryDigest,
+      ...(currentClosure ? { closureDigest: extension.closureDigest as string } : {}),
     });
   }
   assertUnique(extensionIds, "extension");
@@ -180,6 +251,7 @@ export function assertRunnerCapabilityContract(
   assertUnique(serverIds, "language server");
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
+    ...(currentClosure ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION } : {}),
     builtin: {
       id: "builtin.typescript" as const,
       identity: BUILTIN_TYPESCRIPT_IDENTITY,
@@ -198,6 +270,9 @@ export function cloneRunnerCapabilityContract(
   assertRunnerCapabilityContract(contract);
   return {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
+    ...(contract.extensionClosureVersion === EXTENSION_CLOSURE_VERSION
+      ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION }
+      : {}),
     builtin: { ...contract.builtin },
     extensions: contract.extensions.map((extension) => ({
       ...extension,
@@ -208,44 +283,231 @@ export function cloneRunnerCapabilityContract(
   };
 }
 
-async function captureExtension(directory: string): Promise<RunnerCapabilityExtensionContract> {
+async function captureRunnerCapabilities(
+  config: RunnerCapabilitiesConfig,
+): Promise<CapturedRunnerCapabilities> {
+  const extensions = await Promise.all(
+    config.extensions.map(async (directory) => await captureExtension(directory)),
+  );
+  extensions.sort((left, right) => left.contract.id.localeCompare(right.contract.id));
+  const extensionContracts = extensions.map((extension) => extension.contract);
+  assertUnique(extensionContracts.map((extension) => extension.id), "extension");
+
+  const languageServers = config.languageServers
+    .map((server) => ({
+      id: server.descriptor.id,
+      descriptorDigest: digest(canonicalLanguageServer(server)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  assertUnique(languageServers.map((server) => server.id), "language server");
+
+  const payload = {
+    version: RUNNER_CAPABILITY_CONTRACT_VERSION,
+    extensionClosureVersion: EXTENSION_CLOSURE_VERSION,
+    builtin: {
+      id: "builtin.typescript" as const,
+      identity: BUILTIN_TYPESCRIPT_IDENTITY,
+    },
+    extensions: extensionContracts,
+    languageServers,
+  };
+  return {
+    contract: {
+      ...payload,
+      digest: digest(payload),
+    },
+    extensions,
+  };
+}
+
+async function captureExtension(directory: string): Promise<CapturedExtension> {
   const root = await requiredRealDirectory(directory);
-  const manifestPath = join(root, RUNNER_EXTENSION_MANIFEST_FILE);
-  const manifestMetadata = await lstat(manifestPath);
-  if (manifestMetadata.isSymbolicLink() || !manifestMetadata.isFile()) {
-    throw new Error(`Runner extension manifest ${manifestPath} must be a regular non-symbolic file.`);
+  const files = await captureExtensionFiles(root);
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const manifestSource = byPath.get(RUNNER_EXTENSION_MANIFEST_FILE)?.source;
+  if (!manifestSource) {
+    throw new Error(`Runner extension manifest ${join(root, RUNNER_EXTENSION_MANIFEST_FILE)} is missing.`);
   }
-  const actualManifestPath = await realpath(manifestPath);
-  if (normalizePath(actualManifestPath) !== normalizePath(manifestPath)) {
-    throw new Error(`Runner extension manifest ${manifestPath} resolves through a symbolic link.`);
+  if (manifestSource.byteLength > MAX_MANIFEST_BYTES) {
+    throw new Error(`Runner extension manifest ${join(root, RUNNER_EXTENSION_MANIFEST_FILE)} exceeds the size limit.`);
   }
-  if (manifestMetadata.size > MAX_MANIFEST_BYTES) {
-    throw new Error(`Runner extension manifest ${manifestPath} exceeds the size limit.`);
-  }
-  const manifestSource = await readFile(actualManifestPath);
   let manifest: RunnerExtensionManifest;
   try {
     manifest = parseRunnerExtensionManifest(JSON.parse(manifestSource.toString("utf8")));
   } catch (error) {
     throw new Error(
-      `Runner extension manifest ${manifestPath} is invalid: ${boundedError(error)}.`,
+      `Runner extension manifest ${join(root, RUNNER_EXTENSION_MANIFEST_FILE)} is invalid: ${boundedError(error)}.`,
       { cause: error },
     );
   }
-  const entryPath = await resolveContainedEntry(root, manifest.entry);
-  const entryMetadata = await lstat(entryPath);
-  if (entryMetadata.size > MAX_ENTRY_BYTES) {
+  const entrySource = byPath.get(manifest.entry)?.source;
+  if (!entrySource) {
+    throw new Error(`Runner extension entry ${manifest.entry} must be a regular contained file.`);
+  }
+  if (entrySource.byteLength > MAX_ENTRY_BYTES) {
     throw new Error(`Runner extension entry ${manifest.entry} exceeds the size limit.`);
   }
-  const entrySource = await readFile(entryPath);
   return {
-    id: manifest.id,
-    version: manifest.version,
-    apiVersion: manifest.apiVersion,
-    capabilities: [...manifest.capabilities],
-    manifestDigest: digest(manifestSource),
-    entryDigest: digest(entrySource),
+    contract: {
+      id: manifest.id,
+      version: manifest.version,
+      apiVersion: manifest.apiVersion,
+      capabilities: [...manifest.capabilities],
+      manifestDigest: digest(manifestSource),
+      entryDigest: digest(entrySource),
+      closureDigest: digest(files.map((file) => ({
+        path: file.path,
+        digest: digest(file.source),
+      }))),
+    },
+    files,
   };
+}
+
+async function captureExtensionFiles(root: string): Promise<CapturedExtensionFile[]> {
+  const files: CapturedExtensionFile[] = [];
+  let totalBytes = 0;
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory);
+    entries.sort(compareCodeUnits);
+    for (const name of entries) {
+      const candidate = join(directory, name);
+      const metadata = await lstat(candidate);
+      if (metadata.isSymbolicLink()) {
+        throw new Error(`Runner extension ${candidate} cannot be a symbolic link.`);
+      }
+      const actual = await realpath(candidate);
+      if (!contained(root, actual) || normalizePath(actual) !== normalizePath(candidate)) {
+        throw new Error(`Runner extension ${candidate} resolves outside its plugin directory.`);
+      }
+      if (metadata.isDirectory()) {
+        await visit(candidate);
+        continue;
+      }
+      if (!metadata.isFile()) {
+        throw new Error(`Runner extension ${candidate} must contain only regular files and directories.`);
+      }
+      if (files.length >= MAX_EXTENSION_FILES) {
+        throw new Error(`Runner extension exceeds the ${MAX_EXTENSION_FILES} file limit.`);
+      }
+      const source = await readFile(actual);
+      totalBytes += source.byteLength;
+      if (totalBytes > MAX_EXTENSION_BYTES) {
+        throw new Error(`Runner extension exceeds the ${MAX_EXTENSION_BYTES} byte limit.`);
+      }
+      files.push({
+        path: relative(root, candidate).split(sep).join("/"),
+        source,
+      });
+    }
+  };
+  await visit(root);
+  return files;
+}
+
+async function persistRunnerCapabilitySnapshot(
+  captured: CapturedRunnerCapabilities,
+  stateDirectory: string,
+): Promise<void> {
+  if (captured.extensions.length === 0) return;
+  const stateRoot = await requiredRealStateDirectory(stateDirectory);
+  const snapshots = join(stateRoot, "capability-snapshots");
+  await mkdir(snapshots, { recursive: true });
+  await requiredRealStateDirectory(snapshots);
+  const target = runnerCapabilitySnapshotRoot(captured.contract, stateRoot);
+  if (await pathExists(target)) {
+    await assertSnapshotAtRoot(captured.contract, target);
+    return;
+  }
+  const staging = await mkdtemp(join(snapshots, ".staging-"));
+  let renamed = false;
+  try {
+    for (const [index, extension] of captured.extensions.entries()) {
+      const output = join(
+        staging,
+        "extensions",
+        snapshotExtensionDirectoryName(index, extension.contract),
+      );
+      await writeCapturedExtension(output, extension.files);
+    }
+    await assertSnapshotAtRoot(captured.contract, staging);
+    try {
+      await rename(staging, target);
+      renamed = true;
+    } catch (error) {
+      if (!(await pathExists(target))) throw error;
+      await assertSnapshotAtRoot(captured.contract, target);
+    }
+  } finally {
+    if (!renamed) await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function writeCapturedExtension(
+  output: string,
+  files: readonly CapturedExtensionFile[],
+): Promise<void> {
+  for (const file of files) {
+    const destination = join(output, ...file.path.split("/"));
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, file.source, { flag: "wx" });
+  }
+}
+
+async function assertSnapshotAtRoot(
+  contract: RunnerCapabilityContract,
+  root: string,
+): Promise<void> {
+  for (const [index, expected] of contract.extensions.entries()) {
+    const directory = join(
+      root,
+      "extensions",
+      snapshotExtensionDirectoryName(index, expected),
+    );
+    const actual = await captureExtension(directory);
+    if (!sameExtensionContract(expected, actual.contract)) {
+      throw new Error(`Runner extension snapshot for ${expected.id} differs from its persisted contract.`);
+    }
+  }
+}
+
+function sameExtensionContract(
+  expected: RunnerCapabilityExtensionContract,
+  actual: RunnerCapabilityExtensionContract,
+): boolean {
+  return expected.id === actual.id &&
+    expected.version === actual.version &&
+    expected.apiVersion === actual.apiVersion &&
+    expected.manifestDigest === actual.manifestDigest &&
+    expected.entryDigest === actual.entryDigest &&
+    expected.closureDigest === actual.closureDigest &&
+    expected.capabilities.length === actual.capabilities.length &&
+    expected.capabilities.every((capability, index) => capability === actual.capabilities[index]);
+}
+
+function runnerCapabilitySnapshotRoot(
+  contract: RunnerCapabilityContract,
+  stateDirectory: string,
+): string {
+  return join(resolve(stateDirectory), "capability-snapshots", contract.digest);
+}
+
+function snapshotExtensionDirectoryName(
+  index: number,
+  extension: RunnerCapabilityExtensionContract,
+): string {
+  return `${String(index).padStart(3, "0")}-${extension.closureDigest}`;
+}
+
+function assertCurrentExtensionClosure(
+  contract: RunnerCapabilityContract,
+): void {
+  if (contract.extensionClosureVersion !== EXTENSION_CLOSURE_VERSION) {
+    throw new RunnerCapabilityContractError(
+      "capability_contract_missing",
+      "Active Build recovery requires a persisted immutable extension capability contract.",
+    );
+  }
 }
 
 async function requiredRealDirectory(input: string): Promise<string> {
@@ -253,14 +515,7 @@ async function requiredRealDirectory(input: string): Promise<string> {
     throw new Error("Runner capability extension directory must be an absolute non-empty path.");
   }
   const candidate = resolve(input);
-  const root = parse(candidate).root;
-  let current = root;
-  for (const segment of relative(root, candidate).split(sep).filter(Boolean)) {
-    current = join(current, segment);
-    if ((await lstat(current)).isSymbolicLink()) {
-      throw new Error(`Runner capability extension directory ${candidate} contains a symbolic link at ${current}.`);
-    }
-  }
+  await assertNoSymbolicPathComponents(candidate, "Runner capability extension directory");
   const metadata = await lstat(candidate);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
     throw new Error(`Runner capability extension directory ${candidate} must be a real directory.`);
@@ -268,26 +523,28 @@ async function requiredRealDirectory(input: string): Promise<string> {
   return await realpath(candidate);
 }
 
-async function resolveContainedEntry(
-  directory: string,
-  portableEntry: string,
-): Promise<string> {
-  let candidate = directory;
-  for (const segment of portableEntry.split("/")) {
-    candidate = join(candidate, segment);
-    if ((await lstat(candidate)).isSymbolicLink()) {
-      throw new Error(`Runner extension entry ${portableEntry} contains a symbolic link.`);
+async function requiredRealStateDirectory(input: string): Promise<string> {
+  if (typeof input !== "string" || !input.trim() || !isAbsolute(input) || input.includes("\0")) {
+    throw new Error("Runner capability snapshot state directory must be an absolute non-empty path.");
+  }
+  const candidate = resolve(input);
+  await assertNoSymbolicPathComponents(candidate, "Runner capability snapshot state directory");
+  const metadata = await lstat(candidate);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error(`Runner capability snapshot state directory ${candidate} must be a real directory.`);
+  }
+  return await realpath(candidate);
+}
+
+async function assertNoSymbolicPathComponents(candidate: string, label: string): Promise<void> {
+  const root = parse(candidate).root;
+  let current = root;
+  for (const segment of relative(root, candidate).split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    if ((await lstat(current)).isSymbolicLink()) {
+      throw new Error(`${label} ${candidate} contains a symbolic link at ${current}.`);
     }
   }
-  const metadata = await lstat(candidate);
-  if (!metadata.isFile()) {
-    throw new Error(`Runner extension entry ${portableEntry} must be a regular file.`);
-  }
-  const actual = await realpath(candidate);
-  if (!contained(directory, actual)) {
-    throw new Error(`Runner extension entry ${portableEntry} escapes its plugin directory.`);
-  }
-  return actual;
 }
 
 function canonicalLanguageServer(server: ConfiguredLanguageServer): Record<string, unknown> {
@@ -352,6 +609,24 @@ function contained(root: string, candidate: string): boolean {
 function normalizePath(path: string): string {
   const value = resolve(path);
   return process.platform === "win32" ? value.toLowerCase() : value;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return false;
+    throw error;
+  }
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code;
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function boundedError(error: unknown): string {
