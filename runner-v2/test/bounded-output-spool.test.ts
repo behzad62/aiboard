@@ -107,6 +107,140 @@ for (const [name, attestation] of [
   });
 }
 
+for (const [name, attestation] of [
+  ["truthy string guarantees", {
+    currentPrincipalPrivacy: "unverified",
+    identityStableDeletion: "partial",
+    unlinkedEntries: false,
+  }],
+  ["an unknown key", {
+    currentPrincipalPrivacy: true,
+    identityStableDeletion: true,
+    unlinkedEntries: false,
+    unexpected: "accepted by an open parser",
+  }],
+  ["a partial guarantee", {
+    currentPrincipalPrivacy: true,
+    identityStableDeletion: "unavailable",
+    unlinkedEntries: false,
+  }],
+  ["a missing guarantee", {
+    currentPrincipalPrivacy: true,
+    unlinkedEntries: false,
+  }],
+  ["a malformed non-object", "enforced"],
+] as const) {
+  test(`strictly rejects ${name} before spill filesystem access`, async (t) => {
+    const root = await temporaryRoot(t);
+    const nodeStorage = createNodeOutputSpillStorage();
+    let opens = 0;
+    const storage: OutputSpillStorage = {
+      ...nodeStorage,
+      attest: async () => attestation as unknown as OutputSpillStorageAttestation,
+      openExclusive: async () => {
+        opens += 1;
+        throw new Error("malformed attestation reached disk");
+      },
+    };
+    const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+
+    await spool.write("stdout", Buffer.from("tail only"));
+    await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+    const output = stream(await spool.finalize(), "stdout");
+
+    assert.equal(opens, 0);
+    assert.equal(output.lossReason?.code, "private_spill_unavailable");
+    assert.equal(output.lossyBytes, 9);
+  });
+}
+
+test("rejects accessor attestation fields without evaluating or rereading them", async (t) => {
+  const root = await temporaryRoot(t);
+  let getterReads = 0;
+  const attestation = {
+    get currentPrincipalPrivacy() { getterReads += 1; return true; },
+    get identityStableDeletion() { getterReads += 1; return true; },
+    get unlinkedEntries() { getterReads += 1; return false; },
+  };
+  const nodeStorage = createNodeOutputSpillStorage();
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => attestation,
+  };
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+
+  await spool.write("stdout", Buffer.from("tail only"));
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(getterReads, 0);
+  assert.equal(output.lossReason?.code, "private_spill_unavailable");
+  await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
+test("rejects proxy attestations before traps can supply changing guarantees", async (t) => {
+  const root = await temporaryRoot(t);
+  let trapReads = 0;
+  const attestation = new Proxy({
+    currentPrincipalPrivacy: true,
+    identityStableDeletion: true,
+    unlinkedEntries: false,
+  }, {
+    get(target, property, receiver) {
+      if (property !== "then") trapReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+    ownKeys(target) {
+      trapReads += 1;
+      return Reflect.ownKeys(target);
+    },
+  });
+  const nodeStorage = createNodeOutputSpillStorage();
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => attestation,
+  };
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+
+  await spool.write("stdout", Buffer.from("tail only"));
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(trapReads, 0);
+  assert.equal(output.lossReason?.code, "private_spill_unavailable");
+  await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
+for (const [name, attestation] of [
+  ["truthy strings", {
+    currentPrincipalPrivacy: "unverified",
+    identityStableDeletion: "partial",
+    unlinkedEntries: false,
+  }],
+  ["unknown fields", {
+    currentPrincipalPrivacy: true,
+    identityStableDeletion: true,
+    unlinkedEntries: false,
+    unexpected: true,
+  }],
+] as const) {
+  test(`restart cleanup rejects ${name} before inspecting the spill path`, async (t) => {
+    const root = await temporaryRoot(t);
+    await writeFile(root, "foreign regular file");
+    const storage: OutputSpillStorage = {
+      ...createNodeOutputSpillStorage(),
+      attest: async () => attestation as unknown as OutputSpillStorageAttestation,
+    };
+
+    await cleanupOutputSpillRoot({
+      spillRoot: root,
+      projectRoot: process.cwd(),
+      ownershipId: "runner-test-owner",
+      storage,
+    });
+
+    assert.equal(await readFile(root, "utf8"), "foreign regular file");
+  });
+}
+
 test("treats unavailable attestation as tail-only without trying disk", async (t) => {
   const root = await temporaryRoot(t);
   const nodeStorage = createNodeOutputSpillStorage();

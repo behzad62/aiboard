@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { types as nodeTypes } from "node:util";
 
 export type OutputStream = "stdout" | "stderr";
 export type OutputLossReasonCode =
@@ -129,6 +130,12 @@ const SPILL_PREFIX = "output-spill-";
 const SPILL_SUFFIX = ".tmp";
 const OWNER_MARKER = ".output-spool-owner.json";
 const ENTRY_PROOF_SUFFIX = ".owner.json";
+const SPILL_ATTESTATION_KEYS = new Set([
+  "currentPrincipalPrivacy",
+  "identityStableDeletion",
+  "unlinkedEntries",
+  "currentPrincipalIdentity",
+]);
 
 export class BoundedOutputSpool {
   private readonly spillRoot: string;
@@ -283,11 +290,11 @@ export class BoundedOutputSpool {
     if (state.spillFile) return true;
     if (!this.storageAttestation && !this.spillCapabilityUnavailable) {
       try {
-        const attestation = await this.storage.attest();
-        if (!attestation.currentPrincipalPrivacy || !attestation.identityStableDeletion) {
+        const attestation = parseOutputSpillStorageAttestation(await this.storage.attest());
+        if (!attestation) {
           this.spillCapabilityUnavailable = true;
         } else {
-          this.storageAttestation = Object.freeze({ ...attestation });
+          this.storageAttestation = attestation;
         }
       } catch {
         this.spillCapabilityUnavailable = true;
@@ -507,13 +514,13 @@ export async function cleanupOutputSpillRoot(
   }
 ): Promise<void> {
   const storage = options.storage ?? createNodeOutputSpillStorage();
-  let attestation: OutputSpillStorageAttestation;
+  let attestation: OutputSpillStorageAttestation | undefined;
   try {
-    attestation = await storage.attest();
+    attestation = parseOutputSpillStorageAttestation(await storage.attest());
   } catch {
     return;
   }
-  if (!attestation.currentPrincipalPrivacy || !attestation.identityStableDeletion) return;
+  if (!attestation) return;
   const root = resolve(requiredText(options.spillRoot, "spillRoot"));
   try {
     await lstat(root);
@@ -652,6 +659,45 @@ export function attestPrivateDirectoryForPrincipal(
   currentPrincipalIdentity: string
 ): boolean {
   return directory.ownerIdentity === currentPrincipalIdentity && (directory.mode & 0o077) === 0;
+}
+
+function parseOutputSpillStorageAttestation(value: unknown): OutputSpillStorageAttestation | undefined {
+  if (typeof value !== "object" || value === null || nodeTypes.isProxy(value)) return undefined;
+  let descriptors: Record<PropertyKey, PropertyDescriptor>;
+  try {
+    if (Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return undefined;
+  }
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.some((key) => typeof key !== "string" || !SPILL_ATTESTATION_KEYS.has(key))) return undefined;
+
+  const dataValue = (key: string): unknown => {
+    const descriptor = descriptors[key];
+    return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+  };
+  const currentPrincipalPrivacy = dataValue("currentPrincipalPrivacy");
+  const identityStableDeletion = dataValue("identityStableDeletion");
+  const unlinkedEntries = dataValue("unlinkedEntries");
+  if (currentPrincipalPrivacy !== true || identityStableDeletion !== true || typeof unlinkedEntries !== "boolean") {
+    return undefined;
+  }
+  const principalDescriptor = descriptors.currentPrincipalIdentity;
+  const currentPrincipalIdentity = dataValue("currentPrincipalIdentity");
+  let normalizedPrincipalIdentity: string | undefined;
+  if (principalDescriptor !== undefined) {
+    if (typeof currentPrincipalIdentity !== "string" || currentPrincipalIdentity.length === 0) return undefined;
+    normalizedPrincipalIdentity = currentPrincipalIdentity;
+  }
+  return Object.freeze({
+    currentPrincipalPrivacy: true,
+    identityStableDeletion: true,
+    unlinkedEntries,
+    ...(normalizedPrincipalIdentity === undefined
+      ? {}
+      : { currentPrincipalIdentity: normalizedPrincipalIdentity }),
+  });
 }
 
 async function removeOwnedEntry(
