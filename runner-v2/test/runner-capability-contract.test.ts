@@ -11,13 +11,62 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
 
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import {
+  assertRunnerCapabilityContract,
+  cloneRunnerCapabilityContract,
   createRunnerCapabilityContract,
   runnerCapabilitiesForContract,
   validateRunnerCapabilityContract,
 } from "../src/runner-capability-contract.js";
+import { EXECUTION_SAFETY_CONTRACT_VERSION } from "../src/execution-safety-contracts.js";
+
+test("current capability snapshots bind the execution-safety contract version into the digest", async () => {
+  const contract = await createRunnerCapabilityContract({ extensions: [], languageServers: [] });
+  assert.equal(contract.executionSafetyVersion, EXECUTION_SAFETY_CONTRACT_VERSION);
+
+  const withoutExecutionSafety = {
+    version: contract.version,
+    extensionClosureVersion: contract.extensionClosureVersion,
+    languageServerExecutableIdentityVersion: contract.languageServerExecutableIdentityVersion,
+    builtin: contract.builtin,
+    extensions: contract.extensions,
+    languageServers: contract.languageServers,
+  };
+  assert.notEqual(contract.digest, fixtureDigest(withoutExecutionSafety));
+});
+
+test("historical capability contracts remain readable but cannot recover an active Build", async () => {
+  const current = await createRunnerCapabilityContract({ extensions: [], languageServers: [] });
+  const historicalPayload = {
+    version: current.version,
+    extensionClosureVersion: current.extensionClosureVersion,
+    languageServerExecutableIdentityVersion: current.languageServerExecutableIdentityVersion,
+    builtin: current.builtin,
+    extensions: current.extensions,
+    languageServers: current.languageServers,
+  };
+  const historical = { ...historicalPayload, digest: fixtureDigest(historicalPayload) };
+  assert.doesNotThrow(() => assertRunnerCapabilityContract(historical));
+  assert.equal(cloneRunnerCapabilityContract(historical).executionSafetyVersion, undefined);
+  await assert.rejects(
+    validateRunnerCapabilityContract(historical, { extensions: [], languageServers: [] }),
+    (error: unknown) => (error as { code?: unknown }).code === "capability_contract_missing",
+  );
+});
+
+test("unsupported execution-safety contract versions are rejected", async () => {
+  const current = await createRunnerCapabilityContract({ extensions: [], languageServers: [] });
+  const unsupportedPayload = { ...current, executionSafetyVersion: 2, digest: undefined };
+  const { digest: _digest, ...payload } = unsupportedPayload;
+  const unsupported = { ...payload, digest: fixtureDigest(payload) };
+  assert.throws(
+    () => assertRunnerCapabilityContract(unsupported),
+    (error: unknown) => (error as { code?: unknown }).code === "capability_contract_invalid",
+  );
+});
 import {
   languageServerCommandCandidates,
   resolveLanguageServerExecutable,
@@ -202,4 +251,21 @@ function writeLauncher(path: string, marker: string): void {
   }
   writeFileSync(path, `#!/bin/sh\n# ${marker}\nexit 0\n`);
   chmodSync(path, 0o755);
+}
+
+function fixtureDigest(value: unknown): string {
+  return createHash("sha256").update(stableJson(value)).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
+  }
+  throw new Error("unsupported fixture value");
 }

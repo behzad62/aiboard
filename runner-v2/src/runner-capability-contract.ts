@@ -41,6 +41,7 @@ import {
   type LanguageServerExecutableIdentity,
   type LanguageServerExecutableResolutionOptions,
 } from "./language-server-executable.js";
+import { EXECUTION_SAFETY_CONTRACT_VERSION } from "./execution-safety-contracts.js";
 
 export const RUNNER_CAPABILITY_CONTRACT_VERSION = 1 as const;
 
@@ -88,6 +89,8 @@ export interface RunnerCapabilityLanguageServerContract {
 
 export interface RunnerCapabilityContract {
   version: typeof RUNNER_CAPABILITY_CONTRACT_VERSION;
+  /** Historical contracts remain readable but cannot recover an active Build. */
+  executionSafetyVersion?: typeof EXECUTION_SAFETY_CONTRACT_VERSION;
   /**
    * Older durable contracts omit this field. They remain readable for
    * historical projections but cannot recover an active Build.
@@ -177,6 +180,7 @@ export async function validateRunnerCapabilityContract(
     );
   }
   assertRunnerCapabilityContract(expected);
+  assertCurrentExecutionSafety(expected);
   assertCurrentExtensionClosure(expected);
   assertCurrentLanguageServerExecutableIdentity(expected);
   let actual: RunnerCapabilityContract;
@@ -240,6 +244,12 @@ export function assertRunnerCapabilityContract(
     throw invalidContract("Runner capability contract version is invalid.");
   }
   if (
+    value.executionSafetyVersion !== undefined &&
+    value.executionSafetyVersion !== EXECUTION_SAFETY_CONTRACT_VERSION
+  ) {
+    throw invalidContract("Runner capability contract execution-safety version is invalid.");
+  }
+  if (
     value.extensionClosureVersion !== undefined &&
     value.extensionClosureVersion !== EXTENSION_CLOSURE_VERSION
   ) {
@@ -252,6 +262,8 @@ export function assertRunnerCapabilityContract(
     throw invalidContract("Runner capability contract language-server executable identity version is invalid.");
   }
   const currentClosure = value.extensionClosureVersion === EXTENSION_CLOSURE_VERSION;
+  const currentExecutionSafety =
+    value.executionSafetyVersion === EXECUTION_SAFETY_CONTRACT_VERSION;
   const currentLanguageServerIdentity =
     value.languageServerExecutableIdentityVersion === LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION;
   if (!isObject(value.builtin) ||
@@ -315,6 +327,9 @@ export function assertRunnerCapabilityContract(
   assertUnique(serverIds, "language server");
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
+    ...(currentExecutionSafety
+      ? { executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION }
+      : {}),
     ...(currentClosure ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION } : {}),
     ...(currentLanguageServerIdentity
       ? { languageServerExecutableIdentityVersion: LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION }
@@ -337,6 +352,9 @@ export function cloneRunnerCapabilityContract(
   assertRunnerCapabilityContract(contract);
   return {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
+    ...(contract.executionSafetyVersion === EXECUTION_SAFETY_CONTRACT_VERSION
+      ? { executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION }
+      : {}),
     ...(contract.extensionClosureVersion === EXTENSION_CLOSURE_VERSION
       ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION }
       : {}),
@@ -381,6 +399,7 @@ async function captureRunnerCapabilities(
 
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
+    executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION,
     extensionClosureVersion: EXTENSION_CLOSURE_VERSION,
     languageServerExecutableIdentityVersion: LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION,
     builtin: {
@@ -894,6 +913,17 @@ function assertCurrentExtensionClosure(
     throw new RunnerCapabilityContractError(
       "capability_contract_missing",
       "Active Build recovery requires a persisted immutable extension capability contract.",
+    );
+  }
+}
+
+function assertCurrentExecutionSafety(
+  contract: RunnerCapabilityContract,
+): void {
+  if (contract.executionSafetyVersion !== EXECUTION_SAFETY_CONTRACT_VERSION) {
+    throw new RunnerCapabilityContractError(
+      "capability_contract_missing",
+      "Active Build recovery requires a persisted execution-safety capability contract.",
     );
   }
 }

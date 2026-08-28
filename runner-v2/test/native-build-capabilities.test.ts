@@ -426,6 +426,7 @@ test("NativeBuildFactory persists and validates a capability contract before rec
     });
     const prepared = await factory.prepareSpec(buildSpec("capability_recovery_contract"));
     assert.match(prepared.capabilityContract?.digest ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(prepared.capabilityContract?.executionSafetyVersion, 1);
 
     await factory.validateRecoveryCapabilityContract(prepared);
     const structurallyTampered = structuredClone(prepared);
@@ -510,6 +511,36 @@ test("NativeBuildFactory fails closed when an active legacy capability contract 
       factory.validateRecoveryCapabilityContract({
         ...prepared,
         capabilityContract: legacy,
+      }),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_missing",
+    );
+  } finally {
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory fails closed when an active historical contract lacks execution safety", async () => {
+  const fixture = createFixture("historical-execution-safety-contract");
+  let factory: NativeBuildFactory | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId: "capability_historical_execution_safety",
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [],
+      languageServers: [],
+    });
+    const prepared = await factory.prepareSpec(buildSpec("capability_historical_execution_safety"));
+    const historical = historicalExecutionSafetyContract(prepared.capabilityContract!);
+
+    await assert.rejects(
+      factory.validateRecoveryCapabilityContract({
+        ...prepared,
+        capabilityContract: historical,
       }),
       (error: unknown) =>
         (error as { code?: unknown }).code === "capability_contract_missing",
@@ -1159,6 +1190,7 @@ test("NativeBuildFactory serves a terminal legacy Build from read-only durable s
     assert.equal(snapshot.runId, runId);
     assert.deepEqual(snapshot.capabilities?.historicalContract, {
       version: prepared.capabilityContract!.version,
+      executionSafetyVersion: prepared.capabilityContract!.executionSafetyVersion,
       extensionClosureVersion: prepared.capabilityContract!.extensionClosureVersion,
       languageServerExecutableIdentityVersion:
         prepared.capabilityContract!.languageServerExecutableIdentityVersion,
@@ -2616,6 +2648,16 @@ function legacyContract(contract: RunnerCapabilityContract): RunnerCapabilityCon
   return {
     ...legacy,
     digest: createHash("sha256").update(stableJson(legacy)).digest("hex"),
+  };
+}
+
+function historicalExecutionSafetyContract(
+  contract: RunnerCapabilityContract,
+): RunnerCapabilityContract {
+  const { executionSafetyVersion: _executionSafetyVersion, digest: _digest, ...historical } = contract;
+  return {
+    ...historical,
+    digest: createHash("sha256").update(stableJson(historical)).digest("hex"),
   };
 }
 
