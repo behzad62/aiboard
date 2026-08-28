@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
@@ -222,14 +223,26 @@ test("LSP provider ignores stale publish diagnostics after a bounded wait", asyn
   const fixture = providerFixture("stale push diagnostics", {
     LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
     LSP_FIXTURE_PUBLISH_STALE_VERSION: "1",
-  }, 80);
+  }, 1_000, 80);
   try {
+    await fixture.provider.definition({
+      root: fixture.workspace,
+      path: "main.py",
+      line: 1,
+      column: 1,
+    });
+    const startedAt = performance.now();
     const result = await fixture.provider.diagnostics({
       root: fixture.workspace,
       path: "main.py",
     });
+    const elapsedMs = performance.now() - startedAt;
     assert.deepEqual(result.results, []);
     assert.equal(result.truncated, false);
+    assert.ok(
+      elapsedMs >= 50 && elapsedMs < 400,
+      `stale publish diagnostics wait should use its 80ms bound, received ${elapsedMs.toFixed(1)}ms`,
+    );
   } finally {
     await fixture.close();
   }
@@ -239,6 +252,7 @@ function providerFixture(
   name: string,
   environment: Record<string, string>,
   requestTimeoutMs = 500,
+  publishDiagnosticsWaitTimeoutMs?: number,
 ) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-lsp-${name}-`));
   const workspace = join(root, "workspace Ω");
@@ -247,7 +261,13 @@ function providerFixture(
   writeFileSync(file, "😀value = 1\nprint(value)\n");
   writeFileSync(join(workspace, "note.txt"), "not supported\n");
   writeFileSync(join(workspace, "pyproject.toml"), "[project]\nname='fixture'\n");
-  const provider = createProvider(workspace, environment, 128 * 1024, requestTimeoutMs);
+  const provider = createProvider(
+    workspace,
+    environment,
+    128 * 1024,
+    requestTimeoutMs,
+    publishDiagnosticsWaitTimeoutMs,
+  );
   return {
     root,
     workspace,
@@ -265,6 +285,7 @@ function createProvider(
   environment: Record<string, string>,
   maxDocumentBytes = 128 * 1024,
   requestTimeoutMs = 500,
+  publishDiagnosticsWaitTimeoutMs?: number,
 ): LspLanguageProvider {
   return new LspLanguageProvider({
     descriptor,
@@ -276,6 +297,9 @@ function createProvider(
       command: process.execPath,
       args: [fixtureServer],
       requestTimeoutMs,
+      ...(publishDiagnosticsWaitTimeoutMs === undefined
+        ? {}
+        : { publishDiagnosticsWaitTimeoutMs }),
       shutdownTimeoutMs: 500,
       restartLimit: 1,
       env: { ...process.env, ...environment },

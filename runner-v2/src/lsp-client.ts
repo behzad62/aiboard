@@ -65,6 +65,7 @@ export interface LspClientOptions {
   env?: NodeJS.ProcessEnv;
   initializationOptions?: unknown;
   requestTimeoutMs?: number;
+  publishDiagnosticsWaitTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   restartLimit?: number;
   maxFrameBytes?: number;
@@ -168,6 +169,7 @@ export class LspClient {
   private readonly env?: NodeJS.ProcessEnv;
   private readonly initializationOptions?: unknown;
   private readonly requestTimeoutMs: number;
+  private readonly publishDiagnosticsWaitTimeoutMs: number;
   private readonly shutdownTimeoutMs: number;
   private readonly restartLimit: number;
   private readonly maxFrameBytes: number;
@@ -225,6 +227,10 @@ export class LspClient {
     this.requestTimeoutMs = positiveInteger(
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       "requestTimeoutMs",
+    );
+    this.publishDiagnosticsWaitTimeoutMs = positiveInteger(
+      options.publishDiagnosticsWaitTimeoutMs ?? this.requestTimeoutMs,
+      "publishDiagnosticsWaitTimeoutMs",
     );
     this.shutdownTimeoutMs = positiveInteger(
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -440,7 +446,10 @@ export class LspClient {
       const waiter: PublishedDiagnosticsWaiter = {
         uri,
         version,
-        timer: setTimeout(() => this.settleDiagnosticWaiter(waiter, undefined), this.requestTimeoutMs),
+        timer: setTimeout(
+          () => this.settleDiagnosticWaiter(waiter, undefined),
+          this.publishDiagnosticsWaitTimeoutMs,
+        ),
         signal,
         settled: false,
         resolve: resolvePromise,
