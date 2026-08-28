@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,6 +14,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { LspClient, LspClientError } from "../src/lsp-client.js";
+import { resolveLanguageServerExecutable } from "../src/language-server-executable.js";
 
 const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
 
@@ -194,6 +202,56 @@ test("LSP client launches a direct executable in a space and Unicode workspace",
     await client.start();
     const state = await client.request<FixtureState>("fixture/state", {});
     assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
+  } finally {
+    await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
+test("LSP client launches the attested canonical executable and rejects a byte replacement before spawn", async () => {
+  const fixture = workspace("attested executable Ω");
+  const commandName = process.platform === "win32" ? "fixture-lsp.cmd" : "fixture-lsp";
+  const launcher = join(fixture.root, commandName);
+  const commandSource = process.platform === "win32"
+    ? `@echo off\r\n"${process.execPath}" "${fixtureServer}" %*\r\n`
+    : `#!/bin/sh\nexec "${process.execPath}" "${fixtureServer}" "$@"\n`;
+  writeFileSync(launcher, commandSource);
+  if (process.platform !== "win32") {
+    chmodSync(launcher, 0o755);
+  }
+  const resolvedEnvironment = { ...process.env };
+  const identity = await resolveLanguageServerExecutable(launcher, {
+    commandSearchDirectory: fixture.root,
+    environment: resolvedEnvironment,
+  });
+  const client = new LspClient({
+    command: identity.path,
+    attestedCommand: identity,
+    workspaceRoot: fixture.workspace,
+    requestTimeoutMs: 3_000,
+    shutdownTimeoutMs: 500,
+    restartLimit: 0,
+    env: resolvedEnvironment,
+  });
+  try {
+    await client.start();
+    const state = await client.request<FixtureState>("fixture/state", {});
+    assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
+    await client.close();
+
+    const replaced = new LspClient({
+      command: identity.path,
+      attestedCommand: identity,
+      workspaceRoot: fixture.workspace,
+      requestTimeoutMs: 500,
+      restartLimit: 0,
+      env: resolvedEnvironment,
+    });
+    writeFileSync(launcher, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+    if (process.platform !== "win32") chmodSync(launcher, 0o755);
+    await assert.rejects(replaced.start(), isLspError("invalid_configuration"));
+    assert.equal(replaced.stats().starts, 0, "a replaced launcher must be rejected before process creation");
+    await replaced.close();
   } finally {
     await client.close().catch(() => undefined);
     fixture.close();

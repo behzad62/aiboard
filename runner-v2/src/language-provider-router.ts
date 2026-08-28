@@ -340,6 +340,9 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       client: {
         command: configured.command,
         args: configured.args,
+        ...(configured.commandIdentity
+          ? { attestedCommand: { ...configured.commandIdentity } }
+          : {}),
         ...(configured.requestTimeoutMs !== undefined
           ? { requestTimeoutMs: configured.requestTimeoutMs }
           : {}),
@@ -441,6 +444,7 @@ function cloneConfiguredServer(input: ConfiguredLanguageServer): ConfiguredLangu
     languageId: input.languageId,
     command: input.command,
     args: [...input.args],
+    ...(input.commandIdentity ? { commandIdentity: { ...input.commandIdentity } } : {}),
     ...(input.requestTimeoutMs !== undefined ? { requestTimeoutMs: input.requestTimeoutMs } : {}),
     ...(input.shutdownTimeoutMs !== undefined ? { shutdownTimeoutMs: input.shutdownTimeoutMs } : {}),
     ...(input.restartLimit !== undefined ? { restartLimit: input.restartLimit } : {}),

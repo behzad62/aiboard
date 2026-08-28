@@ -5,6 +5,7 @@ import {
   parseLanguageProviderDescriptor,
   type LanguageProviderDescriptor,
 } from "./language-intelligence.js";
+import type { LanguageServerExecutableIdentity } from "./language-server-executable.js";
 
 const CONFIG_VERSION = 1;
 const MAX_CONFIG_BYTES = 256 * 1024;
@@ -64,6 +65,8 @@ export interface ConfiguredLanguageServer {
   maxFrameBytes?: number;
   maxPendingRequests?: number;
   maxDocumentBytes?: number;
+  /** Runner-owned attestation; configuration JSON can never provide this field. */
+  commandIdentity?: LanguageServerExecutableIdentity;
 }
 
 export interface RunnerCapabilitiesConfig {

@@ -74,9 +74,11 @@ import {
   type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
 import {
+  attestRunnerCapabilitiesLanguageServers,
   RunnerCapabilityContractError,
   cloneRunnerCapabilityContract,
   createRunnerCapabilityContractSnapshot,
+  runnerCapabilitiesForContract,
   runnerCapabilitySnapshotExtensionDirectories,
   validateRunnerCapabilityContract,
   validateRunnerCapabilityContractSnapshot,
@@ -160,13 +162,18 @@ export class NativeBuildFactory {
       capabilityContract: await createRunnerCapabilityContractSnapshot(
         config,
         this.options.stateDirectory,
+        { commandSearchDirectory: this.options.projectRoot },
       ),
     };
   }
 
   async validateRecoveryCapabilityContract(spec: NativeBuildSpec): Promise<void> {
     if (this.closed) throw new Error("Native Build factory is closed.");
-    await validateRunnerCapabilityContract(spec.capabilityContract, this.capabilitiesConfig());
+    await validateRunnerCapabilityContract(
+      spec.capabilityContract,
+      this.capabilitiesConfig(),
+      { commandSearchDirectory: this.options.projectRoot },
+    );
   }
 
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
@@ -179,7 +186,10 @@ export class NativeBuildFactory {
       spec.capabilityContract,
       this.options.stateDirectory,
     );
-    const capabilitiesConfig = this.capabilitiesConfig();
+    const capabilitiesConfig = runnerCapabilitiesForContract(
+      this.capabilitiesConfig(),
+      spec.capabilityContract,
+    );
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     await mkdir(runRoot, { recursive: true });
     const runCapabilities = await createNativeRunCapabilities({
@@ -192,6 +202,12 @@ export class NativeBuildFactory {
       },
       projectDirectory: this.options.projectRoot,
       stateDirectory: runRoot,
+      verifyExtensionIntegrity: async () => {
+        await validateRunnerCapabilityContractSnapshot(
+          spec.capabilityContract!,
+          this.options.stateDirectory,
+        );
+      },
       reservedToolNames: [
         ...RUNNER_BUILTIN_TOOL_NAMES,
         ...(this.options.mcpManager
@@ -1011,6 +1027,7 @@ export interface RunnerCapabilityPreflightOptions {
   projectDirectory: string;
   stateDirectory: string;
   reservedToolNames: readonly string[];
+  verifyExtensionIntegrity?: () => Promise<void>;
 }
 
 export interface RecoveredRunnerCapabilityPreflightOptions {
@@ -1051,6 +1068,9 @@ class NativeRunCapabilities {
 async function createNativeRunCapabilities(
   options: RunnerCapabilityPreflightOptions,
 ): Promise<NativeRunCapabilities> {
+  const config = await attestRunnerCapabilitiesLanguageServers(options.config, {
+    commandSearchDirectory: options.projectDirectory,
+  });
   const builtInLanguage = new TypeScriptIntelligence(
     new RepositoryIntelligence(),
   );
@@ -1058,12 +1078,15 @@ async function createNativeRunCapabilities(
   let registry: CapabilityRegistry | undefined;
   let language: LanguageProviderRouter | undefined;
   try {
-    if (options.config.extensions.length > 0) {
+    if (config.extensions.length > 0) {
       extensions = await new LocalPluginLoader({
-        pluginDirectories: options.config.extensions,
+        pluginDirectories: config.extensions,
         projectDirectory: options.projectDirectory,
         stateDirectory: options.stateDirectory,
         reservedToolNames: options.reservedToolNames,
+        ...(options.verifyExtensionIntegrity
+          ? { verifyExtensionIntegrity: options.verifyExtensionIntegrity }
+          : {}),
       }).load();
     }
     registry = extensions?.registry ?? new CapabilityRegistry([], {
@@ -1072,7 +1095,7 @@ async function createNativeRunCapabilities(
     language = new LanguageProviderRouter({
       builtInProvider: builtInLanguage,
       extensionProviders: registry.languageProviders(),
-      configuredServers: options.config.languageServers,
+      configuredServers: config.languageServers,
     });
     return new NativeRunCapabilities(
       registry,
@@ -1128,7 +1151,9 @@ export async function preflightRunnerCapabilities(
 export async function preflightRecoveredRunnerCapabilities(
   options: RecoveredRunnerCapabilityPreflightOptions,
 ): Promise<void> {
-  await validateRunnerCapabilityContract(options.spec.capabilityContract, options.config);
+  await validateRunnerCapabilityContract(options.spec.capabilityContract, options.config, {
+    commandSearchDirectory: options.projectDirectory,
+  });
   const contract = options.spec.capabilityContract;
   if (!contract) {
     throw new RunnerCapabilityContractError(
@@ -1137,6 +1162,7 @@ export async function preflightRecoveredRunnerCapabilities(
     );
   }
   await validateRunnerCapabilityContractSnapshot(contract, options.stateDirectory);
+  const contractConfig = runnerCapabilitiesForContract(options.config, contract);
   const preflightDirectory = join(
     options.stateDirectory,
     "capability-preflight",
@@ -1147,7 +1173,7 @@ export async function preflightRecoveredRunnerCapabilities(
     await mkdir(preflightDirectory, { recursive: true });
     await preflightRunnerCapabilities({
       config: {
-        ...options.config,
+        ...contractConfig,
         extensions: runnerCapabilitySnapshotExtensionDirectories(
           contract,
           options.stateDirectory,
@@ -1156,6 +1182,9 @@ export async function preflightRecoveredRunnerCapabilities(
       projectDirectory: options.projectDirectory,
       stateDirectory: preflightDirectory,
       reservedToolNames: options.reservedToolNames,
+      verifyExtensionIntegrity: async () => {
+        await validateRunnerCapabilityContractSnapshot(contract, options.stateDirectory);
+      },
     });
   } catch (error) {
     throw new RunnerCapabilityContractError(

@@ -41,13 +41,15 @@ The configuration is deliberately strict. It must be a regular, non-symbolic JSO
 
 `version`, `extensions`, and `languageServers` are required. Each language-server entry requires `id`, `displayName`, `extensions`, `rootMarkers`, `priority`, `languageId`, `command`, and `args`; the timeout, restart, and size limits are optional bounded tuning values. An empty pair of arrays disables optional capabilities while retaining the built-in TypeScript/JavaScript provider (`builtin.typescript`).
 
-On Windows, Runner launches each configured language server inside a Windows Job Object, so closing the provider also terminates its descendant processes. Direct executables and ordinary `.cmd`/`.bat` shims are supported through the Job host's safe argv resolution. Use a direct executable (for example `node.exe` plus the server entry module) when an argument needs command-shell metacharacters.
+On Windows, Runner launches each configured language server inside a Windows Job Object, so closing the provider also terminates its descendant processes. Direct executables and ordinary `.cmd`/`.bat` shims are supported through the Job host's safe argv resolution. Use a direct executable (for example `node.exe` plus the server entry module) when an argument needs command-shell metacharacters. Runner resolves a bare command once using normal platform lookup, records the canonical launcher path and its bytes, and launches that attested path—not a later PATH lookup. It rechecks those bytes immediately before a server starts; a replaced executable or shim fails closed.
 
-Runner stamps each new active Build with a digest of its extension manifests and entries, configured language-server descriptors, and built-in language-provider identity. On restart, omitting or changing those capabilities fails an active Build before it can construct a runtime or make model calls; terminal history remains inspectable.
+Runner stamps each new active Build with a digest of its extension manifests, complete captured module closure, configured language-server descriptors and launcher identities, and built-in language-provider identity. On restart, omitting or changing those capabilities fails an active Build before it can construct a runtime or make model calls; terminal history remains inspectable.
 
 ## Extension package contract
 
 Each allowlisted directory contains a `runner-extension.json` manifest and a contained ESM entry module. The manifest declares API version `1`, a stable extension ID, name, version, entry path, and one or more capabilities: `tools`, `context`, or `language_intelligence`.
+
+Extensions are a trusted-local integration boundary, not a sandbox. Runner captures the bounded complete directory before evaluation and permits only explicit contained `.mjs`/`.js` ESM imports plus `node:` built-ins. Relative escapes, package-name imports, `require`, and dynamic imports are rejected. It evaluates a unique Runner-owned execution copy made from those captured bytes, seals and rehashes that copy at lifecycle boundaries, then removes it after normal or failed cleanup. An extension must vendor any code it needs inside its allowlisted directory.
 
 The module exports `createExtension()`, returning an instance with synchronous `capabilities()` plus asynchronous `start(context)` and `close()` methods. `start` receives only the extension ID, an extension-private state directory outside the project, and an abort signal. It never receives scheduler, workspace, integration, permission, budget, evidence, or completion stores.
 

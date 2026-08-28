@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -12,13 +13,17 @@ import {
 } from "node:fs/promises";
 import {
   dirname,
+  extname,
   isAbsolute,
   join,
   parse,
+  posix,
   relative,
   resolve,
   sep,
 } from "node:path";
+import { builtinModules } from "node:module";
+import * as ts from "typescript";
 
 import {
   RUNNER_EXTENSION_MANIFEST_FILE,
@@ -29,10 +34,18 @@ import type {
   ConfiguredLanguageServer,
   RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
+import {
+  assertLanguageServerExecutableIdentity,
+  cloneLanguageServerExecutableIdentity,
+  resolveLanguageServerExecutable,
+  type LanguageServerExecutableIdentity,
+  type LanguageServerExecutableResolutionOptions,
+} from "./language-server-executable.js";
 
 export const RUNNER_CAPABILITY_CONTRACT_VERSION = 1 as const;
 
 const EXTENSION_CLOSURE_VERSION = 1 as const;
+const LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION = 1 as const;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
 const MAX_EXTENSION_FILES = 4_096;
@@ -70,6 +83,7 @@ export interface RunnerCapabilityExtensionContract {
 export interface RunnerCapabilityLanguageServerContract {
   id: string;
   descriptorDigest: string;
+  executable?: LanguageServerExecutableIdentity;
 }
 
 export interface RunnerCapabilityContract {
@@ -79,6 +93,8 @@ export interface RunnerCapabilityContract {
    * historical projections but cannot recover an active Build.
    */
   extensionClosureVersion?: typeof EXTENSION_CLOSURE_VERSION;
+  /** Older contracts remain readable but cannot activate configured servers. */
+  languageServerExecutableIdentityVersion?: typeof LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION;
   builtin: {
     id: "builtin.typescript";
     identity: string;
@@ -88,14 +104,35 @@ export interface RunnerCapabilityContract {
   digest: string;
 }
 
-interface CapturedExtensionFile {
+export interface RunnerExtensionClosureFile {
   path: string;
   source: Buffer;
 }
 
+/**
+ * A bounded, statically validated ESM extension closure captured from one
+ * allowlisted local directory.  Runner does not treat the original directory
+ * as an execution source after this capture completes.
+ */
+export interface RunnerExtensionClosure {
+  directory: string;
+  manifest: RunnerExtensionManifest;
+  contract: RunnerCapabilityExtensionContract;
+  files: readonly RunnerExtensionClosureFile[];
+}
+
+/** A unique Runner-owned execution copy made only from a captured closure. */
+export interface RunnerExtensionExecutionCopy {
+  directory: string;
+  entryPath: string;
+  /** Rehashes the sealed copy before an extension crosses a lifecycle boundary. */
+  verify(): Promise<void>;
+  close(): Promise<void>;
+}
+
 interface CapturedExtension {
   contract: RunnerCapabilityExtensionContract;
-  files: readonly CapturedExtensionFile[];
+  files: readonly RunnerExtensionClosureFile[];
 }
 
 interface CapturedRunnerCapabilities {
@@ -109,8 +146,9 @@ interface CapturedRunnerCapabilities {
  */
 export async function createRunnerCapabilityContract(
   config: RunnerCapabilitiesConfig,
+  options: LanguageServerExecutableResolutionOptions = {},
 ): Promise<RunnerCapabilityContract> {
-  return (await captureRunnerCapabilities(config)).contract;
+  return (await captureRunnerCapabilities(config, options)).contract;
 }
 
 /**
@@ -120,8 +158,9 @@ export async function createRunnerCapabilityContract(
 export async function createRunnerCapabilityContractSnapshot(
   config: RunnerCapabilitiesConfig,
   stateDirectory: string,
+  options: LanguageServerExecutableResolutionOptions = {},
 ): Promise<RunnerCapabilityContract> {
-  const captured = await captureRunnerCapabilities(config);
+  const captured = await captureRunnerCapabilities(config, options);
   await persistRunnerCapabilitySnapshot(captured, stateDirectory);
   return captured.contract;
 }
@@ -129,6 +168,7 @@ export async function createRunnerCapabilityContractSnapshot(
 export async function validateRunnerCapabilityContract(
   expected: RunnerCapabilityContract | undefined,
   config: RunnerCapabilitiesConfig,
+  options: LanguageServerExecutableResolutionOptions = {},
 ): Promise<void> {
   if (!expected) {
     throw new RunnerCapabilityContractError(
@@ -138,7 +178,17 @@ export async function validateRunnerCapabilityContract(
   }
   assertRunnerCapabilityContract(expected);
   assertCurrentExtensionClosure(expected);
-  const actual = await createRunnerCapabilityContract(config);
+  assertCurrentLanguageServerExecutableIdentity(expected);
+  let actual: RunnerCapabilityContract;
+  try {
+    actual = await createRunnerCapabilityContract(config, options);
+  } catch (error) {
+    throw new RunnerCapabilityContractError(
+      "capability_contract_mismatch",
+      "Runner capability configuration differs from the active Build's persisted contract and can no longer resolve its attested capabilities.",
+      { cause: error },
+    );
+  }
   if (actual.digest !== expected.digest) {
     throw new RunnerCapabilityContractError(
       "capability_contract_mismatch",
@@ -195,7 +245,15 @@ export function assertRunnerCapabilityContract(
   ) {
     throw invalidContract("Runner capability contract extension closure version is invalid.");
   }
+  if (
+    value.languageServerExecutableIdentityVersion !== undefined &&
+    value.languageServerExecutableIdentityVersion !== LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION
+  ) {
+    throw invalidContract("Runner capability contract language-server executable identity version is invalid.");
+  }
   const currentClosure = value.extensionClosureVersion === EXTENSION_CLOSURE_VERSION;
+  const currentLanguageServerIdentity =
+    value.languageServerExecutableIdentityVersion === LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION;
   if (!isObject(value.builtin) ||
       value.builtin.id !== "builtin.typescript" ||
       value.builtin.identity !== BUILTIN_TYPESCRIPT_IDENTITY) {
@@ -240,19 +298,27 @@ export function assertRunnerCapabilityContract(
   for (const server of value.languageServers) {
     if (!isObject(server) ||
         typeof server.id !== "string" ||
-        !isDigest(server.descriptorDigest)) {
+        !isDigest(server.descriptorDigest) ||
+        (currentLanguageServerIdentity && !isLanguageServerExecutableIdentity(server.executable)) ||
+        (!currentLanguageServerIdentity && server.executable !== undefined)) {
       throw invalidContract("Runner capability contract language-server entry is invalid.");
     }
     serverIds.push(server.id);
     languageServers.push({
       id: server.id,
       descriptorDigest: server.descriptorDigest,
+      ...(currentLanguageServerIdentity
+        ? { executable: cloneLanguageServerExecutableIdentity(server.executable as LanguageServerExecutableIdentity) }
+        : {}),
     });
   }
   assertUnique(serverIds, "language server");
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
     ...(currentClosure ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION } : {}),
+    ...(currentLanguageServerIdentity
+      ? { languageServerExecutableIdentityVersion: LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION }
+      : {}),
     builtin: {
       id: "builtin.typescript" as const,
       identity: BUILTIN_TYPESCRIPT_IDENTITY,
@@ -274,18 +340,27 @@ export function cloneRunnerCapabilityContract(
     ...(contract.extensionClosureVersion === EXTENSION_CLOSURE_VERSION
       ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION }
       : {}),
+    ...(contract.languageServerExecutableIdentityVersion === LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION
+      ? { languageServerExecutableIdentityVersion: LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION }
+      : {}),
     builtin: { ...contract.builtin },
     extensions: contract.extensions.map((extension) => ({
       ...extension,
       capabilities: [...extension.capabilities],
     })),
-    languageServers: contract.languageServers.map((server) => ({ ...server })),
+    languageServers: contract.languageServers.map((server) => ({
+      ...server,
+      ...(server.executable
+        ? { executable: cloneLanguageServerExecutableIdentity(server.executable) }
+        : {}),
+    })),
     digest: contract.digest,
   };
 }
 
 async function captureRunnerCapabilities(
   config: RunnerCapabilitiesConfig,
+  options: LanguageServerExecutableResolutionOptions,
 ): Promise<CapturedRunnerCapabilities> {
   const extensions = await Promise.all(
     config.extensions.map(async (directory) => await captureExtension(directory)),
@@ -294,10 +369,12 @@ async function captureRunnerCapabilities(
   const extensionContracts = extensions.map((extension) => extension.contract);
   assertUnique(extensionContracts.map((extension) => extension.id), "extension");
 
-  const languageServers = config.languageServers
+  const attested = await attestRunnerCapabilitiesLanguageServers(config, options);
+  const languageServers = attested.languageServers
     .map((server) => ({
       id: server.descriptor.id,
       descriptorDigest: digest(canonicalLanguageServer(server)),
+      executable: cloneLanguageServerExecutableIdentity(server.commandIdentity!),
     }))
     .sort((left, right) => left.id.localeCompare(right.id));
   assertUnique(languageServers.map((server) => server.id), "language server");
@@ -305,6 +382,7 @@ async function captureRunnerCapabilities(
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
     extensionClosureVersion: EXTENSION_CLOSURE_VERSION,
+    languageServerExecutableIdentityVersion: LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION,
     builtin: {
       id: "builtin.typescript" as const,
       identity: BUILTIN_TYPESCRIPT_IDENTITY,
@@ -321,7 +399,100 @@ async function captureRunnerCapabilities(
   };
 }
 
+/**
+ * Converts configured server commands into canonical absolute identities that
+ * are safe to pass to a process launcher. This is Runner-owned metadata and is
+ * deliberately absent from the strict JSON configuration schema.
+ */
+export async function attestRunnerCapabilitiesLanguageServers(
+  config: RunnerCapabilitiesConfig,
+  options: LanguageServerExecutableResolutionOptions = {},
+): Promise<RunnerCapabilitiesConfig> {
+  const languageServers = await Promise.all(config.languageServers.map(async (server) => {
+    const identity = server.commandIdentity
+      ? await verifiedConfiguredLanguageServerIdentity(server)
+      : await resolveLanguageServerExecutable(server.command, options);
+    return {
+      ...server,
+      descriptor: {
+        ...server.descriptor,
+        extensions: [...server.descriptor.extensions],
+        rootMarkers: [...server.descriptor.rootMarkers],
+      },
+      command: identity.path,
+      args: [...server.args],
+      commandIdentity: identity,
+    };
+  }));
+  return {
+    extensions: [...config.extensions],
+    languageServers,
+  };
+}
+
+/**
+ * Binds live configured-server launch data to a previously validated durable
+ * contract. This prevents a validate-to-launch race from replacing a bare PATH
+ * command with a newly resolved executable after the active contract passed.
+ */
+export function runnerCapabilitiesForContract(
+  config: RunnerCapabilitiesConfig,
+  contract: RunnerCapabilityContract,
+): RunnerCapabilitiesConfig {
+  assertRunnerCapabilityContract(contract);
+  assertCurrentLanguageServerExecutableIdentity(contract);
+  const byId = new Map(contract.languageServers.map((server) => [server.id, server]));
+  const languageServers = config.languageServers.map((server) => {
+    const expected = byId.get(server.descriptor.id);
+    if (!expected?.executable) {
+      throw new RunnerCapabilityContractError(
+        "capability_contract_mismatch",
+        `Runner capability contract has no executable identity for language server ${server.descriptor.id}.`,
+      );
+    }
+    return {
+      ...server,
+      descriptor: {
+        ...server.descriptor,
+        extensions: [...server.descriptor.extensions],
+        rootMarkers: [...server.descriptor.rootMarkers],
+      },
+      command: expected.executable.path,
+      args: [...server.args],
+      commandIdentity: cloneLanguageServerExecutableIdentity(expected.executable),
+    };
+  });
+  return { extensions: [...config.extensions], languageServers };
+}
+
+async function verifiedConfiguredLanguageServerIdentity(
+  server: ConfiguredLanguageServer,
+): Promise<LanguageServerExecutableIdentity> {
+  const identity = server.commandIdentity!;
+  if (normalizePath(server.command) !== normalizePath(identity.path)) {
+    throw new Error(
+      `Language server ${server.descriptor.id} command does not match its Runner-owned executable identity.`,
+    );
+  }
+  await assertLanguageServerExecutableIdentity(identity);
+  return cloneLanguageServerExecutableIdentity(identity);
+}
+
 async function captureExtension(directory: string): Promise<CapturedExtension> {
+  const closure = await captureRunnerExtensionClosure(directory);
+  return { contract: closure.contract, files: closure.files };
+}
+
+/**
+ * Captures and validates every executable extension module before anything is
+ * imported. Only contained relative ESM modules and explicit `node:` built-ins
+ * are supported in the trusted-local extension boundary; Node package and
+ * dynamic resolution are deliberately excluded because they escape a durable
+ * closure without a sandbox.
+ */
+export async function captureRunnerExtensionClosure(
+  directory: string,
+): Promise<RunnerExtensionClosure> {
   const root = await requiredRealDirectory(directory);
   const files = await captureExtensionFiles(root);
   const byPath = new Map(files.map((file) => [file.path, file]));
@@ -348,7 +519,10 @@ async function captureExtension(directory: string): Promise<CapturedExtension> {
   if (entrySource.byteLength > MAX_ENTRY_BYTES) {
     throw new Error(`Runner extension entry ${manifest.entry} exceeds the size limit.`);
   }
+  validateCapturedExtensionModuleGraph(files, manifest.entry);
   return {
+    directory: root,
+    manifest,
     contract: {
       id: manifest.id,
       version: manifest.version,
@@ -365,8 +539,8 @@ async function captureExtension(directory: string): Promise<CapturedExtension> {
   };
 }
 
-async function captureExtensionFiles(root: string): Promise<CapturedExtensionFile[]> {
-  const files: CapturedExtensionFile[] = [];
+async function captureExtensionFiles(root: string): Promise<RunnerExtensionClosureFile[]> {
+  const files: RunnerExtensionClosureFile[] = [];
   let totalBytes = 0;
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory);
@@ -404,6 +578,219 @@ async function captureExtensionFiles(root: string): Promise<CapturedExtensionFil
   };
   await visit(root);
   return files;
+}
+
+const ALLOWED_NODE_BUILTINS = new Set(
+  builtinModules.map((name) => name.replace(/^node:/, "")),
+);
+
+/**
+ * Validates the complete conventional ESM graph from captured bytes. This is
+ * intentionally stricter than Node's resolver: extensions must vendor any
+ * dependency inside their allowlisted directory, and dynamic imports are not
+ * executable under the trusted-local/no-sandbox extension model.
+ */
+function validateCapturedExtensionModuleGraph(
+  files: readonly RunnerExtensionClosureFile[],
+  entry: string,
+): void {
+  const sources = new Map(files.map((file) => [file.path, file.source]));
+  const checked = new Set<string>();
+  const visit = (path: string): void => {
+    if (checked.has(path)) return;
+    checked.add(path);
+    const source = sources.get(path);
+    if (!source) {
+      throw new Error(`Runner extension module ${path} is not part of the captured closure.`);
+    }
+    if (!isExecutableExtensionModule(path)) {
+      throw new Error(
+        `Runner extension module ${path} must use a contained .mjs or .js ESM file.`,
+      );
+    }
+    const parsed = ts.createSourceFile(
+      path,
+      source.toString("utf8"),
+      ts.ScriptTarget.ES2023,
+      true,
+      ts.ScriptKind.JS,
+    );
+    const parseDiagnostics = (parsed as unknown as {
+      parseDiagnostics: readonly ts.Diagnostic[];
+    }).parseDiagnostics;
+    if (parseDiagnostics.length > 0) {
+      throw new Error(
+        `Runner extension module ${path} has invalid syntax: ${parseDiagnostics[0]!.messageText}.`,
+      );
+    }
+    const resolveSpecifier = (specifier: string): void => {
+      if (specifier.startsWith("node:")) {
+        const builtin = specifier.slice("node:".length);
+        if (!ALLOWED_NODE_BUILTINS.has(builtin)) {
+          throw new Error(`Runner extension module ${path} imports unsupported node builtin ${specifier}.`);
+        }
+        return;
+      }
+      if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+        throw new Error(
+          `Runner extension module ${path} imports bare external package ${specifier}; vendor it inside the extension instead.`,
+        );
+      }
+      const resolved = posix.normalize(posix.join(posix.dirname(path), specifier));
+      if (resolved === ".." || resolved.startsWith("../") || resolved.startsWith("/")) {
+        throw new Error(`Runner extension module ${path} escapes its captured closure via ${specifier}.`);
+      }
+      if (!isExecutableExtensionModule(resolved) || !sources.has(resolved)) {
+        throw new Error(
+          `Runner extension module ${path} imports unresolved contained module ${specifier}.`,
+        );
+      }
+      visit(resolved);
+    };
+    const inspect = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        if (node.moduleSpecifier) {
+          if (!ts.isStringLiteral(node.moduleSpecifier)) {
+            throw new Error(`Runner extension module ${path} has an unresolved module specifier.`);
+          }
+          resolveSpecifier(node.moduleSpecifier.text);
+        }
+      } else if (ts.isImportEqualsDeclaration(node)) {
+        throw new Error(`Runner extension module ${path} uses unsupported require-style module resolution.`);
+      } else if (ts.isCallExpression(node)) {
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          throw new Error(`Runner extension module ${path} uses unsupported dynamic import resolution.`);
+        }
+        if (ts.isIdentifier(node.expression) && node.expression.text === "require") {
+          throw new Error(`Runner extension module ${path} uses unsupported require-style module resolution.`);
+        }
+      }
+      ts.forEachChild(node, inspect);
+    };
+    ts.forEachChild(parsed, inspect);
+  };
+  visit(entry);
+}
+
+function isExecutableExtensionModule(path: string): boolean {
+  const extension = extname(path).toLowerCase();
+  return extension === ".mjs" || extension === ".js";
+}
+
+/**
+ * Materializes a unique execution directory solely from already-verified
+ * closure bytes. The original/snapshot directory is never imported directly,
+ * so a mutation after capture cannot change the code evaluated for this run.
+ */
+export async function materializeRunnerExtensionExecutionCopy(
+  closure: RunnerExtensionClosure,
+  stateDirectory: string,
+): Promise<RunnerExtensionExecutionCopy> {
+  const stateRoot = await requiredRealStateDirectory(stateDirectory);
+  const executions = join(stateRoot, "extension-executions");
+  await mkdir(executions, { recursive: true });
+  const executionRoot = await requiredRealStateDirectory(executions);
+  const directory = await mkdtemp(join(
+    executionRoot,
+    `.${closure.contract.closureDigest?.slice(0, 16) ?? "extension"}-`,
+  ));
+  let retained = false;
+  try {
+    await writeCapturedExtension(directory, closure.files);
+    const verified = await captureRunnerExtensionClosure(directory);
+    if (!sameExtensionContract(closure.contract, verified.contract)) {
+      throw new Error("Runner extension execution copy differs from its captured closure.");
+    }
+    await sealExecutionCopy(directory, closure.files);
+    retained = true;
+    return new CapturedExecutionCopy(
+      directory,
+      closure.manifest.entry,
+      closure.files,
+      closure.contract,
+    );
+  } finally {
+    if (!retained) await removeExecutionCopy(directory, closure.files);
+  }
+}
+
+class CapturedExecutionCopy implements RunnerExtensionExecutionCopy {
+  private closed = false;
+  readonly entryPath: string;
+
+  constructor(
+    readonly directory: string,
+    entry: string,
+    private readonly files: readonly RunnerExtensionClosureFile[],
+    private readonly contract: RunnerCapabilityExtensionContract,
+  ) {
+    this.entryPath = join(directory, ...entry.split("/"));
+  }
+
+  async verify(): Promise<void> {
+    if (this.closed) throw new Error("Runner extension execution copy is already closed.");
+    const actual = await captureRunnerExtensionClosure(this.directory);
+    if (!sameExtensionContract(this.contract, actual.contract)) {
+      throw new Error("Runner extension execution copy changed after it was captured.");
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    await removeExecutionCopy(this.directory, this.files);
+    this.closed = true;
+  }
+}
+
+async function sealExecutionCopy(
+  directory: string,
+  files: readonly RunnerExtensionClosureFile[],
+): Promise<void> {
+  for (const file of files) {
+    await chmod(join(directory, ...file.path.split("/")), 0o444);
+  }
+  const directories = new Set<string>([directory]);
+  for (const file of files) {
+    let current = dirname(join(directory, ...file.path.split("/")));
+    while (contained(directory, current)) {
+      directories.add(current);
+      if (normalizePath(current) === normalizePath(directory)) break;
+      current = dirname(current);
+    }
+  }
+  for (const candidate of [...directories].sort((left, right) => right.length - left.length)) {
+    await chmod(candidate, 0o555);
+  }
+}
+
+async function removeExecutionCopy(
+  directory: string,
+  files: readonly RunnerExtensionClosureFile[],
+): Promise<void> {
+  for (const file of files) {
+    try {
+      await chmod(join(directory, ...file.path.split("/")), 0o600);
+    } catch (error) {
+      if (!isErrno(error, "ENOENT")) throw error;
+    }
+  }
+  const directories = new Set<string>([directory]);
+  for (const file of files) {
+    let current = dirname(join(directory, ...file.path.split("/")));
+    while (contained(directory, current)) {
+      directories.add(current);
+      if (normalizePath(current) === normalizePath(directory)) break;
+      current = dirname(current);
+    }
+  }
+  for (const candidate of [...directories].sort((left, right) => right.length - left.length)) {
+    try {
+      await chmod(candidate, 0o700);
+    } catch (error) {
+      if (!isErrno(error, "ENOENT")) throw error;
+    }
+  }
+  await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
 }
 
 async function persistRunnerCapabilitySnapshot(
@@ -446,7 +833,7 @@ async function persistRunnerCapabilitySnapshot(
 
 async function writeCapturedExtension(
   output: string,
-  files: readonly CapturedExtensionFile[],
+  files: readonly RunnerExtensionClosureFile[],
 ): Promise<void> {
   for (const file of files) {
     const destination = join(output, ...file.path.split("/"));
@@ -509,6 +896,29 @@ function assertCurrentExtensionClosure(
       "Active Build recovery requires a persisted immutable extension capability contract.",
     );
   }
+}
+
+function assertCurrentLanguageServerExecutableIdentity(
+  contract: RunnerCapabilityContract,
+): void {
+  if (
+    contract.languageServerExecutableIdentityVersion !==
+    LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION
+  ) {
+    throw new RunnerCapabilityContractError(
+      "capability_contract_missing",
+      "Active Build recovery requires a persisted language-server executable capability contract.",
+    );
+  }
+}
+
+function isLanguageServerExecutableIdentity(
+  value: unknown,
+): value is LanguageServerExecutableIdentity {
+  return isObject(value) &&
+    typeof value.path === "string" &&
+    isDigest(value.digest) &&
+    (value.launcher === "native" || value.launcher === "batch");
 }
 
 async function requiredRealDirectory(input: string): Promise<string> {

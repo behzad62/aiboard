@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,6 +16,7 @@ import test from "node:test";
 
 import type { NativeTool } from "../src/agent-contracts.js";
 import { LocalPluginLoader } from "../src/plugin-loader.js";
+import { captureRunnerExtensionClosure } from "../src/runner-capability-contract.js";
 import type {
   RunnerExtensionCapabilities,
   RunnerExtensionInstance,
@@ -94,16 +97,18 @@ test("the production importer loads an allowlisted module from a path with space
     const plugin = fixture.plugin("real-import", {
       directoryName: "plugin module Ω",
     });
+    writeFileSync(join(plugin.directory, "helper.mjs"), 'export const suffix = "contained-helper";\n');
     writeFileSync(plugin.entry, `
       import { writeFile } from "node:fs/promises";
       import { join } from "node:path";
+      import { suffix } from "./helper.mjs";
       export function createExtension() {
         return {
           capabilities() {
             return { tools: [], contextContributors: [], languageProviders: [] };
           },
           async start({ extensionId, stateDirectory }) {
-            await writeFile(join(stateDirectory, "started.txt"), extensionId, "utf8");
+            await writeFile(join(stateDirectory, "started.txt"), extensionId + ":" + suffix, "utf8");
           },
           async close() {}
         };
@@ -120,9 +125,222 @@ test("the production importer loads an allowlisted module from a path with space
         join(fixture.state, "extensions", "real-import", "started.txt"),
         "utf8",
       ),
-      "real-import",
+      "real-import:contained-helper",
     );
     await loaded.close();
+  } finally {
+    fixture.close();
+  }
+});
+
+test("the production importer rejects escaped, bare, unresolved, and dynamic module resolution before evaluation", async () => {
+  for (const scenario of [
+    {
+      name: "relative escape",
+      entry: (_marker: string) => `
+        import "../outside.mjs";
+        export function createExtension() {
+          return { capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }), start: async () => {}, close: async () => {} };
+        }
+      `,
+      setup: (root: string, marker: string) => writeFileSync(join(root, "outside.mjs"), `
+        import { appendFileSync } from "node:fs";
+        appendFileSync(${JSON.stringify(marker)}, "outside evaluated\\n");
+      `),
+    },
+    {
+      name: "bare package",
+      entry: () => `
+        import "outside-package";
+        export function createExtension() {
+          return { capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }), start: async () => {}, close: async () => {} };
+        }
+      `,
+      setup: (root: string, marker: string) => {
+        const packageRoot = join(root, "node_modules", "outside-package");
+        mkdirSync(packageRoot, { recursive: true });
+        writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+          name: "outside-package",
+          type: "module",
+          exports: "./index.mjs",
+        }));
+        writeFileSync(join(packageRoot, "index.mjs"), `
+          import { appendFileSync } from "node:fs";
+          appendFileSync(${JSON.stringify(marker)}, "bare evaluated\\n");
+        `);
+      },
+    },
+    {
+      name: "dynamic import",
+      entry: () => `
+        await import("./helper.mjs");
+        export function createExtension() {
+          return { capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }), start: async () => {}, close: async () => {} };
+        }
+      `,
+      setup: (root: string, marker: string, directory: string) => writeFileSync(join(directory, "helper.mjs"), `
+        import { appendFileSync } from "node:fs";
+        appendFileSync(${JSON.stringify(marker)}, "dynamic evaluated\\n");
+      `),
+    },
+    {
+      name: "computed dynamic import",
+      entry: () => `
+        const target = "./helper.mjs";
+        await import(target);
+        export function createExtension() {
+          return { capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }), start: async () => {}, close: async () => {} };
+        }
+      `,
+      setup: (root: string, marker: string, directory: string) => writeFileSync(join(directory, "helper.mjs"), `
+        import { appendFileSync } from "node:fs";
+        appendFileSync(${JSON.stringify(marker)}, "computed dynamic evaluated\\n");
+      `),
+    },
+    {
+      name: "unresolved contained module",
+      entry: () => `
+        import "./missing.mjs";
+        export function createExtension() {
+          return { capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }), start: async () => {}, close: async () => {} };
+        }
+      `,
+      setup: () => undefined,
+    },
+  ] as const) {
+    const fixture = createFixture(`module graph ${scenario.name}`);
+    const marker = join(fixture.root, "unexpected-evaluation.log");
+    try {
+      const plugin = fixture.plugin("module-graph", {});
+      scenario.setup(fixture.root, marker, plugin.directory);
+      writeFileSync(plugin.entry, scenario.entry(marker));
+
+      await assert.rejects(
+        new LocalPluginLoader({
+          pluginDirectories: [plugin.directory],
+          projectDirectory: fixture.project,
+          stateDirectory: fixture.state,
+        }).load(),
+        /module.*(?:escape|bare|dynamic|unresolved)|(?:escape|bare|dynamic|unresolved).*module/i,
+      );
+      assert.equal(existsSync(marker), false);
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
+test("the production importer executes only captured bytes and removes its execution copy", async () => {
+  const fixture = createFixture("captured execution copy");
+  try {
+    const plugin = fixture.plugin("captured-copy", {});
+    const marker = join(fixture.root, "unexpected-live-source-evaluation.log");
+    writeFileSync(plugin.entry, `
+      import { writeFile } from "node:fs/promises";
+      import { join } from "node:path";
+      export function createExtension() {
+        return {
+          capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),
+          async start({ stateDirectory }) { await writeFile(join(stateDirectory, "executed.txt"), "captured", "utf8"); },
+          async close() {}
+        };
+      }
+    `);
+    const loaded = await new LocalPluginLoader({
+      pluginDirectories: [plugin.directory],
+      projectDirectory: fixture.project,
+      stateDirectory: fixture.state,
+      captureClosure: async (directory) => {
+        const closure = await captureRunnerExtensionClosure(directory);
+        writeFileSync(plugin.entry, `
+          import { appendFileSync } from "node:fs";
+          import { join } from "node:path";
+          appendFileSync(${JSON.stringify(marker)}, "live source evaluated\\n");
+          export function createExtension() {
+            return {
+              capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),
+              async start({ stateDirectory }) { appendFileSync(join(stateDirectory, "executed.txt"), "live"); },
+              async close() {}
+            };
+          }
+        `);
+        return closure;
+      },
+    }).load();
+
+    assert.equal(readFileSync(join(fixture.state, "extensions", "captured-copy", "executed.txt"), "utf8"), "captured");
+    assert.equal(existsSync(marker), false, "the source changed after capture must never be imported");
+    await loaded.close();
+    assert.deepEqual(
+      readdirSync(join(fixture.state, "extension-executions")),
+      [],
+      "a unique execution copy is removed after extension cleanup",
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("the production importer removes its execution copy after a failed start", async () => {
+  const fixture = createFixture("failed execution copy cleanup");
+  try {
+    const plugin = fixture.plugin("failed-copy", {});
+    writeFileSync(plugin.entry, `
+      export function createExtension() {
+        return {
+          capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),
+          async start() { throw new Error("expected start failure"); },
+          async close() {}
+        };
+      }
+    `);
+    await assert.rejects(
+      new LocalPluginLoader({
+        pluginDirectories: [plugin.directory],
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+      }).load(),
+      /expected start failure/i,
+    );
+    assert.deepEqual(
+      readdirSync(join(fixture.state, "extension-executions")),
+      [],
+      "a failed load must not retain executable extension bytes",
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test("the production importer rehashes its sealed execution copy after evaluation", async () => {
+  const fixture = createFixture("post import execution mutation");
+  try {
+    const plugin = fixture.plugin("post-import-copy", {});
+    const started = join(fixture.root, "unexpected-start.log");
+    writeFileSync(plugin.entry, `
+      import { appendFileSync } from "node:fs";
+      export function createExtension() {
+        return {
+          capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),
+          async start() { appendFileSync(${JSON.stringify(started)}, "started\\n"); },
+          async close() {}
+        };
+      }
+    `);
+    await assert.rejects(
+      new LocalPluginLoader({
+        pluginDirectories: [plugin.directory],
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        afterImport: async (copy) => {
+          chmodSync(copy.entryPath, 0o600);
+          writeFileSync(copy.entryPath, "export const changed = true;\n");
+        },
+      }).load(),
+      /execution copy changed/i,
+    );
+    assert.equal(existsSync(started), false, "a changed execution copy cannot reach extension start");
+    assert.deepEqual(readdirSync(join(fixture.state, "extension-executions")), []);
   } finally {
     fixture.close();
   }

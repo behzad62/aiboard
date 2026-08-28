@@ -15,6 +15,11 @@ import {
 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  assertLanguageServerExecutableIdentity,
+  type LanguageServerExecutableIdentity,
+} from "./language-server-executable.js";
+
 const HEADER_BOUNDARY = Buffer.from("\r\n\r\n", "ascii");
 const MAX_HEADER_BYTES = 8 * 1024;
 const DEFAULT_MAX_FRAME_BYTES = 4 * 1024 * 1024;
@@ -60,6 +65,8 @@ export class LspClientError extends Error {
 
 export interface LspClientOptions {
   command: string;
+  /** Runner-owned byte identity for the exact command passed to spawn. */
+  attestedCommand?: LanguageServerExecutableIdentity;
   args?: readonly string[];
   workspaceRoot: string;
   env?: NodeJS.ProcessEnv;
@@ -175,6 +182,7 @@ export class LspClient {
   readonly workspaceRoot: string;
 
   private readonly command: string;
+  private readonly attestedCommand?: LanguageServerExecutableIdentity;
   private readonly args: string[];
   private readonly env?: NodeJS.ProcessEnv;
   private readonly initializationOptions?: unknown;
@@ -231,6 +239,12 @@ export class LspClient {
       );
     }
     this.command = options.command;
+    if (options.attestedCommand) {
+      if (normalizePath(options.attestedCommand.path) !== normalizePath(options.command)) {
+        throw configurationError("LSP attested command must match the command passed to spawn.");
+      }
+      this.attestedCommand = { ...options.attestedCommand };
+    }
     this.args = args;
     this.env = options.env ? { ...options.env } : undefined;
     this.initializationOptions = options.initializationOptions;
@@ -599,6 +613,19 @@ export class LspClient {
   private async startSession(restart: boolean): Promise<void> {
     this.assertNotClosed();
     this.state = restart ? "restarting" : "starting";
+    if (this.attestedCommand) {
+      try {
+        await assertLanguageServerExecutableIdentity(this.attestedCommand);
+      } catch (error) {
+        this.state = "failed";
+        throw new LspClientError(
+          "invalid_configuration",
+          `Language server executable attestation failed: ${boundedMessage(error)}.`,
+          false,
+          { cause: error },
+        );
+      }
+    }
     const generation = this.nextGeneration++;
     let resolveExited!: () => void;
     const exited = new Promise<void>((resolvePromise) => {
@@ -1537,6 +1564,11 @@ function contained(root: string, candidate: string): boolean {
   const relation = relative(root, candidate);
   return relation === "" ||
     (relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation));
+}
+
+function normalizePath(path: string): string {
+  const value = resolve(path);
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
 function displayPath(root: string, path: string): string {

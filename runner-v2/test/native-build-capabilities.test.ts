@@ -126,12 +126,12 @@ test("active recovery preflights matching snapshot extensions atomically and ret
   }
 });
 
-test("active recovery rejects matching snapshot syntax and factory failures before a live runtime root exists", async () => {
+test("active recovery rejects matching snapshot evaluation and factory failures before a live runtime root exists", async () => {
   for (const scenario of [
     {
-      name: "syntax",
-      source: "export function createExtension( {\n",
-      expected: /unexpected token|unexpected end|syntaxerror/i,
+      name: "evaluation",
+      source: 'throw new Error("snapshot evaluation failed");\n',
+      expected: /snapshot evaluation failed/i,
     },
     {
       name: "factory",
@@ -657,6 +657,8 @@ test("NativeBuildFactory serves a terminal legacy Build from read-only durable s
     assert.deepEqual(snapshot.capabilities?.historicalContract, {
       version: prepared.capabilityContract!.version,
       extensionClosureVersion: prepared.capabilityContract!.extensionClosureVersion,
+      languageServerExecutableIdentityVersion:
+        prepared.capabilityContract!.languageServerExecutableIdentityVersion,
       digest: prepared.capabilityContract!.digest,
       builtin: prepared.capabilityContract!.builtin,
       extensions: prepared.capabilityContract!.extensions,

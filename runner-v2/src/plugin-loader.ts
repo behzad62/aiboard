@@ -1,7 +1,6 @@
 import {
   lstat,
   mkdir,
-  readFile,
   realpath,
 } from "node:fs/promises";
 import {
@@ -18,14 +17,16 @@ import {
   CapabilityRegistry,
   type RunnerExtensionRegistration,
 } from "./capability-registry.js";
-import {
-  RUNNER_EXTENSION_MANIFEST_FILE,
-  parseRunnerExtensionManifest,
-  type RunnerExtensionInstance,
-  type RunnerExtensionModule,
+import type {
+  RunnerExtensionInstance,
+  RunnerExtensionModule,
 } from "./runner-extension.js";
-
-const MAX_MANIFEST_BYTES = 64 * 1024;
+import {
+  captureRunnerExtensionClosure,
+  materializeRunnerExtensionExecutionCopy,
+  type RunnerExtensionClosure,
+  type RunnerExtensionExecutionCopy,
+} from "./runner-capability-contract.js";
 
 export interface LocalPluginLoaderOptions {
   pluginDirectories: readonly string[];
@@ -33,6 +34,12 @@ export interface LocalPluginLoaderOptions {
   stateDirectory: string;
   reservedToolNames?: readonly string[];
   signal?: AbortSignal;
+  /** Revalidates a durable snapshot around every extension execution boundary. */
+  verifyExtensionIntegrity?: () => Promise<void>;
+  /** Internal deterministic seam for testing capture-to-import TOCTOU defenses. */
+  captureClosure?: (directory: string) => Promise<RunnerExtensionClosure>;
+  /** Internal deterministic seam for testing post-evaluation integrity checks. */
+  afterImport?: (copy: RunnerExtensionExecutionCopy) => Promise<void>;
   importModule?: (entryPath: string) => Promise<unknown>;
 }
 
@@ -42,17 +49,26 @@ export class LoadedRunnerExtensions {
   constructor(
     readonly registry: CapabilityRegistry,
     private instances: RunnerExtensionInstance[],
+    private executionCopies: RunnerExtensionExecutionCopy[] = [],
   ) {}
 
   async close(): Promise<void> {
     if (this.closed) return;
     const result = await closeInstances([...this.instances].reverse());
     this.instances = [...result.failedInstances].reverse();
-    this.closed = this.instances.length === 0;
     if (result.failures.length > 0) {
       throw new AggregateError(
         result.failures,
         "One or more Runner extensions failed to close.",
+      );
+    }
+    const copies = await closeExecutionCopies([...this.executionCopies].reverse());
+    this.executionCopies = [...copies.failedCopies].reverse();
+    this.closed = this.executionCopies.length === 0;
+    if (copies.failures.length > 0) {
+      throw new AggregateError(
+        copies.failures,
+        "One or more Runner extension execution copies failed to close.",
       );
     }
   }
@@ -73,6 +89,7 @@ export class LocalPluginLoader {
 
   async load(): Promise<LoadedRunnerExtensions> {
     const created: RunnerExtensionRegistration[] = [];
+    const executionCopies: RunnerExtensionExecutionCopy[] = [];
     try {
       throwIfAborted(this.options.signal);
       const projectDirectory = await requiredRealDirectory(
@@ -91,14 +108,30 @@ export class LocalPluginLoader {
       const directories = await this.resolvePluginDirectories();
       for (const directory of directories) {
         throwIfAborted(this.options.signal);
-        const manifest = await readManifest(directory);
-        const entryPath = await resolveContainedEntry(directory, manifest.entry);
-        const importedModule = await (this.options.importModule ?? importExtensionModule)(
-          entryPath,
-        );
+        await this.options.verifyExtensionIntegrity?.();
+        const closure = await (this.options.captureClosure ?? captureRunnerExtensionClosure)(directory);
+        const manifest = closure.manifest;
+        await this.options.verifyExtensionIntegrity?.();
+        let importedModule: unknown;
+        if (this.options.importModule) {
+          const entryPath = await resolveContainedEntry(directory, manifest.entry);
+          importedModule = await this.options.importModule(entryPath);
+        } else {
+          const copy = await materializeRunnerExtensionExecutionCopy(
+            closure,
+            stateDirectory,
+          );
+          executionCopies.push(copy);
+          await copy.verify();
+          importedModule = await importExtensionModule(copy.entryPath);
+          await this.options.afterImport?.(copy);
+          await copy.verify();
+        }
+        await this.options.verifyExtensionIntegrity?.();
         const extensionModule = assertExtensionModule(manifest.id, importedModule);
         const instance = extensionModule.createExtension();
         created.push({ manifest, instance });
+        await verifyExecutionCopies(executionCopies);
       }
 
       const registry = new CapabilityRegistry(created, {
@@ -106,8 +139,11 @@ export class LocalPluginLoader {
           ? { reservedToolNames: this.options.reservedToolNames }
           : {}),
       });
+      await verifyExecutionCopies(executionCopies);
       for (const registration of created) {
         throwIfAborted(this.options.signal);
+        await this.options.verifyExtensionIntegrity?.();
+        await verifyExecutionCopies(executionCopies);
         const extensionState = await prepareExtensionState(
           stateDirectory,
           projectDirectory,
@@ -122,14 +158,16 @@ export class LocalPluginLoader {
       return new LoadedRunnerExtensions(
         registry,
         created.map((registration) => registration.instance),
+        executionCopies,
       );
     } catch (error) {
       const cleanup = await closeInstances(
         created.map((registration) => registration.instance).reverse(),
       );
-      if (cleanup.failures.length > 0) {
+      const copyCleanup = await closeExecutionCopies([...executionCopies].reverse());
+      if (cleanup.failures.length > 0 || copyCleanup.failures.length > 0) {
         throw new AggregateError(
-          [error, ...cleanup.failures],
+          [error, ...cleanup.failures, ...copyCleanup.failures],
           "Runner extension loading failed and cleanup reported errors.",
         );
       }
@@ -158,29 +196,6 @@ export class LocalPluginLoader {
     }
     return directories;
   }
-}
-
-async function readManifest(directory: string) {
-  const path = join(directory, RUNNER_EXTENSION_MANIFEST_FILE);
-  const metadata = await lstat(path);
-  if (metadata.isSymbolicLink() || !metadata.isFile()) {
-    throw new Error(`Runner extension manifest ${path} must be a regular non-symbolic file.`);
-  }
-  const actual = await realpath(path);
-  if (actual !== path && resolve(actual) !== resolve(path)) {
-    throw new Error(`Runner extension manifest ${path} resolves through a symbolic link.`);
-  }
-  const source = await readFile(actual, "utf8");
-  if (Buffer.byteLength(source) > MAX_MANIFEST_BYTES) {
-    throw new Error(`Runner extension manifest ${path} exceeds the size limit.`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(source);
-  } catch {
-    throw new Error(`Runner extension manifest ${path} is not valid JSON.`);
-  }
-  return parseRunnerExtensionManifest(parsed);
 }
 
 async function resolveContainedEntry(
@@ -348,6 +363,31 @@ async function closeInstances(
     }
   }
   return { failures, failedInstances };
+}
+
+async function closeExecutionCopies(
+  copies: readonly RunnerExtensionExecutionCopy[],
+): Promise<{
+  failures: unknown[];
+  failedCopies: RunnerExtensionExecutionCopy[];
+}> {
+  const failures: unknown[] = [];
+  const failedCopies: RunnerExtensionExecutionCopy[] = [];
+  for (const copy of copies) {
+    try {
+      await copy.close();
+    } catch (error) {
+      failures.push(error);
+      failedCopies.push(copy);
+    }
+  }
+  return { failures, failedCopies };
+}
+
+async function verifyExecutionCopies(
+  copies: readonly RunnerExtensionExecutionCopy[],
+): Promise<void> {
+  for (const copy of copies) await copy.verify();
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
