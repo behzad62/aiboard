@@ -1,26 +1,16 @@
-/* Robust Build harness-parity checks (run: npx tsx scripts/test-robust-build-parity.mts) */
 import assert from "node:assert/strict";
+
 import {
-  beginParityValidatedHarnessArms,
+  canonicalHarnessParityContract,
   canonicalHarnessParityIdentity,
   createHarnessParityContract,
   DEEPSEEK_HARNESS_SOURCE_REVISION,
+  executeParityValidatedHarnessArms,
   HarnessParityError,
-  RUNNER_V2_PRODUCT_SOURCE_REVISION,
 } from "../lib/benchmark/robust-build/parity";
-import type { HarnessParityArmCallbacks } from "../lib/benchmark/robust-build/types";
+import type { HarnessParityErrorCode } from "../lib/benchmark/robust-build/parity";
 
-function expectParityError(
-  assertion: () => unknown,
-  code: HarnessParityError["code"],
-  message: string
-): void {
-  assert.throws(
-    assertion,
-    (error) => error instanceof HarnessParityError && error.code === code,
-    message
-  );
-}
+type HarnessId = "deepseek-harness" | "runner-v2";
 
 interface MutableRole {
   role: string;
@@ -40,32 +30,78 @@ interface MutableLimits {
 }
 
 interface MutablePolicy {
+  version: number;
   permissions: string[];
   network: string;
 }
 
+interface MutableEnvironment {
+  version: number;
+  platform: string;
+  architecture: string;
+  clock: {
+    source: string;
+    deadlinePolicy: string;
+  };
+  dependencies: {
+    policy: string;
+    prefetchManifestHash: string;
+  };
+  workspace: string;
+  state: string;
+  processTree: string;
+  ports: string;
+}
+
+interface MutableSource {
+  revision: string;
+  treeHash: string;
+  dependencyLockHash: string;
+}
+
 interface MutableArm {
-  harness: string;
-  sourceRevision: string;
+  harness: HarnessId;
+  source: MutableSource;
   providerId: string;
   modelId: string;
   reasoningEffort: string;
   roles: MutableRole[];
   limits: MutableLimits;
   policy: MutablePolicy;
+  environment: MutableEnvironment;
   baseRepositoryHash: string;
   caseHash: string;
 }
 
-interface MutableParityFixture {
+interface MutableContract {
   schemaVersion: number;
   requiredRoles: string[];
-  executionOrder: string[];
-  arms: Record<string, MutableArm>;
+  executionOrder: HarnessId[];
+  arms: Record<HarnessId, MutableArm>;
 }
 
-function parityFixture(): MutableParityFixture {
-  const roles = [
+interface MutableAttestation extends Omit<MutableArm, "harness"> {
+  schemaVersion: number;
+  harness: HarnessId;
+}
+
+interface MutableLaunchRecord {
+  attestation: MutableAttestation;
+  callback: () => unknown | Promise<unknown>;
+}
+
+const RUNNER_V2_TEST_REVISION = "ec1ec8a110a77a0ad34a12ee60fa350583d4da2e";
+const RUNNER_V2_NEXT_TEST_REVISION = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const BASE_REPOSITORY_HASH = "0123456789abcdef0123456789abcdef01234567";
+const CASE_HASH = "89abcdef0123456789abcdef0123456789abcdef";
+const DEEPSEEK_TREE_HASH = "1111111111111111111111111111111111111111";
+const RUNNER_TREE_HASH = "2222222222222222222222222222222222222222";
+const DEEPSEEK_LOCK_HASH = "3333333333333333333333333333333333333333";
+const RUNNER_LOCK_HASH = "4444444444444444444444444444444444444444";
+const PREFETCH_MANIFEST_HASH = "5555555555555555555555555555555555555555";
+
+function makeContract(): MutableContract {
+  const roles: MutableRole[] = [
     {
       role: "architect",
       available: true,
@@ -81,18 +117,37 @@ function parityFixture(): MutableParityFixture {
       reasoningEffort: "high",
     },
   ];
-  const limits = {
-    maxInputTokens: 12_000,
-    maxOutputTokens: 4_000,
-    maxModelCalls: 8,
-    maxToolCalls: 24,
-    maxCostUsd: 1.5,
-    maxWallClockMs: 300_000,
+  const limits: MutableLimits = {
+    maxInputTokens: 40_000,
+    maxOutputTokens: 8_000,
+    maxModelCalls: 12,
+    maxToolCalls: 30,
+    maxCostUsd: 4.5,
+    maxWallClockMs: 180_000,
   };
-  const policy = {
+  const policy: MutablePolicy = {
+    version: 1,
     permissions: ["workspace-read", "workspace-write", "run-allowlisted-command"],
     network: "dependency-only",
   };
+  const environment: MutableEnvironment = {
+    version: 1,
+    platform: "win32",
+    architecture: "x64",
+    clock: {
+      source: "monotonic-clock-v1",
+      deadlinePolicy: "monotonic-hard-deadline",
+    },
+    dependencies: {
+      policy: "locked-prefetched",
+      prefetchManifestHash: PREFETCH_MANIFEST_HASH,
+    },
+    workspace: "fresh-isolated",
+    state: "fresh-isolated",
+    processTree: "owned-process-tree",
+    ports: "exclusive-reserved",
+  };
+
   return {
     schemaVersion: 1,
     requiredRoles: ["architect", "worker"],
@@ -100,353 +155,473 @@ function parityFixture(): MutableParityFixture {
     arms: {
       "deepseek-harness": {
         harness: "deepseek-harness",
-        sourceRevision: DEEPSEEK_HARNESS_SOURCE_REVISION,
+        source: {
+          revision: DEEPSEEK_HARNESS_SOURCE_REVISION,
+          treeHash: DEEPSEEK_TREE_HASH,
+          dependencyLockHash: DEEPSEEK_LOCK_HASH,
+        },
         providerId: "openai",
         modelId: "gpt-5.6",
         reasoningEffort: "high",
-        roles,
-        limits,
-        policy,
-        baseRepositoryHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        caseHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        roles: clone(roles),
+        limits: clone(limits),
+        policy: clone(policy),
+        environment: clone(environment),
+        baseRepositoryHash: BASE_REPOSITORY_HASH,
+        caseHash: CASE_HASH,
       },
       "runner-v2": {
         harness: "runner-v2",
-        sourceRevision: RUNNER_V2_PRODUCT_SOURCE_REVISION,
+        source: {
+          revision: RUNNER_V2_TEST_REVISION,
+          treeHash: RUNNER_TREE_HASH,
+          dependencyLockHash: RUNNER_LOCK_HASH,
+        },
         providerId: "openai",
         modelId: "gpt-5.6",
         reasoningEffort: "high",
-        roles: structuredClone(roles),
-        limits: structuredClone(limits),
-        policy: structuredClone(policy),
-        baseRepositoryHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        caseHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        roles: clone(roles),
+        limits: clone(limits),
+        policy: clone(policy),
+        environment: clone(environment),
+        baseRepositoryHash: BASE_REPOSITORY_HASH,
+        caseHash: CASE_HASH,
       },
     },
   };
 }
 
-const unequalEffort = structuredClone(parityFixture()) as {
-  arms: Record<string, { reasoningEffort: string }>;
-};
-unequalEffort.arms["runner-v2"]!.reasoningEffort = "low";
-
-expectParityError(
-  () => createHarnessParityContract(unequalEffort),
-  "parity_mismatch",
-  "a pair whose arm-level reasoning effort differs must be rejected before it can run"
-);
-
-console.log("PASS reasoning-effort parity guard");
-
-const unequalBudget = structuredClone(parityFixture()) as {
-  arms: Record<string, { limits: { maxToolCalls: number } }>;
-};
-unequalBudget.arms["runner-v2"]!.limits.maxToolCalls += 1;
-
-expectParityError(
-  () => createHarnessParityContract(unequalBudget),
-  "parity_mismatch",
-  "a one-call budget difference must be rejected before either arm can run"
-);
-
-console.log("PASS one-call budget parity guard");
-
-const unequalProvider = structuredClone(parityFixture()) as {
-  arms: Record<string, { providerId: string }>;
-};
-unequalProvider.arms["runner-v2"]!.providerId = "anthropic";
-
-expectParityError(
-  () => createHarnessParityContract(unequalProvider),
-  "parity_mismatch",
-  "a provider identity difference must be rejected before either arm can run"
-);
-
-console.log("PASS provider identity parity guard");
-
-const unequalModel = structuredClone(parityFixture()) as {
-  arms: Record<string, { modelId: string }>;
-};
-unequalModel.arms["runner-v2"]!.modelId = "claude-opus-5";
-
-expectParityError(
-  () => createHarnessParityContract(unequalModel),
-  "parity_mismatch",
-  "a model identity difference must be rejected before either arm can run"
-);
-
-console.log("PASS model identity parity guard");
-
-const unequalRoleAvailability = structuredClone(parityFixture()) as {
-  arms: Record<string, { roles: Array<{ available: boolean }> }>;
-};
-unequalRoleAvailability.arms["runner-v2"]!.roles[1]!.available = false;
-
-expectParityError(
-  () => createHarnessParityContract(unequalRoleAvailability),
-  "parity_mismatch",
-  "a role availability difference must be rejected before either arm can run"
-);
-
-console.log("PASS role availability parity guard");
-
-const unequalRoleMapping = structuredClone(parityFixture()) as {
-  arms: Record<string, { roles: Array<{ modelId: string }> }>;
-};
-unequalRoleMapping.arms["runner-v2"]!.roles[0]!.modelId = "gpt-5.6-mini";
-
-expectParityError(
-  () => createHarnessParityContract(unequalRoleMapping),
-  "parity_mismatch",
-  "a per-role model mapping difference must be rejected before either arm can run"
-);
-
-console.log("PASS role mapping parity guard");
-
-const missingRequiredRole = structuredClone(parityFixture()) as {
-  arms: Record<string, { roles: unknown[] }>;
-};
-for (const arm of Object.values(missingRequiredRole.arms)) arm.roles.pop();
-
-expectParityError(
-  () => createHarnessParityContract(missingRequiredRole),
-  "missing_value",
-  "a role omitted from both arms must fail closed rather than silently shrink the parity roster"
-);
-
-console.log("PASS complete role roster guard");
-
-const unequalNetworkPolicy = structuredClone(parityFixture()) as {
-  arms: Record<string, { policy: { network: string } }>;
-};
-unequalNetworkPolicy.arms["runner-v2"]!.policy.network = "none";
-
-expectParityError(
-  () => createHarnessParityContract(unequalNetworkPolicy),
-  "parity_mismatch",
-  "a network policy difference must be rejected before either arm can run"
-);
-
-console.log("PASS network policy parity guard");
-
-const unequalPermissions = structuredClone(parityFixture()) as {
-  arms: Record<string, { policy: { permissions: string[] } }>;
-};
-unequalPermissions.arms["runner-v2"]!.policy.permissions.pop();
-
-expectParityError(
-  () => createHarnessParityContract(unequalPermissions),
-  "parity_mismatch",
-  "a permission policy difference must be rejected before either arm can run"
-);
-
-console.log("PASS permission policy parity guard");
-
-const unequalBaseRepository = structuredClone(parityFixture()) as {
-  arms: Record<string, { baseRepositoryHash: string }>;
-};
-unequalBaseRepository.arms["runner-v2"]!.baseRepositoryHash =
-  "cccccccccccccccccccccccccccccccccccccccc";
-
-expectParityError(
-  () => createHarnessParityContract(unequalBaseRepository),
-  "parity_mismatch",
-  "a base-repository hash difference must be rejected before either arm can run"
-);
-
-console.log("PASS base repository hash parity guard");
-
-const unequalCaseHash = structuredClone(parityFixture()) as {
-  arms: Record<string, { caseHash: string }>;
-};
-unequalCaseHash.arms["runner-v2"]!.caseHash =
-  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-
-expectParityError(
-  () => createHarnessParityContract(unequalCaseHash),
-  "parity_mismatch",
-  "a case hash difference must be rejected before either arm can run"
-);
-
-console.log("PASS case hash parity guard");
-
-const wrongRunnerSource = structuredClone(parityFixture()) as {
-  arms: Record<string, { sourceRevision: string }>;
-};
-wrongRunnerSource.arms["runner-v2"]!.sourceRevision =
-  "0000000000000000000000000000000000000000";
-
-expectParityError(
-  () => createHarnessParityContract(wrongRunnerSource),
-  "invalid_source_revision",
-  "Runner V2 must be pinned to the exact product revision"
-);
-
-console.log("PASS Runner source pin guard");
-
-const wrongDeepSeekSource = structuredClone(parityFixture()) as {
-  arms: Record<string, { sourceRevision: string }>;
-};
-wrongDeepSeekSource.arms["deepseek-harness"]!.sourceRevision =
-  "0000000000000000000000000000000000000000";
-
-expectParityError(
-  () => createHarnessParityContract(wrongDeepSeekSource),
-  "invalid_source_revision",
-  "DeepSeek Harness must be pinned to its exact immutable source revision"
-);
-
-console.log("PASS DeepSeek source pin guard");
-
-const malformedExecutionOrder = structuredClone(parityFixture()) as {
-  executionOrder: string[];
-};
-malformedExecutionOrder.executionOrder = ["runner-v2", "runner-v2"];
-
-expectParityError(
-  () => createHarnessParityContract(malformedExecutionOrder),
-  "invalid_execution_order",
-  "a paired execution order must name each harness exactly once"
-);
-
-console.log("PASS paired execution order guard");
-
-const missingCostLimit = structuredClone(parityFixture());
-for (const arm of Object.values(missingCostLimit.arms)) {
-  delete (arm.limits as Partial<MutableLimits>).maxCostUsd;
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
-expectParityError(
-  () => createHarnessParityContract(missingCostLimit),
-  "missing_value",
-  "an unreported parity limit must fail closed even when both arms omit it"
-);
-
-console.log("PASS missing parity value guard");
-
-const frozenContract = createHarnessParityContract(parityFixture());
-assert.equal(Object.isFrozen(frozenContract), true, "the contract itself must be immutable");
-assert.equal(Object.isFrozen(frozenContract.arms), true, "the arm record must be immutable");
-assert.equal(
-  Object.isFrozen(frozenContract.arms["deepseek-harness"]!.roles),
-  true,
-  "nested role mappings must be immutable"
-);
-
-console.log("PASS immutable contract guard");
-
-const defensiveInput = parityFixture();
-const defensiveContract = createHarnessParityContract(defensiveInput);
-defensiveInput.arms["deepseek-harness"]!.roles[0]!.modelId = "tampered-after-validation";
-defensiveInput.arms["runner-v2"]!.policy.permissions.push("network-admin");
-assert.equal(
-  defensiveContract.arms["deepseek-harness"]!.roles[0]!.modelId,
-  "gpt-5.6",
-  "the returned contract must not retain mutable role references"
-);
-assert.deepEqual(
-  defensiveContract.arms["runner-v2"]!.policy.permissions,
-  ["run-allowlisted-command", "workspace-read", "workspace-write"],
-  "the returned contract must not retain mutable permission references"
-);
-
-console.log("PASS defensive contract copy guard");
-
-expectParityError(
-  () => createHarnessParityContract({}),
-  "missing_value",
-  "a malformed contract must fail closed"
-);
-
-const abbreviatedDeepSeekSource = parityFixture();
-abbreviatedDeepSeekSource.arms["deepseek-harness"]!.sourceRevision = "b150a55";
-expectParityError(
-  () => createHarnessParityContract(abbreviatedDeepSeekSource),
-  "invalid_source_revision",
-  "an abbreviated source pin must fail closed"
-);
-
-console.log("PASS malformed and abbreviated source guards");
-
-const reorderedInput = parityFixture();
-reorderedInput.requiredRoles.reverse();
-for (const arm of Object.values(reorderedInput.arms)) {
-  arm.roles.reverse();
-  arm.policy.permissions.reverse();
+function makeAttestation(arm: MutableArm): MutableAttestation {
+  return {
+    schemaVersion: 1,
+    harness: arm.harness,
+    source: clone(arm.source),
+    providerId: arm.providerId,
+    modelId: arm.modelId,
+    reasoningEffort: arm.reasoningEffort,
+    roles: clone(arm.roles),
+    limits: clone(arm.limits),
+    policy: clone(arm.policy),
+    environment: clone(arm.environment),
+    baseRepositoryHash: arm.baseRepositoryHash,
+    caseHash: arm.caseHash,
+  };
 }
-assert.equal(
-  canonicalHarnessParityIdentity(reorderedInput),
-  canonicalHarnessParityIdentity(parityFixture()),
-  "canonical identity must ignore ordering within role and permission mappings"
-);
 
-const reversedOrderInput = parityFixture();
-reversedOrderInput.executionOrder = ["runner-v2", "deepseek-harness"];
-assert.notEqual(
-  canonicalHarnessParityIdentity(reversedOrderInput),
-  canonicalHarnessParityIdentity(parityFixture()),
-  "canonical identity must preserve the paired execution order"
-);
+function makeLaunchRecords(
+  contract: MutableContract,
+  callbacks: Partial<Record<HarnessId, () => unknown | Promise<unknown>>> = {}
+): Record<HarnessId, MutableLaunchRecord> {
+  return {
+    "deepseek-harness": {
+      attestation: makeAttestation(contract.arms["deepseek-harness"]),
+      callback: callbacks["deepseek-harness"] ?? (() => "deepseek"),
+    },
+    "runner-v2": {
+      attestation: makeAttestation(contract.arms["runner-v2"]),
+      callback: callbacks["runner-v2"] ?? (() => "runner"),
+    },
+  };
+}
 
-console.log("PASS deterministic canonical identity guard");
+function expectParityError(
+  operation: () => unknown,
+  code: HarnessParityErrorCode
+): HarnessParityError {
+  let caught: unknown;
+  try {
+    operation();
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof HarnessParityError, `expected ${code} parity error`);
+  assert.equal(caught.code, code);
+  return caught;
+}
 
-const blockedCallbacks: string[] = [];
-expectParityError(
-  () =>
-    beginParityValidatedHarnessArms(unequalEffort, {
-      "deepseek-harness": ({ harness }) => {
-        blockedCallbacks.push(harness);
-        return harness;
+function expectNoModelStarts(
+  contract: MutableContract,
+  mutate: (records: Record<HarnessId, MutableLaunchRecord>) => void,
+  code: HarnessParityErrorCode
+): void {
+  const starts: HarnessId[] = [];
+  const records = makeLaunchRecords(contract, {
+    "deepseek-harness": () => starts.push("deepseek-harness"),
+    "runner-v2": () => starts.push("runner-v2"),
+  });
+  mutate(records);
+  expectParityError(() => executeParityValidatedHarnessArms(contract, records), code);
+  assert.deepEqual(starts, []);
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+{
+  const fixture = makeContract();
+  const canonical = canonicalHarnessParityContract(fixture);
+  assert.equal(canonical.arms["deepseek-harness"].source.revision, DEEPSEEK_HARNESS_SOURCE_REVISION);
+  assert.equal(canonical.arms["runner-v2"].source.revision, RUNNER_V2_TEST_REVISION);
+  assert.ok(Object.isFrozen(canonical));
+  assert.ok(Object.isFrozen(canonical.arms["deepseek-harness"].source));
+  assert.ok(Object.isFrozen(canonical.arms["runner-v2"].environment.dependencies));
+  fixture.arms["runner-v2"].limits.maxModelCalls = 99;
+  assert.equal(canonical.arms["runner-v2"].limits.maxModelCalls, 12);
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["runner-v2"].reasoningEffort = "medium";
+  expectParityError(() => createHarnessParityContract(fixture), "parity_mismatch");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["runner-v2"].limits.maxToolCalls -= 1;
+  expectParityError(() => createHarnessParityContract(fixture), "parity_mismatch");
+}
+
+for (const mutate of [
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].providerId = "other-provider";
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].modelId = "other-model";
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].roles[0].modelId = "other-role-model";
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].policy.network = "none";
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].policy.permissions = ["workspace-read"];
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].environment.architecture = "arm64";
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].baseRepositoryHash =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  },
+  (fixture: MutableContract) => {
+    fixture.arms["runner-v2"].caseHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  },
+]) {
+  const fixture = makeContract();
+  mutate(fixture);
+  expectParityError(() => createHarnessParityContract(fixture), "parity_mismatch");
+}
+
+for (const limitKey of [
+  "maxInputTokens",
+  "maxOutputTokens",
+  "maxModelCalls",
+  "maxToolCalls",
+  "maxCostUsd",
+  "maxWallClockMs",
+] as const) {
+  const fixture = makeContract();
+  fixture.arms["runner-v2"].limits[limitKey] += 1;
+  expectParityError(() => createHarnessParityContract(fixture), "parity_mismatch");
+}
+
+{
+  const fixture = makeContract();
+  delete (fixture.arms["deepseek-harness"].limits as unknown as Record<string, unknown>)
+    .maxCostUsd;
+  delete (fixture.arms["runner-v2"].limits as unknown as Record<string, unknown>).maxCostUsd;
+  expectNoModelStarts(fixture, () => undefined, "missing_value");
+}
+
+{
+  const fixture = makeContract();
+  fixture.executionOrder = ["deepseek-harness", "deepseek-harness"];
+  expectParityError(() => createHarnessParityContract(fixture), "invalid_execution_order");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["deepseek-harness"].source.revision = RUNNER_V2_TEST_REVISION;
+  expectParityError(() => createHarnessParityContract(fixture), "invalid_source_revision");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["deepseek-harness"].roles[0].available = false;
+  fixture.arms["runner-v2"].roles[0].available = false;
+  expectNoModelStarts(fixture, () => undefined, "missing_value");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["deepseek-harness"].roles.pop();
+  fixture.arms["runner-v2"].roles.pop();
+  expectNoModelStarts(fixture, () => undefined, "missing_value");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["deepseek-harness"].policy.network = "internet";
+  fixture.arms["runner-v2"].policy.network = "internet";
+  expectNoModelStarts(fixture, () => undefined, "invalid_contract");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["deepseek-harness"].policy.permissions = ["workspace-read", "shell"];
+  fixture.arms["runner-v2"].policy.permissions = ["workspace-read", "shell"];
+  expectNoModelStarts(fixture, () => undefined, "invalid_contract");
+}
+
+{
+  const fixture = makeContract();
+  fixture.arms["deepseek-harness"].environment.platform = "plan9";
+  fixture.arms["runner-v2"].environment.platform = "plan9";
+  expectNoModelStarts(fixture, () => undefined, "invalid_contract");
+}
+
+{
+  const fixture = makeContract();
+  expectNoModelStarts(
+    fixture,
+    (records) => {
+      records["runner-v2"].attestation.policy.network = "none";
+    },
+    "attestation_mismatch"
+  );
+}
+
+{
+  const fixture = makeContract();
+  expectNoModelStarts(
+    fixture,
+    (records) => {
+      delete (records["runner-v2"].attestation.environment as unknown as Record<string, unknown>)
+        .ports;
+    },
+    "missing_value"
+  );
+}
+
+{
+  const fixture = makeContract();
+  expectNoModelStarts(
+    fixture,
+    (records) => {
+      records["runner-v2"].attestation.environment.architecture = "arm64";
+    },
+    "attestation_mismatch"
+  );
+}
+
+for (const sourceField of ["revision", "treeHash", "dependencyLockHash"] as const) {
+  const fixture = makeContract();
+  expectNoModelStarts(
+    fixture,
+    (records) => {
+      records["runner-v2"].attestation.source[sourceField] =
+        sourceField === "revision"
+          ? RUNNER_V2_NEXT_TEST_REVISION
+          : "6666666666666666666666666666666666666666";
+    },
+    "attestation_mismatch"
+  );
+}
+
+{
+  const current = makeContract();
+  const next = makeContract();
+  next.arms["runner-v2"].source.revision = RUNNER_V2_NEXT_TEST_REVISION;
+  const currentIdentity = canonicalHarnessParityIdentity(current);
+  const nextIdentity = canonicalHarnessParityIdentity(next);
+  assert.notEqual(nextIdentity, currentIdentity);
+  const result = await executeParityValidatedHarnessArms(next, makeLaunchRecords(next));
+  assert.deepEqual(
+    result.map((entry) => entry.result),
+    ["deepseek", "runner"]
+  );
+}
+
+{
+  const canonical = makeContract();
+  const reordered = makeContract();
+  reordered.requiredRoles.reverse();
+  for (const arm of Object.values(reordered.arms)) {
+    arm.roles.reverse();
+    arm.policy.permissions.reverse();
+  }
+  assert.equal(canonicalHarnessParityIdentity(reordered), canonicalHarnessParityIdentity(canonical));
+
+  const reversedOrder = makeContract();
+  reversedOrder.executionOrder = ["runner-v2", "deepseek-harness"];
+  assert.notEqual(
+    canonicalHarnessParityIdentity(reversedOrder),
+    canonicalHarnessParityIdentity(canonical)
+  );
+}
+
+{
+  const fixture = makeContract();
+  const starts: HarnessId[] = [];
+  const pendingDeepseek = deferred<string>();
+  const pair = executeParityValidatedHarnessArms(
+    fixture,
+    makeLaunchRecords(fixture, {
+      "deepseek-harness": () => {
+        starts.push("deepseek-harness");
+        return pendingDeepseek.promise;
       },
-      "runner-v2": ({ harness }) => {
-        blockedCallbacks.push(harness);
-        return harness;
+      "runner-v2": () => {
+        starts.push("runner-v2");
+        return "runner";
       },
-    }),
-  "parity_mismatch",
-  "an unequal contract must be rejected before either arm callback begins"
-);
-assert.deepEqual(blockedCallbacks, [], "invalid parity must not begin any arm callback");
+    })
+  );
+  assert.deepEqual(starts, ["deepseek-harness"]);
+  await Promise.resolve();
+  assert.deepEqual(starts, ["deepseek-harness"]);
+  pendingDeepseek.resolve("deepseek");
+  const result = await pair;
+  assert.deepEqual(starts, ["deepseek-harness", "runner-v2"]);
+  assert.ok(Object.isFrozen(result));
+  assert.ok(Object.isFrozen(result[0]));
+  assert.ok(Object.isFrozen(result[0].attestation));
+  assert.deepEqual(
+    result.map((entry) => entry.result),
+    ["deepseek", "runner"]
+  );
+}
 
-const incompleteCallbacks: string[] = [];
-const incompleteCallbackRecord: Partial<HarnessParityArmCallbacks<string>> = {
-  "deepseek-harness": ({ harness }) => {
-    incompleteCallbacks.push(harness);
-    return harness;
-  },
-};
-expectParityError(
-  () =>
-    beginParityValidatedHarnessArms(
-      parityFixture(),
-      incompleteCallbackRecord as HarnessParityArmCallbacks<string>
-    ),
-  "invalid_callbacks",
-  "missing arm callbacks must be rejected before the provided callback begins"
-);
-assert.deepEqual(incompleteCallbacks, [], "an incomplete callback record must not start an arm");
+{
+  const fixture = makeContract();
+  const starts: HarnessId[] = [];
+  const pair = executeParityValidatedHarnessArms(
+    fixture,
+    makeLaunchRecords(fixture, {
+      "deepseek-harness": () => {
+        starts.push("deepseek-harness");
+        return Promise.reject(new Error("deepseek failed"));
+      },
+      "runner-v2": () => {
+        starts.push("runner-v2");
+        return "runner";
+      },
+    })
+  );
+  await assert.rejects(pair, /deepseek failed/);
+  assert.deepEqual(starts, ["deepseek-harness"]);
+}
 
-const executionEvents: string[] = [];
-const launched = beginParityValidatedHarnessArms(reversedOrderInput, {
-  "deepseek-harness": ({ harness, contract }) => {
-    assert.equal(Object.isFrozen(contract), true, "callbacks receive the frozen contract");
-    executionEvents.push(harness);
-    return `started:${harness}`;
-  },
-  "runner-v2": ({ harness, contract }) => {
-    assert.equal(Object.isFrozen(contract), true, "callbacks receive the frozen contract");
-    executionEvents.push(harness);
-    return `started:${harness}`;
-  },
-});
-assert.deepEqual(executionEvents, ["runner-v2", "deepseek-harness"]);
-assert.deepEqual(
-  launched.map((entry) => entry.harness),
-  ["runner-v2", "deepseek-harness"],
-  "valid callbacks must begin in the declared paired order"
-);
-assert.equal(Object.isFrozen(launched), true, "launch records must be immutable");
-assert.equal(Object.isFrozen(launched[0]!), true, "each launch record must be immutable");
+{
+  const fixture = makeContract();
+  let getterReads = 0;
+  const starts: HarnessId[] = [];
+  const records = makeLaunchRecords(fixture, {
+    "deepseek-harness": () => starts.push("deepseek-harness"),
+    "runner-v2": () => starts.push("runner-v2"),
+  });
+  const arm = fixture.arms["deepseek-harness"] as unknown as Record<string, unknown>;
+  const source = arm.source;
+  Object.defineProperty(arm, "source", {
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return source;
+    },
+  });
+  expectParityError(() => executeParityValidatedHarnessArms(fixture, records), "invalid_contract");
+  assert.equal(getterReads, 0);
+  assert.deepEqual(starts, []);
+}
 
-console.log("PASS synchronous callback preflight and paired launch order guards");
+{
+  const fixture = makeContract();
+  const starts: HarnessId[] = [];
+  const records = makeLaunchRecords(fixture, {
+    "deepseek-harness": () => starts.push("deepseek-harness"),
+    "runner-v2": () => starts.push("runner-v2"),
+  });
+  delete (records as unknown as Record<string, unknown>)["runner-v2"];
+  expectParityError(() => executeParityValidatedHarnessArms(fixture, records), "invalid_callbacks");
+  assert.deepEqual(starts, []);
+}
+
+{
+  const fixture = makeContract();
+  let getterReads = 0;
+  const starts: HarnessId[] = [];
+  const records = makeLaunchRecords(fixture, {
+    "deepseek-harness": () => starts.push("deepseek-harness"),
+    "runner-v2": () => starts.push("runner-v2"),
+  });
+  const permissions = fixture.arms["deepseek-harness"].policy.permissions;
+  Object.defineProperty(permissions, "0", {
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return "workspace-read";
+    },
+  });
+  expectParityError(() => executeParityValidatedHarnessArms(fixture, records), "invalid_contract");
+  assert.equal(getterReads, 0);
+  assert.deepEqual(starts, []);
+}
+
+{
+  const fixture = makeContract();
+  let getterReads = 0;
+  const starts: HarnessId[] = [];
+  const records = makeLaunchRecords(fixture, {
+    "deepseek-harness": () => starts.push("deepseek-harness"),
+    "runner-v2": () => starts.push("runner-v2"),
+  });
+  const record = records["runner-v2"] as unknown as Record<string, unknown>;
+  const attestation = record.attestation;
+  Object.defineProperty(record, "attestation", {
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return attestation;
+    },
+  });
+  expectParityError(() => executeParityValidatedHarnessArms(fixture, records), "invalid_callbacks");
+  assert.equal(getterReads, 0);
+  assert.deepEqual(starts, []);
+}
+
+{
+  const fixture = makeContract();
+  Object.defineProperty(fixture, "hidden", {
+    enumerable: false,
+    value: "must not be ignored",
+  });
+  expectParityError(() => createHarnessParityContract(fixture), "invalid_contract");
+}
+
+{
+  const fixture = makeContract();
+  const secret = Symbol("secret");
+  Object.defineProperty(fixture.arms["runner-v2"], secret, {
+    enumerable: true,
+    value: "must not be ignored",
+  });
+  expectParityError(() => createHarnessParityContract(fixture), "invalid_contract");
+}
+
+console.log("robust-build parity contract tests passed");
