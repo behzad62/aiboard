@@ -1,128 +1,43 @@
-import {
-  EXECUTION_SAFETY_CAPABILITY_NAMES,
-  parseExecutionSafetyCapabilities,
-  type ExecutionBackendIdentity,
-  type ExecutionInvocationIntent,
-  type ExecutionSafetyCapabilities,
-  type ExecutionSafetyCapabilityName,
-  type OpaqueOneCallExecutionGrant,
-  type ProcessBirthFingerprint,
-  type ProcessEscalationAction,
-  type ProcessOutputStream,
-} from "./execution-safety-contracts.js";
+import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
+import { EXECUTION_SAFETY_CAPABILITY_NAMES, parseExecutionSafetyCapabilities, type ExactPathAccess, type ExecutionInvocationIntent, type ExecutionSafetyCapabilities, type ExecutionSafetyCapabilityName, type ProcessEscalationAction, type ProcessOutputStream } from "./execution-safety-contracts.js";
 
-export interface ProcessBackendProbe {
-  readonly backendId: string;
-  readonly verified: true;
-  readonly platformLabel: string;
-  readonly capabilities: ExecutionSafetyCapabilities;
-}
+export const PROCESS_BACKEND_ATTESTATION_VERSION = 1 as const;
+export interface ProcessBackendProbe { readonly attestationVersion: 1; readonly backendId: string; readonly verified: true; readonly platformLabel: string; readonly capabilities: ExecutionSafetyCapabilities }
+export interface ProcessBackendRegistryEntry { readonly registryId: string; readonly backendId: string; readonly backend: ProcessBackend }
+export interface SelectedProcessBackend { readonly registryId: string; readonly backend: ProcessBackend; readonly attestation: ProcessBackendProbe; readonly attestationDigest: string }
+export interface ConsumedExecutionGrant { readonly grantId: string; readonly runId: string; readonly invocationId: string; readonly issuedAt: string; readonly expiresAt?: string; readonly access: readonly ExactPathAccess[] }
+export interface ProcessBackendBinding { readonly registryId: string; readonly backendId: string; readonly attestationVersion: number; readonly attestationDigest: string; readonly opaqueIdentity: string; readonly birthFingerprint: { readonly observedAt: string; readonly discriminator: string }; readonly rootPid?: number; readonly startedAt: string }
+export interface ProcessLaunchResult { readonly opaqueIdentity: string; readonly birthFingerprint: { readonly observedAt: string; readonly discriminator: string }; readonly rootPid?: number; readonly startedAt: string }
+export type ProcessObservation = { readonly state: "exited"; readonly exitCode?: number; readonly signal?: string };
+export type ProcessSignalResult = { readonly state: "running" | "exited" };
+export type ProcessEmptyVerification = { readonly empty: true; readonly proofArtifactId?: string } | { readonly empty: false; readonly detail: string };
+export type ProcessReconciliation = { readonly state: "running" } | { readonly state: "exited"; readonly exitCode?: number; readonly signal?: string } | { readonly state: "identity_mismatch" } | { readonly state: "outcome_unknown" };
+export type ProcessReleaseResult = { readonly released: true };
+export interface ProcessLaunchRequest { readonly intent: ExecutionInvocationIntent; readonly grant: ConsumedExecutionGrant; readonly environment: Readonly<Record<string,string>>; readonly outputOwnerId: string }
+export interface ProcessBackend { probe():Promise<unknown>; launch(request:ProcessLaunchRequest):Promise<unknown>; observe(binding:ProcessBackendBinding, output:(stream:ProcessOutputStream,bytes:Uint8Array)=>Promise<void>):Promise<unknown>; signal(binding:ProcessBackendBinding,action:ProcessEscalationAction):Promise<unknown>; verifyEmpty(binding:ProcessBackendBinding):Promise<unknown>; reconcile(binding:ProcessBackendBinding):Promise<unknown>; release(binding:ProcessBackendBinding):Promise<unknown> }
 
-export interface ProcessBackendBinding {
-  readonly backend: ExecutionBackendIdentity;
-  readonly birthFingerprint: ProcessBirthFingerprint;
-  readonly rootPid?: number;
-}
+export function parseProcessBackendProbe(value:unknown):ProcessBackendProbe { const o=record(value);keys(o,["attestationVersion","backendId","verified","platformLabel","capabilities"]);if(o.attestationVersion!==1||o.verified!==true)bad();const caps=record(o.capabilities);const parsed=Object.freeze(parseExecutionSafetyCapabilities(caps));return freeze({attestationVersion:1,backendId:text(o.backendId),verified:true,platformLabel:text(o.platformLabel),capabilities:parsed}); }
+export function parseProcessLaunchResult(value:unknown):ProcessLaunchResult { const o=record(value);keys(o,["opaqueIdentity","birthFingerprint","rootPid","startedAt"]);const birth=record(o.birthFingerprint);keys(birth,["observedAt","discriminator"]);return freeze({opaqueIdentity:text(o.opaqueIdentity),birthFingerprint:freeze({observedAt:text(birth.observedAt),discriminator:text(birth.discriminator)}),...(o.rootPid===undefined?{}:{rootPid:integer(o.rootPid,1)}),startedAt:text(o.startedAt)}); }
+export function parseProcessObservation(value:unknown):ProcessObservation { const o=record(value);keys(o,["state","exitCode","signal"]);if(o.state!=="exited")bad();return freeze({state:"exited",...(o.exitCode===undefined?{}:{exitCode:integer(o.exitCode,-2147483648,2147483647)}),...optionalText(o,"signal")}); }
+export function parseProcessSignalResult(value:unknown):ProcessSignalResult { const o=record(value);keys(o,["state"]);if(o.state!=="running"&&o.state!=="exited")bad();return freeze({state:o.state}); }
+export function parseProcessEmptyVerification(value:unknown):ProcessEmptyVerification { const o=record(value);if(o.empty===true){keys(o,["empty","proofArtifactId"]);return freeze({empty:true,...optionalText(o,"proofArtifactId")});}if(o.empty===false){keys(o,["empty","detail"]);return freeze({empty:false,detail:text(o.detail)});}bad(); }
+export function parseProcessReconciliation(value:unknown):ProcessReconciliation { const o=record(value);if(o.state==="running"||o.state==="identity_mismatch"||o.state==="outcome_unknown"){keys(o,["state"]);return freeze({state:o.state});}if(o.state==="exited"){keys(o,["state","exitCode","signal"]);return freeze({state:"exited",...(o.exitCode===undefined?{}:{exitCode:integer(o.exitCode,-2147483648,2147483647)}),...optionalText(o,"signal")});}bad(); }
+export function parseProcessReleaseResult(value:unknown):ProcessReleaseResult { const o=record(value);keys(o,["released"]);if(o.released!==true)bad();return freeze({released:true}); }
 
-export interface ProcessLaunchResult extends ProcessBackendBinding {
-  readonly startedAt: string;
-}
+export async function selectProcessBackend(entries:readonly ProcessBackendRegistryEntry[],required:readonly ExecutionSafetyCapabilityName[]):Promise<SelectedProcessBackend>{validateRegistry(entries);if(required.some((name)=>!EXECUTION_SAFETY_CAPABILITY_NAMES.includes(name)))throw unavailable();for(const entry of entries){try{const attestation=parseProcessBackendProbe(await entry.backend.probe());if(attestation.backendId===entry.backendId&&required.every((name)=>attestation.capabilities[name]==="enforced"))return freeze({registryId:safeId(entry.registryId),backend:entry.backend,attestation,attestationDigest:digestAttestation(attestation)});}catch{}}throw unavailable();}
+export async function reattestProcessBackend(entries:readonly ProcessBackendRegistryEntry[],binding:Pick<ProcessBackendBinding,"registryId"|"backendId"|"attestationVersion"|"attestationDigest">):Promise<SelectedProcessBackend>{validateRegistry(entries);const entry=entries.find((candidate)=>candidate.registryId===binding.registryId);if(!entry||entry.backendId!==binding.backendId)throw new Error("Process backend attestation mismatch.");let attestation:ProcessBackendProbe;try{attestation=parseProcessBackendProbe(await entry.backend.probe());}catch(error){throw new Error("Process backend attestation mismatch.",{cause:error});}const attestationDigest=digestAttestation(attestation);if(attestation.backendId!==binding.backendId||attestation.attestationVersion!==binding.attestationVersion||attestationDigest!==binding.attestationDigest)throw new Error("Process backend attestation mismatch.");return freeze({registryId:entry.registryId,backend:entry.backend,attestation,attestationDigest});}
+export function digestProcessBackendAttestation(attestation:ProcessBackendProbe):string{return digestAttestation(parseProcessBackendProbe(attestation));}
 
-export interface ProcessObservation {
-  readonly exitCode?: number;
-  readonly signal?: string;
-}
-
-export type ProcessSignalResult =
-  | { readonly state: "running" }
-  | { readonly state: "exited" };
-
-export type ProcessEmptyVerification =
-  | { readonly empty: true; readonly proofArtifactId?: string }
-  | { readonly empty: false; readonly detail: string };
-
-export type ProcessReconciliation =
-  | { readonly state: "running" }
-  | { readonly state: "exited"; readonly exitCode?: number; readonly signal?: string }
-  | { readonly state: "identity_mismatch" }
-  | { readonly state: "outcome_unknown" };
-
-export interface ProcessLaunchRequest {
-  readonly intent: ExecutionInvocationIntent;
-  readonly grant?: OpaqueOneCallExecutionGrant;
-  /** Ephemeral and call-scoped. Backends must never return or persist it. */
-  readonly environment: Readonly<Record<string, string>>;
-}
-
-export interface ProcessBackend {
-  readonly backendId: string;
-  probe(): Promise<unknown>;
-  launch(request: ProcessLaunchRequest): Promise<ProcessLaunchResult>;
-  observe(
-    binding: ProcessBackendBinding,
-    output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>,
-  ): Promise<ProcessObservation>;
-  signal(binding: ProcessBackendBinding, action: ProcessEscalationAction): Promise<ProcessSignalResult>;
-  verifyEmpty(binding: ProcessBackendBinding): Promise<ProcessEmptyVerification>;
-  reconcile(binding: ProcessBackendBinding): Promise<ProcessReconciliation>;
-  release(binding: ProcessBackendBinding): Promise<void>;
-}
-
-const PROBE_KEYS = new Set(["backendId", "verified", "platformLabel", "capabilities"]);
-
-export function parseProcessBackendProbe(value: unknown): ProcessBackendProbe {
-  const record = strictDataRecord(value);
-  if (!record || Object.keys(record).some((key) => !PROBE_KEYS.has(key))) {
-    throw new Error("A verified process backend probe is required.");
-  }
-  if (
-    typeof record.backendId !== "string" || !record.backendId.trim() ||
-    record.verified !== true ||
-    typeof record.platformLabel !== "string" || !record.platformLabel.trim()
-  ) {
-    throw new Error("A verified process backend probe is required.");
-  }
-  const capabilityRecord = strictDataRecord(record.capabilities);
-  if (!capabilityRecord) throw new Error("A verified process backend probe is required.");
-  const capabilities = Object.freeze(parseExecutionSafetyCapabilities(capabilityRecord));
-  return Object.freeze({
-    backendId: record.backendId,
-    verified: true,
-    platformLabel: record.platformLabel,
-    capabilities,
-  });
-}
-
-export async function selectProcessBackend(
-  backends: readonly ProcessBackend[],
-  required: readonly ExecutionSafetyCapabilityName[],
-): Promise<ProcessBackend> {
-  if (required.some((name) => !EXECUTION_SAFETY_CAPABILITY_NAMES.includes(name))) {
-    throw new Error("A verified process backend with required semantic capabilities is unavailable.");
-  }
-  for (const backend of backends) {
-    try {
-      const probe = parseProcessBackendProbe(await backend.probe());
-      if (probe.backendId !== backend.backendId) continue;
-      if (required.every((name) => probe.capabilities[name] === "enforced")) return backend;
-    } catch {
-      // A backend controls its probe value, so malformed claims are unavailable.
-    }
-  }
-  throw new Error("A verified process backend with required semantic capabilities is unavailable.");
-}
-
-function strictDataRecord(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value) || nodeTypes.isProxy(value)) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(descriptors).some((key) => typeof key !== "string")) return undefined;
-  const result = Object.create(null) as Record<string, unknown>;
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!("value" in descriptor)) return undefined;
-    result[key] = descriptor.value;
-  }
-  return result;
-}
+function digestAttestation(value:ProcessBackendProbe):string{return createHash("sha256").update(canonical(value)).digest("hex");}
+function validateRegistry(entries:readonly ProcessBackendRegistryEntry[]):void{const seen=new Set<string>();for(const entry of entries){const id=safeId(entry.registryId);safeId(entry.backendId);if(seen.has(id))throw new Error(`Duplicate process backend registry identity ${id}.`);seen.add(id);if(!entry.backend||typeof entry.backend!=="object")throw unavailable();}}
+function record(value:unknown):Record<string,unknown>{if(typeof value!=="object"||value===null||Array.isArray(value)||nodeTypes.isProxy(value))bad();const proto=Object.getPrototypeOf(value);if(proto!==Object.prototype&&proto!==null)bad();const descriptors=Object.getOwnPropertyDescriptors(value);const result=Object.create(null) as Record<string,unknown>;for(const rawKey of Reflect.ownKeys(descriptors)){if(typeof rawKey!=="string")bad();const descriptor=descriptors[rawKey]!;if(!("value" in descriptor))bad();result[rawKey]=descriptor.value;}return result;}
+function keys(o:Record<string,unknown>,allowed:readonly string[]):void{const set=new Set(allowed);const unexpected=Object.keys(o).find((key)=>!set.has(key));if(unexpected)throw new Error(`Backend response contains unknown field ${unexpected}.`);for(const key of allowed){if(!Object.hasOwn(o,key)&&!["rootPid","exitCode","signal","proofArtifactId"].includes(key))throw new Error(`Backend response is missing ${key}.`);}}
+function text(value:unknown):string{if(typeof value!=="string"||!value.trim())bad();return value;}
+function safeId(value:unknown):string{const result=text(value);if(!/^[A-Za-z0-9._-]{1,160}$/.test(result))bad();return result;}
+function integer(value:unknown,min:number,max=Number.MAX_SAFE_INTEGER):number{if(!Number.isSafeInteger(value)||(value as number)<min||(value as number)>max)bad();return value as number;}
+function optionalText<K extends string>(o:Record<string,unknown>,key:K):{[P in K]?:string}{return o[key]===undefined?{}:{[key]:text(o[key])} as {[P in K]?:string};}
+function bad():never{throw new Error("Backend response is invalid.");}
+function unavailable():Error{return new Error("A verified process backend with required semantic capabilities is unavailable.");}
+function freeze<T>(value:T):T{if(value&&typeof value==="object")Object.freeze(value);return value;}
+function canonical(value:unknown):string{if(Array.isArray(value))return`[${value.map(canonical).join(",")}]`;if(value&&typeof value==="object"){const o=value as Record<string,unknown>;return`{${Object.keys(o).sort().map((k)=>`${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;}return JSON.stringify(value)??"null";}

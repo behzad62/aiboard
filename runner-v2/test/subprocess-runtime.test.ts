@@ -1,181 +1,150 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import test from "node:test";
+import {mkdtemp,readFile,rm} from "node:fs/promises";
+import {join} from "node:path";
+import {tmpdir} from "node:os";
 
-import { BoundedOutputSpool, type OutputSpillStorage } from "../src/bounded-output-spool.js";
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
-import { createOpaqueOneCallExecutionGrant, type ExecutionInvocationIntent } from "../src/execution-safety-contracts.js";
-import { InMemoryDurableProcessStore } from "../src/durable-process-store.js";
-import { SubprocessRuntime, SubprocessRuntimeError } from "../src/subprocess-runtime.js";
-import type { ProcessBackend, ProcessBackendBinding, ProcessObservation, ProcessReconciliation } from "../src/process-backend.js";
+import type { ExecutionInvocationIntent } from "../src/execution-safety-contracts.js";
+import { InMemoryDurableProcessStore, SqliteDurableProcessStore, type DurableProcessStore } from "../src/durable-process-store.js";
+import type { ProcessBackend, ProcessBackendBinding, ProcessBackendRegistryEntry } from "../src/process-backend.js";
+import { SubprocessRuntime, SubprocessRuntimeError, type ProcessOutputFactory, type RunnerPrivateExecutionGrantAuthority, type SubprocessRuntimeClock } from "../src/subprocess-runtime.js";
 
-class FakeClock {
-  private tick = 0;
-  now = () => new Date(Date.UTC(2026, 0, 1, 0, 0, this.tick++)).toISOString();
-}
+const capabilities = { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "enforced" } as const;
+const intent = (id = "invoke-1", command = "tool"): ExecutionInvocationIntent => ({ invocationId: id, runId: "run-1", kind: "command", executable: command, arguments: ["--secret-value"], workingDirectory: "C:\\host\\project", requestedCapabilities: ["tree_termination", "verified_emptiness"] });
 
-class FakeBackend implements ProcessBackend {
-  readonly backendId = "fake";
+class Grants implements RunnerPrivateExecutionGrantAuthority {
   readonly calls: string[] = [];
-  launchError?: Error;
-  observation: ProcessObservation = { exitCode: 0, signal: undefined };
-  launchIdentity = "opaque-1";
-  launchBirth = "birth-1";
-  verify = { empty: true, proofArtifactId: "empty-proof" } as const;
-  reconcileResult: ProcessReconciliation = { state: "exited", exitCode: 0 };
-  releaseError?: Error;
-  disappearAt?: "observe" | "signal" | "verify" | "reconcile";
-  probe = async () => ({ backendId: "fake", verified: true as const, platformLabel: "fixture", capabilities: { tree_termination: "enforced" as const, crash_cleanup: "enforced" as const, verified_emptiness: "enforced" as const, write_confinement: "enforced" as const } });
-  launch = async () => { this.calls.push("launch"); if (this.launchError) throw this.launchError; return { backend: { backendId: "fake", opaqueIdentity: this.launchIdentity }, birthFingerprint: { observedAt: "2026-01-01T00:00:00.000Z", discriminator: this.launchBirth }, rootPid: 4242, startedAt: "2026-01-01T00:00:00.000Z" }; };
-  observe = async (_binding: ProcessBackendBinding, sink: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>) => { this.calls.push("observe"); if (this.disappearAt === "observe") throw new Error("backend gone"); await sink("stdout", Buffer.from("ok")); return this.observation; };
-  signal = async (_binding: ProcessBackendBinding) => { this.calls.push("signal"); if (this.disappearAt === "signal") throw new Error("backend gone"); return { state: "exited" as const }; };
-  verifyEmpty = async (_binding: ProcessBackendBinding) => { this.calls.push("verify"); if (this.disappearAt === "verify") throw new Error("backend gone"); return this.verify; };
-  reconcile = async (_binding: ProcessBackendBinding) => { this.calls.push("reconcile"); if (this.disappearAt === "reconcile") throw new Error("backend gone"); return this.reconcileResult; };
-  release = async () => { this.calls.push("release"); if (this.releaseError) throw this.releaseError; };
+  constructor(readonly values = new Map<string, unknown>()) {}
+  consume(id: string): unknown { this.calls.push(id); const value = this.values.get(id); if (!value) throw new Error("missing"); this.values.delete(id); return value; }
+}
+const grantValue = (invocationId = "invoke-1", overrides: Record<string, unknown> = {}) => ({ grantId: `grant-${invocationId}`, runId: "run-1", invocationId, issuedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T01:00:00.000Z", access: [], ...overrides });
+
+class Clock implements SubprocessRuntimeClock {
+  current = new Date("2026-01-01T00:00:00.000Z"); readonly sleeps: number[] = [];
+  now = () => new Date(this.current);
+  sleep = async (ms: number) => { this.sleeps.push(ms); this.current = new Date(this.current.getTime() + ms); };
 }
 
-const intent: ExecutionInvocationIntent = { invocationId: "invoke-1", runId: "run-1", kind: "command", executable: "tool", arguments: ["--secret-value"], workingDirectory: "C:\\host\\project", requestedCapabilities: ["tree_termination", "verified_emptiness"] };
-const grant = createOpaqueOneCallExecutionGrant({ grantId: "grant-1", invocationId: "invoke-1", issuedAt: "2026-01-01T00:00:00.000Z", access: [], state: "issued" });
-
-async function fixture(t: test.TestContext, mutate?: (backend: FakeBackend) => void) {
-  const root = await mkdtemp(join(tmpdir(), "runner-v2-runtime-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
-  const backend = new FakeBackend(); mutate?.(backend);
-  const store = new InMemoryDurableProcessStore();
-  const clock = new FakeClock();
-  const environments = createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw new Error("unused"); } }, now: () => new Date("2026-01-01T00:00:00.000Z") });
-  const unavailableSpill: OutputSpillStorage = {
-    attest: async () => ({ currentPrincipalPrivacy: false, identityStableDeletion: false, unlinkedEntries: false }),
-    prepareRoot: async () => { throw new Error("must not prepare"); },
-    openExclusive: async () => { throw new Error("must not open"); },
-    remove: async () => undefined,
-    removeIdentityStable: async () => undefined,
-    list: async () => [],
-  };
-  const runtime = new SubprocessRuntime({ backends: [backend], store, clock, environments, createSpool: (id) => new BoundedOutputSpool({ spillRoot: join(root, id), projectRoot: process.cwd(), ownershipId: id, storage: unavailableSpill }) });
-  return { backend, store, runtime };
+class Outputs implements ProcessOutputFactory {
+  readonly calls: string[] = []; readonly chunks: string[] = [];
+  failFinalizeFor = new Set<string>(); failReopenFor = new Set<string>();
+  async prepare(ownerId: string) { this.calls.push(`prepare:${ownerId}`); return this.session(ownerId); }
+  async reopen(ownerId: string) { this.calls.push(`reopen:${ownerId}`); if (this.failReopenFor.has(ownerId)) throw new Error("reopen failed"); return this.session(ownerId); }
+  private session(ownerId: string) { return { ownerId, write: async (_stream: "stdout"|"stderr", bytes: Uint8Array) => { this.chunks.push(Buffer.from(bytes).toString()); }, finalize: async () => { this.calls.push(`finalize:${ownerId}`); if (this.failFinalizeFor.has(ownerId)) throw new Error("finalize failed"); return { streams: [{ stream: "stdout" as const, tail: this.chunks.join(""), tailBytesBase64: Buffer.from(this.chunks.join("")).toString("base64"), tailByteLength: Buffer.byteLength(this.chunks.join("")), tailDisplayTruncated: false, totalBytes: Buffer.byteLength(this.chunks.join("")), truncated: false, spillBytes: 0, lossyBytes: 0, lossyOutput: false, lossReasons: [], spillState: "empty" as const }, { stream: "stderr" as const, tail: "", tailBytesBase64: "", tailByteLength: 0, tailDisplayTruncated: false, totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0, lossyOutput: false, lossReasons: [], spillState: "empty" as const }] }; }, cleanup: async () => { this.calls.push(`cleanup:${ownerId}`); } }; }
 }
 
-test("durably orders intent and launch binding before reporting started", async (t) => {
-  const { backend, store, runtime } = await fixture(t);
-  const result = await runtime.invoke({ intent, grant, ambientEnvironment: { PATH: "safe", API_KEY: "secret-value" } });
-  const record = store.readByInvocation("invoke-1")!;
-  assert.deepEqual(record.history.slice(0, 3).map(({ state }) => state), ["prepared", "launching", "running"]);
-  assert.ok(backend.calls.indexOf("launch") >= 0);
-  assert.equal(result.outcome, "exited");
-  assert.ok(record.output.some(({ lossyBytes }) => lossyBytes > 0));
-  assert.deepEqual(record.history.slice(-3).map(({ state }) => state), ["exited", "verifying_empty", "cleaned"]);
-  assert.deepEqual(backend.calls, ["launch", "observe", "verify", "release"]);
-  assert.equal(JSON.stringify(record).includes("secret-value"), false);
-  assert.equal(JSON.stringify(record).includes("C:\\host\\project"), false);
+class Backend implements ProcessBackend {
+  readonly calls: string[] = []; probeValue: unknown = { attestationVersion: 1, backendId: "fake", verified: true, platformLabel: "fixture", capabilities };
+  launchValue: unknown = { opaqueIdentity: "opaque-1", birthFingerprint: { observedAt: "2026-01-01T00:00:00.000Z", discriminator: "birth-1" }, rootPid: 42, startedAt: "2026-01-01T00:00:00.000Z" };
+  observeValue: unknown = { state: "exited", exitCode: 0 }; verifyValue: unknown = { empty: true, proofArtifactId: "proof" }; reconcileValue: unknown = { state: "exited", exitCode: 0 }; releaseValue: unknown = { released: true }; signalValues: unknown[] = [{ state: "exited" }]; launchGate?: Promise<void>; observeGate?:Promise<void>;onSignal?:(action:string)=>void;
+  probe = async () => { this.calls.push("probe"); return this.probeValue; };
+  observe = async (_binding: ProcessBackendBinding, output: (stream:"stdout"|"stderr",bytes:Uint8Array)=>Promise<void>) => { this.calls.push("observe"); await output("stdout",Buffer.from("child"));await this.observeGate; return this.observeValue; };
+  onLaunch?:()=>void;
+  launch = async () => { this.calls.push("launch");this.onLaunch?.(); await this.launchGate; return this.launchValue; };
+  signal = async (_binding: ProcessBackendBinding, action: string) => { this.calls.push(`signal:${action}`);this.onSignal?.(action); return this.signalValues.shift() ?? { state: "exited" }; };
+  verifyEmpty = async () => { this.calls.push("verify"); return this.verifyValue; };
+  reconcile = async () => { this.calls.push("reconcile"); return this.reconcileValue; };
+  release = async () => { this.calls.push("release"); return this.releaseValue; };
+}
+
+function deferred() { let resolve!:()=>void; const promise = new Promise<void>((done)=>{resolve=done;}); return {promise,resolve}; }
+function fixture(id = "invoke-1") {
+  const key = Object.freeze({}); const store = new InMemoryDurableProcessStore(key); const backend = new Backend(); const grants = new Grants(new Map([[`grant-${id}`,grantValue(id)]])); const clock = new Clock(); const outputs = new Outputs();
+  const entries: ProcessBackendRegistryEntry[] = [{ registryId:"registry-fake-v1",backendId:"fake",backend }];
+  const environments = createChildEnvironmentFactory({ credentialResolver:{consume:()=>{throw new Error("unused");}},now:()=>clock.now() });
+  const runtime = new SubprocessRuntime({ backends:entries,store,storeAuthority:key,grants,clock,environments,outputs,createLogicalProcessId:(invocationId)=>`proc-${invocationId}`,escalationGraceMs:[10,20] });
+  return {runtime,store,backend,grants,clock,outputs,entries,key};
+}
+function runtimeFor(store:DurableProcessStore,key:object,backend:Backend,grants:Grants,clock:Clock,outputs:Outputs){const environments=createChildEnvironmentFactory({credentialResolver:{consume:()=>{throw new Error("unused");}},now:()=>clock.now()});return new SubprocessRuntime({backends:[{registryId:"registry-fake-v1",backendId:"fake",backend}],store,storeAuthority:key,grants,clock,environments,outputs,createLogicalProcessId:(invocationId)=>`proc-${invocationId}`,escalationGraceMs:[10,20]});}
+
+test("caller can provide only an opaque grant id and forged grant/result fields are rejected", async () => {
+  const {runtime,backend,grants}=fixture();
+  await assert.rejects(runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{},grant:grantValue(),stopReason:"cancelled"} as never), /unknown invocation field/i);
+  assert.equal(grants.calls.length,0); assert.equal(backend.calls.includes("launch"),false);
 });
 
-test("duplicate exact invocation is idempotent and never launches twice", async (t) => {
-  const { backend, runtime } = await fixture(t);
-  const first = await runtime.invoke({ intent, grant, ambientEnvironment: {} });
-  const second = await runtime.invoke({ intent, grant, ambientEnvironment: {} });
-  assert.deepEqual(second, first);
-  assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
+test("Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked", async () => {
+  const expired=fixture(); expired.grants.values.set("grant-invoke-1",grantValue("invoke-1",{expiresAt:"2025-01-01T00:00:00.000Z"}));
+  await assert.rejects(expired.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}), /execution grant/i);
+  assert.equal(expired.backend.calls.includes("launch"),false);
+  const forged=fixture(); forged.grants.values.set("grant-invoke-1",Object.defineProperty(grantValue(),"runId",{enumerable:true,get:()=>"run-1"}));
+  await assert.rejects(forged.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}), /execution grant/i);
+  const future=fixture();future.grants.values.set("grant-invoke-1",grantValue("invoke-1",{issuedAt:"2027-01-01T00:00:00.000Z"}));await assert.rejects(future.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}),/execution grant/i);
 });
 
-test("start errors and launch crash points persist launch_not_proven", async (t) => {
-  const { store, runtime } = await fixture(t, (backend) => { backend.launchError = new Error("start denied"); });
-  await assert.rejects(runtime.invoke({ intent, grant, ambientEnvironment: {} }), (error: SubprocessRuntimeError) => error.code === "launch_not_proven");
-  assert.equal(store.readByInvocation("invoke-1")?.state, "launch_not_proven");
+test("concurrent exact invocations share one operation while divergent retries conflict", async () => {
+  const {runtime,backend}=fixture();
+  const [left,right]=await Promise.all([runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{PATH:"safe"}}),runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{PATH:"other-value"}})]);
+  assert.deepEqual(right,left); assert.equal(backend.calls.filter((call)=>call==="launch").length,1);
+  await assert.rejects(runtime.invoke({intent:intent("invoke-1","different"),grantId:"grant-invoke-1",ambientEnvironment:{PATH:"safe"}}), /idempotency conflict/i);
 });
 
-test("timeout and cancellation outrank child exit while output loss never changes outcome", async (t) => {
-  for (const stopReason of ["timed_out", "cancelled"] as const) {
-    const { backend, runtime } = await fixture(t, (candidate) => { candidate.observation = { exitCode: 0, signal: undefined }; });
-    const invocation = { ...intent, invocationId: `invoke-${stopReason}` };
-    const matchingGrant = createOpaqueOneCallExecutionGrant({ grantId: `grant-${stopReason}`, invocationId: invocation.invocationId, issuedAt: "2026-01-01T00:00:00.000Z", access: [], state: "issued" });
-    const result = await runtime.invoke({ intent: invocation, grant: matchingGrant, ambientEnvironment: {}, stopReason });
-    assert.equal(result.outcome, stopReason);
-    assert.equal(backend.calls.includes("signal"), true);
+test("concurrent runtimes over separate SQLite connections observe one operation and persist no request secrets",async(t)=>{const root=await mkdtemp(join(tmpdir(),"runner-v2-runtime-sqlite-"));t.after(async()=>rm(root,{recursive:true,force:true}));const path=join(root,"process.sqlite");const key=Object.freeze({});const firstStore=new SqliteDurableProcessStore(path,{runtimeAuthority:key});const secondStore=new SqliteDurableProcessStore(path,{runtimeAuthority:key});const backend=new Backend();const grants=new Grants(new Map([["grant-invoke-1",grantValue()]]));const clock=new Clock();const outputs=new Outputs();const first=runtimeFor(firstStore,key,backend,grants,clock,outputs);const second=runtimeFor(secondStore,key,backend,grants,clock,outputs);const [left,right]=await Promise.all([first.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{API_KEY:"secret-value",PATH:"one"}}),second.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{API_KEY:"different-secret",PATH:"two"}})]);assert.deepEqual(right,left);assert.equal(backend.calls.filter((call)=>call==="launch").length,1);firstStore.close();secondStore.close();const bytes=await readFile(path);for(const forbidden of ["secret-value","different-secret","--secret-value","C:\\host\\project","nativeHandle","spill.tmp"])assert.equal(bytes.includes(Buffer.from(forbidden)),false,forbidden);});
+
+test("deadline is runtime-owned and persists interrupt terminate force escalation before effects", async () => {
+  const {runtime,store,backend}=fixture(); backend.signalValues=[{state:"running"},{state:"running"},{state:"exited"}];backend.onSignal=()=>assert.equal(store.readByInvocation("invoke-1")?.escalation.at(-1)?.outcome,"requested");
+  const result=await runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{},deadline:new Date("2026-01-01T00:00:01.000Z")});
+  assert.equal(result.outcome,"timed_out"); assert.deepEqual(backend.calls.filter((call)=>call.startsWith("signal:")),["signal:interrupt","signal:terminate","signal:force_terminate"]);
+  assert.deepEqual(store.readByInvocation("invoke-1")?.escalation.map(({action})=>action),["interrupt","terminate","force_terminate"]);
+});
+
+test("cancellation during launch queues durable stop and signals only after identity bind", async () => {
+  const {runtime,store,backend}=fixture(); const gate=deferred(); backend.launchGate=gate.promise;
+  const running=runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}});
+  await Promise.resolve(); await Promise.resolve();
+  const cancellation=runtime.cancel("invoke-1");
+  assert.equal(backend.calls.some((call)=>call.startsWith("signal:")),false); assert.equal(store.readByInvocation("invoke-1")?.stopIntent?.reason,"cancelled");
+  gate.resolve(); await Promise.all([running,cancellation]);
+  assert.equal(backend.calls.some((call)=>call.startsWith("signal:")),true);
+});
+
+test("terminal cancel is a read-only no-op and never signals a cleaned process", async () => {
+  const {runtime,store,backend}=fixture(); await runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}); const before=store.readByInvocation("invoke-1");
+  assert.equal(await runtime.cancel("invoke-1"),false); assert.deepEqual(store.readByInvocation("invoke-1"),before); assert.equal(backend.calls.filter((call)=>call.startsWith("signal:")).length,0);
+});
+
+test("fresh attestation mismatch blocks cancellation authority before signal", async () => {
+  const {runtime,backend,store}=fixture();const gate=deferred();backend.observeGate=gate.promise;const operation=runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}});for(let i=0;i<20&&store.readByInvocation("invoke-1")?.state!=="running";i+=1)await Promise.resolve();
+  backend.probeValue={attestationVersion:1,backendId:"fake",verified:true,platformLabel:"replacement",capabilities};
+  assert.equal(await runtime.cancel("invoke-1"),false); assert.equal(backend.calls.filter((call)=>call.startsWith("signal:")).length,0);assert.equal(store.readByInvocation("invoke-1")?.state,"identity_mismatch");gate.resolve();await assert.rejects(operation);
+});
+
+test("restart preserves durable timeout precedence after observation loss",async()=>{const f=fixture();f.backend.observeValue=new Proxy({},{});await assert.rejects(f.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{},deadline:new Date("2026-01-01T00:00:01.000Z")}));assert.equal(f.store.readByInvocation("invoke-1")?.stopIntent?.reason,"timed_out");f.backend.observeValue={state:"exited",exitCode:0};await f.runtime.reconcileStartup();assert.equal(f.store.readByInvocation("invoke-1")?.result?.outcome,"timed_out");});
+
+test("restart resumes an escalation whose durable request preceded a crash",async()=>{const f=fixture();f.backend.observeValue=new Proxy({},{});await assert.rejects(f.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}));const writer=f.store.connectRuntime(f.key);let record=f.store.readByInvocation("invoke-1")!;record=writer.apply({type:"request_stop",invocationId:record.invocationId,expectedRevision:record.revision,at:f.clock.now().toISOString(),reason:"cancelled"});record=writer.apply({type:"start_escalation",invocationId:record.invocationId,expectedRevision:record.revision,action:"interrupt",requestedAt:f.clock.now().toISOString()});assert.equal(record.escalation.at(-1)?.outcome,"requested");f.backend.reconcileValue={state:"running"};f.backend.observeValue={state:"exited",exitCode:0};f.backend.signalValues=[{state:"exited"}];await f.runtime.reconcileStartup();assert.equal(f.store.readByInvocation("invoke-1")?.state,"cleaned");assert.equal(f.store.readByInvocation("invoke-1")?.result?.outcome,"cancelled");assert.deepEqual(f.backend.calls.filter((call)=>call.startsWith("signal:")),["signal:interrupt"]);});
+
+test("durable timeout and cancellation outrank later cleanup failure",async()=>{const f=fixture();f.backend.verifyValue={empty:false,detail:"descendant remains"};const result=await f.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{},deadline:new Date("2026-01-01T00:00:01.000Z")});assert.equal(result.outcome,"timed_out");assert.equal(f.store.readByInvocation("invoke-1")?.state,"cleanup_blocked");});
+
+test("malformed backend results are classified and never become verified success", async () => {
+  const launch=fixture(); launch.backend.launchValue={opaqueIdentity:"opaque",birthFingerprint:{observedAt:"x",discriminator:"d"},startedAt:"x",extra:true};
+  await assert.rejects(launch.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}),(error:SubprocessRuntimeError)=>error.code==="launch_not_proven");
+  const verify=fixture(); verify.backend.verifyValue={empty:"false",detail:"descendant"};
+  const result=await verify.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}); assert.equal(result.outcome,"cleanup_failed"); assert.equal(verify.store.readByInvocation("invoke-1")?.state,"cleanup_blocked");
+});
+
+test("output ownership is prepared before launch and finalized before verified cleanup", async () => {
+  const {runtime,backend,outputs}=fixture();backend.onLaunch=()=>assert.deepEqual(outputs.calls,["prepare:output-proc-invoke-1"]); await runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}});
+  assert.deepEqual(outputs.calls,["prepare:output-proc-invoke-1","finalize:output-proc-invoke-1"]);
+});
+
+test("restart reopens output, preserves stop precedence, and isolates one record failure from later recovery", async () => {
+  const first=fixture("first"); const secondIntent=intent("second");
+  // Build two recoverable rows through real runtime/store commands by crashing observation.
+  first.backend.observeValue=new Proxy({},{}); first.grants.values.set("grant-second",grantValue("second"));
+  await assert.rejects(first.runtime.invoke({intent:intent("first"),grantId:"grant-first",ambientEnvironment:{}}));
+  await assert.rejects(first.runtime.invoke({intent:secondIntent,grantId:"grant-second",ambientEnvironment:{}}));
+  const firstRecord=first.store.readByInvocation("first")!; first.outputs.failReopenFor.add(firstRecord.outputOwnerId);
+  first.backend.observeValue={state:"exited",exitCode:0};
+  const outcomes=await first.runtime.reconcileStartup();
+  assert.equal(outcomes.length,2); assert.equal(outcomes[0]?.state,"outcome_unknown"); assert.equal(first.store.readByInvocation("second")?.state,"cleaned");
+  assert.ok(first.outputs.calls.includes(`reopen:${first.store.readByInvocation("second")?.outputOwnerId}`));
+});
+
+test("reconciliation matrix maps running exited mismatch and unknown without illegal stale transitions", async () => {
+  for (const [state,want] of [["identity_mismatch","identity_mismatch"],["outcome_unknown","outcome_unknown"],["exited","cleaned"]] as const) {
+    const f=fixture(); f.backend.observeValue=new Proxy({},{}); await assert.rejects(f.runtime.invoke({intent:intent(),grantId:"grant-invoke-1",ambientEnvironment:{}}));
+    f.backend.reconcileValue=state==="exited"?{state:"exited",exitCode:0}:{state}; f.backend.observeValue={state:"exited",exitCode:0};
+    await f.runtime.reconcileStartup(); assert.equal(f.store.readByInvocation("invoke-1")?.state,want);
   }
-});
-
-test("missing identity and PID reuse never authorize signal", async (t) => {
-  const { backend, store, runtime } = await fixture(t);
-  store.createPrepared({ schemaVersion: 1, logicalProcessId: "p", invocationId: "lost", runId: "r", state: "prepared", history: [{ state: "prepared", at: "x" }], requiredCapabilities: [], environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, rootPid: 4242, output: [], cleanup: { state: "pending" } });
-  store.transition("lost", "launching", "y");
-  await assert.rejects(runtime.cancel("lost"), (error: SubprocessRuntimeError) => error.code === "identity_mismatch");
-  assert.equal(backend.calls.includes("signal"), false);
-  await runtime.invoke({ intent, grant, ambientEnvironment: {} });
-  backend.launchBirth = "different-birth";
-  await assert.rejects(runtime.cancel("invoke-1", { observedBirthDiscriminator: "different-birth" }), (error: SubprocessRuntimeError) => error.code === "identity_mismatch");
-  assert.equal(backend.calls.filter((call) => call === "signal").length, 0);
-});
-
-test("backend disappearance and unknown observation persist typed recovery states", async (t) => {
-  const { backend, store, runtime } = await fixture(t, (candidate) => { candidate.disappearAt = "observe"; });
-  await assert.rejects(runtime.invoke({ intent, grant, ambientEnvironment: {} }), (error: SubprocessRuntimeError) => error.code === "backend_unavailable");
-  assert.equal(store.readByInvocation("invoke-1")?.state, "backend_unavailable");
-  backend.disappearAt = undefined;
-  await runtime.reconcileStartup();
-  assert.equal(store.readByInvocation("invoke-1")?.state, "cleaned");
-});
-
-test("bad launch identity fails closed before observation or signal", async (t) => {
-  const { backend, store, runtime } = await fixture(t, (candidate) => { candidate.launchIdentity = ""; });
-  await assert.rejects(runtime.invoke({ intent, grant, ambientEnvironment: {} }), (error: SubprocessRuntimeError) => error.code === "identity_mismatch");
-  assert.equal(store.readByInvocation("invoke-1")?.state, "identity_mismatch");
-  assert.deepEqual(backend.calls, ["launch"]);
-});
-
-test("verified-empty failure blocks cleanup and success cannot be persisted first", async (t) => {
-  const { backend, store, runtime } = await fixture(t, (candidate) => { (candidate as { verify: unknown }).verify = { empty: false, detail: "descendant remains" }; });
-  const result = await runtime.invoke({ intent, grant, ambientEnvironment: {} });
-  assert.equal(result.outcome, "cleanup_failed");
-  assert.equal(store.readByInvocation("invoke-1")?.state, "cleanup_blocked");
-  assert.equal(store.readByInvocation("invoke-1")?.history.some(({ state }) => state === "cleaned"), false);
-  assert.deepEqual(backend.calls, ["launch", "observe", "verify"]);
-});
-
-test("release failure remains a cleanup blocker and never records durable success", async (t) => {
-  const { backend, store, runtime } = await fixture(t, (candidate) => { candidate.releaseError = new Error("release refused"); });
-  const result = await runtime.invoke({ intent, grant, ambientEnvironment: {} });
-  assert.equal(result.outcome, "cleanup_failed");
-  assert.equal(store.readByInvocation("invoke-1")?.state, "cleanup_blocked");
-  assert.equal(store.readByInvocation("invoke-1")?.history.some(({ state }) => state === "cleaned"), false);
-  assert.deepEqual(backend.calls, ["launch", "observe", "verify", "release"]);
-});
-
-test("timeout and cancellation retain precedence over cleanup failure", async (t) => {
-  for (const stopReason of ["timed_out", "cancelled"] as const) {
-    const { runtime } = await fixture(t, (candidate) => { (candidate as { verify: unknown }).verify = { empty: false, detail: "still running" }; });
-    const invocation = { ...intent, invocationId: `precedence-${stopReason}` };
-    const matchingGrant = createOpaqueOneCallExecutionGrant({ grantId: `precedence-${stopReason}`, invocationId: invocation.invocationId, issuedAt: "2026-01-01T00:00:00.000Z", access: [], state: "issued" });
-    assert.equal((await runtime.invoke({ intent: invocation, grant: matchingGrant, ambientEnvironment: {}, stopReason })).outcome, stopReason);
-  }
-});
-
-test("restart reconciliation classifies each durable crash point and unknown outcome", async (t) => {
-  const { backend, store, runtime } = await fixture(t, (candidate) => { candidate.reconcileResult = { state: "outcome_unknown" }; });
-  const base = { schemaVersion: 1 as const, runId: "r", requiredCapabilities: [] as const, environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, output: [], cleanup: { state: "pending" as const } };
-  store.createPrepared({ ...base, logicalProcessId: "before-launch", invocationId: "before-launch", state: "prepared", history: [{ state: "prepared", at: "a" }] });
-  store.createPrepared({ ...base, logicalProcessId: "during-launch", invocationId: "during-launch", state: "prepared", history: [{ state: "prepared", at: "a" }] });
-  store.transition("during-launch", "launching", "b");
-  store.createPrepared({ ...base, logicalProcessId: "after-bind", invocationId: "after-bind", state: "prepared", history: [{ state: "prepared", at: "a" }] });
-  store.transition("after-bind", "launching", "b");
-  store.bindLaunch("after-bind", { backend: { backendId: "fake", opaqueIdentity: "opaque" }, birthFingerprint: { observedAt: "a", discriminator: "birth" } }, "c");
-  await runtime.reconcileStartup();
-  assert.equal(store.readByInvocation("before-launch")?.state, "launch_not_proven");
-  assert.equal(store.readByInvocation("during-launch")?.state, "orphaned");
-  assert.equal(store.readByInvocation("after-bind")?.state, "outcome_unknown");
-  assert.equal(backend.calls.filter((call) => call === "launch").length, 0);
-});
-
-test("restart reconciliation is explicit, identity-bound, and historical reads do not reconcile", async (t) => {
-  const { backend, store, runtime } = await fixture(t);
-  store.createPrepared({ schemaVersion: 1, logicalProcessId: "p", invocationId: "resume", runId: "r", state: "prepared", history: [{ state: "prepared", at: "a" }], requiredCapabilities: ["verified_emptiness"], environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, output: [], cleanup: { state: "pending" } });
-  store.transition("resume", "launching", "b");
-  store.bindLaunch("resume", { backend: { backendId: "fake", opaqueIdentity: "opaque-r" }, birthFingerprint: { observedAt: "a", discriminator: "birth-r" }, rootPid: 7 }, "c");
-  assert.equal(store.readByInvocation("resume")?.state, "running");
-  assert.equal(backend.calls.length, 0);
-  await runtime.reconcileStartup();
-  assert.deepEqual(backend.calls, ["reconcile", "verify", "release"]);
-  assert.equal(store.readByInvocation("resume")?.state, "cleaned");
 });
