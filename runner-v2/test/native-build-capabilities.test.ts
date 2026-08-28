@@ -24,6 +24,7 @@ import {
   NativeBuildFactory,
   NativeBuildRuntimeInitializationError,
   preflightRecoveredRunnerCapabilities,
+  preflightRunnerCapabilities,
 } from "../src/native-build-factory.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -141,6 +142,35 @@ test("active recovery preflights matching snapshot extensions atomically and ret
     );
     assert.equal(readFileSync(lifecycle, "utf8"), "started\nclosed\n");
     assert.equal(existsSync(runRoot(fixture.state, runId)), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("standalone capability preflight sweeps retryable close failures before releasing ownership", async () => {
+  const fixture = createFixture("standalone-preflight-close-retry");
+  const executionRoot = join(fixture.state, "extension-executions");
+  try {
+    writeRetryingCloseExtension(fixture.extension);
+    await assert.rejects(
+      preflightRunnerCapabilities({
+        config: { extensions: [fixture.extension], languageServers: [] },
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) => {
+        const messages = nestedErrorMessages(error);
+        assert.equal(messages.some((message) => /provider close failed/i.test(message)), true);
+        assert.equal(messages.some((message) => /extension close failed/i.test(message)), true);
+        return true;
+      },
+    );
+    assert.equal(!existsSync(executionRoot) || readdirSync(executionRoot).length === 0, true);
+    assert.equal(
+      readFileSync(join(fixture.state, "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
+      "provider:1\nextension:1\nprovider:2\nextension:2\n",
+    );
   } finally {
     fixture.cleanup();
   }
@@ -833,6 +863,66 @@ test("NativeBuildFactory retains the primary construction error while retrying e
     assertReleasedRunnerDatabase(join(runRoot(fixture.state, runId), "evidence.sqlite"));
   } finally {
     await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory retries real capability close failures and removes the execution copy", async () => {
+  const fixture = createFixture("runtime-capability-close-retry");
+  const runId = "runtime_capability_close_retry";
+  const root = runRoot(fixture.state, runId);
+  let factory: NativeBuildFactory | undefined;
+  try {
+    writeRetryingCloseExtension(fixture.extension);
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: fixture.project,
+      stateDirectory: fixture.state,
+      providerConfigs: {
+        load: () => [providerConfig()],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      capabilitiesConfig: { extensions: [fixture.extension], languageServers: [] },
+      baselineFor: () => baseline.revision,
+      runtimeConstructionHooks: {
+        afterAcquire: async (stage) => {
+          if (stage === "evidence_store") {
+            throw new Error("injected evidence construction failure");
+          }
+        },
+      },
+    });
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    await assert.rejects(factory.create(prepared), (error: unknown) => {
+      assert.equal(error instanceof AggregateError, true);
+      const messages = nestedErrorMessages(error);
+      assert.equal(messages.some((message) => /evidence construction failure/i.test(message)), true);
+      assert.equal(messages.some((message) => /provider close failed/i.test(message)), true);
+      assert.equal(messages.some((message) => /extension close failed/i.test(message)), true);
+      return true;
+    });
+
+    const executionRoot = join(root, "extension-executions");
+    assert.equal(readdirSync(executionRoot).length, 1);
+    assert.equal(
+      readFileSync(join(root, "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
+      "provider:1\nextension:1\n",
+    );
+
+    await factory.close();
+    factory = undefined;
+    assert.equal(!existsSync(executionRoot) || readdirSync(executionRoot).length === 0, true);
+    assert.equal(
+      readFileSync(join(root, "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
+      "provider:1\nextension:1\nprovider:2\nextension:2\n",
+    );
+  } finally {
+    await factory?.close().catch(() => undefined);
     fixture.cleanup();
   }
 });
@@ -2016,6 +2106,59 @@ function extensionModuleSource(
     "}",
     "",
   ].join("\n");
+}
+
+function writeRetryingCloseExtension(extension: string): void {
+  writeFileSync(join(extension, "runner-extension.json"), JSON.stringify({
+    apiVersion: 1,
+    id: "fixture.factory",
+    name: "Factory Retry Fixture",
+    version: "1.0.0",
+    entry: "index.mjs",
+    capabilities: ["language_intelligence"],
+  }, null, 2));
+  writeFileSync(join(extension, "index.mjs"), [
+    'import { appendFile, mkdir } from "node:fs/promises";',
+    'import { join } from "node:path";',
+    "let stateDirectory;",
+    "let providerCloseAttempts = 0;",
+    "let extensionCloseAttempts = 0;",
+    "const empty = async () => ({ status: 'ok', results: [], truncated: false });",
+    "export function createExtension() {",
+    "  return {",
+    "    capabilities: () => ({",
+    "      tools: [],",
+    "      contextContributors: [],",
+    "      languageProviders: [{",
+    "        descriptor: { id: 'fixture.retry-provider', displayName: 'Retry provider', extensions: ['.fixture'], rootMarkers: [], priority: 1 },",
+    "        workspaceSymbols: empty, definition: empty, references: empty, diagnostics: empty,",
+    "        close: async () => {",
+    "          providerCloseAttempts += 1;",
+    "          await appendFile(join(stateDirectory, 'lifecycle.log'), `provider:${providerCloseAttempts}\\n`);",
+    "          if (providerCloseAttempts === 1) throw new Error('provider close failed');",
+    "        },",
+    "      }],",
+    "    }),",
+    "    start: async (context) => { stateDirectory = context.stateDirectory; await mkdir(stateDirectory, { recursive: true }); },",
+    "    close: async () => {",
+    "      extensionCloseAttempts += 1;",
+    "      await appendFile(join(stateDirectory, 'lifecycle.log'), `extension:${extensionCloseAttempts}\\n`);",
+    "      if (extensionCloseAttempts === 1) throw new Error('extension close failed');",
+    "    },",
+    "  };",
+    "}",
+    "",
+  ].join("\n"));
+}
+
+function nestedErrorMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return [error.message, ...error.errors.flatMap(nestedErrorMessages)];
+  }
+  if (error instanceof Error) {
+    return [error.message, ...(error.cause === undefined ? [] : nestedErrorMessages(error.cause))];
+  }
+  return [String(error)];
 }
 
 function writeHelperExtension(extension: string, marker: string): void {

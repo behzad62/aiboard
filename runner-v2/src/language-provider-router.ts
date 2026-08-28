@@ -100,6 +100,7 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   private readonly maxAuditRecords: number;
   private nextSequence = 1;
   private closePromise?: Promise<void>;
+  private pendingCloseProviders?: LanguageIntelligenceProvider[];
   private closed = false;
 
   constructor(options: LanguageProviderRouterOptions) {
@@ -214,6 +215,7 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
 
   /** Starts every configured stdio server so startup rejects an unusable capability atomically. */
   async preflightConfiguredServers(workspaceRoot: string): Promise<void> {
+    this.assertOpen();
     const root = existingDirectory(workspaceRoot);
     for (const candidate of this.candidates) {
       if (candidate.source !== "configured") continue;
@@ -232,34 +234,40 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     if (this.closePromise) return await this.closePromise;
-    this.closePromise = this.closeOwnedProviders();
-    return await this.closePromise;
+    const attempt = this.closeOwnedProviders();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
   }
 
   private async closeOwnedProviders(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    const failures: unknown[] = [];
-    const closedProviders = new Set<LanguageIntelligenceProvider>();
-    for (const provider of [
+    this.pendingCloseProviders ??= uniqueProviders([
       ...this.ownedProviders.slice().reverse(),
       ...this.extensionProviderInstances.slice().reverse(),
       this.builtInProvider,
-    ]) {
-      if (closedProviders.has(provider)) continue;
-      closedProviders.add(provider);
+    ]);
+    const failures: unknown[] = [];
+    const failedProviders: LanguageIntelligenceProvider[] = [];
+    for (const provider of this.pendingCloseProviders) {
       try {
         await provider.close();
       } catch (error) {
         failures.push(error);
+        failedProviders.push(provider);
       }
     }
-    this.configuredProviders.clear();
-    this.ownedProviders.length = 0;
+    this.pendingCloseProviders = failedProviders;
     if (failures.length > 0) {
       throw new AggregateError(failures, "One or more language providers failed to close.");
     }
+    this.configuredProviders.clear();
+    this.ownedProviders.length = 0;
   }
 
   private async positionQuery(
@@ -415,6 +423,17 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       throw new LanguageProviderRoutingError("router_closed", "Language provider router is closed.");
     }
   }
+}
+
+function uniqueProviders(
+  providers: readonly LanguageIntelligenceProvider[],
+): LanguageIntelligenceProvider[] {
+  const seen = new Set<LanguageIntelligenceProvider>();
+  return providers.filter((provider) => {
+    if (seen.has(provider)) return false;
+    seen.add(provider);
+    return true;
+  });
 }
 
 function candidate(

@@ -1539,6 +1539,7 @@ interface ClosableLanguageProvider {
 
 class NativeRunCapabilities {
   private closePromise?: Promise<void>;
+  private closed = false;
 
   constructor(
     readonly registry: CapabilityRegistry,
@@ -1548,11 +1549,20 @@ class NativeRunCapabilities {
   ) {}
 
   async close(): Promise<void> {
-    this.closePromise ??= closeCapabilityResources(
+    if (this.closed) return;
+    if (this.closePromise) return await this.closePromise;
+    const attempt = closeCapabilityResources(
       [this.language],
       this.extensions,
     );
-    return await this.closePromise;
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      this.closed = true;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
   }
 
   async preflight(): Promise<void> {
@@ -1627,7 +1637,7 @@ export async function preflightRunnerCapabilities(
     await capabilities.preflight();
   } catch (error) {
     try {
-      await capabilities.close();
+      await closePreflightCapabilities(capabilities);
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
@@ -1636,7 +1646,25 @@ export async function preflightRunnerCapabilities(
     }
     throw error;
   }
-  await capabilities.close();
+  await closePreflightCapabilities(capabilities);
+}
+
+async function closePreflightCapabilities(
+  capabilities: NativeRunCapabilities,
+): Promise<void> {
+  try {
+    await capabilities.close();
+  } catch (firstError) {
+    try {
+      await capabilities.close();
+    } catch (retryError) {
+      throw new AggregateError(
+        [firstError, retryError],
+        "Runner capability preflight cleanup failed after a retry.",
+      );
+    }
+    throw firstError;
+  }
 }
 
 /**

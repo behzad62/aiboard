@@ -77,6 +77,10 @@ export interface LspClientOptions {
   restartLimit?: number;
   maxFrameBytes?: number;
   maxPendingRequests?: number;
+  /** Test-only fault seam; production uses the supplied process-tree terminator directly. */
+  processTreeTerminationHook?: (
+    terminate: () => Promise<void>,
+  ) => Promise<void>;
 }
 
 export interface LspDocumentInput {
@@ -192,6 +196,7 @@ export class LspClient {
   private readonly restartLimit: number;
   private readonly maxFrameBytes: number;
   private readonly maxPendingRequests: number;
+  private readonly processTreeTerminationHook?: LspClientOptions["processTreeTerminationHook"];
   private readonly documents = new Map<string, OpenDocument>();
   private readonly diagnostics = new Map<string, PublishedDiagnosticsCache>();
   private readonly diagnosticWaiters = new Set<PublishedDiagnosticsWaiter>();
@@ -269,6 +274,7 @@ export class LspClient {
       options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS,
       "maxPendingRequests",
     );
+    this.processTreeTerminationHook = options.processTreeTerminationHook;
   }
 
   async start(): Promise<void> {
@@ -555,39 +561,49 @@ export class LspClient {
 
   async close(): Promise<void> {
     if (this.closePromise) return await this.closePromise;
-    this.closePromise = this.closeInternal();
-    return await this.closePromise;
+    const attempt = this.closeInternal();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
   }
 
   private async closeInternal(): Promise<void> {
     if (this.state === "closed") return;
     this.state = "closing";
     const session = this.session;
-    if (session && !session.expectedExit) {
-      if (session.initialized && !session.failure) {
-        try {
-          await this.requestOnSession(
-            session,
-            "shutdown",
-            null,
-            undefined,
-            this.shutdownTimeoutMs,
-          );
-          session.expectedExit = true;
-          await this.notifyOnSession(session, "exit", null);
-          if (!session.windowsJobHost) {
-            await terminateProcessTree(session.child);
+    if (session && !processSessionExited(session)) {
+      if (!session.expectedExit) {
+        if (session.initialized && !session.failure) {
+          try {
+            await this.requestOnSession(
+              session,
+              "shutdown",
+              null,
+              undefined,
+              this.shutdownTimeoutMs,
+            );
+            session.expectedExit = true;
+            await this.notifyOnSession(session, "exit", null);
+            if (!session.windowsJobHost) {
+              await this.terminateSessionProcessTree(session);
+            }
+          } catch {
+            session.expectedExit = true;
+            await this.terminateSessionProcessTree(session, "SIGTERM");
           }
-        } catch {
+        } else {
           session.expectedExit = true;
-          await terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined);
+          await this.terminateSessionProcessTree(session, "SIGTERM");
         }
       } else {
-        session.expectedExit = true;
-        await terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined);
+        await this.terminateSessionProcessTree(session, "SIGTERM");
       }
       if (!(await waitForProcessExit(session, this.shutdownTimeoutMs))) {
-        await terminateProcessTree(session.child, "SIGKILL", session.windowsJobHost !== undefined);
+        await this.terminateSessionProcessTree(session, "SIGKILL");
         if (!(await waitForProcessExit(session, this.shutdownTimeoutMs))) {
           const failure = new LspClientError(
             "process_error",
@@ -608,6 +624,22 @@ export class LspClient {
     this.diagnostics.clear();
     this.session = undefined;
     this.state = "closed";
+  }
+
+  private async terminateSessionProcessTree(
+    session: ProcessSession,
+    signal: NodeJS.Signals = "SIGTERM",
+  ): Promise<void> {
+    const terminate = async () => await terminateProcessTree(
+      session.child,
+      signal,
+      session.windowsJobHost !== undefined,
+    );
+    if (this.processTreeTerminationHook) {
+      await this.processTreeTerminationHook(terminate);
+    } else {
+      await terminate();
+    }
   }
 
   private async startSession(restart: boolean): Promise<void> {
@@ -1541,6 +1573,10 @@ async function waitForProcessExit(
     session.exited.then(() => true),
     delay(timeoutMs).then(() => false),
   ]);
+}
+
+function processSessionExited(session: ProcessSession): boolean {
+  return session.child.exitCode !== null || session.child.signalCode !== null;
 }
 
 function canonicalTarget(target: string): string {

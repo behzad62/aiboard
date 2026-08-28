@@ -18,7 +18,10 @@ import type {
   LanguageIntelligenceProvider,
   LanguageProviderDescriptor,
 } from "../src/language-intelligence.js";
-import { LanguageProviderRouter } from "../src/language-provider-router.js";
+import {
+  LanguageProviderRouter,
+  LanguageProviderRoutingError,
+} from "../src/language-provider-router.js";
 import { RepositoryIntelligence } from "../src/repository-intelligence.js";
 import type { ConfiguredLanguageServer } from "../src/runner-capabilities-config.js";
 import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
@@ -236,6 +239,59 @@ test("language routing rejects provider identity collisions before any query", (
     }),
     /duplicate language provider.*builtin\.typescript/i,
   );
+});
+
+test("router close retries only failed providers in the original reverse order", async () => {
+  const lifecycle: string[] = [];
+  const closeAttempts = new Map<string, number>();
+  const provider = (id: string, failOnce: boolean): LanguageIntelligenceProvider => {
+    const created = fakeProvider(id, [`.${id}`], [], 0, []);
+    return {
+      ...created,
+      close: async () => {
+        const attempt = (closeAttempts.get(id) ?? 0) + 1;
+        closeAttempts.set(id, attempt);
+        lifecycle.push(`${id}:${attempt}`);
+        if (failOnce && attempt === 1) throw new Error(`${id} close failed`);
+      },
+    };
+  };
+  const builtin = provider("builtin.typescript", true);
+  const first = provider("extension.first", false);
+  const second = provider("extension.second", true);
+  const router = new LanguageProviderRouter({
+    builtInProvider: builtin,
+    extensionProviders: [
+      { extensionId: "first.extension", descriptor: first.descriptor, provider: first },
+      { extensionId: "second.extension", descriptor: second.descriptor, provider: second },
+    ],
+    configuredServers: [],
+  });
+
+  await assert.rejects(
+    router.close(),
+    (error: unknown) => error instanceof AggregateError && error.errors.length === 2,
+  );
+  assert.deepEqual(lifecycle, [
+    "extension.second:1",
+    "extension.first:1",
+    "builtin.typescript:1",
+  ]);
+  await assert.rejects(
+    router.workspaceSymbols({ root: process.cwd(), query: "closed" }),
+    (error: unknown) => error instanceof LanguageProviderRoutingError &&
+      error.code === "router_closed",
+  );
+
+  await router.close();
+  await router.close();
+  assert.deepEqual(lifecycle, [
+    "extension.second:1",
+    "extension.first:1",
+    "builtin.typescript:1",
+    "extension.second:2",
+    "builtin.typescript:2",
+  ]);
 });
 
 function fakeProvider(

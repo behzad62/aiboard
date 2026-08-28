@@ -296,6 +296,42 @@ test("LSP client force-closes a server that does not answer shutdown", async () 
   }
 });
 
+test("LSP client retries termination after a failed close while the server remains live", async () => {
+  const fixture = workspace("close termination retry");
+  let terminationAttempts = 0;
+  const client = fixture.client({
+    requestTimeoutMs: 100,
+    shutdownTimeoutMs: 100,
+    env: { LSP_FIXTURE_IGNORE_SHUTDOWN: "1" },
+    processTreeTerminationHook: async (terminate: () => Promise<void>) => {
+      terminationAttempts += 1;
+      if (terminationAttempts === 1) {
+        throw new Error("injected process-tree termination failure");
+      }
+      await terminate();
+    },
+  });
+  let pid = 0;
+  try {
+    await client.start();
+    pid = (await client.request<FixtureState>("fixture/state", {})).pid;
+    await assert.rejects(client.close(), /injected process-tree termination failure/i);
+    assert.equal(processExists(pid), true);
+
+    await client.close();
+    await waitFor(() => !processExists(pid));
+    assert.equal(terminationAttempts, 2);
+    assert.equal(client.stats().state, "closed");
+  } finally {
+    await client.close().catch(() => undefined);
+    if (pid > 0 && processExists(pid)) {
+      process.kill(pid, "SIGKILL");
+      await waitFor(() => !processExists(pid));
+    }
+    fixture.close();
+  }
+});
+
 test("LSP client retains a fast versionless publish as explicitly non-authoritative", async () => {
   const fixture = workspace("versionless publish diagnostics");
   const client = fixture.client({
