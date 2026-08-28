@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 import { RunSupervisor } from "../src/run-supervisor.js";
 import {
@@ -293,6 +295,41 @@ test("CLI rejects an active legacy Build without a capability contract before li
       recovered.close();
     }
     assert.equal(existsSync(join(state, "builds", runId)), false);
+  } finally {
+    await removeFixtureRoot(root);
+  }
+});
+
+test("CLI records an unsupported persisted execution-safety version as a per-run capability refusal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-execution-safety-version-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "unsupported_execution_safety_contract";
+  const token = "cli-execution-safety-version-token";
+  mkdirSync(project);
+  mkdirSync(state);
+  writeCapabilitiesConfig(config, []);
+  const contract = await createRunnerCapabilityContractSnapshot({
+    extensions: [],
+    languageServers: [],
+  }, state);
+  saveActiveBuild(state, project, runId, contract);
+  replacePersistedExecutionSafetyVersion(state, runId, 2);
+
+  try {
+    const outcome = await runCliToExit(project, state, config, token);
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /unsupported persisted execution-safety capability contract/i);
+    const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+    try {
+      const run = recovered.getRun(runId);
+      assert.equal(run.state, "failed");
+      assert.equal(run.stopReason, "capability-contract:capability_contract_mismatch");
+    } finally {
+      recovered.close();
+    }
   } finally {
     await removeFixtureRoot(root);
   }
@@ -899,6 +936,45 @@ function saveActiveBuild(
     specs.close();
     supervisor.close();
   }
+}
+
+function replacePersistedExecutionSafetyVersion(
+  state: string,
+  runId: string,
+  version: number,
+): void {
+  const database = new DatabaseSync(join(state, "build-specs.sqlite"));
+  try {
+    const row = database.prepare("SELECT spec_json FROM build_specs WHERE run_id = ?").get(runId) as {
+      spec_json: string;
+    };
+    const spec = JSON.parse(row.spec_json) as {
+      capabilityContract: Record<string, unknown> & { digest: string };
+    };
+    const { digest: _digest, ...contract } = spec.capabilityContract;
+    const unsupported = { ...contract, executionSafetyVersion: version };
+    spec.capabilityContract = {
+      ...unsupported,
+      digest: createHash("sha256").update(stableJson(unsupported)).digest("hex"),
+    };
+    database.prepare("UPDATE build_specs SET spec_json = ? WHERE run_id = ?")
+      .run(JSON.stringify(spec), runId);
+  } finally {
+    database.close();
+  }
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
+  }
+  throw new Error("unsupported fixture value");
 }
 
 async function removeFixtureRoot(root: string): Promise<void> {

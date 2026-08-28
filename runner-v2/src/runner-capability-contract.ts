@@ -90,7 +90,7 @@ export interface RunnerCapabilityLanguageServerContract {
 export interface RunnerCapabilityContract {
   version: typeof RUNNER_CAPABILITY_CONTRACT_VERSION;
   /** Historical contracts remain readable but cannot recover an active Build. */
-  executionSafetyVersion?: typeof EXECUTION_SAFETY_CONTRACT_VERSION;
+  executionSafetyVersion?: number;
   /**
    * Older durable contracts omit this field. They remain readable for
    * historical projections but cannot recover an active Build.
@@ -245,7 +245,9 @@ export function assertRunnerCapabilityContract(
   }
   if (
     value.executionSafetyVersion !== undefined &&
-    value.executionSafetyVersion !== EXECUTION_SAFETY_CONTRACT_VERSION
+    (typeof value.executionSafetyVersion !== "number" ||
+      !Number.isSafeInteger(value.executionSafetyVersion) ||
+      value.executionSafetyVersion < 1)
   ) {
     throw invalidContract("Runner capability contract execution-safety version is invalid.");
   }
@@ -262,8 +264,7 @@ export function assertRunnerCapabilityContract(
     throw invalidContract("Runner capability contract language-server executable identity version is invalid.");
   }
   const currentClosure = value.extensionClosureVersion === EXTENSION_CLOSURE_VERSION;
-  const currentExecutionSafety =
-    value.executionSafetyVersion === EXECUTION_SAFETY_CONTRACT_VERSION;
+  const hasExecutionSafetyVersion = value.executionSafetyVersion !== undefined;
   const currentLanguageServerIdentity =
     value.languageServerExecutableIdentityVersion === LANGUAGE_SERVER_EXECUTABLE_IDENTITY_VERSION;
   if (!isObject(value.builtin) ||
@@ -327,8 +328,8 @@ export function assertRunnerCapabilityContract(
   assertUnique(serverIds, "language server");
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
-    ...(currentExecutionSafety
-      ? { executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION }
+    ...(hasExecutionSafetyVersion
+      ? { executionSafetyVersion: value.executionSafetyVersion as number }
       : {}),
     ...(currentClosure ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION } : {}),
     ...(currentLanguageServerIdentity
@@ -352,8 +353,8 @@ export function cloneRunnerCapabilityContract(
   assertRunnerCapabilityContract(contract);
   return {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
-    ...(contract.executionSafetyVersion === EXECUTION_SAFETY_CONTRACT_VERSION
-      ? { executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION }
+    ...(contract.executionSafetyVersion !== undefined
+      ? { executionSafetyVersion: contract.executionSafetyVersion }
       : {}),
     ...(contract.extensionClosureVersion === EXTENSION_CLOSURE_VERSION
       ? { extensionClosureVersion: EXTENSION_CLOSURE_VERSION }
@@ -921,6 +922,12 @@ function assertCurrentExecutionSafety(
   contract: RunnerCapabilityContract,
 ): void {
   if (contract.executionSafetyVersion !== EXECUTION_SAFETY_CONTRACT_VERSION) {
+    if (contract.executionSafetyVersion !== undefined) {
+      throw new RunnerCapabilityContractError(
+        "capability_contract_mismatch",
+        `Active Build recovery cannot use unsupported persisted execution-safety capability contract version ${contract.executionSafetyVersion}.`,
+      );
+    }
     throw new RunnerCapabilityContractError(
       "capability_contract_missing",
       "Active Build recovery requires a persisted execution-safety capability contract.",

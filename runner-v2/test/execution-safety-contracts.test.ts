@@ -5,10 +5,27 @@ import {
   EXECUTION_SAFETY_CAPABILITY_NAMES,
   assertDurableExecutionSafetyValue,
   cloneExecutionBackendAttestation,
+  cloneDurableProcessRecord,
   cloneIsolationProviderAttestation,
+  createOpaqueOneCallExecutionGrant,
   executionSafetyCapabilitiesSatisfy,
+  parseDurableProcessRecord,
+  parseExceptionalRecoveryOutcome,
+  parseExceptionalRecoveryProposal,
   parseExecutionBackendAttestation,
+  parseExecutionBackendIdentity,
+  parseExecutionInvocationIntent,
+  parseExactPathAccess,
+  parseGenericProcessResult,
   parseIsolationProviderAttestation,
+  parseIsolationLease,
+  parseModelExecutionInvocationIntent,
+  parseOpaqueOneCallExecutionGrant,
+  parseProcessBirthFingerprint,
+  parseProcessCleanupStatus,
+  parseProcessEscalationHistoryEntry,
+  parseProcessLifecycleHistoryEntry,
+  parseProcessOutputDisposition,
   type ExecutionBackendAttestation,
   type ExecutionSafetyCapabilityName,
 } from "../src/execution-safety-contracts.js";
@@ -116,9 +133,75 @@ test("durable execution-safety values reject handles, secret material, and live 
     /oneCallToken/i,
   );
   assert.throws(
+    () => assertDurableExecutionSafetyValue({ process: { nativeFd: 7 } }),
+    /nativeFd/i,
+  );
+  assert.throws(
+    () => assertDurableExecutionSafetyValue({ process: { nativeDescriptor: 7 } }),
+    /nativeDescriptor/i,
+  );
+  assert.throws(
     () => assertDurableExecutionSafetyValue({ close: () => undefined }),
     /durable/i,
   );
+});
+
+test("durable execution-safety parsers reject undeclared fields at every frozen shape", () => {
+  const cases: Array<[string, (value: unknown) => unknown, Record<string, unknown>]> = [
+    ["invocation", parseExecutionInvocationIntent, validInvocation()],
+    ["path access", parseExactPathAccess, validPathAccess()],
+    ["grant", parseOpaqueOneCallExecutionGrant, validGrant()],
+    ["birth fingerprint", parseProcessBirthFingerprint, validBirthFingerprint()],
+    ["backend identity", parseExecutionBackendIdentity, validBackendIdentity()],
+    ["lifecycle", parseProcessLifecycleHistoryEntry, validLifecycle()],
+    ["escalation", parseProcessEscalationHistoryEntry, validEscalation()],
+    ["cleanup", parseProcessCleanupStatus, validCleanup()],
+    ["output", parseProcessOutputDisposition, validOutput()],
+    ["process record", parseDurableProcessRecord, validProcessRecord()],
+    ["process result", parseGenericProcessResult, validProcessResult()],
+    ["isolation lease", parseIsolationLease, validLease()],
+    ["recovery proposal", parseExceptionalRecoveryProposal, validRecoveryProposal()],
+    ["recovery outcome", parseExceptionalRecoveryOutcome, validRecoveryOutcome()],
+  ];
+  for (const [label, parse, value] of cases) {
+    assert.doesNotThrow(() => parse(value), `${label} fixture must be valid`);
+    assert.throws(
+      () => parse({ ...value, undeclared: true }),
+      /unknown.*undeclared/i,
+      `${label} must be closed`,
+    );
+  }
+
+  assert.throws(
+    () => parseExecutionBackendIdentity({ ...validBackendIdentity(), nativeDescriptor: 7 }),
+    /unknown.*nativeDescriptor/i,
+  );
+  assert.throws(
+    () => parseDurableProcessRecord({ ...validProcessRecord(), nativeFd: 7 }),
+    /unknown.*nativeFd/i,
+  );
+});
+
+test("model invocation parsing rejects forged grants while Runner-created grants are branded and call-bound", () => {
+  assert.throws(
+    () => parseModelExecutionInvocationIntent({
+      ...validInvocation(),
+      grant: validGrant(),
+    }),
+    /unknown.*grant|grant.*model/i,
+  );
+  const grant = createOpaqueOneCallExecutionGrant(validGrant());
+  assert.equal(grant.invocationId, "invocation-1");
+  assert.equal(parseOpaqueOneCallExecutionGrant(grant).grantId, "grant-1");
+});
+
+test("durable process clones own every nested mutable value", () => {
+  const source = validProcessRecord();
+  const clone = cloneDurableProcessRecord(source);
+  (source.lifecycle as Array<Record<string, unknown>>)[0]!.state = "cleanup_failed";
+  (source.logArtifactIds as string[]).push("forged-log");
+  assert.equal(clone.lifecycle[0]?.state, "running");
+  assert.deepEqual(clone.logArtifactIds, ["log-1"]);
 });
 
 test("capability comparison selects semantic enforcement independently of mechanism labels", () => {
@@ -143,3 +226,139 @@ test("capability comparison selects semantic enforcement independently of mechan
     false,
   );
 });
+
+function validInvocation(): Record<string, unknown> {
+  return {
+    invocationId: "invocation-1",
+    runId: "run-1",
+    taskId: "task-1",
+    sessionId: "session-1",
+    kind: "command",
+    executable: "fixture-command",
+    arguments: ["--fixture"],
+    workingDirectory: "C:\\fixture",
+    requestedCapabilities: ["tree_termination"],
+  };
+}
+
+function validPathAccess(): Record<string, unknown> {
+  return { canonicalPath: "C:\\fixture", mode: "write" };
+}
+
+function validGrant(): Record<string, unknown> {
+  return {
+    grantId: "grant-1",
+    invocationId: "invocation-1",
+    issuedAt: "2026-08-28T00:00:00.000Z",
+    expiresAt: "2026-08-28T00:01:00.000Z",
+    access: [validPathAccess()],
+    state: "issued",
+  };
+}
+
+function validBirthFingerprint(): Record<string, unknown> {
+  return { observedAt: "2026-08-28T00:00:00.000Z", discriminator: "birth-1" };
+}
+
+function validBackendIdentity(): Record<string, unknown> {
+  return { backendId: "fixture.portable", opaqueIdentity: "identity-1" };
+}
+
+function validLifecycle(): Record<string, unknown> {
+  return { state: "running", at: "2026-08-28T00:00:00.000Z", reason: "launched" };
+}
+
+function validEscalation(): Record<string, unknown> {
+  return {
+    action: "terminate",
+    at: "2026-08-28T00:00:01.000Z",
+    outcome: "requested",
+    detail: "timeout",
+  };
+}
+
+function validCleanup(): Record<string, unknown> {
+  return {
+    state: "verified_empty",
+    verifiedAt: "2026-08-28T00:00:02.000Z",
+    proofArtifactId: "cleanup-proof-1",
+  };
+}
+
+function validOutput(): Record<string, unknown> {
+  return {
+    stream: "stdout",
+    tail: "fixture output",
+    totalBytes: 14,
+    truncated: false,
+    spillArtifactId: "spill-1",
+    spillBytes: 14,
+    lossyBytes: 0,
+  };
+}
+
+function validProcessRecord(): Record<string, unknown> {
+  return {
+    logicalProcessId: "process-1",
+    runId: "run-1",
+    taskId: "task-1",
+    sessionId: "session-1",
+    invocationId: "invocation-1",
+    rootPid: 123,
+    birthFingerprint: validBirthFingerprint(),
+    backend: validBackendIdentity(),
+    attestedCapabilities: { ...enforcedCapabilities },
+    lifecycle: [validLifecycle()],
+    escalation: [validEscalation()],
+    logArtifactIds: ["log-1"],
+    spillArtifactIds: ["spill-1"],
+    cleanup: validCleanup(),
+  };
+}
+
+function validProcessResult(): Record<string, unknown> {
+  return {
+    logicalProcessId: "process-1",
+    outcome: "exited",
+    exitCode: 0,
+    signal: "none",
+    startedAt: "2026-08-28T00:00:00.000Z",
+    finishedAt: "2026-08-28T00:00:02.000Z",
+    output: [validOutput()],
+    cleanup: validCleanup(),
+  };
+}
+
+function validLease(): Record<string, unknown> {
+  return {
+    leaseId: "lease-1",
+    providerId: "fixture.isolation",
+    invocationId: "invocation-1",
+    grantedAccess: [validPathAccess()],
+    acquiredAt: "2026-08-28T00:00:00.000Z",
+    expiresAt: "2026-08-28T00:01:00.000Z",
+    state: "active",
+  };
+}
+
+function validRecoveryProposal(): Record<string, unknown> {
+  return {
+    proposalId: "proposal-1",
+    logicalProcessId: "process-1",
+    birthFingerprint: validBirthFingerprint(),
+    requestedAction: "inspect",
+    targetScope: ["process-1"],
+    rationale: "bounded recovery",
+    requiresUserAuthority: false,
+  };
+}
+
+function validRecoveryOutcome(): Record<string, unknown> {
+  return {
+    proposalId: "proposal-1",
+    state: "executed",
+    decidedAt: "2026-08-28T00:00:03.000Z",
+    detail: "recovered",
+    evidenceArtifactIds: ["evidence-1"],
+  };
+}
