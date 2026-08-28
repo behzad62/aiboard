@@ -85,6 +85,34 @@ test("rejects forged ids, replay, mismatched authoritative bindings, and expiry 
   assert.throws(() => runner.withChildEnvironment({} as never, () => undefined), GENERIC_GRANT_ERROR);
 });
 
+test("factory atomically blocks non-consuming and reentrant grant redemption attempts", () => {
+  const record: GrantRecord = {
+    grantId: "grant_atomic", runId: "run_1", invocationId: "call_1",
+    names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_ATOMIC_VALUE" },
+  };
+  let attempts = 0;
+  let reentrantError: unknown;
+  const runner = createChildEnvironmentFactory({
+    credentialResolver: {
+      consume: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          try { runner.prepare({ ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: "grant_atomic" }); }
+          catch (error) { reentrantError = error; }
+        }
+        return record;
+      },
+    },
+    now: () => new Date(NOW),
+  });
+  const input = { ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: "grant_atomic" };
+  runner.prepare(input);
+  assert.match(reentrantError instanceof Error ? reentrantError.message : "", GENERIC_GRANT_ERROR);
+  assert.equal(attempts, 1);
+  assert.throws(() => runner.prepare(input), GENERIC_GRANT_ERROR);
+  assert.equal(attempts, 1);
+});
+
 test("rejects non-credential, Runner, and canonical-colliding authoritative grant names", () => {
   for (const [id, names, values] of [
     ["path", ["PATH"], { PATH: "/other" }], ["runner", ["Runner_Control_Port"], { Runner_Control_Port: "1" }],

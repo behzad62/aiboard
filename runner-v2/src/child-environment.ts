@@ -69,6 +69,7 @@ export function createChildEnvironmentFactory(
   options: CreateChildEnvironmentFactoryOptions,
 ): ChildEnvironmentFactory {
   const environments = new WeakMap<object, Readonly<Record<string, string>>>();
+  const redeemedGrantIds = new Set<string>();
   const now = options.now ?? (() => new Date());
 
   return Object.freeze({
@@ -101,6 +102,7 @@ export function createChildEnvironmentFactory(
       }
 
       if (input.credentialGrantId !== undefined) {
+        reserveCredentialGrantId(input.credentialGrantId, redeemedGrantIds);
         const grant = consumeAndValidateGrant(options.credentialResolver, input, now);
         for (const name of grant.names) {
           setEnvironment(environment, name, grant.values.get(canonicalName(name))!);
@@ -128,6 +130,13 @@ export function createChildEnvironmentFactory(
       return trustedSpawn(environment);
     },
   });
+}
+
+function reserveCredentialGrantId(grantId: string, redeemedGrantIds: Set<string>): void {
+  if (!nonEmpty(grantId)) throw invalidGrant();
+  const canonical = grantId.trim().toUpperCase();
+  if (redeemedGrantIds.has(canonical)) throw consumedGrant();
+  redeemedGrantIds.add(canonical);
 }
 
 function consumeAndValidateGrant(
