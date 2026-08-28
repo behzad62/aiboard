@@ -11,17 +11,21 @@ import {
   HARNESS_PROCESS_TREE_POLICIES,
   ROBUST_BUILD_HARNESS_IDS,
   type HarnessParityArm,
-  type HarnessParityArmCallback,
   type HarnessParityContract,
   type HarnessParityEnvironment,
-  type HarnessParityLaunchAttestation,
-  type HarnessParityLaunchRecord,
+  type HarnessParityLaunchInput,
   type HarnessParityLimits,
+  type HarnessParityMaybePromise,
+  type HarnessParityObservedFacts,
   type HarnessParityPolicy,
+  type HarnessParityPreparationAdapter,
   type HarnessParityRole,
   type HarnessParitySource,
   type PairedHarnessArmResult,
+  type PreparedHarnessParityPair,
   type RobustBuildHarnessId,
+  type TrustedHarnessParityAuthority,
+  type TrustedHarnessParityLease,
 } from "./types";
 
 /**
@@ -35,10 +39,14 @@ export type HarnessParityErrorCode =
   | "invalid_contract"
   | "invalid_execution_order"
   | "invalid_source_revision"
-  | "invalid_callbacks"
   | "missing_value"
   | "parity_mismatch"
-  | "attestation_mismatch";
+  | "invalid_authority"
+  | "invalid_preparation"
+  | "observed_fact_mismatch"
+  | "invalid_prepared_pair"
+  | "seal_validation_failed"
+  | "cleanup_failed";
 
 export class HarnessParityError extends Error {
   readonly code: HarnessParityErrorCode;
@@ -50,7 +58,53 @@ export class HarnessParityError extends Error {
   }
 }
 
+/**
+ * Cleanup is never best-effort. If a primary failure and one or more releases
+ * both fail, this typed error preserves all of that evidence instead of
+ * silently replacing or discarding either failure.
+ */
+export class HarnessParityCleanupError extends HarnessParityError {
+  readonly primaryError: unknown | undefined;
+  readonly cleanupErrors: readonly unknown[];
+
+  constructor(primaryError: unknown | undefined, cleanupErrors: readonly unknown[]) {
+    super(
+      "cleanup_failed",
+      `Harness parity cleanup failed for ${cleanupErrors.length} prepared lease${
+        cleanupErrors.length === 1 ? "" : "s"
+      }.`
+    );
+    this.name = "HarnessParityCleanupError";
+    this.primaryError = primaryError;
+    this.cleanupErrors = Object.freeze([...cleanupErrors]);
+  }
+}
+
 type UnknownRecord = Record<string, unknown>;
+
+type InternalLease<T> = Readonly<{
+  harness: RobustBuildHarnessId;
+  arm: HarnessParityArm;
+  observedFacts: HarnessParityObservedFacts;
+  revalidate: () => HarnessParityMaybePromise<HarnessParityObservedFacts>;
+  launch: (input: HarnessParityLaunchInput) => HarnessParityMaybePromise<T>;
+  release: () => HarnessParityMaybePromise<void>;
+}>;
+
+interface PreparedPairState<T> {
+  readonly contract: HarnessParityContract;
+  readonly leases: Readonly<Record<RobustBuildHarnessId, InternalLease<T>>>;
+  /** Harnesses whose release has not yet succeeded, in preparation order. */
+  unreleasedLeaseHarnesses: RobustBuildHarnessId[];
+  status: "prepared" | "executing" | "releasing" | "cleanup-failed" | "released";
+}
+
+interface TrustedAuthorityState<T> {
+  readonly prepare: HarnessParityPreparationAdapter<T>["prepare"];
+}
+
+const preparedPairStates = new WeakMap<object, PreparedPairState<unknown>>();
+const trustedAuthorityStates = new WeakMap<object, TrustedAuthorityState<unknown>>();
 
 const ARM_KEYS = ROBUST_BUILD_HARNESS_IDS;
 const LIMIT_KEYS = [
@@ -98,8 +152,8 @@ const ENVIRONMENT_FIELDS = [
 ] as const;
 const CLOCK_FIELDS = ["source", "deadlinePolicy"] as const;
 const DEPENDENCY_FIELDS = ["policy", "prefetchManifestHash"] as const;
-const ATTESTATION_FIELDS = ["schemaVersion", ...ARM_FIELDS] as const;
-const LAUNCH_RECORD_FIELDS = ["attestation", "callback"] as const;
+const PREPARATION_ADAPTER_FIELDS = ["prepare"] as const;
+const LEASE_FIELDS = ["observedFacts", "revalidate", "launch", "release"] as const;
 
 /**
  * Parses a contract into a fresh immutable value. Only harness identity and
@@ -160,41 +214,91 @@ export function canonicalHarnessParityIdentity(input: unknown): string {
 }
 
 /**
- * Validates the full contract, both launch records, both attestations, and
- * both callbacks before invoking either callback. Once preflight succeeds,
- * callbacks execute strictly in the declared order: arm B is not started
- * until arm A has settled successfully. If arm A rejects, the pair rejects
- * and arm B never starts.
- *
- * This wrapper is intentionally not `async`: malformed input throws
- * synchronously, before it can create a model-call promise or invoke a model
- * callback. Valid executions return a promise for the ordered pair.
+ * Admits a P6.2 preparation adapter at the explicit trust boundary and
+ * returns a module-issued opaque authority. The adapter is responsible for
+ * independently probing effective facts and for owning model-free leases; a
+ * raw { prepare } object is deliberately not usable by pair preparation.
  */
-export function executeParityValidatedHarnessArms<T>(
+export function createTrustedHarnessParityAuthority<T>(
+  adapter: unknown
+): TrustedHarnessParityAuthority<T> {
+  const prepare = parsePreparationAdapter<T>(adapter);
+  const authority = Object.freeze({}) as unknown as TrustedHarnessParityAuthority<T>;
+  trustedAuthorityStates.set(
+    authority as unknown as object,
+    Object.freeze({ prepare }) as unknown as TrustedAuthorityState<unknown>
+  );
+  return authority;
+}
+
+/**
+ * Validates the sealed contract before model work and asks the trusted,
+ * model-free authority to acquire both owned leases. Each lease returns facts
+ * independently observed by its adapter; copied contract claims are not an
+ * execution input. Every acquired lease remains owned until pair execution
+ * finishes or preparation rolls back.
+ */
+export function prepareHarnessParityPair<T>(
   input: unknown,
-  launchRecords: unknown
-): Promise<readonly PairedHarnessArmResult<T>[]> {
+  authority: unknown
+): Promise<PreparedHarnessParityPair<T>> {
   const contract = createHarnessParityContract(input);
-  const records = parseLaunchRecords<T>(launchRecords, contract);
-  return executeArmsInOrder(contract, records);
+  const prepare = requireTrustedAuthority<T>(authority);
+  return prepareBothHarnessArms(contract, prepare);
+}
+
+/**
+ * Executes only a module-issued opaque pair. Launchers originate from the
+ * retained trusted leases, never from a caller-provided callback. Every arm is
+ * revalidated immediately before launch; a first-arm side effect that changes
+ * the second lease therefore rejects the pair before the second launcher runs.
+ */
+export function executePreparedHarnessParityPair<T>(
+  preparedPair: unknown
+): Promise<readonly PairedHarnessArmResult<T>[]> {
+  const state = requirePreparedPairState<T>(preparedPair);
+  if (state.status !== "prepared") {
+    fail("invalid_prepared_pair", "Harness parity prepared pair is no longer executable.");
+  }
+  state.status = "executing";
+  return executeAndReleasePreparedPair(state);
+}
+
+/**
+ * Releases an unused, module-issued pair. Callers that prepare a pair but do
+ * not execute it must cancel it through this API so retained
+ * workspace/state/process/port leases cannot be abandoned. This is also the
+ * recovery path after an execution cleanup failure. Releases happen in reverse
+ * preparation order; a failed release stays retained and may be retried through
+ * this same opaque pair without repeating successful releases.
+ */
+export function releasePreparedHarnessParityPair(preparedPair: unknown): Promise<void> {
+  const state = requirePreparedPairState<unknown>(preparedPair);
+  if (state.status !== "prepared" && state.status !== "cleanup-failed") {
+    fail("invalid_prepared_pair", "Harness parity prepared pair is no longer releasable.");
+  }
+  state.status = "releasing";
+  return releasePreparedPair(state);
 }
 
 function parseArm(
   input: unknown,
   expectedHarness: RobustBuildHarnessId,
   requiredRoles: readonly string[],
-  path: string
+  path: string,
+  environmentMode: "sealed-contract" | "observed" = "sealed-contract"
 ): HarnessParityArm {
   const raw = readDataRecord(input, path, "invalid_contract");
   assertExactKeys(raw, ARM_FIELDS, path);
-  return parseArmFields(raw, expectedHarness, requiredRoles, path);
+  return parseArmFields(raw, expectedHarness, requiredRoles, path, environmentMode);
 }
 
 function parseArmFields(
   raw: UnknownRecord,
   expectedHarness: RobustBuildHarnessId,
   requiredRoles: readonly string[],
-  path: string
+  path: string,
+  environmentMode: "sealed-contract" | "observed"
 ): HarnessParityArm {
   const harness = parseHarnessId(raw.harness, `${path}.harness`);
   if (harness !== expectedHarness) {
@@ -213,7 +317,7 @@ function parseArmFields(
     roles: parseRoles(raw.roles, expectedHarness, requiredRoles, `${path}.roles`),
     limits: parseLimits(raw.limits, `${path}.limits`),
     policy: parsePolicy(raw.policy, `${path}.policy`),
-    environment: parseEnvironment(raw.environment, `${path}.environment`),
+    environment: parseEnvironment(raw.environment, `${path}.environment`, environmentMode),
     baseRepositoryHash: requireHash(raw.baseRepositoryHash, `${path}.baseRepositoryHash`),
     caseHash: requireHash(raw.caseHash, `${path}.caseHash`),
   };
@@ -345,7 +449,11 @@ function parsePolicy(input: unknown, path: string): HarnessParityPolicy {
   };
 }
 
-function parseEnvironment(input: unknown, path: string): HarnessParityEnvironment {
+function parseEnvironment(
+  input: unknown,
+  path: string,
+  mode: "sealed-contract" | "observed"
+): HarnessParityEnvironment {
   const raw = readDataRecord(input, path, "invalid_contract");
   assertExactKeys(raw, ENVIRONMENT_FIELDS, path);
   if (raw.version !== 1) {
@@ -360,7 +468,7 @@ function parseEnvironment(input: unknown, path: string): HarnessParityEnvironmen
   const dependencies = readDataRecord(raw.dependencies, dependenciesPath, "invalid_contract");
   assertExactKeys(dependencies, DEPENDENCY_FIELDS, dependenciesPath);
 
-  return {
+  const environment: HarnessParityEnvironment = {
     version: 1,
     platform: requireEnum(raw.platform, HARNESS_PLATFORMS, `${path}.platform`),
     architecture: requireEnum(raw.architecture, HARNESS_ARCHITECTURES, `${path}.architecture`),
@@ -392,6 +500,28 @@ function parseEnvironment(input: unknown, path: string): HarnessParityEnvironmen
     ),
     ports: requireEnum(raw.ports, HARNESS_PORT_POLICIES, `${path}.ports`),
   };
+  if (mode === "sealed-contract") {
+    assertSafeSealedEnvironment(environment, path);
+  }
+  return environment;
+}
+
+function assertSafeSealedEnvironment(environment: HarnessParityEnvironment, path: string): void {
+  if (environment.dependencies.policy !== "locked-prefetched") {
+    fail("invalid_contract", `${path}.dependencies.policy must be locked-prefetched.`);
+  }
+  if (environment.workspace !== "fresh-isolated") {
+    fail("invalid_contract", `${path}.workspace must be fresh-isolated.`);
+  }
+  if (environment.state !== "fresh-isolated") {
+    fail("invalid_contract", `${path}.state must be fresh-isolated.`);
+  }
+  if (environment.processTree !== "owned-process-tree") {
+    fail("invalid_contract", `${path}.processTree must be owned-process-tree.`);
+  }
+  if (environment.ports !== "exclusive-reserved") {
+    fail("invalid_contract", `${path}.ports must be exclusive-reserved.`);
+  }
 }
 
 function assertArmsHaveParity(deepseek: HarnessParityArm, runner: HarnessParityArm): void {
@@ -406,116 +536,247 @@ function assertArmsHaveParity(deepseek: HarnessParityArm, runner: HarnessParityA
   assertSame(deepseek.caseHash, runner.caseHash, "caseHash");
 }
 
-function parseLaunchRecords<T>(
-  input: unknown,
-  contract: HarnessParityContract
-): Readonly<Record<RobustBuildHarnessId, HarnessParityLaunchRecord<T>>> {
-  const raw = readDataRecord(input, "launchRecords", "invalid_callbacks");
-  assertExactKeys(raw, ARM_KEYS, "launchRecords", "invalid_callbacks", "invalid_callbacks");
-
-  const records = {} as Record<RobustBuildHarnessId, HarnessParityLaunchRecord<T>>;
-  for (const harness of ARM_KEYS) {
-    const record = parseLaunchRecord<T>(raw[harness], harness, contract);
-    assertAttestationMatchesArm(record.attestation, contract.arms[harness], harness);
-    records[harness] = record;
+function parsePreparationAdapter<T>(
+  input: unknown
+): HarnessParityPreparationAdapter<T>["prepare"] {
+  const raw = readDataRecord(input, "preparationAdapter", "invalid_authority");
+  assertExactKeys(
+    raw,
+    PREPARATION_ADAPTER_FIELDS,
+    "preparationAdapter",
+    "invalid_authority",
+    "invalid_authority"
+  );
+  if (typeof raw.prepare !== "function") {
+    fail("invalid_authority", "preparationAdapter.prepare must be a preparation function.");
   }
-  return Object.freeze({
-    "deepseek-harness": records["deepseek-harness"],
-    "runner-v2": records["runner-v2"],
-  });
+  return raw.prepare as HarnessParityPreparationAdapter<T>["prepare"];
 }
 
-function parseLaunchRecord<T>(
-  input: unknown,
-  harness: RobustBuildHarnessId,
-  contract: HarnessParityContract
-): HarnessParityLaunchRecord<T> {
-  const path = `launchRecords.${harness}`;
-  const raw = readDataRecord(input, path, "invalid_callbacks");
-  assertExactKeys(raw, LAUNCH_RECORD_FIELDS, path, "invalid_callbacks", "invalid_callbacks");
-  const callback = raw.callback;
-  if (typeof callback !== "function") {
-    fail("invalid_callbacks", `${path}.callback must be a function.`);
+function requireTrustedAuthority<T>(
+  authority: unknown
+): HarnessParityPreparationAdapter<T>["prepare"] {
+  if (typeof authority !== "object" || authority === null) {
+    fail("invalid_authority", "Harness parity preparation requires a module-issued authority.");
   }
-  const attestation = parseLaunchAttestation(
-    raw.attestation,
-    harness,
+  const state = trustedAuthorityStates.get(authority);
+  if (!state) {
+    fail("invalid_authority", "Harness parity preparation requires a module-issued authority.");
+  }
+  return state.prepare as HarnessParityPreparationAdapter<T>["prepare"];
+}
+
+async function prepareBothHarnessArms<T>(
+  contract: HarnessParityContract,
+  prepare: HarnessParityPreparationAdapter<T>["prepare"]
+): Promise<PreparedHarnessParityPair<T>> {
+  const acquired: InternalLease<T>[] = [];
+  try {
+    for (const harness of ARM_KEYS) {
+      const arm = contract.arms[harness];
+      const rawLease = await prepare(
+        Object.freeze({
+          harness,
+          arm,
+          contract,
+        })
+      );
+      const lease = parseTrustedLease<T>(rawLease, harness, contract, `authority.${harness}`);
+      acquired.push(lease);
+      assertObservedFactsMatchArm(
+        lease.observedFacts,
+        arm,
+        harness,
+        "observed_fact_mismatch",
+        "preparation"
+      );
+    }
+  } catch (error) {
+    const cleanupErrors = await releaseLeases(acquired);
+    if (cleanupErrors.length > 0) {
+      throw new HarnessParityCleanupError(error, cleanupErrors);
+    }
+    throw error;
+  }
+
+  const leases = {} as Record<RobustBuildHarnessId, InternalLease<T>>;
+  for (const lease of acquired) leases[lease.harness] = lease;
+  const preparedPair = Object.freeze({}) as unknown as PreparedHarnessParityPair<T>;
+  const state: PreparedPairState<T> = {
+    contract,
+    leases: Object.freeze({
+      "deepseek-harness": leases["deepseek-harness"],
+      "runner-v2": leases["runner-v2"],
+    }),
+    unreleasedLeaseHarnesses: acquired.map((lease) => lease.harness),
+    status: "prepared",
+  };
+  preparedPairStates.set(
+    preparedPair as unknown as object,
+    state as unknown as PreparedPairState<unknown>
+  );
+  return preparedPair;
+}
+
+function parseTrustedLease<T>(
+  input: unknown,
+  expectedHarness: RobustBuildHarnessId,
+  contract: HarnessParityContract,
+  path: string
+): InternalLease<T> {
+  const raw = readDataRecord(input, path, "invalid_preparation");
+  assertExactKeys(raw, LEASE_FIELDS, path, "invalid_preparation", "invalid_preparation");
+  if (
+    typeof raw.revalidate !== "function" ||
+    typeof raw.launch !== "function" ||
+    typeof raw.release !== "function"
+  ) {
+    fail("invalid_preparation", `${path} must provide trusted revalidate, launch, and release functions.`);
+  }
+  const observedFacts = parseObservedFacts(
+    raw.observedFacts,
+    expectedHarness,
     contract.requiredRoles,
-    `${path}.attestation`
+    `${path}.observedFacts`
   );
   return Object.freeze({
-    attestation,
-    callback: callback as HarnessParityArmCallback<T>,
+    harness: expectedHarness,
+    arm: contract.arms[expectedHarness],
+    observedFacts,
+    revalidate: raw.revalidate as TrustedHarnessParityLease<T>["revalidate"],
+    launch: raw.launch as TrustedHarnessParityLease<T>["launch"],
+    release: raw.release as TrustedHarnessParityLease<T>["release"],
   });
 }
 
-function parseLaunchAttestation(
+function parseObservedFacts(
   input: unknown,
   expectedHarness: RobustBuildHarnessId,
   requiredRoles: readonly string[],
   path: string
-): HarnessParityLaunchAttestation {
-  const raw = readDataRecord(input, path, "invalid_callbacks");
-  assertExactKeys(raw, ATTESTATION_FIELDS, path, "invalid_callbacks", "missing_value");
-  if (raw.schemaVersion !== 1) {
-    fail("invalid_callbacks", `${path}.schemaVersion must be 1.`);
-  }
-  return freezeAttestation({
-    schemaVersion: 1,
-    ...parseArmFields(raw, expectedHarness, requiredRoles, path),
-  });
+): HarnessParityObservedFacts {
+  return freezeObservedFacts(
+    parseArm(input, expectedHarness, requiredRoles, path, "observed")
+  );
 }
 
-function assertAttestationMatchesArm(
-  attestation: HarnessParityLaunchAttestation,
+function assertObservedFactsMatchArm(
+  observedFacts: HarnessParityObservedFacts,
   arm: HarnessParityArm,
-  harness: RobustBuildHarnessId
+  harness: RobustBuildHarnessId,
+  code: "observed_fact_mismatch" | "seal_validation_failed",
+  phase: "preparation" | "revalidation"
 ): void {
-  const attestedArm: HarnessParityArm = {
-    harness: attestation.harness,
-    source: attestation.source,
-    providerId: attestation.providerId,
-    modelId: attestation.modelId,
-    reasoningEffort: attestation.reasoningEffort,
-    roles: attestation.roles,
-    limits: attestation.limits,
-    policy: attestation.policy,
-    environment: attestation.environment,
-    baseRepositoryHash: attestation.baseRepositoryHash,
-    caseHash: attestation.caseHash,
-  };
-  if (stableStringify(attestedArm) !== stableStringify(arm)) {
+  if (stableStringify(observedFacts) !== stableStringify(arm)) {
     fail(
-      "attestation_mismatch",
-      `Launch attestation for ${harness} does not match the sealed parity contract.`
+      code,
+      `Trusted ${phase} facts for ${harness} do not match the sealed parity contract.`
     );
   }
 }
 
-async function executeArmsInOrder<T>(
-  contract: HarnessParityContract,
-  records: Readonly<Record<RobustBuildHarnessId, HarnessParityLaunchRecord<T>>>
-): Promise<readonly PairedHarnessArmResult<T>[]> {
-  const results: PairedHarnessArmResult<T>[] = [];
-  for (const harness of contract.executionOrder) {
-    const record = records[harness];
-    const result = await record.callback(
-      Object.freeze({
-        harness,
-        arm: contract.arms[harness],
-        attestation: record.attestation,
-        contract,
-      })
-    );
-    results.push(
-      Object.freeze({
-        harness,
-        attestation: record.attestation,
-        result,
-      })
-    );
+function requirePreparedPairState<T>(preparedPair: unknown): PreparedPairState<T> {
+  if (typeof preparedPair !== "object" || preparedPair === null) {
+    fail("invalid_prepared_pair", "Harness parity execution requires a module-issued prepared pair.");
   }
-  return Object.freeze(results);
+  const state = preparedPairStates.get(preparedPair);
+  if (!state) {
+    fail("invalid_prepared_pair", "Harness parity execution requires a module-issued prepared pair.");
+  }
+  return state as unknown as PreparedPairState<T>;
+}
+
+async function executeAndReleasePreparedPair<T>(
+  state: PreparedPairState<T>
+): Promise<readonly PairedHarnessArmResult<T>[]> {
+  let hasPrimaryError = false;
+  let primaryError: unknown;
+  let results: readonly PairedHarnessArmResult<T>[] = Object.freeze([]);
+
+  try {
+    const completed: PairedHarnessArmResult<T>[] = [];
+    for (const harness of state.contract.executionOrder) {
+      const lease = state.leases[harness];
+      const observedFacts = parseObservedFacts(
+        await lease.revalidate(),
+        harness,
+        state.contract.requiredRoles,
+        `preparedPair.${harness}.revalidate`
+      );
+      assertObservedFactsMatchArm(
+        observedFacts,
+        lease.arm,
+        harness,
+        "seal_validation_failed",
+        "revalidation"
+      );
+      const result = await lease.launch(
+        Object.freeze({
+          harness,
+          arm: lease.arm,
+          observedFacts,
+          contract: state.contract,
+        })
+      );
+      completed.push(
+        Object.freeze({
+          harness,
+          observedFacts,
+          result,
+        })
+      );
+    }
+    results = Object.freeze(completed);
+  } catch (error) {
+    hasPrimaryError = true;
+    primaryError = error;
+  }
+
+  const cleanupErrors = await releaseLeasesInReversePreparationOrder(state);
+  if (cleanupErrors.length > 0) {
+    state.status = "cleanup-failed";
+    throw new HarnessParityCleanupError(hasPrimaryError ? primaryError : undefined, cleanupErrors);
+  }
+  state.status = "released";
+  if (hasPrimaryError) throw primaryError;
+  return results;
+}
+
+async function releasePreparedPair<T>(state: PreparedPairState<T>): Promise<void> {
+  const cleanupErrors = await releaseLeasesInReversePreparationOrder(state);
+  if (cleanupErrors.length > 0) {
+    state.status = "cleanup-failed";
+    throw new HarnessParityCleanupError(undefined, cleanupErrors);
+  }
+  state.status = "released";
+}
+
+async function releaseLeasesInReversePreparationOrder<T>(
+  state: PreparedPairState<T>
+): Promise<readonly unknown[]> {
+  const cleanupErrors: unknown[] = [];
+  for (let index = state.unreleasedLeaseHarnesses.length - 1; index >= 0; index -= 1) {
+    const harness = state.unreleasedLeaseHarnesses[index];
+    try {
+      await state.leases[harness].release();
+      state.unreleasedLeaseHarnesses.splice(index, 1);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  return Object.freeze(cleanupErrors);
+}
+
+async function releaseLeases<T>(leases: readonly InternalLease<T>[]): Promise<readonly unknown[]> {
+  const cleanupErrors: unknown[] = [];
+  for (let index = leases.length - 1; index >= 0; index -= 1) {
+    try {
+      await leases[index].release();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  return Object.freeze(cleanupErrors);
 }
 
 function assertSame(left: unknown, right: unknown, field: string): void {
@@ -794,14 +1055,8 @@ function freezeArm(arm: HarnessParityArm): HarnessParityArm {
   });
 }
 
-function freezeAttestation(
-  attestation: HarnessParityLaunchAttestation
-): HarnessParityLaunchAttestation {
-  const arm = freezeArm(attestation);
-  return Object.freeze({
-    schemaVersion: 1 as const,
-    ...arm,
-  });
+function freezeObservedFacts(arm: HarnessParityArm): HarnessParityObservedFacts {
+  return freezeArm(arm) as HarnessParityObservedFacts;
 }
 
 function freezeSource(source: HarnessParitySource): HarnessParitySource {

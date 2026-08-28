@@ -60,19 +60,34 @@ export const HARNESS_DEADLINE_POLICIES = ["monotonic-hard-deadline"] as const;
 
 export type HarnessDeadlinePolicy = (typeof HARNESS_DEADLINE_POLICIES)[number];
 
-export const HARNESS_DEPENDENCY_POLICIES = ["locked-prefetched"] as const;
+/**
+ * A trusted probe can report a known unsafe dependency state so a sealed lease
+ * can fail as drift instead of treating the value as an adapter-specific label.
+ */
+export const HARNESS_DEPENDENCY_POLICIES = [
+  "locked-prefetched",
+  "unlocked-or-unprefetched",
+] as const;
 
 export type HarnessDependencyPolicy = (typeof HARNESS_DEPENDENCY_POLICIES)[number];
 
-export const HARNESS_ISOLATION_POLICIES = ["fresh-isolated"] as const;
+/**
+ * Both states are reportable observations. Only fresh-isolated is legal in a
+ * sealed contract; a trusted lease can report the known unsafe state so
+ * revalidation exposes drift before the corresponding launcher can begin.
+ */
+export const HARNESS_ISOLATION_POLICIES = ["fresh-isolated", "shared-or-reused"] as const;
 
 export type HarnessIsolationPolicy = (typeof HARNESS_ISOLATION_POLICIES)[number];
 
-export const HARNESS_PROCESS_TREE_POLICIES = ["owned-process-tree"] as const;
+export const HARNESS_PROCESS_TREE_POLICIES = [
+  "owned-process-tree",
+  "unowned-process-tree",
+] as const;
 
 export type HarnessProcessTreePolicy = (typeof HARNESS_PROCESS_TREE_POLICIES)[number];
 
-export const HARNESS_PORT_POLICIES = ["exclusive-reserved"] as const;
+export const HARNESS_PORT_POLICIES = ["exclusive-reserved", "shared-or-unreserved"] as const;
 
 export type HarnessPortPolicy = (typeof HARNESS_PORT_POLICIES)[number];
 
@@ -112,8 +127,8 @@ export interface HarnessParityPolicy {
 
 /**
  * The effective host/environment restrictions that apply to a scored arm.
- * Every field is semantic and versioned; adapters attest this exact structure
- * immediately before their callback may start model work.
+ * Every field is semantic and versioned; a trusted lease observes this exact
+ * structure immediately before its launcher may start model work.
  */
 export interface HarnessParityEnvironment {
   readonly version: 1;
@@ -156,33 +171,85 @@ export interface HarnessParityContract {
 
 export type HarnessParityContractInput = HarnessParityContract;
 
-/**
- * Adapter evidence captured at the launch boundary. It deliberately repeats
- * the arm's effective values so runtime configuration cannot silently differ
- * from the independently sealed contract.
- */
-export interface HarnessParityLaunchAttestation extends HarnessParityArm {
-  readonly schemaVersion: 1;
-}
+declare const observedHarnessParityFactsBrand: unique symbol;
 
-export type HarnessParityArmCallback<T> = (input: {
+/**
+ * Facts observed independently by a trusted preparation lease. This branded
+ * shape is deliberately distinct from the caller-authored contract: P6.2
+ * adapters must populate it from real checkout, lockfile, provider, budget,
+ * policy, and environment probes rather than copying contract JSON.
+ */
+export type HarnessParityObservedFacts = HarnessParityArm & {
+  readonly [observedHarnessParityFactsBrand]?: never;
+};
+
+export type HarnessParityMaybePromise<T> = T | Promise<T>;
+
+export interface HarnessParityLaunchInput {
   readonly harness: RobustBuildHarnessId;
   readonly arm: HarnessParityArm;
-  readonly attestation: HarnessParityLaunchAttestation;
+  readonly observedFacts: HarnessParityObservedFacts;
   readonly contract: HarnessParityContract;
-}) => T | Promise<T>;
-
-export interface HarnessParityLaunchRecord<T> {
-  readonly attestation: HarnessParityLaunchAttestation;
-  readonly callback: HarnessParityArmCallback<T>;
 }
 
-export type HarnessParityLaunchRecords<T> = Readonly<
-  Record<RobustBuildHarnessId, HarnessParityLaunchRecord<T>>
->;
+export interface HarnessParityPreparationInput {
+  readonly harness: RobustBuildHarnessId;
+  readonly arm: HarnessParityArm;
+  readonly contract: HarnessParityContract;
+}
+
+/**
+ * A trusted, model-free preparation lease. Its functions must be supplied by
+ * adapter code that owns the actual resources. In P6.2 that means probing the
+ * sealed checkout/tree/lock and effective provider, budgets, policies, and
+ * isolation state; retaining the owned workspace/state/process/port leases;
+ * and releasing those leases without model calls.
+ */
+export interface TrustedHarnessParityLease<T> {
+  readonly observedFacts: HarnessParityObservedFacts;
+  readonly revalidate: () => HarnessParityMaybePromise<HarnessParityObservedFacts>;
+  readonly launch: (input: HarnessParityLaunchInput) => HarnessParityMaybePromise<T>;
+  readonly release: () => HarnessParityMaybePromise<void>;
+}
+
+/**
+ * Trusted P6.1 preparation boundary. It is intentionally the only source of
+ * launch functions: execution never accepts caller-provided callbacks or
+ * caller-authored attestation records. Implementations must be model-free.
+ */
+export interface HarnessParityPreparationAdapter<T> {
+  readonly prepare: (
+    input: HarnessParityPreparationInput
+  ) => HarnessParityMaybePromise<TrustedHarnessParityLease<T>>;
+}
+
+declare const trustedHarnessParityAuthorityBrand: unique symbol;
+
+/**
+ * Opaque authority issued only by createTrustedHarnessParityAuthority(). A
+ * plain object with a prepare callback is never an authority at the launch
+ * boundary. P6.2 adapters must enter through that factory and use real
+ * filesystem/Git/lock/environment probes plus owned launcher leases; they must
+ * also clean up anything acquired if prepare throws before it returns a valid
+ * lease, because the parity module cannot release a resource it never received.
+ */
+export interface TrustedHarnessParityAuthority<T> {
+  readonly [trustedHarnessParityAuthorityBrand]: T;
+}
+
+declare const preparedHarnessParityPairBrand: unique symbol;
+
+/**
+ * Opaque module-issued capability. A plain object, clone, or serialized copy
+ * is not a valid prepared pair at runtime; only the parity module registry can
+ * bind one to trusted leases.
+ */
+export interface PreparedHarnessParityPair<T> {
+  readonly [preparedHarnessParityPairBrand]: T;
+}
 
 export interface PairedHarnessArmResult<T> {
   readonly harness: RobustBuildHarnessId;
-  readonly attestation: HarnessParityLaunchAttestation;
+  readonly observedFacts: HarnessParityObservedFacts;
   readonly result: T;
 }
