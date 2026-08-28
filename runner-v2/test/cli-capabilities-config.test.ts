@@ -334,7 +334,7 @@ test("CLI records a non-capability runtime recovery failure with its initializat
         if (readinessSucceeded) assertSuccessfulCliShutdown(close);
       }
     } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
     }
   }
 });

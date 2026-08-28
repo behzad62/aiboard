@@ -670,7 +670,12 @@ function workspace(name: string) {
         },
       });
     },
-    close: () => rmSync(root, { recursive: true, force: true }),
+    close: () => rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 40,
+      retryDelay: 50,
+    }),
   };
 }
 
