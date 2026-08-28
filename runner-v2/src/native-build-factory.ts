@@ -89,6 +89,7 @@ import {
   runnerCapabilitySnapshotExtensionDirectories,
   validateRunnerCapabilityContract,
   validateRunnerCapabilityContractSnapshot,
+  type RunnerCapabilityContractErrorCode,
 } from "./runner-capability-contract.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
@@ -127,6 +128,83 @@ import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
 
+export type NativeBuildRuntimeResourceStage =
+  | "capabilities"
+  | "evidence_store"
+  | "scheduler_store"
+  | "session_store"
+  | "tool_ledger"
+  | "budget_ledger"
+  | "workspace_manager"
+  | "integration_workspace"
+  | "verification_workspace"
+  | "independent_verifier_workspace"
+  | "memory_store"
+  | "managed_process_service";
+
+export type NativeBuildRuntimeInitializationStage =
+  | NativeBuildRuntimeResourceStage
+  | "baseline"
+  | "runtime_configuration"
+  | "runtime_drivers";
+
+/** A bounded, attributable failure while rebuilding a live native Build. */
+export class NativeBuildRuntimeInitializationError extends Error {
+  constructor(
+    readonly stage: NativeBuildRuntimeInitializationStage,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "NativeBuildRuntimeInitializationError";
+  }
+}
+
+export type NativeBuildRecoveryErrorClassification =
+  | { kind: "capability"; code: RunnerCapabilityContractErrorCode }
+  | { kind: "runtime"; stage: NativeBuildRuntimeInitializationStage };
+
+/**
+ * Cleanup aggregation must not erase the attributable construction failure.
+ * The primary error is always first, but recursively walking also handles the
+ * capability loader's own startup-plus-cleanup aggregate.
+ */
+export function classifyNativeBuildRecoveryError(
+  error: unknown,
+): NativeBuildRecoveryErrorClassification | undefined {
+  return classifyNativeBuildRecoveryErrorValue(error, new Set());
+}
+
+function classifyNativeBuildRecoveryErrorValue(
+  error: unknown,
+  seen: Set<unknown>,
+): NativeBuildRecoveryErrorClassification | undefined {
+  if (seen.has(error)) return undefined;
+  seen.add(error);
+  if (error instanceof RunnerCapabilityContractError) {
+    return { kind: "capability", code: error.code };
+  }
+  if (error instanceof NativeBuildRuntimeInitializationError) {
+    return { kind: "runtime", stage: error.stage };
+  }
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) {
+      const classified = classifyNativeBuildRecoveryErrorValue(nested, seen);
+      if (classified) return classified;
+    }
+  }
+  if (error instanceof Error && error.cause !== undefined) {
+    return classifyNativeBuildRecoveryErrorValue(error.cause, seen);
+  }
+  return undefined;
+}
+
+/** Test seam for exercising every construction boundary with real resources. */
+export interface NativeBuildRuntimeConstructionHooks {
+  afterAcquire?(stage: NativeBuildRuntimeResourceStage): void | Promise<void>;
+  beforeCleanup?(stage: NativeBuildRuntimeResourceStage): void | Promise<void>;
+}
+
 export interface NativeBuildFactoryOptions {
   projectRoot: string;
   stateDirectory: string;
@@ -138,6 +216,8 @@ export interface NativeBuildFactoryOptions {
   skillRoots?: readonly SharedSkillRoot[];
   /** The CLI owns provider configuration cleanup when it manages the full process lifecycle. */
   closeProviderConfigs?: boolean;
+  /** Injected only by focused lifecycle tests; live callers leave this undefined. */
+  runtimeConstructionHooks?: NativeBuildRuntimeConstructionHooks;
 }
 
 export class NativeBuildFactory {
@@ -146,6 +226,10 @@ export class NativeBuildFactory {
   private memoryStore: SqliteProjectMemoryStore | undefined;
   private readonly browserBackend: PlaywrightBrowserBackend;
   private managedProcesses: ManagedProcessService | undefined;
+  private readonly incompleteConstructionCleanups = new Set<NativeBuildResourceCleanupStack>();
+  private closePromise: Promise<void> | undefined;
+  private providerConfigsClosed = false;
+  private browserBackendClosed = false;
   private closed = false;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
@@ -183,6 +267,7 @@ export class NativeBuildFactory {
 
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    await this.closeIncompleteConstructionResources();
     if (!spec.capabilityContract) {
       throw new Error("Native Build runtime requires a Runner-prepared capability contract.");
     }
@@ -197,6 +282,11 @@ export class NativeBuildFactory {
     );
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     await mkdir(runRoot, { recursive: true });
+    const constructionResources = new NativeBuildResourceCleanupStack(
+      this.options.runtimeConstructionHooks,
+    );
+    let initializationStage: NativeBuildRuntimeInitializationStage = "capabilities";
+    try {
     const runCapabilities = await createNativeRunCapabilities({
       config: {
         ...capabilitiesConfig,
@@ -222,9 +312,11 @@ export class NativeBuildFactory {
           : []),
       ],
     });
-    let runCapabilitiesTransferred = false;
-    try {
+    constructionResources.add("capabilities", () => runCapabilities.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("capabilities");
+    initializationStage = "baseline";
     const baselineRevision = this.options.baselineFor(spec.runId);
+    initializationStage = "runtime_configuration";
     const selected = selectRuntimeCandidates(
       this.options.providerConfigs.load(),
       spec
@@ -251,13 +343,17 @@ export class NativeBuildFactory {
     const modelCostBases = new Map<string, ModelCostBasisSnapshot>(
       selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
+    initializationStage = "evidence_store";
     const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    constructionResources.add("evidence_store", () => evidenceStore.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("evidence_store");
     const finalVerificationPorts = new FinalVerificationPortAuthority(this.options.stateDirectory);
     const finalVerificationProfiles = new FinalVerificationProfileAuthority({
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       portAuthority: finalVerificationPorts,
     });
+    initializationStage = "scheduler_store";
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
       evidenceStore,
       artifacts: this.artifacts,
@@ -266,7 +362,10 @@ export class NativeBuildFactory {
       validateExecutionProfile: ({ targetRevision, profile }) =>
         finalVerificationProfiles.validate(profile, targetRevision),
     });
+    constructionResources.add("scheduler_store", () => schedulerStore.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("scheduler_store");
     const schedulerEvents = schedulerStore.readRun(spec.runId);
+    initializationStage = "session_store";
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
       this.artifacts,
@@ -275,23 +374,35 @@ export class NativeBuildFactory {
           this.artifactReachability.removeIfGloballyUnreachable(hash),
       }
     );
+    constructionResources.add("session_store", () => sessions.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("session_store");
+    initializationStage = "tool_ledger";
     const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
+    constructionResources.add("tool_ledger", () => ledger.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("tool_ledger");
+    initializationStage = "budget_ledger";
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
       limitsFor: (scopeId) => {
         if (scopeId !== spec.runId) throw new Error(`Unknown budget scope ${scopeId}.`);
         return { ...spec.budgetLimits };
       },
     });
+    constructionResources.add("budget_ledger", () => budgetLedger.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("budget_ledger");
     budgetLedger.recoverInterruptedActive(
       spec.runId,
       `startup-recovery:${spec.runId}`,
     );
+    initializationStage = "workspace_manager";
     const workspaceManager = new WorkspaceManager({
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       baselineRevision,
     });
+    constructionResources.add("workspace_manager", () => workspaceManager.cleanup());
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("workspace_manager");
+    initializationStage = "integration_workspace";
     const integrationManager = new IntegrationManager({
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,
@@ -299,13 +410,19 @@ export class NativeBuildFactory {
       baselineRevision,
       initializationMode: integrationInitializationModeFromEvents(schedulerEvents),
     });
+    constructionResources.add("integration_workspace", () => integrationManager.cleanup());
     await integrationManager.initialize();
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("integration_workspace");
+    initializationStage = "verification_workspace";
     const verificationWorkspace = new VerificationWorkspaceManager({
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       integrationManager,
     });
+    constructionResources.add("verification_workspace", () => verificationWorkspace.cleanup());
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("verification_workspace");
+    initializationStage = "independent_verifier_workspace";
     const verifierWorkspace = new VerificationWorkspaceManager({
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
@@ -313,6 +430,11 @@ export class NativeBuildFactory {
       integrationManager,
       kind: "independent-verifier",
     });
+    constructionResources.add(
+      "independent_verifier_workspace",
+      () => verifierWorkspace.cleanup(),
+    );
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_workspace");
     if (
       schedulerEvents.length > 0 &&
       rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
@@ -346,6 +468,27 @@ export class NativeBuildFactory {
       projectRoot: this.options.projectRoot,
       sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
     });
+    const hadMemoryStore = this.memoryStore !== undefined;
+    initializationStage = "memory_store";
+    const memoryStore = this.liveMemoryStore();
+    if (!hadMemoryStore) {
+      constructionResources.add("memory_store", () => {
+        memoryStore.close();
+        if (this.memoryStore === memoryStore) this.memoryStore = undefined;
+      });
+    }
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("memory_store");
+    const hadManagedProcesses = this.managedProcesses !== undefined;
+    initializationStage = "managed_process_service";
+    const managedProcesses = this.liveManagedProcesses();
+    if (!hadManagedProcesses) {
+      constructionResources.add("managed_process_service", () => {
+        managedProcesses.close();
+        if (this.managedProcesses === managedProcesses) this.managedProcesses = undefined;
+      });
+    }
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("managed_process_service");
+    initializationStage = "runtime_drivers";
     const workerDriver = new NativeWorkerDriver({
       schedulerStore,
       router: workerRouter,
@@ -359,7 +502,7 @@ export class NativeBuildFactory {
       sessions,
       evidenceStore,
       skillCatalog,
-      memoryStore: this.liveMemoryStore(),
+      memoryStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
       capabilityRegistry: runCapabilities.registry,
@@ -370,7 +513,7 @@ export class NativeBuildFactory {
       browserBackend: this.browserBackend,
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-      managedProcesses: this.liveManagedProcesses(),
+      managedProcesses,
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -389,7 +532,7 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       skillCatalog,
-      memoryStore: this.liveMemoryStore(),
+      memoryStore,
       evidenceStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
@@ -644,7 +787,7 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
     });
     let closed = false;
-    runCapabilitiesTransferred = true;
+    let closing: Promise<void> | undefined;
     return {
       runtime,
       finalVerificationCleanup,
@@ -775,25 +918,53 @@ export class NativeBuildFactory {
       },
       close: async () => {
         if (closed) return;
-        closed = true;
+        if (closing) return await closing;
+        const attempt = (async (): Promise<void> => {
+          await constructionResources.close("handle");
+          closed = true;
+        })();
+        closing = attempt;
         try {
-          await runCapabilities.close();
+          await attempt;
         } finally {
-          budgetLedger.close();
-          evidenceStore.close();
-          ledger.close();
-          sessions.close();
-          schedulerStore.close();
+          if (closing === attempt) closing = undefined;
         }
       },
     };
-    } finally {
-      if (!runCapabilitiesTransferred) await runCapabilities.close();
+    } catch (error) {
+      const primary = nativeBuildConstructionFailure(initializationStage, error);
+      try {
+        await constructionResources.close("failure");
+      } catch (cleanupError) {
+        this.incompleteConstructionCleanups.add(constructionResources);
+        throw aggregateConstructionFailure(spec.runId, primary, cleanupError);
+      }
+      throw primary;
     }
   }
 
   private capabilitiesConfig(): RunnerCapabilitiesConfig {
     return this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig();
+  }
+
+  private async closeIncompleteConstructionResources(): Promise<void> {
+    const failures: unknown[] = [];
+    for (const resources of [...this.incompleteConstructionCleanups]) {
+      try {
+        await resources.close("failure");
+        if (resources.isComplete("failure")) {
+          this.incompleteConstructionCleanups.delete(resources);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "Could not finish cleanup from an earlier native Build construction failure.",
+      );
+    }
   }
 
   /** Mutable global stores are constructed only for a live runtime. */
@@ -928,8 +1099,10 @@ export class NativeBuildFactory {
       const usageProvenance: HistoricalReadProvenance = budgetLedger
         ? "durable"
         : "unavailable";
-      const transcriptProvenance = (): HistoricalReadProvenance =>
-        sessions?.historicalTranscriptProvenance() ?? "unavailable";
+      const transcriptProvenance = async (): Promise<HistoricalReadProvenance> =>
+        sessions
+          ? await sessions.historicalTranscriptProvenance(spec.runId)
+          : "unavailable";
       const evidenceProvenance = (): HistoricalReadProvenance =>
         evidenceStore?.historicalProvenance() ?? "unavailable";
       const memoryProvenance = (): HistoricalReadProvenance =>
@@ -1003,12 +1176,13 @@ export class NativeBuildFactory {
         usage: historicalUsage,
         observability: async (): Promise<BuildObservabilitySnapshot> => {
           const schedulerEvents = readEvents();
+          const transcriptHistoryProvenance = await transcriptProvenance();
           const schedulerProjection = historicalSchedulerProjection(
             spec,
             schedulerEvents,
             terminalState,
           );
-          const agentSessions = transcriptProvenance() === "unavailable"
+          const agentSessions = transcriptHistoryProvenance === "unavailable"
             ? []
             : await sessions!.listRun(spec.runId);
           const toolCalls = ledger ? summarizeToolCalls(ledger.listRun(spec.runId)) : [];
@@ -1075,7 +1249,7 @@ export class NativeBuildFactory {
               terminalState,
               provenance: {
                 usage: usageProvenance,
-                transcript: transcriptProvenance(),
+                transcript: transcriptHistoryProvenance,
                 evidence: evidenceProvenance(),
                 memories: memoryProvenance(),
                 skills: skillSnapshot.provenance,
@@ -1098,7 +1272,7 @@ export class NativeBuildFactory {
           };
         },
         transcript: async (afterSequence = 0) => {
-          const provenance = transcriptProvenance();
+          const provenance = await transcriptProvenance();
           const page = provenance === "unavailable"
             ? { turns: [], cursor: afterSequence }
             : await sessions!.transcript(spec.runId, afterSequence);
@@ -1166,13 +1340,57 @@ export class NativeBuildFactory {
 
   async close(): Promise<void> {
     if (this.closed) return;
-    this.closed = true;
-    this.memoryStore?.close();
-    if (this.options.closeProviderConfigs !== false) {
-      this.options.providerConfigs.close();
+    if (this.closePromise) return await this.closePromise;
+    const attempt = (async (): Promise<void> => {
+      const failures: unknown[] = [];
+      try {
+        await this.closeIncompleteConstructionResources();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (this.memoryStore) {
+        try {
+          this.memoryStore.close();
+          this.memoryStore = undefined;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (!this.providerConfigsClosed && this.options.closeProviderConfigs !== false) {
+        try {
+          this.options.providerConfigs.close();
+          this.providerConfigsClosed = true;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (this.managedProcesses) {
+        try {
+          this.managedProcesses.close();
+          this.managedProcesses = undefined;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (!this.browserBackendClosed) {
+        try {
+          await this.browserBackend.closeAll();
+          this.browserBackendClosed = true;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Could not close native Build factory resources.");
+      }
+      this.closed = true;
+    })();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.closePromise === attempt) this.closePromise = undefined;
     }
-    this.managedProcesses?.close();
-    await this.browserBackend.closeAll();
   }
 
   async runArtifactCompaction<T>(operation: () => Promise<T>): Promise<T> {
@@ -1182,6 +1400,121 @@ export class NativeBuildFactory {
   async prepareArtifactCleanup(): Promise<void> {
     await this.artifactReachability.prepareReachabilityIndex();
   }
+}
+
+type NativeBuildResourceCleanupMode = "failure" | "handle";
+
+interface NativeBuildResourceCleanupEntry {
+  stage: NativeBuildRuntimeResourceStage;
+  cleanup(): void | Promise<void>;
+  closeOnHandle: boolean;
+  completedOnFailure: boolean;
+  completedOnHandle: boolean;
+}
+
+/**
+ * Keeps live Build construction ownership explicit until the returned handle
+ * takes over. Failed cleanup entries remain retryable instead of being hidden
+ * behind a prematurely-set closed flag.
+ */
+class NativeBuildResourceCleanupStack {
+  private readonly entries: NativeBuildResourceCleanupEntry[] = [];
+  private readonly closing = new Map<NativeBuildResourceCleanupMode, Promise<void>>();
+
+  constructor(private readonly hooks?: NativeBuildRuntimeConstructionHooks) {}
+
+  add(
+    stage: NativeBuildRuntimeResourceStage,
+    cleanup: () => void | Promise<void>,
+    closeOnHandle = false,
+  ): void {
+    this.entries.push({
+      stage,
+      cleanup,
+      closeOnHandle,
+      completedOnFailure: false,
+      completedOnHandle: false,
+    });
+  }
+
+  isComplete(mode: NativeBuildResourceCleanupMode): boolean {
+    return this.entries.every((entry) =>
+      mode === "failure"
+        ? entry.completedOnFailure
+        : !entry.closeOnHandle || entry.completedOnHandle,
+    );
+  }
+
+  async close(mode: NativeBuildResourceCleanupMode): Promise<void> {
+    const inFlight = this.closing.get(mode);
+    if (inFlight) return await inFlight;
+    const attempt = this.closeEntries(mode);
+    this.closing.set(mode, attempt);
+    try {
+      await attempt;
+    } finally {
+      if (this.closing.get(mode) === attempt) this.closing.delete(mode);
+    }
+  }
+
+  private async closeEntries(mode: NativeBuildResourceCleanupMode): Promise<void> {
+    const failures: unknown[] = [];
+    for (const entry of [...this.entries].reverse()) {
+      if (mode === "handle" && !entry.closeOnHandle) continue;
+      if (mode === "failure" ? entry.completedOnFailure : entry.completedOnHandle) continue;
+      try {
+        await this.hooks?.beforeCleanup?.(entry.stage);
+        await entry.cleanup();
+        if (mode === "failure") {
+          entry.completedOnFailure = true;
+        } else {
+          entry.completedOnHandle = true;
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Could not close all native Build ${mode} resources.`,
+      );
+    }
+  }
+}
+
+function nativeBuildConstructionFailure(
+  stage: NativeBuildRuntimeInitializationStage,
+  error: unknown,
+): unknown {
+  if (error instanceof RunnerCapabilityContractError) return error;
+  if (error instanceof NativeBuildRuntimeInitializationError) return error;
+  if (stage === "capabilities") {
+    return new RunnerCapabilityContractError(
+      "capability_preflight_failed",
+      `Native Build capability startup failed: ${boundedErrorMessage(error)}.`,
+      { cause: error },
+    );
+  }
+  return new NativeBuildRuntimeInitializationError(
+    stage,
+    `Native Build ${stage} initialization failed: ${boundedErrorMessage(error)}.`,
+    { cause: error },
+  );
+}
+
+function aggregateConstructionFailure(
+  runId: string,
+  primary: unknown,
+  cleanupError: unknown,
+): AggregateError {
+  const cleanupFailures = cleanupError instanceof AggregateError
+    ? [...cleanupError.errors]
+    : [cleanupError];
+  return new AggregateError(
+    [primary, ...cleanupFailures],
+    `Native Build ${runId} construction failed and cleanup reported errors.`,
+  );
 }
 
 export interface RunnerCapabilityPreflightOptions {

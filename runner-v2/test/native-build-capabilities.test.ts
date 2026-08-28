@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -19,13 +20,16 @@ import test from "node:test";
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import {
+  classifyNativeBuildRecoveryError,
   NativeBuildFactory,
+  NativeBuildRuntimeInitializationError,
   preflightRecoveredRunnerCapabilities,
 } from "../src/native-build-factory.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import {
   createRunnerCapabilityContractSnapshot,
+  RunnerCapabilityContractError,
   runnerCapabilitySnapshotExtensionDirectories,
   type RunnerCapabilityContract,
 } from "../src/runner-capability-contract.js";
@@ -599,6 +603,253 @@ test("NativeBuildFactory reserves built-in tool names before any extension start
     await factory?.close();
     fixture.cleanup();
   }
+});
+
+test("NativeBuildFactory reverses every acquired runtime resource after construction faults", async () => {
+  const stages = [
+    "capabilities",
+    "evidence_store",
+    "scheduler_store",
+    "session_store",
+    "tool_ledger",
+    "budget_ledger",
+    "workspace_manager",
+    "integration_workspace",
+    "verification_workspace",
+    "independent_verifier_workspace",
+    "memory_store",
+    "managed_process_service",
+  ] as const;
+  for (const faultAt of stages) {
+    const fixture = createFixture(`runtime-construction-${faultAt}`);
+    const runId = `runtime_construction_${faultAt}`;
+    let factory: NativeBuildFactory | undefined;
+    let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+    const acquired: string[] = [];
+    const released: string[] = [];
+    try {
+      const baseline = await captureGitBaseline({
+        projectPath: fixture.project,
+        stateDirectory: fixture.state,
+        runId,
+      });
+      factory = new NativeBuildFactory({
+        projectRoot: fixture.project,
+        stateDirectory: fixture.state,
+        providerConfigs: {
+          load: () => [providerConfig()],
+          save: () => undefined,
+          close: () => undefined,
+        },
+        capabilitiesConfig: { extensions: [fixture.extension], languageServers: [] },
+        baselineFor: () => baseline.revision,
+        runtimeConstructionHooks: {
+          afterAcquire: async (stage) => {
+            acquired.push(stage);
+            if (stage === faultAt) throw new Error(`injected ${faultAt} construction failure`);
+          },
+          beforeCleanup: async (stage) => { released.push(stage); },
+        },
+      });
+      const prepared = await factory.prepareSpec(buildSpec(runId));
+
+      const createAttempt = factory.create(prepared).then((created) => {
+        handle = created;
+        return created;
+      });
+      await assert.rejects(
+        createAttempt,
+        (error: unknown) => {
+          assert.match(String(error), new RegExp(`injected ${faultAt} construction failure`, "i"));
+          if (faultAt === "capabilities") {
+            assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
+          } else {
+            assert.equal(error instanceof NativeBuildRuntimeInitializationError, true);
+            assert.equal((error as NativeBuildRuntimeInitializationError).stage, faultAt);
+          }
+          return true;
+        },
+      );
+
+      assert.deepEqual(acquired, stages.slice(0, stages.indexOf(faultAt) + 1));
+      assert.deepEqual(released, [...acquired].reverse());
+      const root = runRoot(fixture.state, runId);
+      for (const database of [
+        "evidence.sqlite",
+        "scheduler.sqlite",
+        "sessions.sqlite",
+        "tool-ledger.sqlite",
+        "budget.sqlite",
+      ]) {
+        assertReleasedRunnerDatabase(join(root, database));
+      }
+      const integrationSegment = relative(join(fixture.state, "builds"), root);
+      assert.equal(existsSync(join(fixture.state, "integration", integrationSegment)), false);
+      const executionRoot = join(root, "extension-executions");
+      assert.equal(
+        !existsSync(executionRoot) || readdirSync(executionRoot).length === 0,
+        true,
+        `execution copies must be gone after ${faultAt}`,
+      );
+    } finally {
+      await handle?.close();
+      await factory?.close();
+      fixture.cleanup();
+    }
+  }
+});
+
+test("NativeBuildFactory handle close releases owned stores while retaining recovery worktrees", async () => {
+  const fixture = createFixture("runtime-handle-close-ownership");
+  const runId = "runtime_handle_close_ownership";
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  const released: string[] = [];
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: fixture.project,
+      stateDirectory: fixture.state,
+      providerConfigs: {
+        load: () => [providerConfig()],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      capabilitiesConfig: { extensions: [fixture.extension], languageServers: [] },
+      baselineFor: () => baseline.revision,
+      runtimeConstructionHooks: {
+        beforeCleanup: async (stage) => { released.push(stage); },
+      },
+    });
+    handle = await factory.create(await factory.prepareSpec(buildSpec(runId)));
+    await handle.close();
+    handle = undefined;
+
+    assert.deepEqual(released, [
+      "budget_ledger",
+      "tool_ledger",
+      "session_store",
+      "scheduler_store",
+      "evidence_store",
+      "capabilities",
+    ]);
+    const root = runRoot(fixture.state, runId);
+    for (const database of [
+      "evidence.sqlite",
+      "scheduler.sqlite",
+      "sessions.sqlite",
+      "tool-ledger.sqlite",
+      "budget.sqlite",
+    ]) {
+      assertReleasedRunnerDatabase(join(root, database));
+    }
+    const integrationSegment = relative(join(fixture.state, "builds"), root);
+    assert.equal(
+      existsSync(join(fixture.state, "integration", integrationSegment)),
+      true,
+      "normal handle close retains durable integration recovery state",
+    );
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory retains the primary construction error while retrying every failed cleanup", async () => {
+  const fixture = createFixture("runtime-construction-cleanup-retry");
+  const runId = "runtime_construction_cleanup_retry";
+  let factory: NativeBuildFactory | undefined;
+  let cleanupFaultPending = true;
+  const acquired: string[] = [];
+  const cleanupAttempts: string[] = [];
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: fixture.project,
+      stateDirectory: fixture.state,
+      providerConfigs: {
+        load: () => [providerConfig()],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      capabilitiesConfig: { extensions: [fixture.extension], languageServers: [] },
+      baselineFor: () => baseline.revision,
+      runtimeConstructionHooks: {
+        afterAcquire: async (stage) => {
+          acquired.push(stage);
+          if (stage === "scheduler_store") {
+            throw new Error("injected scheduler construction failure");
+          }
+        },
+        beforeCleanup: async (stage) => {
+          cleanupAttempts.push(stage);
+          if (stage === "evidence_store" && cleanupFaultPending) {
+            cleanupFaultPending = false;
+            throw new Error("injected evidence cleanup failure");
+          }
+        },
+      },
+    });
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    await assert.rejects(factory.create(prepared), (error: unknown) => {
+      assert.equal(error instanceof AggregateError, true);
+      const messages = (error as AggregateError).errors.map((item) => String(item));
+      assert.equal(messages.some((message) => /scheduler construction failure/i.test(message)), true);
+      assert.equal(messages.some((message) => /evidence cleanup failure/i.test(message)), true);
+      const primary = (error as AggregateError).errors[0] as Error & { cause?: unknown };
+      assert.equal(primary instanceof NativeBuildRuntimeInitializationError, true);
+      assert.equal((primary as NativeBuildRuntimeInitializationError).stage, "scheduler_store");
+      assert.match(String(primary.cause), /scheduler construction failure/i);
+      assert.deepEqual(classifyNativeBuildRecoveryError(error), {
+        kind: "runtime",
+        stage: "scheduler_store",
+      });
+      return true;
+    });
+    assert.deepEqual(acquired, ["capabilities", "evidence_store", "scheduler_store"]);
+    assert.deepEqual(
+      cleanupAttempts,
+      ["scheduler_store", "evidence_store", "capabilities"],
+      "a cleanup failure must not stop reverse-order unwinding",
+    );
+
+    await factory.close();
+    factory = undefined;
+    assert.deepEqual(cleanupAttempts, [
+      "scheduler_store",
+      "evidence_store",
+      "capabilities",
+      "evidence_store",
+    ]);
+    assertReleasedRunnerDatabase(join(runRoot(fixture.state, runId), "evidence.sqlite"));
+  } finally {
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("recovery classification preserves a capability primary inside cleanup aggregation", () => {
+  const capability = new RunnerCapabilityContractError(
+    "capability_preflight_failed",
+    "injected capability startup failure",
+  );
+  const failure = new AggregateError(
+    [capability, new Error("injected cleanup failure")],
+    "startup and cleanup failed",
+  );
+  assert.deepEqual(classifyNativeBuildRecoveryError(failure), {
+    kind: "capability",
+    code: "capability_preflight_failed",
+  });
 });
 
 test("NativeBuildFactory leaves provider configuration cleanup to the CLI when requested", async () => {
@@ -1339,6 +1590,114 @@ test("NativeBuildFactory replays unmigrated terminal transcript and evidence wit
   }
 });
 
+test("NativeBuildFactory replays a present but partial terminal transcript projection without writes", async () => {
+  const fixture = createFixture("historical-partial-transcript");
+  const runId = "capability_historical_partial_transcript";
+  const root = runRoot(fixture.state, runId);
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  let sessions: SqliteAgentSessionStore | undefined;
+  let projection: DatabaseSync | undefined;
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+    await sessions.create({
+      sessionId: "architect:partial",
+      runId,
+      actor: { role: "architect", id: "architect_1" },
+      occurredAt: "2026-08-28T00:00:00.000Z",
+    });
+    await sessions.checkpoint(
+      "architect:partial",
+      {
+        messages: [{ id: "first", role: "assistant", content: "First historical turn." }],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:01.000Z",
+    );
+    await sessions.checkpoint(
+      "architect:partial",
+      {
+        messages: [
+          { id: "first", role: "assistant", content: "First historical turn." },
+          { id: "second", role: "assistant", content: "Second historical turn." },
+        ],
+        turns: 2,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:02.000Z",
+    );
+    sessions.close();
+    sessions = undefined;
+    projection = new DatabaseSync(join(root, "sessions.sqlite"));
+    projection.exec(`
+      DELETE FROM agent_transcript_turns WHERE sequence = 2;
+      DELETE FROM agent_transcript_checkpoints WHERE sequence = 2;
+    `);
+    projection.close();
+    projection = undefined;
+    const before = historicalStateSnapshot(fixture.state);
+
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    handle = await factory.createHistorical(buildSpec(runId), "failed");
+    assert.deepEqual(await handle.transcript(), {
+      turns: [
+        {
+          id: "architect:partial:first",
+          sessionId: "architect:partial",
+          actor: { role: "architect", id: "architect_1" },
+          sequence: 2,
+          ordinal: 0,
+          occurredAt: "2026-08-28T00:00:01.000Z",
+          text: "First historical turn.",
+        },
+        {
+          id: "architect:partial:second",
+          sessionId: "architect:partial",
+          actor: { role: "architect", id: "architect_1" },
+          sequence: 3,
+          ordinal: 1,
+          occurredAt: "2026-08-28T00:00:02.000Z",
+          text: "Second historical turn.",
+        },
+      ],
+      cursor: 3,
+      historicalProvenance: "legacy_replay",
+    });
+    assert.deepEqual(await handle.transcript(2), {
+      turns: [{
+        id: "architect:partial:second",
+        sessionId: "architect:partial",
+        actor: { role: "architect", id: "architect_1" },
+        sequence: 3,
+        ordinal: 1,
+        occurredAt: "2026-08-28T00:00:02.000Z",
+        text: "Second historical turn.",
+      }],
+      cursor: 3,
+      historicalProvenance: "legacy_replay",
+    });
+    const audit = await handle.observability();
+    assert.equal(audit.historical?.provenance.transcript, "legacy_replay");
+    await handle.close();
+    handle = undefined;
+    await factory.close();
+    factory = undefined;
+    assert.deepEqual(historicalStateSnapshot(fixture.state), before);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    projection?.close();
+    sessions?.close();
+    fixture.cleanup();
+  }
+});
+
 test("NativeBuildFactory historical copies preserve WAL-visible durable observations", async () => {
   const fixture = createFixture("historical-wal-observation");
   const runId = "capability_historical_wal_observation";
@@ -1497,6 +1856,13 @@ function historicalTemporarySnapshots(): Set<string> {
       .filter((entry) => entry.isDirectory() && entry.name.startsWith("aiboard-historical-sqlite-"))
       .map((entry) => entry.name),
   );
+}
+
+function assertReleasedRunnerDatabase(path: string): void {
+  if (!existsSync(path)) return;
+  const probe = `${path}.release-probe`;
+  renameSync(path, probe);
+  renameSync(probe, path);
 }
 
 function historicalSqliteSchema(

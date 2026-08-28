@@ -297,6 +297,48 @@ test("CLI rejects an active legacy Build without a capability contract before li
   }
 });
 
+test("CLI records a non-capability runtime recovery failure with its initialization stage", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-runtime-recovery-stage-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "runtime_recovery_without_baseline";
+  const token = "cli-runtime-recovery-stage-token";
+  let runner: TrackedCliChild | undefined;
+  let readinessSucceeded = false;
+  mkdirSync(project);
+  mkdirSync(state);
+  writeCapabilitiesConfig(config, []);
+  const contract = await createRunnerCapabilityContractSnapshot({
+    extensions: [],
+    languageServers: [],
+  }, state);
+  saveActiveBuild(state, project, runId, contract);
+  try {
+    runner = spawnCli(project, state, config, token);
+    await awaitCliReadiness(runner);
+    readinessSucceeded = true;
+
+    const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+    try {
+      const run = recovered.getRun(runId);
+      assert.equal(run.state, "failed");
+      assert.equal(run.stopReason, "runtime-recovery:baseline_failed");
+    } finally {
+      recovered.close();
+    }
+  } finally {
+    try {
+      if (runner) {
+        const close = await terminateCliChild(runner);
+        if (readinessSucceeded) assertSuccessfulCliShutdown(close);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  }
+});
+
 test("CLI keeps a terminal legacy Build readable without recovering it against current capabilities", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-terminal-"));
   const project = join(root, "project");

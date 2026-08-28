@@ -56,6 +56,12 @@ interface RetainedCheckpoint {
   artifactHash: string;
 }
 
+interface HistoricalTranscriptAnalysis {
+  turns: AgentTranscriptPage["turns"];
+  cursor: number;
+  provenance: HistoricalReadProvenance;
+}
+
 export interface SqliteAgentSessionStoreOptions {
   /** Opens an existing durable store without schema or transcript-projection writes. */
   readOnly?: boolean;
@@ -66,6 +72,10 @@ export interface SqliteAgentSessionStoreOptions {
 export class SqliteAgentSessionStore {
   private readonly database: DatabaseSync;
   private readonly readOnly: boolean;
+  private readonly historicalTranscriptAnalyses = new Map<
+    string,
+    Promise<HistoricalTranscriptAnalysis>
+  >();
 
   constructor(
     databasePath: string,
@@ -297,14 +307,14 @@ export class SqliteAgentSessionStore {
   }
 
   async transcript(runId: string, afterSequence = 0): Promise<AgentTranscriptPage> {
-    if (!this.readOnly) await this.ensureTranscriptProjection(runId);
-    if (
-      this.readOnly &&
-      (!this.hasTable("agent_transcript_turns") ||
-        !this.hasTable("agent_transcript_checkpoints"))
-    ) {
-      return await this.replayLegacyTranscript(runId, afterSequence);
+    if (this.readOnly) {
+      const analysis = await this.historicalTranscriptAnalysis(runId);
+      return {
+        turns: analysis.turns.filter((turn) => turn.sequence > afterSequence),
+        cursor: Math.max(afterSequence, analysis.cursor),
+      };
     }
+    await this.ensureTranscriptProjection(runId);
     const rows = this.database
       .prepare(
         `SELECT id, session_id, actor_json, sequence, ordinal, occurred_at, text
@@ -607,26 +617,33 @@ export class SqliteAgentSessionStore {
     }
   }
 
-  historicalTranscriptProvenance(): HistoricalReadProvenance {
+  async historicalTranscriptProvenance(runId: string): Promise<HistoricalReadProvenance> {
     if (!this.readOnly) return "durable";
-    if (!this.hasTable("agent_session_events")) return "unavailable";
-    return this.hasTable("agent_transcript_turns") &&
-      this.hasTable("agent_transcript_checkpoints")
-      ? "durable"
-      : "legacy_replay";
+    return (await this.historicalTranscriptAnalysis(runId)).provenance;
   }
 
   /**
-   * Legacy terminal databases can predate the derived transcript tables. A
-   * historical reader must reconstruct their stable assistant text in memory
-   * rather than creating a current projection schema while serving a read.
+   * Historical snapshots are immutable, so one complete analysis can serve
+   * transcript pages and provenance without mutating the durable projection.
    */
-  private async replayLegacyTranscript(
-    runId: string,
-    afterSequence: number,
-  ): Promise<AgentTranscriptPage> {
+  private historicalTranscriptAnalysis(runId: string): Promise<HistoricalTranscriptAnalysis> {
+    const existing = this.historicalTranscriptAnalyses.get(runId);
+    if (existing) return existing;
+    const analysis = this.analyzeHistoricalTranscript(runId);
+    this.historicalTranscriptAnalyses.set(runId, analysis);
+    return analysis;
+  }
+
+  /**
+   * Transcript tables are a replayable projection. Compaction can leave valid
+   * projected checkpoints that no longer have source events, so completeness
+   * requires every remaining authoritative checkpoint to be represented; it
+   * does not require the two sequence sets to be identical. Missing current
+   * turns are merged from checkpoint artifacts in memory.
+   */
+  private async analyzeHistoricalTranscript(runId: string): Promise<HistoricalTranscriptAnalysis> {
     if (!this.hasTable("agent_session_events")) {
-      return { turns: [], cursor: afterSequence };
+      return { turns: [], cursor: 0, provenance: "unavailable" };
     }
     const sessions = new Map(
       this.createdEvents(runId).map((event) => [
@@ -634,8 +651,43 @@ export class SqliteAgentSessionStore {
         event.payload.actor as AgentActor,
       ]),
     );
-    if (sessions.size === 0) return { turns: [], cursor: afterSequence };
-    const checkpoints = (
+    if (sessions.size === 0) {
+      return {
+        turns: [],
+        cursor: 0,
+        provenance: this.hasTable("agent_transcript_checkpoints") &&
+          this.hasTable("agent_transcript_turns")
+          ? "durable"
+          : "legacy_replay",
+      };
+    }
+    const hasCheckpointProjection = this.hasTable("agent_transcript_checkpoints");
+    const hasTurnProjection = this.hasTable("agent_transcript_turns");
+    const projectedCheckpointSequences = new Set(
+      hasCheckpointProjection
+        ? (
+            this.database
+              .prepare(
+                `SELECT sequence FROM agent_transcript_checkpoints
+                 WHERE run_id = ? ORDER BY sequence ASC`,
+              )
+              .all(runId) as Array<{ sequence: number }>
+          ).map((row) => row.sequence)
+        : [],
+    );
+    const projectedTurns = hasTurnProjection
+      ? (
+          this.database
+            .prepare(
+              `SELECT id, session_id, actor_json, sequence, ordinal, occurred_at, text
+               FROM agent_transcript_turns
+               WHERE run_id = ? ORDER BY sequence ASC, ordinal ASC, id ASC`,
+            )
+            .all(runId) as unknown as TranscriptRow[]
+        ).map(decodeTranscriptRow)
+      : [];
+    const merged = new Map(projectedTurns.map((turn) => [turn.id, turn]));
+    const authoritative = (
       this.database
         .prepare(
           `SELECT sequence, session_id, event_type, occurred_at,
@@ -647,11 +699,13 @@ export class SqliteAgentSessionStore {
     )
       .map(decodeEvent)
       .filter((event) => sessions.has(event.sessionId));
-    const seenTurnIds = new Set<string>();
-    const turns: AgentTranscriptPage["turns"] = [];
-    let cursor = afterSequence;
-    for (const event of checkpoints) {
+    let complete = hasCheckpointProjection && hasTurnProjection;
+    let cursor = projectedCheckpointSequences.size > 0
+      ? Math.max(...projectedCheckpointSequences)
+      : 0;
+    for (const event of authoritative) {
       cursor = Math.max(cursor, event.sequence);
+      if (!projectedCheckpointSequences.has(event.sequence)) complete = false;
       if (!event.artifactHash) {
         throw new Error(`Checkpoint event ${event.sequence} has no artifact.`);
       }
@@ -664,10 +718,7 @@ export class SqliteAgentSessionStore {
         const text = assistantText(message);
         if (text === undefined) return;
         const id = `${event.sessionId}:${message.id}`;
-        if (seenTurnIds.has(id)) return;
-        seenTurnIds.add(id);
-        if (event.sequence <= afterSequence) return;
-        turns.push({
+        const expected: AgentTranscriptPage["turns"][number] = {
           id,
           sessionId: event.sessionId,
           actor: sessions.get(event.sessionId)!,
@@ -675,10 +726,31 @@ export class SqliteAgentSessionStore {
           ordinal,
           occurredAt: event.occurredAt,
           text,
-        });
+        };
+        const projected = merged.get(id);
+        const projectedMatches = projected !== undefined &&
+          projected.sessionId === expected.sessionId &&
+          projected.actor.role === expected.actor.role &&
+          projected.actor.id === expected.actor.id &&
+          projected.text === expected.text &&
+          projected.sequence <= expected.sequence &&
+          (projected.sequence !== expected.sequence ||
+            (projected.ordinal === expected.ordinal &&
+              projected.occurredAt === expected.occurredAt));
+        if (!projectedMatches) {
+          complete = false;
+          merged.set(id, expected);
+        }
       });
     }
-    return { turns, cursor };
+    return {
+      turns: [...merged.values()].sort((left, right) =>
+        left.sequence - right.sequence ||
+        left.ordinal - right.ordinal ||
+        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
+      cursor,
+      provenance: complete ? "durable" : "legacy_replay",
+    };
   }
 
   private insertTranscriptCheckpoint(
@@ -829,6 +901,18 @@ function decodeEvent(row: EventRow): AgentSessionEvent {
     idempotencyKey: row.idempotency_key,
     payload: JSON.parse(row.payload_json) as Record<string, unknown>,
     ...(row.artifact_hash ? { artifactHash: row.artifact_hash } : {}),
+  };
+}
+
+function decodeTranscriptRow(row: TranscriptRow): AgentTranscriptPage["turns"][number] {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    actor: JSON.parse(row.actor_json) as AgentActor,
+    sequence: row.sequence,
+    ordinal: row.ordinal,
+    occurredAt: row.occurred_at,
+    text: row.text,
   };
 }
 

@@ -22,13 +22,12 @@ export interface LanguageServerExecutableIdentity {
 export interface LanguageServerExecutableResolutionOptions {
   commandSearchDirectory?: string;
   environment?: NodeJS.ProcessEnv;
-}
-
-export interface LanguageServerCommandCandidateOptions
-  extends LanguageServerExecutableResolutionOptions {
-  /** Test-only platform seam for command-search compatibility behavior. */
+  /** Test seam for platform-specific resolution behavior. */
   platform?: NodeJS.Platform;
 }
+
+export type LanguageServerCommandCandidateOptions =
+  LanguageServerExecutableResolutionOptions;
 
 /** Resolves a configured command once and records the exact launcher bytes. */
 export async function resolveLanguageServerExecutable(
@@ -40,18 +39,21 @@ export async function resolveLanguageServerExecutable(
   }
   const cwd = resolve(options.commandSearchDirectory ?? process.cwd());
   const environment = options.environment ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const searchesPath = isBareCommand(command);
   const candidates = languageServerCommandCandidates(command, {
     commandSearchDirectory: cwd,
     environment,
+    platform,
   });
   let lastNotFound: unknown;
   for (const candidate of candidates) {
     try {
-      return await identifyExecutable(candidate);
+      return await identifyExecutable(candidate, platform);
     } catch (error) {
-      if (isErrno(error, "ENOENT") || isErrno(error, "ENOTDIR")) {
+      if (isUnavailableCandidate(error)) {
         lastNotFound = error;
-        continue;
+        if (searchesPath) continue;
       }
       throw error;
     }
@@ -73,7 +75,7 @@ export async function assertLanguageServerExecutableIdentity(
   if (!isIdentity(identity)) {
     throw new Error("Language server executable identity is invalid.");
   }
-  const actual = await identifyExecutable(identity.path);
+  const actual = await identifyExecutable(identity.path, process.platform);
   if (
     normalizePath(actual.path) !== normalizePath(identity.path) ||
     actual.digest !== identity.digest ||
@@ -169,33 +171,49 @@ function environmentValue(
   return typeof value === "string" ? value : undefined;
 }
 
-async function identifyExecutable(path: string): Promise<LanguageServerExecutableIdentity> {
+class UnusableLanguageServerExecutableCandidateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnusableLanguageServerExecutableCandidateError";
+  }
+}
+
+async function identifyExecutable(
+  path: string,
+  platform: NodeJS.Platform,
+): Promise<LanguageServerExecutableIdentity> {
   const requested = resolve(path);
   const metadata = await lstat(requested);
-  if (!metadata.isFile()) {
-    throw new Error(`Language server command ${requested} must be a regular file.`);
+  if (!metadata.isFile() && !metadata.isSymbolicLink()) {
+    throw new UnusableLanguageServerExecutableCandidateError(
+      `Language server command ${requested} must be a regular file.`,
+    );
   }
   const canonical = await realpath(requested);
   const actual = await stat(canonical);
   if (!actual.isFile()) {
-    throw new Error(`Language server command ${canonical} must be a regular file.`);
+    throw new UnusableLanguageServerExecutableCandidateError(
+      `Language server command ${canonical} must be a regular file.`,
+    );
   }
   if (actual.size > MAX_EXECUTABLE_BYTES) {
     throw new Error(`Language server command ${canonical} exceeds the ${MAX_EXECUTABLE_BYTES} byte limit.`);
   }
   const extension = extname(canonical).toLowerCase();
   let launcher: LanguageServerLauncherKind;
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     if (WINDOWS_NATIVE_EXTENSIONS.has(extension)) launcher = "native";
     else if (WINDOWS_BATCH_EXTENSIONS.has(extension)) launcher = "batch";
     else {
-      throw new Error(
+      throw new UnusableLanguageServerExecutableCandidateError(
         `Language server command ${canonical} must be a .exe/.com program or a .cmd/.bat shim on Windows.`,
       );
     }
   } else {
     if ((actual.mode & 0o111) === 0) {
-      throw new Error(`Language server command ${canonical} must be executable.`);
+      throw new UnusableLanguageServerExecutableCandidateError(
+        `Language server command ${canonical} must be executable.`,
+      );
     }
     launcher = "native";
   }
@@ -205,6 +223,19 @@ async function identifyExecutable(path: string): Promise<LanguageServerExecutabl
     digest: createHash("sha256").update(source).digest("hex"),
     launcher,
   };
+}
+
+function isBareCommand(command: string): boolean {
+  return !isAbsolute(command) &&
+    !command.includes(sep) &&
+    !command.includes("/") &&
+    !command.includes("\\");
+}
+
+function isUnavailableCandidate(error: unknown): boolean {
+  return isErrno(error, "ENOENT") ||
+    isErrno(error, "ENOTDIR") ||
+    error instanceof UnusableLanguageServerExecutableCandidateError;
 }
 
 function isIdentity(value: unknown): value is LanguageServerExecutableIdentity {

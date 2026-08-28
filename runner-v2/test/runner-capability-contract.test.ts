@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -10,7 +18,10 @@ import {
   runnerCapabilitiesForContract,
   validateRunnerCapabilityContract,
 } from "../src/runner-capability-contract.js";
-import { languageServerCommandCandidates } from "../src/language-server-executable.js";
+import {
+  languageServerCommandCandidates,
+  resolveLanguageServerExecutable,
+} from "../src/language-server-executable.js";
 
 test("language-server command search preserves POSIX PATH and Windows cwd semantics", () => {
   const root = join("C:", "runner capability candidate fixture");
@@ -49,6 +60,74 @@ test("language-server command search preserves POSIX PATH and Windows cwd semant
     ],
     "Windows keeps cwd-first command lookup and applies only supported PATHEXT launchers",
   );
+});
+
+test("language-server executable resolution follows a PATH symlink to its canonical launcher", async (context) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-capability-executable-symlink-"));
+  const bin = join(root, "bin");
+  const command = process.platform === "win32" ? "fixture-lsp.cmd" : "fixture-lsp";
+  const target = join(root, process.platform === "win32" ? "target.cmd" : "target-lsp");
+  const intermediate = join(root, process.platform === "win32" ? "intermediate.cmd" : "intermediate-lsp");
+  const alias = join(bin, command);
+  try {
+    mkdirSync(bin);
+    writeLauncher(target, "canonical target");
+    try {
+      symlinkSync(target, intermediate, process.platform === "win32" ? "file" : undefined);
+      symlinkSync(intermediate, alias, process.platform === "win32" ? "file" : undefined);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        context.skip("The host does not permit test symlink creation.");
+        return;
+      }
+      throw error;
+    }
+
+    const identity = await resolveLanguageServerExecutable(command, {
+      commandSearchDirectory: root,
+      environment: { ...process.env, PATH: bin },
+    });
+    assert.equal(identity.path, realpathSync(target));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("language-server executable resolution skips shadowed unusable PATH candidates", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-capability-executable-shadow-"));
+  const first = join(root, "first-bin");
+  const second = join(root, "second-bin");
+  const command = process.platform === "win32" ? "fixture-lsp.cmd" : "fixture-lsp";
+  const shadow = join(first, command);
+  const fallback = join(second, command);
+  try {
+    mkdirSync(first);
+    mkdirSync(second);
+    if (process.platform === "win32") {
+      mkdirSync(shadow);
+    } else {
+      writeLauncher(shadow, "non-executable shadow");
+      chmodSync(shadow, 0o644);
+    }
+    writeLauncher(fallback, "usable fallback");
+    const environment = { ...process.env, PATH: `${first}${delimiter}${second}` };
+
+    const identity = await resolveLanguageServerExecutable(command, {
+      commandSearchDirectory: root,
+      environment,
+    });
+    assert.equal(identity.path, realpathSync(fallback));
+
+    await assert.rejects(
+      resolveLanguageServerExecutable(command, {
+        commandSearchDirectory: root,
+        environment: { ...process.env, PATH: first },
+      }),
+      /was not found as a regular supported executable/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("capability contracts attest the resolved launcher and reject a PATH replacement", async () => {

@@ -433,6 +433,183 @@ test("read-only transcript replay serves legacy checkpoints without transcript p
   }
 });
 
+test("read-only transcript replay repairs empty and partial transcript projections in memory", async () => {
+  for (const scenario of [
+    {
+      name: "empty",
+      mutate: `
+        DELETE FROM agent_transcript_turns;
+        DELETE FROM agent_transcript_checkpoints;
+      `,
+    },
+    {
+      name: "partial",
+      mutate: `
+        DELETE FROM agent_transcript_turns WHERE sequence = 2;
+        DELETE FROM agent_transcript_checkpoints WHERE sequence = 2;
+      `,
+    },
+    {
+      name: "turn-only",
+      mutate: `
+        DELETE FROM agent_transcript_turns WHERE sequence = 2;
+      `,
+    },
+  ]) {
+    const root = mkdtempSync(join(tmpdir(), `aiboard-agent-${scenario.name}-projection-`));
+    const database = join(root, "sessions.sqlite");
+    const artifacts = new ArtifactStore(join(root, "artifacts"));
+    let writer: SqliteAgentSessionStore | undefined;
+    let reader: SqliteAgentSessionStore | undefined;
+    try {
+      writer = new SqliteAgentSessionStore(database, artifacts);
+      await writer.create({
+        sessionId: "architect:run_projection",
+        runId: "run_projection",
+        actor: { role: "architect", id: "architect_1" },
+        occurredAt: "2026-08-28T00:00:00.000Z",
+      });
+      await writer.checkpoint(
+        "architect:run_projection",
+        {
+          messages: [{ id: "first", role: "assistant", content: "First durable turn." }],
+          turns: 1,
+          seenCallIds: [],
+        },
+        "2026-08-28T00:00:01.000Z",
+      );
+      await writer.checkpoint(
+        "architect:run_projection",
+        {
+          messages: [
+            { id: "first", role: "assistant", content: "First durable turn." },
+            { id: "second", role: "assistant", content: "Second durable turn." },
+          ],
+          turns: 2,
+          seenCallIds: [],
+        },
+        "2026-08-28T00:00:02.000Z",
+      );
+      writer.close();
+      writer = undefined;
+
+      const projection = new DatabaseSync(database);
+      try {
+        projection.exec(scenario.mutate);
+      } finally {
+        projection.close();
+      }
+      const beforeBytes = readFileSync(database);
+      const beforeMtime = statSync(database).mtimeMs;
+
+      reader = new SqliteAgentSessionStore(database, artifacts, { readOnly: true });
+      assert.equal(
+        await reader.historicalTranscriptProvenance("run_projection"),
+        "legacy_replay",
+      );
+      assert.deepEqual(await reader.transcript("run_projection"), {
+        turns: [
+          {
+            id: "architect:run_projection:first",
+            sessionId: "architect:run_projection",
+            actor: { role: "architect", id: "architect_1" },
+            sequence: 2,
+            ordinal: 0,
+            occurredAt: "2026-08-28T00:00:01.000Z",
+            text: "First durable turn.",
+          },
+          {
+            id: "architect:run_projection:second",
+            sessionId: "architect:run_projection",
+            actor: { role: "architect", id: "architect_1" },
+            sequence: 3,
+            ordinal: 1,
+            occurredAt: "2026-08-28T00:00:02.000Z",
+            text: "Second durable turn.",
+          },
+        ],
+        cursor: 3,
+      });
+      assert.deepEqual(await reader.transcript("run_projection", 2), {
+        turns: [
+          {
+            id: "architect:run_projection:second",
+            sessionId: "architect:run_projection",
+            actor: { role: "architect", id: "architect_1" },
+            sequence: 3,
+            ordinal: 1,
+            occurredAt: "2026-08-28T00:00:02.000Z",
+            text: "Second durable turn.",
+          },
+        ],
+        cursor: 3,
+      });
+      reader.close();
+      reader = undefined;
+      assert.deepEqual(readFileSync(database), beforeBytes);
+      assert.equal(statSync(database).mtimeMs, beforeMtime);
+    } finally {
+      reader?.close();
+      writer?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("read-only transcript keeps complete compacted projections authoritative", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-compacted-projection-"));
+  const database = join(root, "sessions.sqlite");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  let writer: SqliteAgentSessionStore | undefined;
+  let reader: SqliteAgentSessionStore | undefined;
+  try {
+    writer = new SqliteAgentSessionStore(database, artifacts);
+    await writer.create({
+      sessionId: "architect:run_compacted",
+      runId: "run_compacted",
+      actor: { role: "architect", id: "architect_1" },
+      occurredAt: "2026-08-28T00:00:00.000Z",
+    });
+    await writer.checkpoint(
+      "architect:run_compacted",
+      {
+        messages: [{ id: "first", role: "assistant", content: "First durable turn." }],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:01.000Z",
+    );
+    await writer.checkpoint(
+      "architect:run_compacted",
+      {
+        messages: [
+          { id: "first", role: "assistant", content: "First durable turn." },
+          { id: "second", role: "assistant", content: "Second durable turn." },
+        ],
+        turns: 2,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:02.000Z",
+    );
+    const expected = await writer.transcript("run_compacted");
+    await writer.compactRun("run_compacted");
+    writer.close();
+    writer = undefined;
+
+    reader = new SqliteAgentSessionStore(database, artifacts, { readOnly: true });
+    assert.equal(await reader.historicalTranscriptProvenance("run_compacted"), "durable");
+    assert.deepEqual(await reader.transcript("run_compacted"), expected);
+    assert.deepEqual(await reader.transcript("run_compacted", 2), {
+      turns: [expected.turns[1]],
+      cursor: expected.cursor,
+    });
+  } finally {
+    reader?.close();
+    writer?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("compacting a run retains its latest full checkpoint and removes superseded artifacts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-agent-compaction-"));
   const database = join(root, "sessions.sqlite");

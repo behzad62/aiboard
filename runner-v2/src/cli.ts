@@ -9,6 +9,7 @@ import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.
 import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
 import {
+  classifyNativeBuildRecoveryError,
   NativeBuildFactory,
   preflightRecoveredRunnerCapabilities,
   preflightRunnerCapabilities,
@@ -25,9 +26,6 @@ import {
   loadRunnerCapabilitiesConfig,
   type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
-import {
-  RunnerCapabilityContractError,
-} from "./runner-capability-contract.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
 import type { RunState } from "./contracts.js";
@@ -170,7 +168,7 @@ async function main(): Promise<void> {
         await buildFactory.validateRecoveryCapabilityContract(spec);
       },
       onRecoverySpecError: (runId, error) => {
-        recordCapabilityContractRecoveryFailure(supervisor, runId, error);
+        recordRuntimeRecoveryFailure(supervisor, runId, error);
       },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
@@ -318,7 +316,7 @@ async function validateActiveRecoveryCapabilityContracts(
           reservedToolNames: RUNNER_BUILTIN_TOOL_NAMES,
         });
       } catch (error) {
-        recordCapabilityContractRecoveryFailure(supervisor, spec.runId, error);
+        recordRuntimeRecoveryFailure(supervisor, spec.runId, error);
         failures.push(error);
       }
     }
@@ -334,7 +332,7 @@ async function validateActiveRecoveryCapabilityContracts(
   }
 }
 
-function recordCapabilityContractRecoveryFailure(
+function recordRuntimeRecoveryFailure(
   supervisor: RunSupervisor,
   runId: string,
   error: unknown,
@@ -344,22 +342,26 @@ function recordCapabilityContractRecoveryFailure(
     if (isTerminalRunState(run.state)) return;
     supervisor.fail(
       runId,
-      `capability-contract-recovery:${run.lastSequence}`,
-      capabilityContractRecoveryReason(error),
+      `runtime-recovery:${run.lastSequence}`,
+      runtimeRecoveryReason(error),
     );
   } catch (recordError) {
     writeRunnerWarning(runId, new AggregateError(
       [error, recordError],
-      "Unable to record Runner capability-contract recovery failure.",
+      "Unable to record Runner recovery failure.",
     ));
   }
 }
 
-function capabilityContractRecoveryReason(error: unknown): string {
-  if (error instanceof RunnerCapabilityContractError) {
-    return `capability-contract:${error.code}`;
+function runtimeRecoveryReason(error: unknown): string {
+  const classified = classifyNativeBuildRecoveryError(error);
+  if (classified?.kind === "capability") {
+    return `capability-contract:${classified.code}`;
   }
-  return "capability-contract:validation_failed";
+  if (classified?.kind === "runtime") {
+    return `runtime-recovery:${classified.stage}_failed`;
+  }
+  return "runtime-recovery:runtime_failed";
 }
 
 function parseRunnerArguments(rawArgs: string[]): string[] {
