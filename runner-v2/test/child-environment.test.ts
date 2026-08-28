@@ -2,129 +2,115 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  constructChildEnvironment,
-  type ChildEnvironmentCredentialGrantResolver,
+  createChildEnvironmentFactory,
+  type RunnerOwnedChildEnvironmentCredentialResolver,
 } from "../src/child-environment.js";
 
 const NOW = "2026-08-28T12:00:00.000Z";
+const GENERIC_GRANT_ERROR = /Child environment credential grant (?:is invalid|could not be consumed)\./;
 
-function privateResolver(): ChildEnvironmentCredentialGrantResolver {
+interface GrantRecord {
+  grantId: string;
+  runId: string;
+  invocationId: string;
+  expiresAt?: string;
+  names: string[];
+  values: Record<string, string>;
+}
+
+function resolver(records: Record<string, GrantRecord>): RunnerOwnedChildEnvironmentCredentialResolver {
   const consumed = new Set<string>();
   return {
-    consume(grant) {
-      if (consumed.has(grant.grantId)) throw new Error("Credential grant was already consumed.");
-      consumed.add(grant.grantId);
-      return { DEPLOY_TOKEN: "TEST_ONLY_GRANTED_VALUE" };
+    consume(grantId) {
+      if (consumed.has(grantId)) throw new Error(`SENTINEL_REPLAY_${grantId}`);
+      consumed.add(grantId);
+      const record = records[grantId];
+      if (!record) throw new Error(`SENTINEL_UNKNOWN_${grantId}`);
+      return record;
     },
   };
 }
 
-test("constructs a scrubbed environment with platform necessities and name-only audit", () => {
-  const result = constructChildEnvironment({
+function factory(records: Record<string, GrantRecord> = {}) {
+  return createChildEnvironmentFactory({
+    credentialResolver: resolver(records),
+    now: () => new Date(NOW),
+  });
+}
+
+test("prepares a public name-only capability while preserving safe platform variables", () => {
+  const prepared = factory().prepare({
     ambient: {
-      Path: "C:\\Windows\\System32",
-      TMP: "C:\\Temp",
-      HOME: "C:\\Users\\runner",
-      API_KEY: "TEST_ONLY_AMBIENT_KEY",
-      Access_Token: "TEST_ONLY_AUTH_TOKEN",
-      Authorization: "Bearer TEST_ONLY_HEADER",
-      RUNNER_STATE_DIR: "C:\\private-state",
-      RUNNER_AUTH_TOKEN: "TEST_ONLY_RUNNER_AUTH",
-      SAFE_FLAG: "inherited",
+      Path: "C:\\Windows\\System32", TMP: "C:\\Temp", HOME: "C:\\Users\\runner",
+      API_KEY: "SENTINEL_AMBIENT_KEY", Access_Token: "SENTINEL_AUTH_TOKEN",
+      Authorization: "Bearer SENTINEL_HEADER", RUNNER_STATE_DIR: "C:\\private-state",
+      RUNNER_AUTH_TOKEN: "SENTINEL_RUNNER_AUTH", SAFE_FLAG: "inherited",
     },
-    explicitOverrides: {
-      SAFE_FLAG: "overridden",
-      api_key: "TEST_ONLY_HOSTILE_OVERRIDE",
-      Runner_Control_Port: "9999",
-    },
+    explicitOverrides: { SAFE_FLAG: "overridden", api_key: "SENTINEL_HOSTILE_OVERRIDE", Runner_Control_Port: "9999" },
   });
 
-  assert.deepEqual(result.environment, {
-    Path: "C:\\Windows\\System32",
-    TMP: "C:\\Temp",
-    HOME: "C:\\Users\\runner",
-    SAFE_FLAG: "overridden",
-  });
-  assert.deepEqual(result.audit.inheritedNames, ["HOME", "Path", "SAFE_FLAG", "TMP"]);
-  assert.deepEqual(result.audit.removedNames, [
-    "Access_Token", "API_KEY", "Authorization", "RUNNER_AUTH_TOKEN", "RUNNER_STATE_DIR",
-  ]);
-  assert.deepEqual(result.audit.explicitSafeNames, ["SAFE_FLAG"]);
-  assert.deepEqual(result.audit.grantedNames, []);
-  const audit = JSON.stringify(result.audit);
-  assert.doesNotMatch(JSON.stringify(result), /TEST_ONLY_(?:AMBIENT_KEY|AUTH_TOKEN|HEADER|RUNNER_AUTH|HOSTILE_OVERRIDE)/);
-  assert.doesNotMatch(audit, /TEST_ONLY_(?:AMBIENT_KEY|AUTH_TOKEN|HEADER|RUNNER_AUTH|HOSTILE_OVERRIDE)/);
-  assert.doesNotMatch(audit, /C:\\private-state/);
+  assert.deepEqual(prepared.audit.inheritedNames, ["HOME", "Path", "SAFE_FLAG", "TMP"]);
+  assert.deepEqual(prepared.audit.removedNames, ["Access_Token", "API_KEY", "Authorization", "RUNNER_AUTH_TOKEN", "RUNNER_STATE_DIR"]);
+  assert.deepEqual(prepared.audit.explicitSafeNames, ["SAFE_FLAG"]);
+  assert.deepEqual(prepared.audit.grantedNames, []);
+  assert.deepEqual(Object.keys(prepared).sort(), ["audit", "capability"]);
+  assert.doesNotMatch(JSON.stringify(prepared), /SENTINEL_(?:AMBIENT_KEY|AUTH_TOKEN|HEADER|RUNNER_AUTH|HOSTILE_OVERRIDE)/);
 });
 
-test("restores only a valid named credential grant through the private resolver", () => {
-  const result = constructChildEnvironment({
-    ambient: { PATH: "/bin" },
-    runId: "run_1",
-    invocationId: "call_1",
-    now: () => new Date(NOW),
-    credentialGrant: {
-      grantId: "grant_1",
-      runId: "run_1",
-      invocationId: "call_1",
-      expiresAt: "2026-08-28T12:01:00.000Z",
-      names: ["DEPLOY_TOKEN"],
-    },
-    credentialResolver: privateResolver(),
-  });
+test("atomically consumes an authoritative opaque grant and exposes values only to the trusted callback once", () => {
+  const runner = factory({ grant_1: { grantId: "grant_1", runId: "run_1", invocationId: "call_1", expiresAt: "2026-08-28T12:01:00.000Z", names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_GRANTED_VALUE" } } });
+  const prepared = runner.prepare({ ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: "grant_1" });
 
-  assert.equal(result.environment.DEPLOY_TOKEN, "TEST_ONLY_GRANTED_VALUE");
-  assert.deepEqual(result.audit.grantedNames, ["DEPLOY_TOKEN"]);
-  assert.doesNotMatch(JSON.stringify(result), /TEST_ONLY_GRANTED_VALUE/);
-  assert.doesNotMatch(JSON.stringify(result.audit), /TEST_ONLY_GRANTED_VALUE/);
+  assert.deepEqual(prepared.audit.grantedNames, ["DEPLOY_TOKEN"]);
+  assert.doesNotMatch(JSON.stringify(prepared), /SENTINEL_GRANTED_VALUE/);
+  runner.withChildEnvironment(prepared.capability, (environment) => {
+    assert.equal(environment.DEPLOY_TOKEN, "SENTINEL_GRANTED_VALUE");
+    assert.equal(environment.PATH, "/bin");
+  });
+  assert.throws(() => runner.withChildEnvironment(prepared.capability, () => undefined), GENERIC_GRANT_ERROR);
 });
 
-test("rejects forged, mismatched, expired, and duplicate credential grants", () => {
-  const resolver = privateResolver();
-  const base = {
-    ambient: { PATH: "/bin" },
-    runId: "run_1",
-    invocationId: "call_1",
-    now: () => new Date(NOW),
-    credentialResolver: resolver,
-  } as const;
-  const grant = {
-    grantId: "grant_1",
-    runId: "run_1",
-    invocationId: "call_1",
-    expiresAt: "2026-08-28T12:01:00.000Z",
-    names: ["DEPLOY_TOKEN"],
-  } as const;
-
-  assert.throws(() => constructChildEnvironment({
-    ...base,
-    credentialGrant: { ...grant, values: { DEPLOY_TOKEN: "TEST_ONLY_FORGED_VALUE" } } as unknown as typeof grant,
-  }), /value|unknown/i);
-  assert.throws(() => constructChildEnvironment({ ...base, credentialGrant: { ...grant, runId: "run_other" } }), /run/i);
-  assert.throws(() => constructChildEnvironment({ ...base, credentialGrant: { ...grant, invocationId: "call_other" } }), /invocation|call/i);
-  assert.throws(() => constructChildEnvironment({
-    ...base,
-    credentialGrant: { ...grant, expiresAt: "2026-08-28T11:59:59.000Z" },
-  }), /expired/i);
-
-  constructChildEnvironment({ ...base, credentialGrant: grant });
-  assert.throws(() => constructChildEnvironment({ ...base, credentialGrant: grant }), /consumed|duplicate/i);
+test("rejects forged ids, replay, mismatched authoritative bindings, and expiry with generic errors", () => {
+  const records = {
+    grant_1: { grantId: "grant_1", runId: "run_1", invocationId: "call_1", names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_VALUE" } },
+    wrong_run: { grantId: "wrong_run", runId: "run_other", invocationId: "call_1", names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_VALUE" } },
+    wrong_call: { grantId: "wrong_call", runId: "run_1", invocationId: "call_other", names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_VALUE" } },
+    expired: { grantId: "expired", runId: "run_1", invocationId: "call_1", expiresAt: "2026-08-28T11:59:59.000Z", names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_VALUE" } },
+  };
+  const runner = factory(records);
+  const base = { ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1" };
+  for (const credentialGrantId of ["forged", "wrong_run", "wrong_call", "expired"]) assert.throws(() => runner.prepare({ ...base, credentialGrantId }), GENERIC_GRANT_ERROR);
+  runner.prepare({ ...base, credentialGrantId: "grant_1" });
+  assert.throws(() => runner.prepare({ ...base, credentialGrantId: "grant_1" }), GENERIC_GRANT_ERROR);
+  assert.throws(() => runner.withChildEnvironment({} as never, () => undefined), GENERIC_GRANT_ERROR);
 });
 
-test("rejects resolver values outside the named grant without exposing them in the audit", () => {
-  const result = () => constructChildEnvironment({
-    ambient: { PATH: "/bin" },
-    runId: "run_1",
-    invocationId: "call_1",
-    credentialGrant: {
-      grantId: "grant_1",
-      runId: "run_1",
-      invocationId: "call_1",
-      names: ["DEPLOY_TOKEN"],
-    },
-    credentialResolver: {
-      consume: () => ({ DEPLOY_TOKEN: "TEST_ONLY_GRANTED_VALUE", EXTRA_TOKEN: "TEST_ONLY_EXTRA_VALUE" }),
-    },
+test("rejects non-credential, Runner, and canonical-colliding authoritative grant names", () => {
+  for (const [id, names, values] of [
+    ["path", ["PATH"], { PATH: "/other" }], ["runner", ["Runner_Control_Port"], { Runner_Control_Port: "1" }],
+    ["duplicate", ["DEPLOY_TOKEN", "deploy_token"], { DEPLOY_TOKEN: "SENTINEL_VALUE" }],
+    ["collision", ["DEPLOY_TOKEN"], { DEPLOY_TOKEN: "SENTINEL_VALUE", deploy_token: "SENTINEL_OTHER" }],
+  ] as const) {
+    const runner = factory({ [id]: { grantId: id, runId: "run_1", invocationId: "call_1", names: [...names], values: { ...values } } });
+    assert.throws(() => runner.prepare({ ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: id }), GENERIC_GRANT_ERROR);
+  }
+});
+
+test("contains resolver and untrusted failures without reflecting sentinel names or values", () => {
+  const runner = createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw new Error("SENTINEL_PRIVATE_VALUE_AND_NAME"); } }, now: () => new Date(NOW) });
+  let error: unknown;
+  try { runner.prepare({ ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: "SENTINEL_FORGED_ID" }); } catch (caught) { error = caught; }
+  assert.match(error instanceof Error ? error.message : "", GENERIC_GRANT_ERROR);
+  assert.doesNotMatch(error instanceof Error ? error.message : "", /SENTINEL/);
+});
+
+test("preserves reserved object-property environment names without adding environment hooks", () => {
+  const runner = factory();
+  const prepared = runner.prepare({ ambient: { PATH: "/bin", toJSON: "safe-to-json", constructor: "safe-constructor", prototype: "safe-prototype" } });
+  runner.withChildEnvironment(prepared.capability, (environment) => {
+    assert.equal(Object.getPrototypeOf(environment), null);
+    assert.equal(environment.toJSON, "safe-to-json");
+    assert.equal(environment.constructor, "safe-constructor");
+    assert.equal(environment.prototype, "safe-prototype");
   });
-  assert.throws(result, /named|grant/i);
 });
