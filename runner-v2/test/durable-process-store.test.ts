@@ -5,68 +5,69 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { InMemoryDurableProcessStore, SqliteDurableProcessStore, canonicalRequestFingerprint, parseDurableSubprocessRecord, type DurableProcessRuntimeWriter, type PreparedSubprocessRecord } from "../src/durable-process-store.js";
+import { createInMemoryDurableProcessKernel, getDurableProcessRuntimeWriter, openSqliteDurableProcessKernel, semanticRequestFingerprint, parseDurableSubprocessRecord, type DurableProcessStoreKernel, type DurableProcessRuntimeWriter, type PreparedSubprocessRecord } from "../src/durable-process-store.js";
 
-const authority = () => Object.freeze({});
-const fingerprint = canonicalRequestFingerprint({ runId: "run-1", invocationId: "invoke-1", command: "tool", arguments: ["--token=secret-value"], workingDirectory: "C:\\host\\project", requestedCapabilities: ["verified_emptiness"], environmentDecisions: { inheritedNames: ["PATH"], removedNames: ["API_KEY"], explicitSafeNames: [], grantedNames: [] }, grantBinding: { grantId: "grant-1", access: [] } });
-const prepared = (overrides: Partial<PreparedSubprocessRecord> = {}): PreparedSubprocessRecord => ({ schemaVersion: 2, revision: 0, logicalProcessId: "proc-1", invocationId: "invoke-1", runId: "run-1", requestFingerprint: fingerprint, retryKey: "a".repeat(64), outputOwnerId: "output-proc-1", state: "prepared", history: [{ state: "prepared", at: "2026-01-01T00:00:00.000Z" }], requiredCapabilities: ["verified_emptiness"], environmentAudit: { inheritedNames: ["PATH"], removedNames: ["API_KEY"], explicitSafeNames: [], grantedNames: [] }, escalation: [], cleanup: { state: "pending" }, ...overrides });
-function writerFor(store: InMemoryDurableProcessStore | SqliteDurableProcessStore, key: object): DurableProcessRuntimeWriter { return store.connectRuntime(key); }
+const stateKey=new Uint8Array(32).fill(7);
+const semantic={intent:{runId:"run-1",invocationId:"invoke-1",kind:"command",executable:"tool",arguments:["--token=secret-value"],workingDirectory:"C:\\host\\project",requestedCapabilities:["verified_emptiness"]},ambientEnvironment:{API_KEY:"secret-value",PATH:"safe"},grantId:"grant-1",grantBindingDigest:"b".repeat(64),deadline:"2026-01-01T01:00:00.000Z",signalInitiallyAborted:false} as const;
+const fingerprint=semanticRequestFingerprint(stateKey,semantic);
+const prepared = (overrides: Partial<PreparedSubprocessRecord> = {}): PreparedSubprocessRecord => ({ schemaVersion: 2, revision: 0, logicalProcessId: "proc-1", invocationId: "invoke-1", runId: "run-1", requestFingerprint: fingerprint, retryKey: fingerprint,ownerId:"owner-1",leaseExpiresAt:"2026-01-01T00:05:00.000Z", outputOwnerId: "output-proc-1",outputPrepared:false, state: "prepared", history: [{ state: "prepared", at: "2026-01-01T00:00:00.000Z" }], requiredCapabilities: ["verified_emptiness"], environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, escalation: [], cleanup: { state: "pending" }, ...overrides });
+function writerFor(kernel:DurableProcessStoreKernel):DurableProcessRuntimeWriter{return getDurableProcessRuntimeWriter(kernel);}
 
-test("constructor-bound runtime authority rejects forged transition commands", () => {
-  const key = authority(); const store = new InMemoryDurableProcessStore(key); const writer = writerFor(store, key);
-  writer.prepare(prepared());
-  assert.throws(() => store.connectRuntime(authority()), /runtime authority/i);
-  assert.equal(store.readByInvocation("invoke-1")?.state, "prepared");
+test("Runner-created store kernel rejects structural authority and claims output intent durably", () => {
+  const kernel=createInMemoryDurableProcessKernel(stateKey);writerFor(kernel).claim(prepared());
+  assert.throws(()=>getDurableProcessRuntimeWriter({store:kernel.store} as never),/kernel authority/i);
+  assert.equal(kernel.store.readByInvocation("invoke-1")?.outputOwnerId,"output-proc-1");
 });
 
 test("strict per-state parser rejects forged prepared completion and illegal state fields", () => {
   const forged = { ...prepared(), result: { outcome: "exited", finishedAt: "x" }, backendBinding: { registryId: "r", backendId: "b", attestationVersion: 1, attestationDigest: "b".repeat(64), opaqueIdentity: "o", birthFingerprint: { observedAt: "x", discriminator: "d" } } };
   assert.throws(() => parseDurableSubprocessRecord(forged), /durable process record|prepared/i);
   assert.throws(() => parseDurableSubprocessRecord({ ...prepared(), unknown: true }), /unknown field/i);
-  assert.throws(() => parseDurableSubprocessRecord({ ...prepared(), cleanup: { state: "verified_empty", verifiedAt: "x" } }), /durable process record|prepared/i);
+  assert.throws(() => parseDurableSubprocessRecord({ ...prepared(), cleanup: { state: "verified_empty", verifiedAt: "x" } }), /durable process record|prepared|cleanup/i);
   assert.throws(() => parseDurableSubprocessRecord({ ...prepared(), state:"backend_unavailable", history:[...prepared().history,{state:"backend_unavailable",at:"x"}], result:{outcome:"exited",finishedAt:"x"} }), /cannot contain a result|unknown field/i);
-  assert.throws(() => parseDurableSubprocessRecord({ ...prepared(), state:"cleaned", history:[...prepared().history,{state:"cleaned",at:"x"}] }), /illegal transition|requires/i);
-  assert.throws(()=>parseDurableSubprocessRecord({...prepared(),state:"running",history:[...prepared().history,{state:"launching",at:"b"},{state:"running",at:"c"}],backendBinding:{registryId:"registry",backendId:"fake",attestationVersion:1,attestationDigest:"b".repeat(64),opaqueIdentity:"",birthFingerprint:{observedAt:"c",discriminator:"birth"},rootPid:42,startedAt:"c"}}),/opaqueIdentity|invalid/i);
+  assert.throws(() => parseDurableSubprocessRecord({ ...prepared(), state:"cleaned", history:[...prepared().history,{state:"cleaned",at:"x"}] }), /illegal transition|requires|history/i);
+  assert.throws(()=>parseDurableSubprocessRecord({...prepared(),revision:2,outputPrepared:true,state:"running",history:[...prepared().history,{state:"launching",at:"b"},{state:"running",at:"c"}],backendBinding:{registryId:"registry",backendId:"fake",implementationGeneration:"generation",implementationDigest:"d".repeat(64),attestationVersion:1,attestationDigest:"b".repeat(64),opaqueIdentity:"",birthFingerprint:{observedAt:"c",discriminator:"birth"},rootPid:42,startedAt:"c"}}),/opaqueIdentity|invalid/i);
 });
 
-test("canonical request fingerprint is stable, secret-free, and changes for divergent requests", () => {
+test("terminal parser cross-validates history revision observation stop result escalation and cleanup",()=>{const valid={...prepared(),revision:6,outputPrepared:true,state:"cleaned" as const,history:[{state:"prepared" as const,at:"a"},{state:"prepared" as const,at:"b"},{state:"launching" as const,at:"c"},{state:"running" as const,at:"d"},{state:"exited" as const,at:"e"},{state:"verifying_empty" as const,at:"f"},{state:"cleaned" as const,at:"g"}],backendBinding:{registryId:"registry",backendId:"fake",implementationGeneration:"generation",implementationDigest:"b".repeat(64),attestationVersion:1,attestationDigest:"c".repeat(64),opaqueIdentity:"identity",birthFingerprint:{observedAt:"d",discriminator:"birth"},startedAt:"d"},observation:{exitCode:0,observedAt:"e"},output:[{stream:"stdout" as const,tail:"",totalBytes:0,truncated:false,spillBytes:0,lossyBytes:0},{stream:"stderr" as const,tail:"",totalBytes:0,truncated:false,spillBytes:0,lossyBytes:0}],cleanup:{state:"verified_empty" as const,verifiedAt:"g"},result:{outcome:"exited" as const,exitCode:0,startedAt:"d",finishedAt:"g"}};assert.doesNotThrow(()=>parseDurableSubprocessRecord(valid));assert.throws(()=>parseDurableSubprocessRecord({...valid,revision:5}),/history|revision/i);assert.throws(()=>parseDurableSubprocessRecord({...valid,history:[{state:"running",at:"a"},...valid.history.slice(1)]}),/history/i);assert.throws(()=>parseDurableSubprocessRecord({...valid,result:{...valid.result,exitCode:9}}),/consistent|invalid/i);assert.throws(()=>parseDurableSubprocessRecord({...valid,stopIntent:{reason:"cancelled",requestedAt:"d"}}),/consistent|invalid/i);assert.throws(()=>parseDurableSubprocessRecord({...prepared(),escalation:[{action:"interrupt",requestedAt:"a",completedAt:"b",outcome:"running"}]}),/escalation/i);assert.throws(()=>parseDurableSubprocessRecord({...prepared(),stopIntent:{reason:"cancelled",requestedAt:"a"},escalation:[{action:"interrupt",requestedAt:"a",completedAt:"b",outcome:"running"}]}),/escalation/i);});
+
+test("keyed semantic fingerprint covers environment and deadline without dictionary-guessable SHA", () => {
   assert.match(fingerprint, /^[a-f0-9]{64}$/); assert.equal(fingerprint.includes("secret-value"), false);
-  const changed = canonicalRequestFingerprint({ runId: "run-1", invocationId: "invoke-1", command: "other", arguments: ["--token=secret-value"], workingDirectory: "C:\\host\\project", requestedCapabilities: ["verified_emptiness"], environmentDecisions: { inheritedNames: ["PATH"], removedNames: ["API_KEY"], explicitSafeNames: [], grantedNames: [] }, grantBinding: { grantId: "grant-1", access: [] } });
-  assert.notEqual(changed, fingerprint);
+  assert.notEqual(semanticRequestFingerprint(stateKey,{...semantic,ambientEnvironment:{...semantic.ambientEnvironment,API_KEY:"other"}}),fingerprint);
+  assert.notEqual(semanticRequestFingerprint(stateKey,{...semantic,deadline:"2026-01-01T02:00:00.000Z"}),fingerprint);
+  assert.notEqual(semanticRequestFingerprint(new Uint8Array(32).fill(8),semantic),fingerprint);
 });
 
 test("exact prepare retries converge while divergent retries and stale CAS commands conflict", () => {
-  const key = authority(); const store = new InMemoryDurableProcessStore(key); const writer = writerFor(store, key);
-  assert.equal(writer.prepare(prepared()).revision, 0);
-  assert.equal(writer.prepare(prepared({ logicalProcessId: "proc-retry" })).logicalProcessId, "proc-1");
-  assert.throws(() => writer.prepare(prepared({ requestFingerprint: "c".repeat(64) })), /idempotency conflict/i);
-  const launching = writer.apply({ type: "mark_launching", invocationId: "invoke-1", expectedRevision: 0, at: "2026-01-01T00:00:01.000Z" });
-  assert.equal(launching.revision, 1);
+  const kernel=createInMemoryDurableProcessKernel(stateKey);const writer=writerFor(kernel);
+  assert.equal(writer.claim(prepared()).won,true);
+  assert.equal(writer.claim(prepared({ logicalProcessId: "proc-retry" })).record.logicalProcessId, "proc-1");
+  assert.throws(() => writer.claim(prepared({ requestFingerprint: "c".repeat(64) })), /idempotency conflict/i);
+  writer.apply({type:"mark_output_prepared",invocationId:"invoke-1",expectedRevision:0,at:"2026-01-01T00:00:00.500Z",environmentAudit:{inheritedNames:["PATH"],removedNames:["API_KEY"],explicitSafeNames:[],grantedNames:[]}});
+  const launching = writer.apply({ type: "mark_launching", invocationId: "invoke-1", expectedRevision: 1, at: "2026-01-01T00:00:01.000Z" });
+  assert.equal(launching.revision, 2);
   assert.throws(() => writer.apply({ type: "fail_launch", invocationId: "invoke-1", expectedRevision: 0, at: "x", detail: "stale" }), /revision conflict/i);
 });
 
 test("SQLite prepare is atomic across concurrent store instances and divergent requests conflict", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-process-store-")); t.after(async () => rm(root, { recursive: true, force: true }));
-  const path = join(root, "process.sqlite"); const key = authority();
-  const first = new SqliteDurableProcessStore(path, { runtimeAuthority: key }); const second = new SqliteDurableProcessStore(path, { runtimeAuthority: key });
-  const [left, right] = await Promise.all([Promise.resolve(writerFor(first, key).prepare(prepared())), Promise.resolve(writerFor(second, key).prepare(prepared({ logicalProcessId: "other-attempt" })))]);
-  assert.equal(left.logicalProcessId, right.logicalProcessId);
-  assert.throws(() => writerFor(second, key).prepare(prepared({ requestFingerprint: "d".repeat(64) })), /idempotency conflict/i);
-  first.close(); second.close();
+  const path = join(root, "process.sqlite");const first=openSqliteDurableProcessKernel(path,stateKey);const second=openSqliteDurableProcessKernel(path,stateKey);
+  const [left,right]=await Promise.all([Promise.resolve(writerFor(first).claim(prepared())),Promise.resolve(writerFor(second).claim(prepared({logicalProcessId:"other-attempt"})))]);
+  assert.equal(left.record.logicalProcessId,right.record.logicalProcessId);assert.notEqual(left.won,right.won);
+  assert.throws(()=>writerFor(second).claim(prepared({requestFingerprint:"d".repeat(64)})),/idempotency conflict/i);
+  first.store.close();second.store.close();
 });
 
 test("SQLite corruption fails closed on reopen instead of returning a forged cached result", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-process-store-")); t.after(async () => rm(root, { recursive: true, force: true }));
-  const path = join(root, "process.sqlite"); const key = authority(); const store = new SqliteDurableProcessStore(path, { runtimeAuthority: key });
-  writerFor(store, key).prepare(prepared()); store.close();
-  const raw = new DatabaseSync(path); raw.prepare("UPDATE durable_processes SET record_json = ? WHERE invocation_id = ?").run(JSON.stringify({ ...prepared(), state: "cleaned", result: { outcome: "exited", finishedAt: "x" } }), "invoke-1"); raw.close();
-  const reopened = new SqliteDurableProcessStore(path, { readOnly: true });
-  assert.throws(() => reopened.readByInvocation("invoke-1"), /stored durable process record|durable process record/i); reopened.close();
+  const path=join(root,"process.sqlite");const kernel=openSqliteDurableProcessKernel(path,stateKey);writerFor(kernel).claim(prepared());kernel.store.close();
+const raw=new DatabaseSync(path);const row=raw.prepare("SELECT record_json FROM durable_processes WHERE invocation_id = ?").get("invoke-1") as {record_json:string};const forged={...JSON.parse(row.record_json),ownerId:"forged-owner"};raw.prepare("UPDATE durable_processes SET record_json = ? WHERE invocation_id = ?").run(JSON.stringify(forged),"invoke-1");raw.close();
+  const reopened=openSqliteDurableProcessKernel(path,stateKey,{readOnly:true});assert.throws(()=>reopened.store.readByInvocation("invoke-1"),/corrupt|integrity/i);reopened.store.close();
 });
 
 test("actual persisted row contains no command, argument, cwd, secret, native handle, or spill path", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-process-store-")); t.after(async () => rm(root, { recursive: true, force: true }));
-  const path = join(root, "process.sqlite"); const key = authority(); const store = new SqliteDurableProcessStore(path, { runtimeAuthority: key }); writerFor(store, key).prepare(prepared()); store.close();
+  const path=join(root,"process.sqlite");const kernel=openSqliteDurableProcessKernel(path,stateKey);writerFor(kernel).claim(prepared());kernel.store.close();
   const bytes = await readFile(path);
   for (const forbidden of ["secret-value", "--token", "C:\\host\\project", "nativeHandle", "spill.tmp"]) assert.equal(bytes.includes(Buffer.from(forbidden)), false, forbidden);
 });
