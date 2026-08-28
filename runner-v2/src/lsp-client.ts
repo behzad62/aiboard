@@ -24,6 +24,7 @@ const HEADER_BOUNDARY = Buffer.from("\r\n\r\n", "ascii");
 const MAX_HEADER_BYTES = 8 * 1024;
 const DEFAULT_MAX_FRAME_BYTES = 4 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_WRITE_TIMEOUT_MS = 2_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 128;
 const MAX_STDERR_BYTES = 8 * 1024;
@@ -72,6 +73,7 @@ export interface LspClientOptions {
   env?: NodeJS.ProcessEnv;
   initializationOptions?: unknown;
   requestTimeoutMs?: number;
+  writeTimeoutMs?: number;
   publishDiagnosticsWaitTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   restartLimit?: number;
@@ -191,6 +193,7 @@ export class LspClient {
   private readonly env?: NodeJS.ProcessEnv;
   private readonly initializationOptions?: unknown;
   private readonly requestTimeoutMs: number;
+  private readonly writeTimeoutMs: number;
   private readonly publishDiagnosticsWaitTimeoutMs: number;
   private readonly shutdownTimeoutMs: number;
   private readonly restartLimit: number;
@@ -256,6 +259,10 @@ export class LspClient {
     this.requestTimeoutMs = positiveInteger(
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       "requestTimeoutMs",
+    );
+    this.writeTimeoutMs = positiveInteger(
+      options.writeTimeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+      "writeTimeoutMs",
     );
     this.publishDiagnosticsWaitTimeoutMs = positiveInteger(
       options.publishDiagnosticsWaitTimeoutMs ?? this.requestTimeoutMs,
@@ -704,6 +711,12 @@ export class LspClient {
     this.starts += 1;
     child.stdout.on("data", (chunk: Buffer) => this.consumeStdout(session, chunk));
     child.stderr.on("data", (chunk: Buffer) => this.consumeStderr(session, chunk));
+    child.stdin.on("error", (error) => this.failSession(session, new LspClientError(
+      "write_failed",
+      `Language server input failed: ${boundedMessage(error)}.`,
+      true,
+      { cause: error },
+    )));
     child.on("exit", (code, signal) => this.onProcessExit(session, code, signal));
     child.on("error", (error) => this.onProcessError(session, error));
     try {
@@ -959,18 +972,44 @@ export class LspClient {
       );
     }
     await new Promise<void>((resolvePromise, rejectPromise) => {
-      session.child.stdin.write(value, (error) => {
+      let settled = false;
+      const settle = (error?: LspClientError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (error) {
-          rejectPromise(new LspClientError(
-            "write_failed",
-            `Language server write failed: ${boundedMessage(error)}.`,
-            true,
-            { cause: error },
-          ));
+          this.failSession(session, error);
+          rejectPromise(error);
         } else {
           resolvePromise();
         }
-      });
+      };
+      const timer = setTimeout(() => settle(new LspClientError(
+        "write_failed",
+        `Language server write exceeded ${this.writeTimeoutMs} ms.`,
+        true,
+      )), this.writeTimeoutMs);
+      try {
+        session.child.stdin.write(value, (error) => {
+          if (error) {
+            settle(new LspClientError(
+              "write_failed",
+              `Language server write failed: ${boundedMessage(error)}.`,
+              true,
+              { cause: error },
+            ));
+          } else {
+            settle();
+          }
+        });
+      } catch (error) {
+        settle(new LspClientError(
+          "write_failed",
+          `Language server write failed: ${boundedMessage(error)}.`,
+          true,
+          { cause: error },
+        ));
+      }
     });
   }
 
@@ -1263,9 +1302,9 @@ export class LspClient {
     const pending = this.pending.get(key);
     if (!pending || pending.settled || pending.cancellationError) return;
     pending.cancellationError = error;
+    this.settlePending(key, false, error);
     void this.notifyOnSession(session, "$/cancelRequest", { id: pending.id })
-      .catch(() => undefined)
-      .finally(() => this.settlePending(key, false, error));
+      .catch(() => undefined);
   }
 
   private settlePending(key: string, success: boolean, value: unknown): void {
@@ -1342,7 +1381,8 @@ export class LspClient {
     if (this.session?.generation === session.generation && this.state !== "closed") {
       this.state = "failed";
     }
-    void terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined);
+    void terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined)
+      .catch(() => undefined);
   }
 
   private containedPath(pathValue: string): string {

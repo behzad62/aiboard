@@ -39,13 +39,17 @@ import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime } from "./final-verification-runtime.js";
-import { FinalVerificationProfileAuthority } from "./final-verification-profile.js";
+import {
+  finalVerificationProfileDigest,
+  FinalVerificationProfileAuthority,
+} from "./final-verification-profile.js";
 import { FinalVerificationPortAuthority } from "./final-verification-port-authority.js";
 import {
   FinalVerificationDiagnosticsArchive,
   OwnedFinalVerificationCleanup,
   retireInvalidatedFinalVerificationGeneration,
   validateOwnedFinalVerificationCleanupReceipt,
+  type FinalVerificationCleanupReceiptIdentity,
 } from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
 import { LanguageProviderRouter } from "./language-provider-router.js";
@@ -1082,15 +1086,60 @@ export class NativeBuildFactory {
           readOnly: true,
         });
       }
-      if (hasHistoricalStore(schedulerPath)) {
-        schedulerStore = new SqliteSchedulerStore(await snapshotStorePath(schedulerPath), {
-          evidenceStore,
-          artifacts: this.artifacts,
+      const historicalSchedulerPath = hasHistoricalStore(schedulerPath)
+        ? await snapshotStorePath(schedulerPath)
+        : undefined;
+      if (hasHistoricalStore(memoryPath)) {
+        historicalMemoryStore = new SqliteProjectMemoryStore(await snapshotStorePath(memoryPath), {
           readOnly: true,
         });
       }
-      if (hasHistoricalStore(memoryPath)) {
-        historicalMemoryStore = new SqliteProjectMemoryStore(await snapshotStorePath(memoryPath), {
+      if (historicalSchedulerPath) {
+        const ports = new FinalVerificationPortAuthority(this.options.stateDirectory);
+        const profiles = new FinalVerificationProfileAuthority({
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          portAuthority: ports,
+        });
+        const acceptedProfiles = new Set<string>();
+        const acceptedCleanupReceipts = new Set<string>();
+        const profileKey = (targetRevision: string, profile: Parameters<typeof finalVerificationProfileDigest>[1]) =>
+          `${targetRevision}\u0000${finalVerificationProfileDigest(spec.runId, profile)}`;
+        const cleanupReceiptKey = (identity: FinalVerificationCleanupReceiptIdentity) =>
+          JSON.stringify(identity);
+        const openingSchedulerStore = new SqliteSchedulerStore(historicalSchedulerPath, {
+          evidenceStore,
+          artifacts: this.artifacts,
+          validateExecutionProfile: ({ targetRevision, profile }) => {
+            profiles.validate(profile, targetRevision);
+            acceptedProfiles.add(profileKey(targetRevision, profile));
+          },
+          validateCleanupReceipt: (identity) => {
+            validateOwnedFinalVerificationCleanupReceipt(this.options.stateDirectory, identity);
+            acceptedCleanupReceipts.add(cleanupReceiptKey(identity));
+          },
+          readOnly: true,
+        });
+        try {
+          // Authenticate every terminal event against the live Runner-owned
+          // archives once, before freezing the accepted identities below.
+          openingSchedulerStore.readRun(spec.runId);
+        } finally {
+          openingSchedulerStore.close();
+        }
+        schedulerStore = new SqliteSchedulerStore(historicalSchedulerPath, {
+          evidenceStore,
+          artifacts: this.artifacts,
+          validateExecutionProfile: ({ targetRevision, profile }) => {
+            if (!acceptedProfiles.has(profileKey(targetRevision, profile))) {
+              throw new Error("Historical final verification profile was not authenticated at handle open.");
+            }
+          },
+          validateCleanupReceipt: (identity) => {
+            if (!acceptedCleanupReceipts.has(cleanupReceiptKey(identity))) {
+              throw new Error("Historical final verification cleanup receipt was not authenticated at handle open.");
+            }
+          },
           readOnly: true,
         });
       }
@@ -1161,6 +1210,24 @@ export class NativeBuildFactory {
         readEvents(),
         terminalState,
       );
+      // SQLite inputs are materialized above, but managed-process records and
+      // diagnostic archives are bounded filesystem surfaces. Freeze them at
+      // historical-open time so every later audit remains an observation of
+      // the terminal state rather than a fresh read of mutable live files.
+      const historicalProcesses = processProvenance === "durable"
+        ? readHistoricalManagedProcessObservations(managedProcessPath, spec.runId)
+        : [];
+      const historicalFinalGeneration = projection().finalVerification?.current;
+      const historicalFinalVerificationDiagnostics = historicalFinalGeneration
+        ? await loadHistoricalFinalVerificationDiagnostics({
+            stateDirectory: this.options.stateDirectory,
+            runId: spec.runId,
+            diagnosticsPath: historicalFinalGeneration.cleanup?.diagnosticsPath,
+            generationId: historicalFinalGeneration.generationId,
+            taskId: historicalFinalGeneration.taskId,
+            targetRevision: historicalFinalGeneration.targetRevision,
+          })
+        : undefined;
       const readOnlyError = (): never => {
         throw new Error(`Historical Build ${spec.runId} is read-only.`);
       };
@@ -1200,18 +1267,6 @@ export class NativeBuildFactory {
             : await sessions!.listRun(spec.runId);
           const toolCalls = ledger ? summarizeToolCalls(ledger.listRun(spec.runId)) : [];
           const skillSnapshot = historicalSkills();
-          const finalGeneration = schedulerProjection.finalVerification?.current;
-          const diagnostics = finalGeneration
-            ? await loadFinalVerificationDiagnostics({
-                stateDirectory: this.options.stateDirectory,
-                runId: spec.runId,
-                expectedRunSegment: safeSegment(spec.runId),
-                diagnosticsPath: finalGeneration.cleanup?.diagnosticsPath,
-                generationId: finalGeneration.generationId,
-                taskId: finalGeneration.taskId,
-                targetRevision: finalGeneration.targetRevision,
-              })
-            : undefined;
           const integrationRevision = schedulerProjection.projectHandoff?.integrationRevision
             ?? schedulerProjection.integrationRevision;
           return {
@@ -1237,7 +1292,7 @@ export class NativeBuildFactory {
             memories: historicalMemories(),
             skills: skillSnapshot.skills,
             processes: processProvenance === "durable"
-              ? readHistoricalManagedProcessObservations(managedProcessPath, spec.runId)
+              ? structuredClone(historicalProcesses)
               : [],
             providers: Object.values(schedulerProjection.runtime.providerHealth),
             events: schedulerEvents.slice(-1_000),
@@ -1278,7 +1333,7 @@ export class NativeBuildFactory {
             },
             finalVerification: projectFinalVerificationObservability(
               schedulerProjection,
-              diagnostics,
+              historicalFinalVerificationDiagnostics && structuredClone(historicalFinalVerificationDiagnostics),
             ),
             independentVerifier:
               projectIndependentVerifierObservability(schedulerProjection),
@@ -2400,6 +2455,26 @@ function safeSegment(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "run";
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+}
+
+async function loadHistoricalFinalVerificationDiagnostics(input: {
+  stateDirectory: string;
+  runId: string;
+  diagnosticsPath?: string;
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+}) {
+  const read = async (expectedRunSegment: string) => await loadFinalVerificationDiagnostics({
+    ...input,
+    expectedRunSegment,
+  });
+  // Older historical layouts used the Build run-root segment. Cleanup's
+  // production archive uses its own hashed ownership segment; accept either
+  // exact Runner-owned root without widening the containment check.
+  return await read(safeSegment(input.runId)) ?? await read(
+    createHash("sha256").update(input.runId).digest("hex").slice(0, 32),
+  );
 }
 
 function boundedErrorMessage(error: unknown): string {

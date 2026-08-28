@@ -19,6 +19,15 @@ import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { IntegrationManager } from "../src/integration-manager.js";
+import {
+  FinalVerificationDiagnosticsArchive,
+  OwnedFinalVerificationCleanup,
+  validateOwnedFinalVerificationCleanupReceipt,
+} from "../src/final-verification-cleanup.js";
+import { FinalVerificationProfileAuthority } from "../src/final-verification-profile.js";
+import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
+import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
 import {
   classifyNativeBuildRecoveryError,
   NativeBuildFactory,
@@ -39,6 +48,7 @@ import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { deriveFinalVerificationFailure, rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
@@ -1698,6 +1708,199 @@ test("NativeBuildFactory reconstructs terminal observations only from durable ru
     sessions?.close();
     ledger?.close();
     evidence?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory freezes terminal process and final-verification diagnostics observations at historical open", async () => {
+  const fixture = createFixture("historical-frozen-non-sqlite-observations");
+  const runId = "capability_historical_frozen_non_sqlite_observations";
+  const root = runRoot(fixture.state, runId);
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  const generationId = "generation_historical";
+  const taskId = "verify_historical";
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let integration: IntegrationManager | undefined;
+  let verificationWorkspace: VerificationWorkspaceManager | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(fixture.project, "package.json"), JSON.stringify({
+      name: "capability-fixture",
+      scripts: { build: "node build.mjs" },
+    }));
+    writeFileSync(join(fixture.project, "build.mjs"), "console.log('build')\n");
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    integration = new IntegrationManager({
+      repositoryRoot: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+      baselineRevision: baseline.revision,
+    });
+    await integration.initialize();
+    const revision = integration.revision;
+    const ports = new FinalVerificationPortAuthority(fixture.state);
+    const profiles = new FinalVerificationProfileAuthority({
+      stateDirectory: fixture.state,
+      runId,
+      portAuthority: ports,
+    });
+    const profile = await profiles.inspectAndPersist({
+      repositoryRoot: integration.path,
+      targetRevision: revision,
+    });
+    verificationWorkspace = new VerificationWorkspaceManager({
+      repositoryRoot: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+      integrationManager: integration,
+    });
+    await verificationWorkspace.create();
+    const cleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: fixture.state,
+      runId,
+      stopRun: async () => undefined,
+      closeBrowserRun: async () => undefined,
+      workspaceManager: verificationWorkspace,
+      diagnostics: new FinalVerificationDiagnosticsArchive({
+        stateDirectory: fixture.state,
+        runId,
+        workspaceManager: verificationWorkspace,
+      }),
+    });
+    const diagnosticsResult = await cleanup.cleanup({
+      generationId,
+      taskId,
+      targetRevision: revision,
+      failed: {
+        generationId,
+        taskId,
+        targetRevision: revision,
+        checks: [{ command: "npm test" }],
+        evidenceReferences: ["evidence_historical"],
+        logs: ["durable final verification diagnostics"],
+      },
+    });
+    const diagnosticsPath = diagnosticsResult.diagnosticsPath!;
+    evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+    scheduler = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+      artifacts,
+      evidenceStore: evidence,
+      validateCleanupReceipt: (identity) =>
+        validateOwnedFinalVerificationCleanupReceipt(fixture.state, identity),
+      validateExecutionProfile: ({ targetRevision, profile: candidate }) =>
+        profiles.validate(candidate, targetRevision),
+    });
+    const plan = {
+      checks: (["build", "tests", "runtime_smoke", "browser"] as const).map((category) =>
+        category === "build"
+          ? { category, status: "required" as const }
+          : {
+              category,
+              status: "not_applicable" as const,
+              rationale: "The archived profile detected no matching runtime signal.",
+              repositoryInspection: { paths: [...profile.inspectedPaths], summary: "The archived profile contains no matching signal." },
+            }),
+    };
+    scheduler.append({ runId, type: "run.initialized", occurredAt: "2026-08-28T00:00:00.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "initialized", payload: {} });
+    scheduler.append({ runId, type: "integration.revision_advanced", occurredAt: "2026-08-28T00:00:01.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "revision", payload: { integrationRevision: revision } });
+    scheduler.append({ runId, type: "final_verification.generation_created", occurredAt: "2026-08-28T00:00:02.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "generation", payload: { taskId, generationId, targetRevision: revision, planVersion: 1, plan, executionProfile: profile } });
+    scheduler.append({ runId, type: "final_verification.check_completed", occurredAt: "2026-08-28T00:00:03.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "check-build", payload: { taskId, generationId, targetRevision: revision, attempt: 1, workspacePath: "C:/verify", startedAt: "2026-08-28T00:00:02.000Z", finishedAt: "2026-08-28T00:00:03.000Z", result: { ...plan.checks[0], green: false, evidenceIds: [], facts: [], issues: ["historical build failure"] } } });
+    const failure = deriveFinalVerificationFailure(rebuildSchedulerProjection(scheduler.readRun(runId)).finalVerification!.current!, 1);
+    scheduler.append({ runId, type: "final_verification.failure_reported", occurredAt: "2026-08-28T00:00:04.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "failure", payload: failure });
+    scheduler.append({ runId, type: "final_verification.cleanup_started", occurredAt: "2026-08-28T00:00:05.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "cleanup-start", payload: { taskId, generationId, targetRevision: revision, attempt: 1 } });
+    scheduler.append({ runId, type: "final_verification.cleanup_succeeded", occurredAt: "2026-08-28T00:00:06.000Z", actor: { role: "runner", id: "fixture" }, idempotencyKey: "cleanup-succeeded", payload: { taskId, generationId, targetRevision: revision, attempt: 1, diagnosticsPath } });
+    const processDirectory = join(fixture.state, "managed-processes", "process_frozen");
+    const stdoutPath = join(processDirectory, "stdout.log");
+    const stderrPath = join(processDirectory, "stderr.log");
+    mkdirSync(processDirectory, { recursive: true });
+    writeFileSync(stdoutPath, "durable stdout\n");
+    writeFileSync(stderrPath, "durable stderr\n");
+    writeFileSync(join(fixture.state, "managed-processes", "process_frozen.json"), JSON.stringify({
+      processId: "process_frozen", pid: 4242, runId, sessionId: "worker:historical:1",
+      actor: { role: "worker", id: "worker_1" }, command: process.execPath, args: ["--version"],
+      cwd: fixture.project, environmentKeys: ["PATH"], startedAt: "2026-08-28T00:00:05.000Z",
+      updatedAt: "2026-08-28T00:00:06.000Z", status: "stopped", exitCode: 0, signal: null,
+      stdoutPath, stderrPath,
+    }));
+    scheduler.close(); scheduler = undefined;
+    evidence.close(); evidence = undefined;
+    const authorityRunRoot = join(
+      fixture.state,
+      "builds",
+      createHash("sha256").update(runId).digest("hex").slice(0, 32),
+      "audit",
+    );
+    const profileArchivePath = join(
+      authorityRunRoot,
+      "final-verification-profiles",
+      readdirSync(join(authorityRunRoot, "final-verification-profiles"))[0]!,
+    );
+    const cleanupReceiptPath = join(
+      authorityRunRoot,
+      "final-verification-cleanup",
+      readdirSync(join(authorityRunRoot, "final-verification-cleanup"))[0]!,
+    );
+    for (const guard of [
+      { name: "profile", path: profileArchivePath, mutate: () => rmSync(profileArchivePath) },
+      { name: "cleanup receipt", path: cleanupReceiptPath, mutate: () => writeFileSync(cleanupReceiptPath, "corrupt") },
+      { name: "diagnostics", path: diagnosticsPath, mutate: () => rmSync(diagnosticsPath) },
+    ]) {
+      const original = readFileSync(guard.path);
+      let guardedFactory: NativeBuildFactory | undefined;
+      try {
+        guard.mutate();
+        guardedFactory = createFactory(fixture.project, fixture.state, baseline.revision, { extensions: [], languageServers: [] });
+        await assert.rejects(
+          () => guardedFactory!.createHistorical(buildSpec(runId), "completed"),
+          () => true,
+          `historical open must reject a missing or corrupt ${guard.name}`,
+        );
+      } finally {
+        await guardedFactory?.close();
+        writeFileSync(guard.path, original);
+      }
+    }
+
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, { extensions: [], languageServers: [] });
+    handle = await factory.createHistorical(buildSpec(runId), "completed");
+    const sourceAfterOpen = historicalStateSnapshot(fixture.state);
+    const initialProjection = handle.runtime.projection();
+    const initial = await handle.observability();
+    const expected = structuredClone(initial);
+    assert.equal(initial.processes[0]?.stdout, "durable stdout\n");
+    assert.ok(initial.finalVerification?.current?.cleanup.diagnostics, JSON.stringify(initial.finalVerification));
+    assert.equal(initial.finalVerification.current.cleanup.diagnostics.logs[0], "durable final verification diagnostics");
+    assert.deepEqual(historicalStateSnapshot(fixture.state), sourceAfterOpen);
+
+    initial.processes[0]!.stdout = "caller mutation";
+    initial.finalVerification!.current!.cleanup.diagnostics!.logs[0] = "caller mutation";
+    rmSync(stdoutPath); rmSync(stderrPath); rmSync(diagnosticsPath);
+    rmSync(join(fixture.state, "managed-processes", "process_frozen.json"));
+    rmSync(join(authorityRunRoot, "final-verification-profiles", readdirSync(join(authorityRunRoot, "final-verification-profiles"))[0]!));
+    rmSync(join(authorityRunRoot, "final-verification-cleanup", readdirSync(join(authorityRunRoot, "final-verification-cleanup"))[0]!));
+    const sourceAfterDeletion = historicalStateSnapshot(fixture.state);
+    const repeatedProjection = handle.runtime.projection();
+    const repeated = await handle.observability();
+    assert.deepEqual(repeatedProjection, initialProjection);
+    assert.equal(JSON.stringify(repeated), JSON.stringify(expected));
+    assert.deepEqual(historicalStateSnapshot(fixture.state), sourceAfterDeletion);
+    await handle.close(); handle = undefined;
+    await factory.close(); factory = undefined;
+    assert.deepEqual(historicalStateSnapshot(fixture.state), sourceAfterDeletion);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    scheduler?.close();
+    evidence?.close();
+    await verificationWorkspace?.cleanup().catch(() => undefined);
+    await integration?.cleanup().catch(() => undefined);
     fixture.cleanup();
   }
 });

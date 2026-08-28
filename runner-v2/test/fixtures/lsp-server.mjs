@@ -88,7 +88,14 @@ async function handle(message) {
     });
     return;
   }
-  if (method === "initialized") return;
+  if (method === "initialized") {
+    const pauseMarker = process.env.LSP_FIXTURE_PAUSE_STDIN_FILE;
+    if (pauseMarker) {
+      process.stdin.pause();
+      writeFileSync(pauseMarker, JSON.stringify({ pid: process.pid }));
+    }
+    return;
+  }
   if (method === "shutdown") {
     shutdownRequested = true;
     if (process.env.LSP_FIXTURE_IGNORE_SHUTDOWN === "1") return;

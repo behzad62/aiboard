@@ -170,6 +170,73 @@ test("LSP client returns typed bounded errors for missing executables, malformed
   }
 });
 
+test("LSP client settles cancellation before a backpressured pipe and bounds the failed session", async () => {
+  const fixture = workspace("stdin backpressure");
+  const pauseMarker = join(fixture.root, "stdin-paused.json");
+  const descendantMarker = join(fixture.root, "descendant.pid");
+  const client = fixture.client({
+    requestTimeoutMs: 500,
+    writeTimeoutMs: 1_000,
+    shutdownTimeoutMs: 250,
+    restartLimit: 0,
+    maxFrameBytes: 16 * 1024 * 1024,
+    env: {
+      LSP_FIXTURE_PAUSE_STDIN_FILE: pauseMarker,
+      LSP_FIXTURE_DESCENDANT_PID_FILE: descendantMarker,
+    },
+  });
+  let serverPid = 0;
+  let descendantPid = 0;
+  try {
+    await client.start();
+    await waitFor(() => existsSync(pauseMarker));
+    await waitFor(() => existsSync(descendantMarker));
+    serverPid = (JSON.parse(await readFile(pauseMarker, "utf8")) as { pid: number }).pid;
+    descendantPid = (JSON.parse(await readFile(descendantMarker, "utf8")) as { pid: number }).pid;
+
+    const settlements: string[] = [];
+    const backpressuredWrite = observeSettlement("write", client.openDocument({
+      path: fixture.file,
+      languageId: "python",
+      version: 1,
+      text: "x".repeat(8 * 1024 * 1024),
+    }), settlements);
+    const timedOut = observeSettlement(
+      "timeout",
+      client.request("fixture/block", {}),
+      settlements,
+    );
+    const controller = new AbortController();
+    const aborted = observeSettlement(
+      "abort",
+      client.request("fixture/block", {}, controller.signal),
+      settlements,
+    );
+    controller.abort();
+
+    await rejectsBefore(aborted, 750, isLspError("request_cancelled"));
+    await rejectsBefore(timedOut, 1_250, isLspError("request_timeout"));
+    assert.deepEqual(settlements, ["abort", "timeout"]);
+    await rejectsBefore(backpressuredWrite, 2_000, isLspError("write_failed"));
+    assert.deepEqual(settlements, ["abort", "timeout", "write"]);
+    assert.equal(client.stats().state, "failed");
+    await completesBefore(client.close(), 1_500);
+    await waitFor(() => !processExists(serverPid));
+    await waitFor(() => !processExists(descendantPid));
+    assert.equal(client.stats().state, "closed");
+  } finally {
+    await completesBefore(client.close(), 250).catch(() => undefined);
+    for (const pid of [serverPid, descendantPid]) {
+      if (pid > 0 && processExists(pid)) {
+        process.kill(pid, "SIGKILL");
+        await waitFor(() => !processExists(pid));
+      }
+    }
+    await completesBefore(client.close(), 500).catch(() => undefined);
+    fixture.close();
+  }
+});
+
 test("LSP client launches a safe Windows command-shell shim through the Job Object host", async () => {
   const fixture = workspace("cmd launcher");
   const shim = join(fixture.root, "fixture-language-server.cmd");
@@ -567,4 +634,37 @@ async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> 
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Timed out waiting for fixture state.");
+}
+
+async function rejectsBefore(
+  promise: Promise<unknown>,
+  deadlineMs: number,
+  predicate: (error: unknown) => boolean,
+): Promise<void> {
+  await assert.rejects(completesBefore(promise, deadlineMs), predicate);
+}
+
+function observeSettlement<T>(
+  label: string,
+  promise: Promise<T>,
+  settlements: string[],
+): Promise<T> {
+  return promise.finally(() => settlements.push(label));
+}
+
+async function completesBefore<T>(promise: Promise<T>, deadlineMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Operation did not settle within ${deadlineMs} ms.`)),
+          deadlineMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
