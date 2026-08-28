@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to execute this plan phase by phase and `superpowers:test-driven-development` for every implementation packet.
 
-**Goal:** Strengthen Runner V2 for robust application delivery from user requests, then certify the improvements against DeepSeek Harness and a real-world Build-mode project.
+**Goal:** Strengthen Runner V2 for robust application delivery from user requests, audit DeepSeek Harness for beneficial missing capabilities, close any approved high-value gap, and then qualify the result with a real-world Build-mode project.
 
 **Architecture:** Extend the existing durable scheduler, worktree, evidence, integration, recovery, and handoff kernel. Add criterion-level contracts, canonical integrated verification, durable user steering, independent high-risk verification, protected extension/LSP seams, and certified qualification without transferring lifecycle authority out of the kernel.
 
-**Tech stack:** Strict TypeScript, Node.js maintained LTS release lines, Node built-in SQLite, Git worktrees, React 19/Next.js client surfaces, Playwright/browser evidence, and the existing certified benchmark framework.
+**Tech stack:** Strict TypeScript, Node.js maintained LTS release lines, Node built-in SQLite, Git worktrees, React 19/Next.js client surfaces, and Playwright/browser evidence.
 
-**Canonical authority:** This file persists the plan approved in the conversation on 2026-08-26. The sole amendment is ENV-1: Runner V2 must not force Node.js 24.18.0 or any other single patch release. Production support follows Node.js Active LTS and Maintenance LTS lines, as documented by the Node.js project.
+**Canonical authority:** This file persists the plan approved in the conversation on 2026-08-26. ENV-1 records that Runner V2 must not force Node.js 24.18.0 or any other single patch release. On 2026-08-28 the owner cancelled the comparative P6 benchmark and replaced it with a source-level capability audit of the local DeepSeek Harness repository. The audit is recorded in `docs/superpowers/plans/2026-08-28-deepseek-harness-capability-audit.md`.
 
 The plan is grounded in the live Runner V2 seams:
 
@@ -18,7 +18,7 @@ The plan is grounded in the live Runner V2 seams:
 - [integration-manager.ts](C:/Users/b_a_s/source/repos/ai-discussion-board/runner-v2/src/integration-manager.ts:146) already provides the durable integration branch to preserve.
 - [native-build-engine.ts](C:/Users/b_a_s/source/repos/ai-discussion-board/lib/client/native-build-engine.ts:578) snapshots initial user intent but does not deliver later notes durably to an active run.
 - [code-intelligence-tools.ts](C:/Users/b_a_s/source/repos/ai-discussion-board/runner-v2/src/code-intelligence-tools.ts:1) is TypeScript/JavaScript-specific.
-- [native-runner-adapter.ts](C:/Users/b_a_s/source/repos/ai-discussion-board/lib/benchmark/workbench/native-runner-adapter.ts:1) provides the existing certified-benchmark integration point.
+- [process-tools.ts](C:/Users/b_a_s/source/repos/ai-discussion-board/runner-v2/src/process-tools.ts:119) currently launches approved commands with the Runner host process's ambient filesystem and environment authority.
 
 ## Execution controls applying to every phase
 
@@ -90,8 +90,8 @@ or:
 | P3 | Durable user steering and Architect `ask_user` | P0 High | HVI-3 | P2 | P4 |
 | P4 | Independent high-risk verifier | P1 High | HVI-4 | P1–P3 | P5 |
 | P5 | Protected plugin seams and generic LSP | P1 High | HVI-5 | P1–P4 | P6 |
-| P6 | Controlled Runner V2 versus DeepSeek Harness benchmark | P0 Release gate | HVI-6 | P1–P5 | P7 |
-| P7 | Real-world Build-mode qualification | P0 Final gate | RW-1 | P6 and OD-1 | Release decision |
+| P6 | DeepSeek capability audit and gap disposition | P0 Release gate | HVI-6A | P1–P5 | Approved gap closure or P7 |
+| P7 | Real-world Build-mode qualification | P0 Final gate | RW-1 | P6 disposition, every approved gap closure, and OD-1 | Release decision |
 
 The chain is intentionally serial. Later features consume the durable state and invalidation rules established by earlier phases.
 
@@ -769,9 +769,11 @@ Environment validation:
 
 ---
 
-### Task 6: P6 — Controlled Runner V2 versus DeepSeek Harness benchmark
+### Task 6: P6 — DeepSeek capability audit and gap disposition
 
-**Purpose:** Produce an auditable, paired comparison using identical models and budgets across all six canonical robustness scenarios.
+**Purpose:** Inspect the current local DeepSeek Harness source for capabilities
+that materially strengthen robust application building, without spending effort
+on comparative scoring or copying broad general-agent product features.
 
 **Priority:** P0 Release gate
 
@@ -779,121 +781,176 @@ Environment validation:
 
 ### Entry conditions and scope
 
-- All production improvements are verified.
-- Pin the DeepSeek Harness revision evaluated by the source comparison, `b150a55`; do not benchmark a floating branch.
-- Extend the existing certified benchmark framework and native Runner adapter.
-- Execute a paired matrix covering both harnesses and all required scenario families.
+- All P1–P5 production improvements are verified.
+- Record exact local Runner V2 and DeepSeek Harness revisions and preserve both
+  worktrees.
+- Inspect shipped implementation, tests, package limitations, and default
+  composition across execution, recovery, safety, extensibility, context,
+  coordination, tools, language intelligence, and external control surfaces.
+- Classify each material capability as Runner stronger, equivalent/different,
+  DeepSeek stronger and beneficial, or broader but not beneficial to robust
+  application building.
 
 ### Explicit exclusions
 
-- The benchmark may not import the legacy build engine into product Build mode.
-- No adaptive prompt, budget, model, or retry changes after results are observed.
-- No human repair of scored workspaces.
-- No claim that Runner V2 wins unless results support it.
-- Comparator outcomes do not permit weakening Runner controls.
+- No head-to-head workload, parity contract, score, leaderboard, result bundle,
+  or fairness claim.
+- No changes to the DeepSeek Harness repository.
+- No copying DeepSeek implementation code.
+- Breadth alone is not a Runner requirement. Hot reload, self-modification,
+  in-process workflow code, advisory Team scopes, hook compatibility, webhooks,
+  and overlapping SDK/control protocols stay out unless a concrete build
+  reliability requirement independently justifies them.
+- No weakening of Runner scheduler, worktree, integration, permission,
+  verification, or completion authority.
 
 ### Requirements assigned
 
-- HVI-6.1: Controlled head-to-head comparison.
-- HVI-6.2: Identical model identities, efforts, and role availability.
-- HVI-6.3: Identical budgets and environmental limits.
-- HVI-6.4: Greenfield application cases.
-- HVI-6.5: Ambiguous-requirement cases.
-- HVI-6.6: Cross-task conflict cases.
-- HVI-6.7: Browser-regression cases.
-- HVI-6.8: Forced-restart cases.
-- HVI-6.9: Provider-failure cases.
+- HVI-6A.1: Audit the current local DeepSeek Harness source without benchmarking.
+- HVI-6A.2: Identify only shipped capabilities that materially benefit robust
+  application building and cite exact evidence and limitations.
+- HVI-6A.3: Remove abandoned benchmark-only implementation from this branch and
+  record the cancelled HVI-6.1–HVI-6.9 requirements as owner-withdrawn.
+- HVI-6A.4: Give every local Runner child-process family consistent scrubbed
+  environment, tree ownership, cancellation, quiescence, and recovery; give
+  command/evidence families bounded tail plus optional complete output
+  artifacts without failing solely for log volume—or record an explicit owner
+  waiver.
+- HVI-6A.5: Add fail-closed generated-process file-write confinement with exact
+  permission grants and honest enforcement reporting—or record an explicit
+  owner waiver.
+- HVI-6A.6: Prevent repository/user-controlled Git hooks, filters, helpers,
+  configuration, and related programs from bypassing the execution boundary—or
+  record an explicit owner waiver.
+- HVI-6A.7: Add a trusted last-mile fence to every filesystem mutation and
+  optimistic revision/create guards to text replacement/creation—or record an
+  explicit owner waiver with the external-TOCTOU limitation.
+- HVI-6A.8: Do not unlock P7 while any discovered high-value gap remains neither
+  verified nor explicitly waived with its named residual risks.
 
 ### Work packets
 
 | Packet | Executable work | Smallest initial validation |
 |---|---|---|
-| P6.1 | Define immutable `HarnessParityContract`: source revision, model/provider/model ID, reasoning effort, role mapping, token/call/cost/tool/time limits, permission/network policy, base repository hash, case hash, and execution order. Refuse unequal arms before any model call. | New parity tests |
-| P6.2 | Add the DeepSeek Harness adapter pinned to the exact commit and a Runner V2 adapter using the native control plane. Both emit the same normalized attempt record. | Adapter contract tests with mock processes |
-| P6.3 | Build certified cases and hidden oracles for the six scenario families. Each family has at least one case, a reference solution, negative control, alternate valid solution where applicable, and protected oracle files. | Case-loader/oracle certification tests |
-| P6.4 | Add deterministic fault controllers for restart and provider failure, plus browser/console/network oracles and cross-task integration corruption. | Per-controller prove-red tests |
-| P6.5 | Execute three paired attempts per case. Use the same seed where supported; otherwise use identical attempt order and inputs. Counterbalance order A/B, B/A, A/B. Infrastructure-invalid attempts rerun both arms as a pair; scored failures do not rerun. | Small two-case dry run |
-| P6.6 | Validate and publish an immutable result bundle with correctness, criterion coverage, verification integrity, recovery, browser evidence, cost, tokens, calls, tools, and duration. | Result identity/publication/tamper tests |
-| P6.7 | Run the complete matrix and adversarially audit raw workspaces, event logs, protected files, parity, classifications, and report calculations. Route product defects back to their owning phase and rerun only affected paired cells after the fix has passed that phase gate. | Full certification matrix |
+| P6.1 | Verify both revisions and perform the read-only capability audit. | Evidence/path/revision review |
+| P6.2 | Persist the audit, update plan traceability, and delete only the abandoned P6 benchmark files. | Git diff and repository search for removed P6 surfaces |
+| P6.3 | Present the smallest high-value gap-closure design and obtain any genuine architectural approval or waiver. | Requirement/design audit |
+| P6.4a | If approved, freeze the execution-safety threat model, Windows enforcement/grant contracts, process output/result types, capability-contract version, and migration refusal. | Contract/schema/recovery tests |
+| P6.4b | Implement shared scrubbed child environments, private bounded tail/spill with lossy continuation, Windows Job-owned tree lifecycle, escalation, quiescence, and orphan recovery. | Env/output/tree one-shot fixtures |
+| P6.4c | Implement the probed Windows restricted-token/ACL write boundary, exact one-call path grants, partial-enforcement disclosure, Full bypass, and revocation/recovery. | Disposable NTFS/ACL integration fixtures |
+| P6.4d | Route one-shot, evidence, final-verification, managed, Git, LSP, MCP, and locally spawned provider surfaces through shared low-level environment/tree/quiescence primitives while retaining only protocol-specific framing. | Per-family process regressions and raw-spawn audit |
+| P6.4e | Harden every Runner Git command against hooks, helpers, filters, external diff/textconv, ambient configuration/credentials, and outside writes. | Repository-controlled Git escape fixtures |
+| P6.4f | Add the trusted filesystem mutation fence, existing-file revision requirement, create-only primitive, symlink-race handling, and honest external-TOCTOU classification. | Filesystem stale/create/symlink fixtures |
+| P6.4g | Wire durable audit/client disclosure, recovery cleanup, documentation, packaged artifacts, final adversarial re-audit, and the phase exit gate. | Affected integration gates, then one final broad gate |
+
+P6.4a–P6.4g execute only after approval. A waiver skips all seven packets,
+records every named residual risk from the audit, and goes directly to the P6
+gate; it is not represented as successful implementation.
 
 ### Expected files and surfaces
 
-Create:
-
-- `lib/benchmark/robust-build/types.ts`
-- `lib/benchmark/robust-build/parity.ts`
-- `lib/benchmark/robust-build/corpus.ts`
-- `lib/benchmark/robust-build/oracle.ts`
-- `lib/benchmark/robust-build/runner-v2-adapter.ts`
-- `lib/benchmark/robust-build/deepseek-harness-adapter.ts`
-- `lib/benchmark/robust-build/executor.ts`
-- `lib/benchmark/robust-build/report.ts`
-- Six family-specific fixture/controller modules.
-- Corresponding scripts/tests and package commands.
-
-Reuse or modify:
-
-- `lib/benchmark/certified/*`
-- `lib/benchmark/workbench/native-runner-adapter.ts`
-- Benchmark persistence, result identity, publication, and redaction modules.
-- `runner-v2/src/benchmark-command-policy.ts`
-- Benchmark UI only if the report is exposed there.
+- `docs/superpowers/plans/2026-08-28-deepseek-harness-capability-audit.md`
+- This canonical plan and its execution ledger.
+- Removal of `lib/benchmark/robust-build/*` and corresponding P6-only scripts
+  introduced after P5.
+- If P6.4 is approved, expected protected-kernel surfaces include a shared
+  subprocess runtime, child-environment/output-spool/process-sandbox modules, a
+  Windows containment helper, an opaque execution-grant contract, a filesystem
+  mutation fence, the central Git runner, ToolBroker integration, capability
+  contract/recovery/audit/client projections, Runner packaging, documentation,
+  and focused fixtures/tests. Exact filenames are frozen in P6.4a after current
+  source-convention inspection; no extension may own these seams.
 
 ### Acceptance criteria
 
-- Every scored pair has byte-identical case inputs and parity-contract values except harness identity.
-- Model IDs, efforts, available roles, budgets, timeouts, permissions, and environment are equivalent.
-- Missing or unreported usage needed for parity marks the pair invalid rather than assuming equality.
-- Hidden oracles are outside agent-visible workspaces.
-- Reference and alternate solutions pass; negative controls fail.
-- All six scenario families produce complete, classifiable paired results.
-- Forced restarts happen at recorded deterministic event boundaries.
-- Provider failures are injected identically by call ordinal/failure class.
-- Browser checks use the same flows and assertions.
-- Results are honest even if DeepSeek performs better.
-- Any Runner regression against mandatory correctness or integrity controls reopens its owning phase.
+- Both exact source revisions are recorded.
+- Every audited claim distinguishes shipped/default, optional, experimental, and
+  documented limitation states.
+- The report explains why broad DeepSeek features are accepted, rejected, or
+  already covered; it does not equate package count with build strength.
+- Every material DeepSeek advantage relevant to robust building has an explicit
+  disposition.
+- No comparator process or scored workload is run.
+- No obsolete P6 benchmark production or test surface remains on the branch.
+- Any recommended gap has a bounded design, affected surfaces, security model,
+  tests, fault injections, cleanup, rollback, recovery, and P7 gate impact.
+- If P6.4 is approved, every local child-process family has one scrubbed
+  environment/tree ownership policy; command/evidence families add bounded
+  tail and optional complete-output artifacts. Output beyond either memory or
+  spill capacity becomes a lossy-output fact and never kills or reclassifies a
+  command solely for log volume. Cleanup settles only after tree quiescence or
+  a typed blocking failure.
+- Guarded/Project generated commands fail closed outside exact granted roots.
+  Windows partial enforcement and the explicit Full bypass are durable and
+  user-visible; neither is described as a container or absolute security
+  boundary.
+- Repository/user Git hooks, helpers, fsmonitor, external diff/textconv, and
+  unapproved filter drivers cannot execute outside the same boundary.
+- Every filesystem mutation re-canonicalizes its actual target at the trusted
+  seam. Existing-file text replacement requires the current observed revision,
+  and creation is create-if-absent. The implementation does not claim atomic CAS
+  against external writers.
 
 ### Tests and validation
 
-- New parity, adapter, corpus, oracle, fault-controller, result, and report tests.
-- Existing certified harness, WorkBench adapter, publication, recovery, and redaction tests.
-- `npm run test:runner-v2`
-- `npm run test:benchmark:unit`
-- Relevant WorkBench and benchmark end-to-end gates.
-- Runner and app typechecks/build if UI changes.
-
-Environment validation:
-
-- Exact DeepSeek revision and dependency lock.
-- Exact Runner revision.
-- Clean attempt directories.
-- Pre-fetched dependencies before scored network restrictions.
-- Port, process, state-directory, Git, Node, and comparator runtime checks.
-- Identical clocks/timeouts and no shared mutable workspaces.
+- Verify both Git revisions and status without modifying DeepSeek.
+- Inspect the Runner diff back to the P5 exit revision and confirm benchmark-only
+  removal does not touch product Build mode.
+- Search for imports or package commands referring to removed robust-build parity
+  and adapter modules.
+- For P6.1–P6.3, run static/type/test checks only if cleanup can affect executable
+  product code; otherwise prove the product surfaces equal the verified P5 exit.
+- For approved P6.4 packets, run the exact failed check first, then affected
+  tests, Runner typecheck, targeted ESLint, Windows Job/ACL/process inspection,
+  and only the impact-bounded wider gates.
+- P6.4 phase exit requires the complete Runner V2 gate, both maintained Node LTS
+  lines, relevant product Build surfaces, reproducible Runner archives, Git
+  preflight, non-admin NTFS validation, external state/temp roots, and an OS
+  audit with no residual Jobs, helpers, ACL grants, or spills.
 
 ### Required evidence and prove-red injections
 
-- Change one arm’s model effort: parity preflight must reject.
-- Increase one arm’s budget by one unit: reject.
-- Expose a hidden oracle: certification fails.
-- Skip Runner final verification: hidden integrity assertion fails.
-- Tamper with a result after signing: publication rejects it.
-- Make a negative control pass: harness certification fails.
-- Remove restart/provider fault evidence: affected attempt becomes invalid.
+- Audit evidence is the exact source paths/lines and revision identities in the
+  persisted report.
+- Benchmark cleanup must prove no remaining import or command reaches a removed
+  module.
+- P6.1–P6.3 are documentation/disposition packets and introduce no runtime guard,
+  so prove-red is not applicable to them.
+- Every runtime guard added by an approved P6.4 gap plan must be proven red,
+  reverted, and proven green under the global doctrine.
+- Mandatory P6.4 faults cover: a surviving grandchild and TERM-ignoring tree;
+  timeout/cancellation/restart across command, LSP, MCP, and configured-provider
+  transports; output above memory tail and spill cap with lossy continuation;
+  spill ACL/close/disk faults; inherited fake secrets; unavailable/broken/partial
+  sandbox backends; outside writes, symlinks, junctions, hard-link residuals,
+  one-call path escalation and revocation failure; Git hooks/filters/helpers/
+  fsmonitor/textconv; stale replacement, create races, and a controlled external
+  writer race proving the documented non-CAS limitation.
 
 ### Cleanup, rollback, and recovery
 
-- Kill both harness process trees and release ports after every attempt.
-- Preserve immutable audit bundles; remove only disposable workspaces after publication.
-- Never reuse a scored workspace.
-- Interrupted matrix execution resumes from certified completed cells.
-- A repaired product revision gets a new result-set identity; prior results are not overwritten.
+- Preserve the DeepSeek `.vs/` directory and all pre-existing user changes.
+- Delete only the three tracked benchmark files introduced after P5 and the four
+  abandoned untracked drafts named in the capability audit.
+- The capability report remains durable even if the proposed gap is waived.
+- If gap implementation fails, restore the last verified P5 product state,
+  retain the audit, and keep P7 locked.
+- Approved P6.4 owns every Job handle, ACL entry, private temp/cache, and spill.
+  Startup reconciles or revokes leftovers before new work; cleanup failure never
+  falls back to an ambient spawn. Older active capability contracts pause for
+  explicit migration/restart.
 
 ### Definition of Done and exit gate
 
-- HVI-6 has a complete certified paired matrix and immutable report.
-- All six categories and parity controls are proven.
-- P7 unlocks only after the exact success outcome.
+- The benchmark is recorded as skipped by owner decision.
+- The source audit and capability disposition are current and complete.
+- Benchmark-only code is removed.
+- Every high-value gap is either verified through its approved gap phase or has
+  an explicit owner waiver with residual risk.
+- If approved, P6.4a–P6.4g meet every audit acceptance criterion with current
+  red/revert/green evidence, cleanup, recovery, maintained-LTS, package-parity,
+  and final adversarial evidence.
+- P7 unlocks only after this exact outcome.
 
 ---
 
@@ -903,7 +960,7 @@ Environment validation:
 
 **Priority:** P0 Final gate
 
-**Dependencies:** P6 and OD-1
+**Dependencies:** P6 disposition, every approved gap closure, and OD-1
 
 ### Entry conditions and scope
 
@@ -1005,7 +1062,7 @@ Prove-red controls:
 - Preserve the qualification audit and selected handoff result.
 - Delete only disposable qualification worktrees/state after export.
 - Keep the user’s original project baseline recoverable.
-- If a defect is found, return to its owning phase, repair it within that phase’s budget, rerun affected regression gates, rerun impacted P6 cells, then restart P7 from a clean baseline.
+- If a defect is found, return to its owning phase, repair it within that phase’s budget, rerun affected regression gates, then restart P7 from a clean baseline.
 - No failed qualification workspace is promoted.
 
 ### Definition of Done and exit gate
@@ -1042,19 +1099,18 @@ The final output must be the exact success outcome. Otherwise it remains at the 
 | HVI-5.1 | DeepSeek-style plugin seams | P5 | Extension API and loader |
 | HVI-5.2 | Generic LSP | P5 | Multi-language LSP fixtures |
 | HVI-5.3 | Retain Runner kernel | P5 | Scheduler/worktree/integration regression gates |
-| HVI-6.1 | Controlled head-to-head benchmark | P6 | Certified paired matrix |
-| HVI-6.2 | Identical models | P6 | Parity-contract preflight |
-| HVI-6.3 | Identical budgets | P6 | Parity-contract preflight |
-| HVI-6.4 | Greenfield applications | P6 | Certified scenario family |
-| HVI-6.5 | Ambiguous requirements | P6 | Certified scenario family |
-| HVI-6.6 | Cross-task conflicts | P6 | Certified scenario family |
-| HVI-6.7 | Browser regressions | P6 | Certified scenario family |
-| HVI-6.8 | Forced restarts | P6 | Certified scenario family |
-| HVI-6.9 | Provider failures | P6 | Certified scenario family |
+| HVI-6A.1 | Source-level DeepSeek capability audit, no benchmark | P6 | Revision-bound persisted audit |
+| HVI-6A.2 | Material robust-build capability disposition | P6 | Evidence matrix and limitations |
+| HVI-6A.3 | Withdraw benchmark requirements and remove abandoned code | P6 | Owner amendment, diff, and import search |
+| HVI-6A.4 | Shared safe child-process lifecycle/environment/output | P6 | P6.4a, P6.4b, P6.4d or named owner waiver |
+| HVI-6A.5 | Generated-process file-write confinement and exact grants | P6 | P6.4a, P6.4c, P6.4g or named owner waiver |
+| HVI-6A.6 | Git indirect-execution boundary | P6 | P6.4e or named owner waiver |
+| HVI-6A.7 | Trusted filesystem fence and optimistic freshness guards | P6 | P6.4f or named owner waiver |
+| HVI-6A.8 | P7 remains locked until every gap is verified or waived | P6 | P6 exit gate |
 | RW-1.1 | Build a real-world project through Build mode | P7 | Product-path qualification run |
 | RW-1.2 | Verify modifications and intended operation | P7 | Frozen charter and external oracle |
 
-Coverage: **33 of 33 requirements assigned once; zero unowned and zero multiply owned.**
+Coverage: **32 of 32 active requirements assigned once; zero unowned and zero multiply owned.** The nine former HVI-6.1–HVI-6.9 comparison requirements were withdrawn by the owner on 2026-08-28 and are not active requirements.
 
 ### Doctrine applicability matrix
 
@@ -1073,21 +1129,22 @@ Coverage: **33 of 33 requirements assigned once; zero unowned and zero multiply 
 
 # 4. Execution queue
 
-All later packets are locked. The next eligible packet is:
+P1–P5 are verified. P6.1 source audit and P6.2 benchmark cleanup close with the
+clean commit that force-tracks the reviewed report and this amendment. The next
+eligible packet after that publication gate is:
 
-> **P1.0 — Maintained-LTS Node compatibility policy**
+> **P6.3 — Approve or waive the cohesive execution-safety gap design**
 
 Its first execution actions are:
 
-1. Record Git status and preserve the two existing unrelated modified files.
-2. Confirm a supported maintained Node.js LTS release, Git, and an external runner state directory.
-3. Run and record the baseline Runner V2 suite and Runner typecheck.
-4. Add exact failing Node compatibility, package-script, client-policy, and published-artifact tests.
-5. Prove the pre-change behavior red.
-6. Implement only the maintained-LTS compatibility policy and remove fixed-patch invocations and messaging.
-7. Run the exact tests green.
-8. Temporarily reintroduce the exact-patch pin and an unsupported release-line acceptance fault, prove red, revert each fault, and prove green.
-9. Audit P1.0 and unlock P1.1 only if current evidence is green.
+1. Review the persisted capability audit and its evidence anchors.
+2. Confirm that no benchmark executable or import remains.
+3. Present the recommended shared process lifecycle/output/environment seam,
+   Windows write boundary and grant semantics, Git indirect-execution policy,
+   trusted filesystem fence/freshness guards, audit, cleanup, and recovery scope.
+4. If approved, execute P6.4a–P6.4g in order under the global doctrine before P7.
+5. If waived, record the explicit owner waiver and residual host-safety/data-loss
+   risk before P7.
 
 Full queue:
 
@@ -1097,16 +1154,33 @@ P2.1 → P2.2 → P2.3 → P2.4 → P2.5 → P2.6 → P2 gate
 P3.1 → P3.2 → P3.3 → P3.4 → P3.5 → P3.6 → P3 gate
 P4.1 → P4.2 → P4.3 → P4.4 → P4.5 → P4.6 → P4 gate
 P5.1 → P5.2 → P5.3 → P5.4 → P5.5 → P5.6 → P5 gate
-P6.1 → P6.2 → P6.3 → P6.4 → P6.5 → P6.6 → P6.7 → P6 gate
+P6.1 audit → P6.2 benchmark cleanup → P6.3 owner decision
+  approved → P6.4a → P6.4b → P6.4c → P6.4d → P6.4e → P6.4f → P6.4g → P6 gate
+  waived   → durable named-risk waiver → P6 gate
 P7.1 → P7.2 → P7.3 → P7.4 → P7.5 → P7.6 → final gate
 ```
 
 # 5. Genuine unresolved owner decisions
 
-Only one current owner decision remains:
+Two current owner decisions remain:
 
 **OD-1 — Real-world qualification target**
 
 Before P7, the user must choose or approve the actual application brief/repository and its business acceptance criteria. It should be non-trivial, browser-testable, safe to run in isolation, and free of production data or credentials.
 
-OD-1 does **not** block P1–P6. No other routine technical question or owner decision is currently required.
+**OD-2 — DeepSeek gap-closure design**
+
+The source audit found one cohesive execution-safety gap with four facets:
+inconsistent child environment/output/tree ownership; no operating-system
+file-write boundary for generated commands; repository-controlled programs that
+can execute indirectly through Runner-owned Git; and a missing trusted
+last-mile filesystem fence plus optional revision on existing-file `fs.write`.
+The recommended Windows-first design, exact permission escalation and partial
+enforcement semantics, seven implementation packets, residual limits, tests,
+faults, rollback, and recovery are specified in
+`docs/superpowers/plans/2026-08-28-deepseek-harness-capability-audit.md`. The
+owner must approve that design or explicitly waive every named residual risk
+before P7.
+
+OD-1 does **not** block P1–P6. OD-2 blocks P6.4 and therefore P7. No other
+routine technical question or owner decision is currently required.
