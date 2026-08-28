@@ -369,3 +369,49 @@ Exit 0: 909 passed, 0 failed, followed by PASS for Runner V2 client, every nativ
 The persisted-byte tests inspect actual SQLite bytes and continue to reject secrets, arguments, working directories, native handles, spill paths, and integrity-key material. The final worktree audit found no SQLite/WAL/SHM file, temp file, spill owner marker, or output-owner marker under `runner-v2`. The process audit found no live SQLite contender or Task 4 test process. Iterative RED runs and intentional unresolved-effect recovery tests had left 15 uniquely named Task 4 roots below the system temp directory; their resolved paths were verified below the system temp root, those test-only directories were removed, and the repeated audit found zero matching roots. No project or user material was removed.
 
 Self-review traced claim/retry/takeover, mutation creation and replay, HMAC verification, stale revision plus stale owner/token rejection, every awaited external effect, launch ambiguity, restart adoption, output-owner recovery, terminal cleanup, and concurrent schema initialization. It also checked facade keys, symbols, descriptors, prototype, inspection, serialization, and cross-kernel isolation. The large durable-store diff is necessary because row facts are now derived rather than independently trusted; the closed replay table and adversarial combinations are the central regression boundary. No unresolved test, lint, type, diff, process, persistence, cleanup, or scope concern remains.
+
+---
+
+## Review round 5 escalation fix — 2026-08-29
+
+Round 5 was fixed from base `d871df97` in implementation commit `9b42e743` (`fix(runner-v2): orphan ambiguous launches`). Work remained limited to the Task 4 durable store/runtime seam and its regression tests.
+
+### Root cause and correction
+
+`reconcileStartup()` previously ran `takeover_lease` before examining an expired unbound `launching` record. Although later owner/fence checks prevented the stale caller from durably binding after takeover, recovery had still acquired launch-effect authority and reopened output before `reconcileRecord()` classified the row `orphaned`. A fence cannot retract the already-issued external `launch()` effect, so the takeover boundary itself was unsafe.
+
+The durable mutation grammar now includes `orphan_unbound_launch`. Store application and mutation replay both require the exact ambiguous state: `launching`, no durable backend binding, and an expired lease. The atomic mutation preserves the original owner id, increments the fencing token as a tombstone, and moves directly to typed `orphaned`. It therefore invalidates the stale launch fence without granting recovery ownership of the external effect. Runtime startup recovery applies this mutation before any lease takeover, output reopen, cleanup, backend selection, or launch path. A still-live unbound launch is reported `leased`; only expired `prepared` state retains automatic pre-effect takeover/recovery. Expired identity-bound active state continues through the existing takeover and backend reconciliation path.
+
+### TDD and adversarial fault evidence
+
+The deterministic SQLite race blocks the first backend `launch()` after exactly one call, advances the injected clock beyond the lease, and starts a second runtime's recovery. Before the correction, the test failed because the durable owner changed to the recovery owner, directly exposing the forbidden takeover. After the correction it passed and proves all of the following: exactly one launch, durable unbound `orphaned` state, original owner retained with a burned fencing token, no recovery output or backend effect, exact retry cannot relaunch, stale launch return cannot bind or observe, and no cleanup claim is made.
+
+The existing prepared expiry test was strengthened to prove safe takeover still increments the fence, prepares/cleans the output owner, and settles `launch_not_proven` without launching. A separate expired bound-running test proves takeover, backend reconciliation, verified cleanup, and stale-observer rejection remain unchanged.
+
+The required takeover fault was injected after GREEN by disabling the special unbound-launch classification branch. The focused blocked-launch test returned RED with the recovery owner replacing the original owner. The fault was reverted with `apply_patch`, and the identical command returned GREEN, 1 passed and 0 failed.
+
+### Verification
+
+```powershell
+node --import tsx --test runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts
+```
+
+Exit 0: 49 passed, 0 failed.
+
+```powershell
+node --import tsx --test runner-v2/test/execution-safety-contracts.test.ts runner-v2/test/child-environment.test.ts runner-v2/test/bounded-output-spool.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts
+```
+
+Exit 0: 111 passed, 0 failed across the Task 1–4 seam.
+
+`npx tsc -p runner-v2/tsconfig.json --noEmit`, targeted ESLint over the six Task 4 source/test files, targeted Prettier check, `git diff --check`, and staged diff check all exited 0. The source/test commit changes exactly three Task 4 files: 227 insertions and 4 deletions.
+
+```powershell
+npm run test:runner-v2
+```
+
+Exit 0: 911 passed, 0 failed, followed by PASS for the Runner V2 client and every native Build policy, UI, cutover, pause, model-usage, live-state, transcript, files, stats, steering, and observability script.
+
+### Diff and residue audit
+
+Fix-only review confirmed one closed durable mutation, one early recovery branch, and the three requested runtime regressions; no backend adapter, process family, production wiring, or Task 5+ behavior changed. The worktree contains no SQLite/WAL/SHM file, temp file, spill owner marker, or output-owner marker. Three uniquely named `runner-v2-launch-orphan-*` system-temp roots containing only `state.sqlite` remained from the intentionally failing RED/fault runs. Their resolved absolute paths and parent system-temp directory were inspected; the environment policy rejected both attempted PowerShell cleanup commands, so they were left in place rather than bypassing the destructive-action guard. Passing runs cleaned their own roots.
