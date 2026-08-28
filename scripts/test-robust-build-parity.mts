@@ -281,6 +281,16 @@ async function expectRejectedParityError(
   return caught;
 }
 
+function cleanupEvidence(error: HarnessParityCleanupError): {
+  readonly cleanupFailures?: readonly Readonly<{
+    harness: HarnessId;
+    error: unknown;
+  }>[];
+  readonly recoveryPair?: unknown;
+} {
+  return error;
+}
+
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -766,6 +776,167 @@ for (const mutateObservedRunner of [
     /runner preparation failed/
   );
   assert.deepEqual(events, ["prepare:deepseek-harness", "prepare:runner-v2", "release:deepseek-harness"]);
+}
+
+// A valid provisional release handle survives malformed second-arm lease facts.
+{
+  const fixture = makeContract();
+  const events: string[] = [];
+  const deepseekLease = makeLease(fixture.arms["deepseek-harness"], {
+    release: () => {
+      events.push("release:deepseek-harness");
+    },
+  });
+  const malformedRunnerLease = {
+    observedFacts: {},
+    revalidate: () => clone(fixture.arms["runner-v2"]),
+    launch: () => {
+      events.push("launch:runner-v2");
+      return "runner";
+    },
+    release: () => {
+      events.push("release:runner-v2");
+    },
+  };
+  const authority = createTrustedHarnessParityAuthority({
+    prepare: ({ harness }: PreparationInput) => {
+      events.push(`prepare:${harness}`);
+      return harness === "deepseek-harness" ? deepseekLease : malformedRunnerLease;
+    },
+  });
+  await assert.rejects(
+    async () => prepareHarnessParityPair(fixture, authority),
+    (error) => error instanceof HarnessParityError && error.code === "missing_value"
+  );
+  assert.deepEqual(events, [
+    "prepare:deepseek-harness",
+    "prepare:runner-v2",
+    "release:runner-v2",
+    "release:deepseek-harness",
+  ]);
+}
+
+// Failed preparation rollback exposes an opaque cleanup-only retry capability.
+{
+  const fixture = makeContract();
+  const events: string[] = [];
+  const primaryError = new Error("runner preparation failed");
+  const releaseError = new Error("deepseek rollback release failed");
+  let releaseAttempts = 0;
+  const deepseekLease = makeLease(fixture.arms["deepseek-harness"], {
+    release: () => {
+      events.push("release:deepseek-harness");
+      if (releaseAttempts === 0) {
+        releaseAttempts += 1;
+        throw releaseError;
+      }
+    },
+  });
+  const authority = createTrustedHarnessParityAuthority({
+    prepare: ({ harness }: PreparationInput) => {
+      events.push(`prepare:${harness}`);
+      if (harness === "deepseek-harness") return deepseekLease;
+      throw primaryError;
+    },
+  });
+  let caught: unknown;
+  try {
+    await prepareHarnessParityPair(fixture, authority);
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof HarnessParityCleanupError);
+  assert.equal(caught.primaryError, primaryError);
+  const initialEvidence = cleanupEvidence(caught);
+  assert.deepEqual(initialEvidence.cleanupFailures, [
+    { harness: "deepseek-harness", error: releaseError },
+  ]);
+  assert.ok(Object.isFrozen(initialEvidence.cleanupFailures));
+  assert.ok(Object.isFrozen(initialEvidence.cleanupFailures?.[0]));
+  assert.ok(initialEvidence.recoveryPair);
+  const recoveryPair = initialEvidence.recoveryPair;
+  expectParityError(
+    () => executePreparedHarnessParityPair(recoveryPair),
+    "invalid_prepared_pair"
+  );
+  expectParityError(
+    () => executePreparedHarnessParityPair(structuredClone(recoveryPair)),
+    "invalid_prepared_pair"
+  );
+  expectParityError(
+    () => releasePreparedHarnessParityPair(structuredClone(recoveryPair)),
+    "invalid_prepared_pair"
+  );
+  await releasePreparedHarnessParityPair(recoveryPair);
+  assert.deepEqual(events, [
+    "prepare:deepseek-harness",
+    "prepare:runner-v2",
+    "release:deepseek-harness",
+    "release:deepseek-harness",
+  ]);
+  expectParityError(() => releasePreparedHarnessParityPair(recoveryPair), "invalid_prepared_pair");
+}
+
+// Repeated rollback failures keep only failed owners and preserve evidence.
+{
+  const fixture = makeContract();
+  const events: string[] = [];
+  const releaseError = new Error("deepseek rollback release failed");
+  let deepseekReleaseAttempts = 0;
+  const deepseekLease = makeLease(fixture.arms["deepseek-harness"], {
+    release: () => {
+      events.push("release:deepseek-harness");
+      if (deepseekReleaseAttempts < 2) {
+        deepseekReleaseAttempts += 1;
+        throw releaseError;
+      }
+    },
+  });
+  const malformedRunnerLease = {
+    observedFacts: {},
+    revalidate: () => clone(fixture.arms["runner-v2"]),
+    launch: () => "runner",
+    release: () => {
+      events.push("release:runner-v2");
+    },
+  };
+  const authority = createTrustedHarnessParityAuthority({
+    prepare: ({ harness }: PreparationInput) =>
+      harness === "deepseek-harness" ? deepseekLease : malformedRunnerLease,
+  });
+  let initial: unknown;
+  try {
+    await prepareHarnessParityPair(fixture, authority);
+  } catch (error) {
+    initial = error;
+  }
+  assert.ok(initial instanceof HarnessParityCleanupError);
+  const initialEvidence = cleanupEvidence(initial);
+  assert.ok(initialEvidence.recoveryPair);
+  const recoveryPair = initialEvidence.recoveryPair;
+  let retry: unknown;
+  try {
+    await releasePreparedHarnessParityPair(recoveryPair);
+  } catch (error) {
+    retry = error;
+  }
+  assert.ok(retry instanceof HarnessParityCleanupError);
+  assert.equal(retry.primaryError, initial.primaryError);
+  const retryEvidence = cleanupEvidence(retry);
+  assert.equal(retryEvidence.recoveryPair, recoveryPair);
+  assert.deepEqual(
+    retryEvidence.cleanupFailures?.map((failure) => failure.harness),
+    ["deepseek-harness", "deepseek-harness"]
+  );
+  assert.ok(Object.isFrozen(retryEvidence.cleanupFailures));
+  assert.ok(Object.isFrozen(retryEvidence.cleanupFailures?.[1]));
+  await releasePreparedHarnessParityPair(recoveryPair);
+  assert.deepEqual(events, [
+    "release:runner-v2",
+    "release:deepseek-harness",
+    "release:deepseek-harness",
+    "release:deepseek-harness",
+  ]);
 }
 
 {

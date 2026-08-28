@@ -230,8 +230,9 @@ declare const trustedHarnessParityAuthorityBrand: unique symbol;
  * plain object with a prepare callback is never an authority at the launch
  * boundary. P6.2 adapters must enter through that factory and use real
  * filesystem/Git/lock/environment probes plus owned launcher leases; they must
- * also clean up anything acquired if prepare throws before it returns a valid
- * lease, because the parity module cannot release a resource it never received.
+ * also atomically clean up anything they acquire if prepare throws or cannot
+ * return an envelope with an own enumerable data-function release, because the
+ * parity module cannot release a resource it never received safely.
  */
 export interface TrustedHarnessParityAuthority<T> {
   readonly [trustedHarnessParityAuthorityBrand]: T;
@@ -242,7 +243,8 @@ declare const preparedHarnessParityPairBrand: unique symbol;
 /**
  * Opaque module-issued capability. A plain object, clone, or serialized copy
  * is not a valid prepared pair at runtime; only the parity module registry can
- * bind one to trusted leases.
+ * bind one to trusted leases. A recovery pair attached to a cleanup error is
+ * cleanup-only: it can be released, but never executed.
  */
 export interface PreparedHarnessParityPair<T> {
   readonly [preparedHarnessParityPairBrand]: T;

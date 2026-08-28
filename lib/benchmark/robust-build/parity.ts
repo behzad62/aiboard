@@ -58,46 +58,82 @@ export class HarnessParityError extends Error {
   }
 }
 
+export interface HarnessParityCleanupFailure {
+  readonly harness: RobustBuildHarnessId;
+  readonly error: unknown;
+}
+
 /**
  * Cleanup is never best-effort. If a primary failure and one or more releases
- * both fail, this typed error preserves all of that evidence instead of
- * silently replacing or discarding either failure.
+ * both fail, this typed error preserves all of that evidence and a
+ * module-issued recovery capability instead of silently discarding either.
  */
 export class HarnessParityCleanupError extends HarnessParityError {
   readonly primaryError: unknown | undefined;
   readonly cleanupErrors: readonly unknown[];
+  readonly cleanupFailures: readonly HarnessParityCleanupFailure[];
+  readonly recoveryPair: PreparedHarnessParityPair<unknown>;
 
-  constructor(primaryError: unknown | undefined, cleanupErrors: readonly unknown[]) {
+  constructor(
+    primaryError: unknown | undefined,
+    cleanupFailures: readonly HarnessParityCleanupFailure[],
+    recoveryPair: PreparedHarnessParityPair<unknown>
+  ) {
     super(
       "cleanup_failed",
-      `Harness parity cleanup failed for ${cleanupErrors.length} prepared lease${
-        cleanupErrors.length === 1 ? "" : "s"
+      `Harness parity cleanup recorded ${cleanupFailures.length} failed release attempt${
+        cleanupFailures.length === 1 ? "" : "s"
       }.`
     );
     this.name = "HarnessParityCleanupError";
     this.primaryError = primaryError;
-    this.cleanupErrors = Object.freeze([...cleanupErrors]);
+    this.cleanupFailures = Object.freeze(
+      cleanupFailures.map((failure) =>
+        Object.freeze({ harness: failure.harness, error: failure.error })
+      )
+    );
+    this.cleanupErrors = Object.freeze(this.cleanupFailures.map((failure) => failure.error));
+    this.recoveryPair = recoveryPair;
   }
 }
 
 type UnknownRecord = Record<string, unknown>;
 
-type InternalLease<T> = Readonly<{
+type InternalReleaseOwner = Readonly<{
   harness: RobustBuildHarnessId;
+  release: () => HarnessParityMaybePromise<void>;
+}>;
+
+type InternalLease<T> = Readonly<
+  InternalReleaseOwner & {
   arm: HarnessParityArm;
   observedFacts: HarnessParityObservedFacts;
   revalidate: () => HarnessParityMaybePromise<HarnessParityObservedFacts>;
   launch: (input: HarnessParityLaunchInput) => HarnessParityMaybePromise<T>;
-  release: () => HarnessParityMaybePromise<void>;
-}>;
+  }
+>;
 
-interface PreparedPairState<T> {
-  readonly contract: HarnessParityContract;
-  readonly leases: Readonly<Record<RobustBuildHarnessId, InternalLease<T>>>;
-  /** Harnesses whose release has not yet succeeded, in preparation order. */
-  unreleasedLeaseHarnesses: RobustBuildHarnessId[];
+interface SharedPreparedPairState<T> {
+  readonly capability: PreparedHarnessParityPair<T>;
+  readonly unreleasedOwners: InternalReleaseOwner[];
+  cleanupPrimaryError: unknown | undefined;
+  cleanupFailureHistory: HarnessParityCleanupFailure[];
   status: "prepared" | "executing" | "releasing" | "cleanup-failed" | "released";
 }
+
+interface ExecutablePreparedPairState<T> extends SharedPreparedPairState<T> {
+  readonly kind: "executable";
+  readonly contract: HarnessParityContract;
+  readonly leases: Readonly<Record<RobustBuildHarnessId, InternalLease<T>>>;
+}
+
+interface CleanupOnlyPreparedPairState extends SharedPreparedPairState<unknown> {
+  readonly kind: "cleanup-only";
+}
+
+type PreparedPairState<T> =
+  | ExecutablePreparedPairState<T>
+  | CleanupOnlyPreparedPairState;
 
 interface TrustedAuthorityState<T> {
   readonly prepare: HarnessParityPreparationAdapter<T>["prepare"];
@@ -257,7 +293,7 @@ export function executePreparedHarnessParityPair<T>(
   preparedPair: unknown
 ): Promise<readonly PairedHarnessArmResult<T>[]> {
   const state = requirePreparedPairState<T>(preparedPair);
-  if (state.status !== "prepared") {
+  if (state.kind !== "executable" || state.status !== "prepared") {
     fail("invalid_prepared_pair", "Harness parity prepared pair is no longer executable.");
   }
   state.status = "executing";
@@ -571,6 +607,7 @@ async function prepareBothHarnessArms<T>(
   prepare: HarnessParityPreparationAdapter<T>["prepare"]
 ): Promise<PreparedHarnessParityPair<T>> {
   const acquired: InternalLease<T>[] = [];
+  const rollbackOwners: InternalReleaseOwner[] = [];
   try {
     for (const harness of ARM_KEYS) {
       const arm = contract.arms[harness];
@@ -581,6 +618,11 @@ async function prepareBothHarnessArms<T>(
           contract,
         })
       );
+      const provisionalOwner = extractProvisionalReleaseOwner(
+        rawLease,
+        harness
+      );
+      if (provisionalOwner) rollbackOwners.push(provisionalOwner);
       const lease = parseTrustedLease<T>(rawLease, harness, contract, `authority.${harness}`);
       acquired.push(lease);
       assertObservedFactsMatchArm(
@@ -592,30 +634,27 @@ async function prepareBothHarnessArms<T>(
       );
     }
   } catch (error) {
-    const cleanupErrors = await releaseLeases(acquired);
-    if (cleanupErrors.length > 0) {
-      throw new HarnessParityCleanupError(error, cleanupErrors);
+    const cleanupFailures = await releaseOwnersInReverse(rollbackOwners);
+    if (cleanupFailures.length > 0) {
+      const recoveryPair = issueCleanupOnlyPreparedPair(
+        rollbackOwners,
+        error,
+        cleanupFailures
+      );
+      throw new HarnessParityCleanupError(error, cleanupFailures, recoveryPair);
     }
     throw error;
   }
 
   const leases = {} as Record<RobustBuildHarnessId, InternalLease<T>>;
   for (const lease of acquired) leases[lease.harness] = lease;
-  const preparedPair = Object.freeze({}) as unknown as PreparedHarnessParityPair<T>;
-  const state: PreparedPairState<T> = {
+  return issueExecutablePreparedPair(
     contract,
-    leases: Object.freeze({
+    Object.freeze({
       "deepseek-harness": leases["deepseek-harness"],
       "runner-v2": leases["runner-v2"],
-    }),
-    unreleasedLeaseHarnesses: acquired.map((lease) => lease.harness),
-    status: "prepared",
-  };
-  preparedPairStates.set(
-    preparedPair as unknown as object,
-    state as unknown as PreparedPairState<unknown>
+    })
   );
-  return preparedPair;
 }
 
 function parseTrustedLease<T>(
@@ -649,6 +688,33 @@ function parseTrustedLease<T>(
   });
 }
 
+/**
+ * Reads only the own release descriptor before full lease validation. This
+ * deliberately keeps a callable data-property release handle for rollback
+ * when another lease field is malformed; accessors are never invoked.
+ */
+function extractProvisionalReleaseOwner(
+  input: unknown,
+  harness: RobustBuildHarnessId
+): InternalReleaseOwner | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return undefined;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(input, "release");
+  if (
+    !descriptor ||
+    !descriptor.enumerable ||
+    !isDataDescriptor(descriptor) ||
+    typeof descriptor.value !== "function"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    harness,
+    release: descriptor.value as () => HarnessParityMaybePromise<void>,
+  });
+}
+
 function parseObservedFacts(
   input: unknown,
   expectedHarness: RobustBuildHarnessId,
@@ -675,6 +741,51 @@ function assertObservedFactsMatchArm(
   }
 }
 
+function issueExecutablePreparedPair<T>(
+  contract: HarnessParityContract,
+  leases: Readonly<Record<RobustBuildHarnessId, InternalLease<T>>>
+): PreparedHarnessParityPair<T> {
+  const capability = Object.freeze({}) as unknown as PreparedHarnessParityPair<T>;
+  const state: ExecutablePreparedPairState<T> = {
+    capability,
+    kind: "executable",
+    contract,
+    leases,
+    unreleasedOwners: ARM_KEYS.map((harness) =>
+      Object.freeze({
+        harness,
+        release: leases[harness].release,
+      })
+    ),
+    cleanupPrimaryError: undefined,
+    cleanupFailureHistory: [],
+    status: "prepared",
+  };
+  preparedPairStates.set(
+    capability as unknown as object,
+    state as unknown as PreparedPairState<unknown>
+  );
+  return capability;
+}
+
+function issueCleanupOnlyPreparedPair(
+  unreleasedOwners: readonly InternalReleaseOwner[],
+  primaryError: unknown,
+  cleanupFailures: readonly HarnessParityCleanupFailure[]
+): PreparedHarnessParityPair<unknown> {
+  const capability = Object.freeze({}) as unknown as PreparedHarnessParityPair<unknown>;
+  const state: CleanupOnlyPreparedPairState = {
+    capability,
+    kind: "cleanup-only",
+    unreleasedOwners: [...unreleasedOwners],
+    cleanupPrimaryError: primaryError,
+    cleanupFailureHistory: [...cleanupFailures],
+    status: "cleanup-failed",
+  };
+  preparedPairStates.set(capability as unknown as object, state);
+  return capability;
+}
+
 function requirePreparedPairState<T>(preparedPair: unknown): PreparedPairState<T> {
   if (typeof preparedPair !== "object" || preparedPair === null) {
     fail("invalid_prepared_pair", "Harness parity execution requires a module-issued prepared pair.");
@@ -687,7 +798,7 @@ function requirePreparedPairState<T>(preparedPair: unknown): PreparedPairState<T
 }
 
 async function executeAndReleasePreparedPair<T>(
-  state: PreparedPairState<T>
+  state: ExecutablePreparedPairState<T>
 ): Promise<readonly PairedHarnessArmResult<T>[]> {
   let hasPrimaryError = false;
   let primaryError: unknown;
@@ -732,10 +843,10 @@ async function executeAndReleasePreparedPair<T>(
     primaryError = error;
   }
 
-  const cleanupErrors = await releaseLeasesInReversePreparationOrder(state);
-  if (cleanupErrors.length > 0) {
-    state.status = "cleanup-failed";
-    throw new HarnessParityCleanupError(hasPrimaryError ? primaryError : undefined, cleanupErrors);
+  const cleanupFailures = await releaseOwnersInReverse(state.unreleasedOwners);
+  if (cleanupFailures.length > 0) {
+    recordCleanupFailures(state, hasPrimaryError ? primaryError : undefined, cleanupFailures);
+    throw createCleanupError(state);
   }
   state.status = "released";
   if (hasPrimaryError) throw primaryError;
@@ -743,40 +854,48 @@ async function executeAndReleasePreparedPair<T>(
 }
 
 async function releasePreparedPair<T>(state: PreparedPairState<T>): Promise<void> {
-  const cleanupErrors = await releaseLeasesInReversePreparationOrder(state);
-  if (cleanupErrors.length > 0) {
-    state.status = "cleanup-failed";
-    throw new HarnessParityCleanupError(undefined, cleanupErrors);
+  const cleanupFailures = await releaseOwnersInReverse(state.unreleasedOwners);
+  if (cleanupFailures.length > 0) {
+    recordCleanupFailures(state, undefined, cleanupFailures);
+    throw createCleanupError(state);
   }
   state.status = "released";
 }
 
-async function releaseLeasesInReversePreparationOrder<T>(
-  state: PreparedPairState<T>
-): Promise<readonly unknown[]> {
-  const cleanupErrors: unknown[] = [];
-  for (let index = state.unreleasedLeaseHarnesses.length - 1; index >= 0; index -= 1) {
-    const harness = state.unreleasedLeaseHarnesses[index];
-    try {
-      await state.leases[harness].release();
-      state.unreleasedLeaseHarnesses.splice(index, 1);
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
+function recordCleanupFailures<T>(
+  state: PreparedPairState<T>,
+  primaryError: unknown | undefined,
+  cleanupFailures: readonly HarnessParityCleanupFailure[]
+): void {
+  if (state.cleanupFailureHistory.length === 0) {
+    state.cleanupPrimaryError = primaryError;
   }
-  return Object.freeze(cleanupErrors);
+  state.cleanupFailureHistory.push(...cleanupFailures);
+  state.status = "cleanup-failed";
 }
 
-async function releaseLeases<T>(leases: readonly InternalLease<T>[]): Promise<readonly unknown[]> {
-  const cleanupErrors: unknown[] = [];
-  for (let index = leases.length - 1; index >= 0; index -= 1) {
+function createCleanupError<T>(state: PreparedPairState<T>): HarnessParityCleanupError {
+  return new HarnessParityCleanupError(
+    state.cleanupPrimaryError,
+    state.cleanupFailureHistory,
+    state.capability as unknown as PreparedHarnessParityPair<unknown>
+  );
+}
+
+async function releaseOwnersInReverse(
+  owners: InternalReleaseOwner[]
+): Promise<readonly HarnessParityCleanupFailure[]> {
+  const cleanupFailures: HarnessParityCleanupFailure[] = [];
+  for (let index = owners.length - 1; index >= 0; index -= 1) {
+    const owner = owners[index];
     try {
-      await leases[index].release();
+      await owner.release();
+      owners.splice(index, 1);
     } catch (error) {
-      cleanupErrors.push(error);
+      cleanupFailures.push(Object.freeze({ harness: owner.harness, error }));
     }
   }
-  return Object.freeze(cleanupErrors);
+  return Object.freeze(cleanupFailures);
 }
 
 function assertSame(left: unknown, right: unknown, field: string): void {
