@@ -142,6 +142,11 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
     }
   }
 
+  /** Starts and negotiates the configured server without issuing a code query. */
+  async preflight(): Promise<void> {
+    await this.client.start();
+  }
+
   async workspaceSymbols(
     query: WorkspaceSymbolsQuery,
     signal?: AbortSignal,
@@ -196,6 +201,7 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
     const context = this.queryContext(query.root, query.limit);
     if (query.path && !this.supports(query.path)) return unsupported();
     let reports: Array<{ uri: string; diagnostics: unknown[] }>;
+    let diagnosticFreshness: "unversioned" | undefined;
     if (query.path) {
       const document = await this.synchronizeDocument(context.root, query.path, signal);
       const support = await this.client.diagnosticSupport();
@@ -207,11 +213,12 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
         );
         reports = [{ uri: document.uri, diagnostics: diagnosticItems(response) }];
       } else {
-        const published = await this.client.waitForPublishedDiagnostics(
+        const published = await this.client.waitForPublishedDiagnosticsOrUnversioned(
           document.uri,
           document.version,
           signal,
         );
+        if (published?.unversioned) diagnosticFreshness = "unversioned";
         reports = [{ uri: document.uri, diagnostics: published?.diagnostics ?? [] }];
       }
     } else {
@@ -224,9 +231,11 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
         );
         reports = workspaceDiagnosticReports(response);
       } else {
-        reports = this.client.publishedDiagnosticsForOpenDocuments().map((published) => ({
-          uri: published.uri,
-          diagnostics: published.diagnostics,
+        const published = this.client.publishedDiagnosticsForOpenDocuments();
+        if (published.some((item) => item.unversioned)) diagnosticFreshness = "unversioned";
+        reports = published.map((item) => ({
+          uri: item.uri,
+          diagnostics: item.diagnostics,
         }));
       }
     }
@@ -240,7 +249,7 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
       }
     }
     const sorted = deduplicateAndSort(values);
-    return this.result(context, sorted, observed > context.limit);
+    return this.result(context, sorted, observed > context.limit, diagnosticFreshness);
   }
 
   async close(): Promise<void> {
@@ -434,6 +443,7 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
     context: QueryContext,
     values: T[],
     truncated: boolean,
+    diagnosticFreshness?: "unversioned",
   ): CodeIntelligenceResult<T> {
     const sorted = values.slice(0, context.limit);
     return {
@@ -441,6 +451,7 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
       ...(this.projectConfig && contained(context.root, this.projectConfig)
         ? { projectConfig: displayPath(context.root, this.projectConfig) }
         : {}),
+      ...(diagnosticFreshness ? { diagnosticFreshness } : {}),
       results: sorted,
       truncated: truncated || values.length > context.limit,
     };

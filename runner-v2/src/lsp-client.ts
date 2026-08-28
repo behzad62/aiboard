@@ -89,6 +89,8 @@ export interface LspClientStats {
 export interface PublishedDiagnostics {
   uri: string;
   version?: number;
+  /** The server omitted LSP's optional version field, so freshness is unknown. */
+  unversioned?: true;
   diagnostics: unknown[];
 }
 
@@ -103,8 +105,13 @@ interface OpenDocument {
   languageId: string;
   version: number;
   text: string;
-  synchronizationGeneration: number;
-  acceptsVersionlessDiagnostics: boolean;
+}
+
+interface PublishedDiagnosticsCache {
+  /** Last report, which can be useful but is not necessarily version-authoritative. */
+  latest: PublishedDiagnostics;
+  /** Last explicit server version that matched the open document at receipt time. */
+  versioned?: PublishedDiagnostics;
 }
 
 interface ProcessSession {
@@ -146,6 +153,7 @@ interface PendingRequest {
 interface PublishedDiagnosticsWaiter {
   uri: string;
   version: number;
+  acceptUnversioned: boolean;
   timer: NodeJS.Timeout;
   signal?: AbortSignal;
   onAbort?: () => void;
@@ -177,7 +185,7 @@ export class LspClient {
   private readonly maxFrameBytes: number;
   private readonly maxPendingRequests: number;
   private readonly documents = new Map<string, OpenDocument>();
-  private readonly diagnostics = new Map<string, PublishedDiagnostics>();
+  private readonly diagnostics = new Map<string, PublishedDiagnosticsCache>();
   private readonly diagnosticWaiters = new Set<PublishedDiagnosticsWaiter>();
   private readonly pending = new Map<string, PendingRequest>();
   private session?: ProcessSession;
@@ -186,7 +194,6 @@ export class LspClient {
   private closePromise?: Promise<void>;
   private nextRequestId = 1;
   private nextGeneration = 1;
-  private nextDocumentSynchronizationGeneration = 1;
   private starts = 0;
   private restarts = 0;
   private state: LspClientStats["state"] = "idle";
@@ -330,8 +337,6 @@ export class LspClient {
       languageId: input.languageId,
       version: input.version,
       text: input.text,
-      synchronizationGeneration: this.nextDocumentSynchronizationGeneration++,
-      acceptsVersionlessDiagnostics: false,
     };
     this.documents.set(uri, document);
     try {
@@ -343,10 +348,6 @@ export class LspClient {
           text: input.text,
         },
       });
-      this.authorizeVersionlessDiagnostics(
-        uri,
-        document.synchronizationGeneration,
-      );
     } catch (error) {
       this.documents.delete(uri);
       this.diagnostics.delete(uri);
@@ -384,8 +385,6 @@ export class LspClient {
       ...current,
       version: input.version,
       text: input.text,
-      synchronizationGeneration: this.nextDocumentSynchronizationGeneration++,
-      acceptsVersionlessDiagnostics: false,
     };
     const priorDiagnostics = this.diagnostics.get(uri);
     this.documents.set(uri, next);
@@ -395,10 +394,6 @@ export class LspClient {
         textDocument: { uri, version: input.version },
         contentChanges: [{ text: input.text }],
       });
-      this.authorizeVersionlessDiagnostics(
-        uri,
-        next.synchronizationGeneration,
-      );
     } catch (error) {
       this.documents.set(uri, current);
       if (priorDiagnostics) this.diagnostics.set(uri, priorDiagnostics);
@@ -430,13 +425,7 @@ export class LspClient {
   }
 
   publishedDiagnostics(uri: string): PublishedDiagnostics | undefined {
-    const value = this.diagnostics.get(uri);
-    return value
-      ? {
-          ...value,
-          diagnostics: structuredClone(value.diagnostics),
-        }
-      : undefined;
+    return clonePublishedDiagnostics(this.diagnostics.get(uri)?.latest);
   }
 
   async diagnosticSupport(): Promise<LspDiagnosticSupport> {
@@ -461,6 +450,7 @@ export class LspClient {
       const waiter: PublishedDiagnosticsWaiter = {
         uri,
         version,
+        acceptUnversioned: false,
         timer: setTimeout(
           () => this.settleDiagnosticWaiter(waiter, undefined),
           this.publishDiagnosticsWaitTimeoutMs,
@@ -486,9 +476,56 @@ export class LspClient {
     });
   }
 
+  /**
+   * Returns the next push report for display only. A report with
+   * `unversioned: true` must not satisfy a freshness-sensitive gate.
+   */
+  async waitForPublishedDiagnosticsOrUnversioned(
+    uri: string,
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<PublishedDiagnostics | undefined> {
+    const cached = this.publishedDiagnosticsForVersion(uri, version) ?? this.publishedDiagnostics(uri);
+    if (cached) return cached;
+    if (signal?.aborted) {
+      throw new LspClientError(
+        "request_cancelled",
+        "Waiting for publish diagnostics was cancelled.",
+      );
+    }
+    return await new Promise<PublishedDiagnostics | undefined>((resolvePromise, rejectPromise) => {
+      const waiter: PublishedDiagnosticsWaiter = {
+        uri,
+        version,
+        acceptUnversioned: true,
+        timer: setTimeout(
+          () => this.settleDiagnosticWaiter(waiter, undefined),
+          this.publishDiagnosticsWaitTimeoutMs,
+        ),
+        signal,
+        settled: false,
+        resolve: resolvePromise,
+        reject: rejectPromise,
+      };
+      if (signal) {
+        waiter.onAbort = () => this.settleDiagnosticWaiter(
+          waiter,
+          new LspClientError(
+            "request_cancelled",
+            "Waiting for publish diagnostics was cancelled.",
+          ),
+        );
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      this.diagnosticWaiters.add(waiter);
+      const current = this.publishedDiagnosticsForVersion(uri, version) ?? this.publishedDiagnostics(uri);
+      if (current) this.settleDiagnosticWaiter(waiter, current);
+    });
+  }
+
   publishedDiagnosticsForOpenDocuments(): PublishedDiagnostics[] {
     return [...this.documents.values()]
-      .map((document) => this.publishedDiagnosticsForVersion(document.uri, document.version))
+      .map((document) => this.publishedDiagnostics(document.uri))
       .filter((diagnostics): diagnostics is PublishedDiagnostics => diagnostics !== undefined)
       .sort((left, right) => left.uri.localeCompare(right.uri));
   }
@@ -679,8 +716,6 @@ export class LspClient {
       for (const document of [...this.documents.values()]) {
         const reopened: OpenDocument = {
           ...document,
-          synchronizationGeneration: this.nextDocumentSynchronizationGeneration++,
-          acceptsVersionlessDiagnostics: false,
         };
         this.documents.set(reopened.uri, reopened);
         this.diagnostics.delete(reopened.uri);
@@ -692,10 +727,6 @@ export class LspClient {
             text: reopened.text,
           },
         });
-        this.authorizeVersionlessDiagnostics(
-          reopened.uri,
-          reopened.synchronizationGeneration,
-        );
       }
       this.state = "running";
     } catch (error) {
@@ -1070,40 +1101,37 @@ export class LspClient {
     if (typeof params.uri !== "string" || !Array.isArray(params.diagnostics)) return;
     const document = this.documents.get(params.uri);
     if (!document) return;
-    const version = params.version === undefined
-      ? document.acceptsVersionlessDiagnostics
-        ? document.version
-        : undefined
-      : Number.isSafeInteger(params.version) && params.version === document.version
-        ? params.version
-        : undefined;
-    if (version === undefined) {
+    if (params.version === undefined) {
+      const latest: PublishedDiagnostics = {
+        uri: params.uri,
+        unversioned: true,
+        diagnostics: structuredClone(params.diagnostics),
+      };
+      const cache = this.diagnostics.get(params.uri);
+      this.diagnostics.set(params.uri, {
+        latest,
+        ...(cache?.versioned ? { versioned: cache.versioned } : {}),
+      });
+      this.settleDiagnosticWaiters(params.uri);
       return;
     }
-    this.diagnostics.set(params.uri, {
+    if (!Number.isSafeInteger(params.version) || params.version !== document.version) return;
+    const versioned: PublishedDiagnostics = {
       uri: params.uri,
-      version,
+      version: params.version,
       diagnostics: structuredClone(params.diagnostics),
-    });
+    };
+    this.diagnostics.set(params.uri, { latest: versioned, versioned });
     this.settleDiagnosticWaiters(params.uri);
-  }
-
-  private authorizeVersionlessDiagnostics(uri: string, synchronizationGeneration: number): void {
-    const document = this.documents.get(uri);
-    if (!document || document.synchronizationGeneration !== synchronizationGeneration) return;
-    this.documents.set(uri, { ...document, acceptsVersionlessDiagnostics: true });
   }
 
   private publishedDiagnosticsForVersion(
     uri: string,
     version: number,
   ): PublishedDiagnostics | undefined {
-    const value = this.diagnostics.get(uri);
+    const value = this.diagnostics.get(uri)?.versioned;
     if (!value || value.version !== version) return undefined;
-    return {
-      ...value,
-      diagnostics: structuredClone(value.diagnostics),
-    };
+    return clonePublishedDiagnostics(value);
   }
 
   private settleDiagnosticWaiters(uri: string | undefined): void {
@@ -1111,7 +1139,8 @@ export class LspClient {
       if (uri !== undefined && waiter.uri !== uri) continue;
       const result = uri === undefined
         ? undefined
-        : this.publishedDiagnosticsForVersion(waiter.uri, waiter.version);
+        : this.publishedDiagnosticsForVersion(waiter.uri, waiter.version) ??
+          (waiter.acceptUnversioned ? this.publishedDiagnostics(waiter.uri) : undefined);
       if (uri === undefined || result) this.settleDiagnosticWaiter(waiter, result);
     }
   }
@@ -1512,6 +1541,17 @@ function contained(root: string, candidate: string): boolean {
 
 function displayPath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/");
+}
+
+function clonePublishedDiagnostics(
+  value: PublishedDiagnostics | undefined,
+): PublishedDiagnostics | undefined {
+  return value
+    ? {
+        ...value,
+        diagnostics: structuredClone(value.diagnostics),
+      }
+    : undefined;
 }
 
 function boundedAppend(current: Buffer, next: Buffer, maximum: number): Buffer {

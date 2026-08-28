@@ -100,7 +100,14 @@ export class NativeBuildManager implements BuildControlPlane {
           this.options.onPumpError?.(spec.runId, error);
           continue;
         }
-        const handle = await this.ensureRuntime(spec);
+        let handle: NativeBuildRuntimeHandle;
+        try {
+          handle = await this.ensureRuntime(spec);
+        } catch (error) {
+          this.options.onRecoverySpecError?.(spec.runId, error);
+          this.options.onPumpError?.(spec.runId, error);
+          continue;
+        }
         try {
           const projection = handle.runtime.projection();
           const pendingInterruptions = Object.values(projection.userGuidance ?? {})

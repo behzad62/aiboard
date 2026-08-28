@@ -238,15 +238,17 @@ test("LSP client force-closes a server that does not answer shutdown", async () 
   }
 });
 
-test("LSP client accepts versionless publish diagnostics for a synchronized document", async () => {
+test("LSP client retains a fast versionless publish as explicitly non-authoritative", async () => {
   const fixture = workspace("versionless publish diagnostics");
   const client = fixture.client({
     publishDiagnosticsWaitTimeoutMs: 80,
     env: {
       LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
       LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: "1",
+      LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: "1",
     },
   });
+  const uri = client.documentUri(fixture.file);
   try {
     await client.openDocument({
       path: fixture.file,
@@ -254,26 +256,65 @@ test("LSP client accepts versionless publish diagnostics for a synchronized docu
       version: 1,
       text: "value = 1\n",
     });
-    const published = await client.waitForPublishedDiagnostics(
-      client.documentUri(fixture.file),
-      1,
-    );
-    assert.ok(published, "standard versionless publishDiagnostics was not accepted");
-    assert.equal(published.version, 1);
+    await client.request("fixture/diagnosticBarrier", {});
+    const published = client.publishedDiagnostics(uri);
+    assert.equal(published?.version, undefined);
+    assert.equal(published?.unversioned, true);
+    assert.match(String(published?.diagnostics[0] && (published.diagnostics[0] as { message?: unknown }).message), /v1$/);
+    assert.equal(await client.waitForPublishedDiagnostics(uri, 1), undefined);
+    assert.equal(client.publishedDiagnosticsForOpenDocuments()[0]?.unversioned, true);
   } finally {
     await client.close().catch(() => undefined);
     fixture.close();
   }
 });
 
-test("LSP client rejects explicit stale diagnostics after a versionless current publish", async () => {
+test("LSP client never relabels delayed versionless v1 diagnostics as authoritative v2", async () => {
   const fixture = workspace("versionless stale diagnostics");
   const client = fixture.client({
     publishDiagnosticsWaitTimeoutMs: 80,
     env: {
       LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
       LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: "1",
-      LSP_FIXTURE_PUBLISH_OUT_OF_ORDER_STALE_VERSION: "1",
+      LSP_FIXTURE_DELAY_VERSIONLESS_VERSION: "1",
+      LSP_FIXTURE_DELAY_VERSIONLESS_MS: "40",
+      LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: "1",
+    },
+  });
+  const uri = client.documentUri(fixture.file);
+  try {
+    await client.openDocument({
+      path: fixture.file,
+      languageId: "python",
+      version: 1,
+      text: "value = 1\n",
+    });
+    await client.updateDocument({
+      path: fixture.file,
+      version: 2,
+      text: "value = 2\n",
+    });
+    await client.request("fixture/diagnosticBarrier", {});
+    const published = client.publishedDiagnostics(uri);
+    assert.equal(published?.version, undefined);
+    assert.equal(published?.unversioned, true);
+    assert.match(String(published?.diagnostics[0] && (published.diagnostics[0] as { message?: unknown }).message), /v1$/);
+    assert.equal(await client.waitForPublishedDiagnostics(uri, 2), undefined);
+  } finally {
+    await client.close().catch(() => undefined);
+    fixture.close();
+  }
+});
+
+test("LSP client rejects an explicit stale publish after an explicitly versioned current result", async () => {
+  const fixture = workspace("explicit stale diagnostics");
+  const client = fixture.client({
+    publishDiagnosticsWaitTimeoutMs: 80,
+    env: {
+      LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
+      LSP_FIXTURE_PUBLISH_STALE_VERSION: "1",
+      LSP_FIXTURE_PUBLISH_STALE_AFTER_VERSION: "2",
+      LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: "1",
     },
   });
   const uri = client.documentUri(fixture.file);
@@ -286,6 +327,7 @@ test("LSP client rejects explicit stale diagnostics after a versionless current 
     });
     await client.request("fixture/diagnosticBarrier", {});
     assert.equal(client.publishedDiagnostics(uri)?.version, 1);
+    assert.equal(client.publishedDiagnostics(uri)?.unversioned, undefined);
 
     await client.updateDocument({
       path: fixture.file,
@@ -293,7 +335,8 @@ test("LSP client rejects explicit stale diagnostics after a versionless current 
       text: "value = 2\n",
     });
     await client.request("fixture/diagnosticBarrier", {});
-    assert.equal(client.publishedDiagnostics(uri)?.version, 2);
+    assert.equal(client.publishedDiagnostics(uri), undefined);
+    assert.equal(await client.waitForPublishedDiagnostics(uri, 2), undefined);
   } finally {
     await client.close().catch(() => undefined);
     fixture.close();

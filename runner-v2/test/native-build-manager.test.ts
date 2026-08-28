@@ -2703,6 +2703,37 @@ test("recovery rejects an active missing capability contract before constructing
   }
 });
 
+test("recovery routes an active runtime-construction failure through the durable recovery error path", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-runtime-recovery-error-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  const recoveryErrors: unknown[] = [];
+  const pumpErrors: unknown[] = [];
+  let constructed = 0;
+  const manager = new NativeBuildManager({
+    specs,
+    validateRecoveredSpec: async () => undefined,
+    createRuntime: async () => {
+      constructed += 1;
+      throw new Error("snapshot runtime construction failed");
+    },
+    onRecoverySpecError: (_runId, error) => recoveryErrors.push(error),
+    onPumpError: (_runId, error) => pumpErrors.push(error),
+  });
+  try {
+    specs.save({ ...spec, runPolicy: "finish", budgetLimits: {} });
+
+    await manager.recover();
+
+    assert.equal(constructed, 1);
+    assert.equal(recoveryErrors.length, 1);
+    assert.match(String(recoveryErrors[0]), /snapshot runtime construction failed/i);
+    assert.equal(pumpErrors.length, 1);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("terminal legacy Builds retain read-only historical projections without constructing a live runtime", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-historical-read-"));
   const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));

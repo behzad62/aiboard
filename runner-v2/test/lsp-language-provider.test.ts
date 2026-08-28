@@ -199,6 +199,23 @@ test("LSP provider uses bounded, version-matched publish diagnostics when pull i
   }
 });
 
+test("LSP provider preserves push-only versionless diagnostics with explicit freshness metadata", async () => {
+  const fixture = providerFixture("versionless push diagnostics", {
+    LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
+    LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: "1",
+  }, 1_000, 80);
+  try {
+    const result = await fixture.provider.diagnostics({
+      root: fixture.workspace,
+      path: "main.py",
+    });
+    assert.equal(result.results[0]?.code, "fixture-warning");
+    assert.equal(result.diagnosticFreshness, "unversioned");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("LSP provider uses cached publish diagnostics when only document pull is negotiated", async () => {
   const fixture = providerFixture("partial diagnostics", {
     LSP_FIXTURE_DIAGNOSTICS_MODE: "partial",

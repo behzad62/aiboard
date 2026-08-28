@@ -7,10 +7,17 @@ import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { ArtifactStore } from "../src/artifact-store.js";
-import { NativeBuildFactory } from "../src/native-build-factory.js";
+import {
+  NativeBuildFactory,
+  preflightRecoveredRunnerCapabilities,
+} from "../src/native-build-factory.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
-import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import {
+  createRunnerCapabilityContractSnapshot,
+  runnerCapabilitySnapshotExtensionDirectories,
+  type RunnerCapabilityContract,
+} from "../src/runner-capability-contract.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -63,6 +70,199 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
   } finally {
     await handle?.close();
     await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("active recovery preflights matching snapshot extensions atomically and retains startup plus cleanup failures", async () => {
+  const fixture = createFixture("recovery-preflight-start-cleanup");
+  const lifecycle = join(fixture.state, "snapshot-preflight-lifecycle.log");
+  const runId = "recovery_preflight_start_cleanup";
+  try {
+    writeFileSync(join(fixture.extension, "runner-extension.json"), JSON.stringify({
+      apiVersion: 1,
+      id: "fixture.factory",
+      name: "Factory Fixture",
+      version: "1.0.0",
+      entry: "index.mjs",
+      capabilities: [],
+    }));
+    writeFileSync(join(fixture.extension, "index.mjs"), [
+      'import { appendFileSync } from "node:fs";',
+      "export function createExtension() {",
+      "  return {",
+      "    capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),",
+      `    start: async () => { appendFileSync(${JSON.stringify(lifecycle)}, "started\\n"); throw new Error("snapshot preflight start failed"); },`,
+      `    close: async () => { appendFileSync(${JSON.stringify(lifecycle)}, "closed\\n"); throw new Error("snapshot preflight close failed"); },`,
+      "  };",
+      "}",
+      "",
+    ].join("\n"));
+    const config = { extensions: [fixture.extension], languageServers: [] };
+    const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
+
+    await assert.rejects(
+      preflightRecoveredRunnerCapabilities({
+        spec: { runId, capabilityContract },
+        config,
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
+        const cause = (error as Error & { cause?: unknown }).cause;
+        assert.equal(cause instanceof AggregateError, true);
+        const messages = (cause as AggregateError).errors.map((item) => String(item));
+        assert.equal(messages.some((message) => /snapshot preflight start failed/i.test(message)), true);
+        assert.equal(messages.some((message) => /snapshot preflight close failed/i.test(message)), true);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(lifecycle, "utf8"), "started\nclosed\n");
+    assert.equal(existsSync(runRoot(fixture.state, runId)), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("active recovery rejects matching snapshot syntax and factory failures before a live runtime root exists", async () => {
+  for (const scenario of [
+    {
+      name: "syntax",
+      source: "export function createExtension( {\n",
+      expected: /unexpected token|unexpected end|syntaxerror/i,
+    },
+    {
+      name: "factory",
+      source: 'export function createExtension() { throw new Error("snapshot factory failed"); }\n',
+      expected: /snapshot factory failed/i,
+    },
+  ]) {
+    const fixture = createFixture(`recovery-preflight-${scenario.name}`);
+    const runId = `recovery_preflight_${scenario.name}`;
+    try {
+      writeFileSync(join(fixture.extension, "index.mjs"), scenario.source);
+      const config = { extensions: [fixture.extension], languageServers: [] };
+      const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
+
+      await assert.rejects(
+        preflightRecoveredRunnerCapabilities({
+          spec: { runId, capabilityContract },
+          config,
+          projectDirectory: fixture.project,
+          stateDirectory: fixture.state,
+          reservedToolNames: [],
+        }),
+        (error: unknown) => {
+          assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
+          assert.match(String(error), scenario.expected);
+          return true;
+        },
+      );
+      assert.equal(existsSync(runRoot(fixture.state, runId)), false);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test("active recovery validates a missing snapshot before evaluating an extension", async () => {
+  const fixture = createFixture("recovery-preflight-missing-snapshot");
+  const runId = "recovery_preflight_missing_snapshot";
+  try {
+    const config = { extensions: [fixture.extension], languageServers: [] };
+    const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
+    rmSync(join(fixture.state, "capability-snapshots"), { recursive: true, force: true });
+
+    await assert.rejects(
+      preflightRecoveredRunnerCapabilities({
+        spec: { runId, capabilityContract },
+        config,
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_mismatch",
+    );
+    assert.equal(existsSync(runRoot(fixture.state, runId)), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("active recovery validates a corrupt snapshot before evaluating an extension", async () => {
+  const fixture = createFixture("recovery-preflight-corrupt-snapshot");
+  const runId = "recovery_preflight_corrupt_snapshot";
+  try {
+    const config = { extensions: [fixture.extension], languageServers: [] };
+    const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
+    const [snapshotExtension] = runnerCapabilitySnapshotExtensionDirectories(
+      capabilityContract,
+      fixture.state,
+    );
+    if (!snapshotExtension) assert.fail("Expected a captured extension snapshot.");
+    writeFileSync(join(snapshotExtension, "index.mjs"), "export const corrupt = true;\n");
+
+    await assert.rejects(
+      preflightRecoveredRunnerCapabilities({
+        spec: { runId, capabilityContract },
+        config,
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "capability_contract_mismatch",
+    );
+    assert.equal(existsSync(runRoot(fixture.state, runId)), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("active recovery starts configured language servers before a live runtime is constructed", async () => {
+  const fixture = createFixture("recovery-preflight-lsp");
+  const runId = "recovery_preflight_lsp";
+  const server = join(fixture.state, "lsp-preflight-failure.mjs");
+  try {
+    writeFileSync(server, "process.exit(23);\n");
+    const config: RunnerCapabilitiesConfig = {
+      extensions: [],
+      languageServers: [{
+        descriptor: {
+          id: "fixture.preflight.lsp",
+          displayName: "Failing preflight LSP",
+          extensions: [".fixture"],
+          rootMarkers: [],
+          priority: 10,
+        },
+        languageId: "fixture",
+        command: process.execPath,
+        args: [server],
+        requestTimeoutMs: 1_000,
+        restartLimit: 0,
+      }],
+    };
+    const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
+
+    await assert.rejects(
+      preflightRecoveredRunnerCapabilities({
+        spec: { runId, capabilityContract },
+        config,
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
+        assert.match(String(error), /language server|process exited|preflight/i);
+        return true;
+      },
+    );
+    assert.equal(existsSync(runRoot(fixture.state, runId)), false);
+  } finally {
     fixture.cleanup();
   }
 });

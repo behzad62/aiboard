@@ -74,6 +74,7 @@ import {
   type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
 import {
+  RunnerCapabilityContractError,
   cloneRunnerCapabilityContract,
   createRunnerCapabilityContractSnapshot,
   runnerCapabilitySnapshotExtensionDirectories,
@@ -1012,6 +1013,14 @@ export interface RunnerCapabilityPreflightOptions {
   reservedToolNames: readonly string[];
 }
 
+export interface RecoveredRunnerCapabilityPreflightOptions {
+  spec: Pick<NativeBuildSpec, "runId" | "capabilityContract">;
+  config: RunnerCapabilitiesConfig;
+  projectDirectory: string;
+  stateDirectory: string;
+  reservedToolNames: readonly string[];
+}
+
 interface ClosableLanguageProvider {
   close(): Promise<void>;
 }
@@ -1022,6 +1031,7 @@ class NativeRunCapabilities {
   constructor(
     readonly registry: CapabilityRegistry,
     readonly language: LanguageProviderRouter,
+    private readonly projectDirectory: string,
     private readonly extensions?: LoadedRunnerExtensions,
   ) {}
 
@@ -1031,6 +1041,10 @@ class NativeRunCapabilities {
       this.extensions,
     );
     return await this.closePromise;
+  }
+
+  async preflight(): Promise<void> {
+    await this.language.preflightConfiguredServers(this.projectDirectory);
   }
 }
 
@@ -1060,7 +1074,12 @@ async function createNativeRunCapabilities(
       extensionProviders: registry.languageProviders(),
       configuredServers: options.config.languageServers,
     });
-    return new NativeRunCapabilities(registry, language, extensions);
+    return new NativeRunCapabilities(
+      registry,
+      language,
+      options.projectDirectory,
+      extensions,
+    );
   } catch (error) {
     try {
       const extensionProviders = language
@@ -1086,7 +1105,65 @@ export async function preflightRunnerCapabilities(
   options: RunnerCapabilityPreflightOptions,
 ): Promise<void> {
   const capabilities = await createNativeRunCapabilities(options);
+  try {
+    await capabilities.preflight();
+  } catch (error) {
+    try {
+      await capabilities.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Runner capability preflight failed and cleanup reported errors.",
+      );
+    }
+    throw error;
+  }
   await capabilities.close();
+}
+
+/**
+ * Validates and starts only the capabilities attributable to one active Build
+ * before CLI startup can acquire provider, MCP, or live Build resources.
+ */
+export async function preflightRecoveredRunnerCapabilities(
+  options: RecoveredRunnerCapabilityPreflightOptions,
+): Promise<void> {
+  await validateRunnerCapabilityContract(options.spec.capabilityContract, options.config);
+  const contract = options.spec.capabilityContract;
+  if (!contract) {
+    throw new RunnerCapabilityContractError(
+      "capability_contract_missing",
+      "Active Build recovery requires a persisted Runner capability contract.",
+    );
+  }
+  await validateRunnerCapabilityContractSnapshot(contract, options.stateDirectory);
+  const preflightDirectory = join(
+    options.stateDirectory,
+    "capability-preflight",
+    "recovery",
+    safeSegment(options.spec.runId),
+  );
+  try {
+    await mkdir(preflightDirectory, { recursive: true });
+    await preflightRunnerCapabilities({
+      config: {
+        ...options.config,
+        extensions: runnerCapabilitySnapshotExtensionDirectories(
+          contract,
+          options.stateDirectory,
+        ),
+      },
+      projectDirectory: options.projectDirectory,
+      stateDirectory: preflightDirectory,
+      reservedToolNames: options.reservedToolNames,
+    });
+  } catch (error) {
+    throw new RunnerCapabilityContractError(
+      "capability_preflight_failed",
+      `Active Build recovery capability preflight failed: ${boundedErrorMessage(error)}.`,
+      { cause: error },
+    );
+  }
 }
 
 async function closeCapabilityResources(
@@ -1648,6 +1725,11 @@ function safeSegment(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "run";
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+}
+
+function boundedErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length <= 512 ? message : `${message.slice(0, 512)}…`;
 }
 
 /**

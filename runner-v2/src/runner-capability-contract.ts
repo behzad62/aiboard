@@ -42,7 +42,8 @@ const BUILTIN_TYPESCRIPT_IDENTITY = "runner-v2/typescript-intelligence@1";
 export type RunnerCapabilityContractErrorCode =
   | "capability_contract_missing"
   | "capability_contract_invalid"
-  | "capability_contract_mismatch";
+  | "capability_contract_mismatch"
+  | "capability_preflight_failed";
 
 export class RunnerCapabilityContractError extends Error {
   constructor(

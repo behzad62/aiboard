@@ -19,6 +19,8 @@ export interface CodeDiagnostic extends CodeLocation {
 export interface CodeIntelligenceResult<T> {
   status: "ok" | "unsupported_language";
   projectConfig?: string;
+  /** Present only when push diagnostics omitted the LSP document version. */
+  diagnosticFreshness?: "unversioned";
   results: T[];
   truncated: boolean;
 }

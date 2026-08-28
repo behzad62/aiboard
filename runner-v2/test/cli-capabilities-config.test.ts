@@ -9,7 +9,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { RunSupervisor } from "../src/run-supervisor.js";
-import { createRunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import {
+  createRunnerCapabilityContract,
+  createRunnerCapabilityContractSnapshot,
+} from "../src/runner-capability-contract.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
 
@@ -544,6 +547,90 @@ test("CLI rejects a syntactically invalid changed active extension before prefli
   }
 });
 
+test("CLI fails an active Build when its matching snapshot extension cannot start before MCP or live runtime startup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-snapshot-start-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const extension = join(root, "extension");
+  const config = join(root, "runner-capabilities.json");
+  const runId = "snapshot_start_capability_contract";
+  const token = "cli-capability-snapshot-start-token";
+  const lifecycleLog = join(root, "snapshot-extension-lifecycle.log");
+  const mcpMarker = join(root, "mcp-started.log");
+  const mcpFixture = join(root, "mcp-fixture.mjs");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeExtension(extension, {
+    id: "fixture.cli.snapshot-start",
+    module: `
+      import { appendFileSync } from "node:fs";
+      export function createExtension() {
+        return {
+          capabilities: () => ({
+            tools: [{
+              definition: { name: "fixture.cli.snapshot-start.inspect", description: "Inspect", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+              validate: () => ({ ok: true, value: {} }),
+              execute: async () => ({ content: [], isError: false }),
+            }],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async () => {
+            appendFileSync(${JSON.stringify(lifecycleLog)}, "started\\n");
+            throw new Error("fixture snapshot start failed");
+          },
+          close: async () => appendFileSync(${JSON.stringify(lifecycleLog)}, "closed\\n"),
+        };
+      }
+    `,
+  });
+  writeCapabilitiesConfig(config, [extension]);
+  const capabilityContract = await createRunnerCapabilityContractSnapshot({
+    extensions: [extension],
+    languageServers: [],
+  }, state);
+  saveActiveBuild(state, project, runId, capabilityContract);
+  writeFileSync(mcpFixture, `
+    import { appendFileSync } from "node:fs";
+    import { createInterface } from "node:readline";
+    appendFileSync(${JSON.stringify(mcpMarker)}, "started\\n");
+    const input = createInterface({ input: process.stdin });
+    input.on("line", (line) => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "tools/list" ? { tools: [] } : {};
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+    });
+  `);
+
+  try {
+    const outcome = await runCliToExit(
+      project,
+      state,
+      config,
+      token,
+      [`--mcp`, `fixture=${quoteShellArgument(process.execPath)} ${quoteShellArgument(mcpFixture)}`],
+    );
+
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /fixture snapshot start failed/i);
+    assert.equal(existsSync(mcpMarker), false);
+    assert.equal(existsSync(join(state, "builds", runId)), false);
+    assert.equal(readFileSync(lifecycleLog, "utf8"), "started\nclosed\n");
+    const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+    try {
+      const run = recovered.getRun(runId);
+      assert.equal(run.state, "failed");
+      assert.equal(run.stopReason, "capability-contract:capability_preflight_failed");
+    } finally {
+      recovered.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 test("CLI rejects a capability configuration placed inside the project", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-contained-"));
   const project = join(root, "project");
@@ -593,6 +680,7 @@ function spawnCli(
   state: string,
   config: string,
   token: string,
+  extraArgs: readonly string[] = [],
 ): TrackedCliChild {
   return trackCliChild(spawn(
     process.execPath,
@@ -609,6 +697,7 @@ function spawnCli(
       token,
       "--capabilities-config",
       config,
+      ...extraArgs,
     ],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   ));
@@ -701,8 +790,9 @@ async function runCliToExit(
   state: string,
   config: string,
   token: string,
+  extraArgs: readonly string[] = [],
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const runner = spawnCli(project, state, config, token);
+  const runner = spawnCli(project, state, config, token, extraArgs);
   const { child } = runner;
   const streams = runnerStreams(child);
   let stdout = "";
@@ -728,4 +818,46 @@ async function runCliToExit(
     if (timeout) clearTimeout(timeout);
     await terminateCliChild(runner);
   }
+}
+
+function saveActiveBuild(
+  state: string,
+  project: string,
+  runId: string,
+  capabilityContract: Awaited<ReturnType<typeof createRunnerCapabilityContractSnapshot>>,
+): void {
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
+  const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
+  try {
+    supervisor.createRun({
+      runId,
+      projectPath: project,
+      permissionProfile: "project",
+      idempotencyKey: `create:${runId}`,
+    });
+    specs.save({
+      version: 2,
+      runId,
+      projectId: "project_1",
+      objective: "Preflight this active Build before runtime startup.",
+      architectRuntimeId: "fixture:architect",
+      workerRuntimeIds: ["fixture:worker"],
+      verifierRuntimeIds: ["fixture:worker"],
+      alwaysRequireIndependentVerifier: false,
+      maxConcurrency: 1,
+      permissionProfile: "project",
+      runPolicy: "finish",
+      budgetLimits: {},
+      createdAt: "2026-08-28T00:00:00.000Z",
+      idempotencyKey: `build:${runId}`,
+      capabilityContract,
+    });
+  } finally {
+    specs.close();
+    supervisor.close();
+  }
+}
+
+function quoteShellArgument(value: string): string {
+  return `"${value.replaceAll('"', '\\"')}"`;
 }

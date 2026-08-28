@@ -212,6 +212,25 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     return this.records.map((record) => ({ ...record }));
   }
 
+  /** Starts every configured stdio server so startup rejects an unusable capability atomically. */
+  async preflightConfiguredServers(workspaceRoot: string): Promise<void> {
+    const root = existingDirectory(workspaceRoot);
+    for (const candidate of this.candidates) {
+      if (candidate.source !== "configured") continue;
+      const marker = matchedRootMarker(root, undefined, candidate.descriptor.rootMarkers);
+      const provider = this.provider({
+        candidate,
+        callerRoot: root,
+        providerRoot: marker?.projectRoot ?? root,
+        ...(marker?.projectConfig ? { projectConfig: marker.projectConfig } : {}),
+      });
+      if (!(provider instanceof LspLanguageProvider)) {
+        throw new Error(`Configured language provider ${candidate.descriptor.id} has an invalid implementation.`);
+      }
+      await provider.preflight();
+    }
+  }
+
   async close(): Promise<void> {
     if (this.closePromise) return await this.closePromise;
     this.closePromise = this.closeOwnedProviders();

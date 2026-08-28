@@ -6,7 +6,7 @@ let rootUri = "";
 let clientProcessId = null;
 let shutdownRequested = false;
 let outputQueue = Promise.resolve();
-let diagnosticPublication = Promise.resolve();
+const pendingDiagnosticPublications = new Set();
 const documents = new Map();
 const cancellations = [];
 const blocked = new Set();
@@ -207,7 +207,7 @@ async function handle(message) {
     return;
   }
   if (method === "fixture/diagnosticBarrier") {
-    await diagnosticPublication;
+    await Promise.all([...pendingDiagnosticPublications]);
     await respond(message.id, { published: true });
     return;
   }
@@ -287,41 +287,61 @@ function firstDocumentUri() {
   return documents.keys().next().value ?? new URL("main.py", `${rootUri.replace(/\/?$/, "/")}`).href;
 }
 
-function diagnostics(uri) {
+function diagnostics(uri, version) {
   const count = Number(process.env.LSP_FIXTURE_DIAGNOSTIC_COUNT ?? "1");
+  const versionSuffix = process.env.LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS === "1"
+    ? ` v${version}`
+    : "";
   return Array.from({ length: Number.isSafeInteger(count) && count > 0 ? count : 1 }, (_value, index) => ({
     range: range(1, 0, 1, 5),
     severity: 2,
     code: index === 0 ? "fixture-warning" : `fixture-warning-${index + 1}`,
     source: "fixture",
-    message: `Fixture diagnostic for ${uri}`,
+    message: `Fixture diagnostic for ${uri}${versionSuffix}`,
   }));
 }
 
 async function publishDiagnostics(uri, version) {
+  const staleAfterVersion = Number(process.env.LSP_FIXTURE_PUBLISH_STALE_AFTER_VERSION ?? "0");
+  const publishStaleVersion = process.env.LSP_FIXTURE_PUBLISH_STALE_VERSION === "1" &&
+    (!Number.isSafeInteger(staleAfterVersion) || staleAfterVersion <= 0 || version >= staleAfterVersion);
   await notify("textDocument/publishDiagnostics", {
     uri,
     ...(process.env.LSP_FIXTURE_PUBLISH_WITHOUT_VERSION === "1"
       ? {}
       : {
-          version: process.env.LSP_FIXTURE_PUBLISH_STALE_VERSION === "1"
+          version: publishStaleVersion
             ? Math.max(0, version - 1)
             : version,
         }),
-    diagnostics: diagnostics(uri),
+    diagnostics: diagnostics(uri, version),
   });
   if (process.env.LSP_FIXTURE_PUBLISH_OUT_OF_ORDER_STALE_VERSION === "1") {
     await notify("textDocument/publishDiagnostics", {
       uri,
       version: Math.max(0, version - 1),
-      diagnostics: diagnostics(uri),
+      diagnostics: diagnostics(uri, version),
     });
   }
 }
 
 function queuePublishDiagnostics(uri, version) {
-  diagnosticPublication = diagnosticPublication.then(() => publishDiagnostics(uri, version));
-  return diagnosticPublication;
+  const delayedVersion = Number(process.env.LSP_FIXTURE_DELAY_VERSIONLESS_VERSION ?? "0");
+  const delayMs = Number(process.env.LSP_FIXTURE_DELAY_VERSIONLESS_MS ?? "0");
+  const task = (async () => {
+    if (
+      process.env.LSP_FIXTURE_PUBLISH_WITHOUT_VERSION === "1" &&
+      version === delayedVersion &&
+      Number.isFinite(delayMs) &&
+      delayMs > 0
+    ) {
+      await delay(delayMs);
+    }
+    await publishDiagnostics(uri, version);
+  })();
+  pendingDiagnosticPublications.add(task);
+  void task.finally(() => pendingDiagnosticPublications.delete(task));
+  return task;
 }
 
 function range(startLine, startCharacter, endLine, endCharacter) {

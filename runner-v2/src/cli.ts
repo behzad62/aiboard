@@ -10,6 +10,7 @@ import { captureGitBaseline } from "./git-baseline.js";
 import { checkGit } from "./git-preflight.js";
 import {
   NativeBuildFactory,
+  preflightRecoveredRunnerCapabilities,
   preflightRunnerCapabilities,
 } from "./native-build-factory.js";
 import { NativeBuildManager } from "./native-build-manager.js";
@@ -23,7 +24,6 @@ import {
 } from "./runner-capabilities-config.js";
 import {
   RunnerCapabilityContractError,
-  validateRunnerCapabilityContract,
 } from "./runner-capability-contract.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
@@ -98,6 +98,7 @@ async function main(): Promise<void> {
       supervisor,
       capabilitiesConfig,
       options.stateDirectory,
+      options.projectPath,
     );
     const providerConfigs = new EncryptedProviderConfigStore(
       join(options.stateDirectory, "provider-configs.enc"),
@@ -292,6 +293,7 @@ async function validateActiveRecoveryCapabilityContracts(
   supervisor: RunSupervisor,
   capabilitiesConfig: RunnerCapabilitiesConfig,
   stateDirectory: string,
+  projectDirectory: string,
 ): Promise<void> {
   const specs = new SqliteBuildSpecStore(join(stateDirectory, "build-specs.sqlite"));
   const failures: unknown[] = [];
@@ -300,10 +302,13 @@ async function validateActiveRecoveryCapabilityContracts(
       const run = supervisor.getRun(spec.runId);
       if (isTerminalRunState(run.state)) continue;
       try {
-        await validateRunnerCapabilityContract(
-          spec.capabilityContract,
-          capabilitiesConfig,
-        );
+        await preflightRecoveredRunnerCapabilities({
+          spec,
+          config: capabilitiesConfig,
+          projectDirectory,
+          stateDirectory,
+          reservedToolNames: RUNNER_BUILTIN_TOOL_NAMES,
+        });
       } catch (error) {
         recordCapabilityContractRecoveryFailure(supervisor, spec.runId, error);
         failures.push(error);
