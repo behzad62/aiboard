@@ -87,6 +87,7 @@ export type DurableProcessMutationKind =
   | "prepared"
   | "renew_lease"
   | "takeover_lease"
+  | "orphan_unbound_launch"
   | "mark_launching"
   | "mark_output_prepared"
   | "record_environment"
@@ -167,6 +168,13 @@ export type DurableProcessCommand =
       readonly expectedRevision: number;
       readonly at: string;
       readonly leaseExpiresAt: string;
+    }
+  | {
+      readonly type: "orphan_unbound_launch";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly detail: string;
     }
   | {
       readonly type: "mark_launching";
@@ -900,6 +908,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
       "prepared",
       "renew_lease",
       "takeover_lease",
+      "orphan_unbound_launch",
       "mark_launching",
       "mark_output_prepared",
       "record_environment",
@@ -938,6 +947,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
     },
     renew_lease: { required: ["leaseExpiresAt"] },
     takeover_lease: { required: ["leaseExpiresAt"] },
+    orphan_unbound_launch: { required: ["detail"] },
     mark_launching: { required: [] },
     mark_output_prepared: { required: [] },
     record_environment: { required: ["environmentAudit"] },
@@ -1030,6 +1040,15 @@ function deriveRecord(
         mutation.fencingToken !== record.fencingToken + 1
       )
         throw new Error("Durable process lease takeover is invalid.");
+    } else if (mutation.kind === "orphan_unbound_launch") {
+      if (
+        record.state !== "launching" ||
+        record.backendBinding ||
+        Date.parse(record.leaseExpiresAt) > Date.parse(mutation.at) ||
+        mutation.ownerId !== record.ownerId ||
+        mutation.fencingToken !== record.fencingToken + 1
+      )
+        throw new Error("Durable unbound launch classification is invalid.");
     } else if (
       mutation.ownerId !== record.ownerId ||
       mutation.fencingToken !== record.fencingToken
@@ -1074,6 +1093,19 @@ function reduceMutation(
         },
         mutation.at,
         "lease_takeover",
+      );
+    case "orphan_unbound_launch":
+      requireState(current, ["launching"]);
+      if (
+        current.backendBinding ||
+        Date.parse(current.leaseExpiresAt) > Date.parse(mutation.at)
+      )
+        throw new Error("Unbound launch is not eligible for classification.");
+      return moveDerived(
+        { ...base, fencingToken: mutation.fencingToken },
+        "orphaned",
+        mutation.at,
+        text(data.detail, "detail"),
       );
     case "mark_output_prepared":
       requireState(current, ["prepared"]);
@@ -1374,6 +1406,7 @@ function commandData(
       return { environmentAudit: command.environmentAudit };
     case "record_output_prepare_failure":
     case "fail_launch":
+    case "orphan_unbound_launch":
       return { detail: command.detail };
     case "bind_launch":
     case "adopt_backend":
@@ -1420,6 +1453,18 @@ function applyCommand(
       throw new Error("Process lease is still live.");
     if (command.fencingToken !== current.fencingToken + 1)
       throw new Error("Process fencing token is invalid.");
+  } else if (command.type === "orphan_unbound_launch") {
+    if (
+      current.state !== "launching" ||
+      current.backendBinding ||
+      Date.parse(current.leaseExpiresAt) > Date.parse(command.at)
+    )
+      throw new Error("Unbound launch is not eligible for classification.");
+    if (
+      command.ownerId !== current.ownerId ||
+      command.fencingToken !== current.fencingToken + 1
+    )
+      throw new Error("Process orphan fence is invalid.");
   } else if (
     command.ownerId !== current.ownerId ||
     command.fencingToken !== current.fencingToken

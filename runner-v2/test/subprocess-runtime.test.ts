@@ -861,6 +861,7 @@ test("stale owner completing an uncertain effect is rejected after safe expiry t
     grantId: "grant-invoke-1",
     ambientEnvironment: {},
   });
+  const prepared = first.readOnlyStore.readByInvocation("invoke-1")!;
   clock.current = new Date(clock.current.getTime() + 301_000);
   const secondOutputs = new Outputs();
   const second = runtimeFor(
@@ -871,9 +872,158 @@ test("stale owner completing an uncertain effect is rejected after safe expiry t
     secondOutputs,
   );
   await second.runtime.reconcileStartup();
+  const recovered = second.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(recovered.state, "launch_not_proven");
+  assert.notEqual(recovered.ownerId, prepared.ownerId);
+  assert.equal(recovered.fencingToken, prepared.fencingToken + 1);
+  assert.deepEqual(secondOutputs.calls, [
+    "prepare:output-proc-invoke-1",
+    "cleanup:output-proc-invoke-1",
+  ]);
   gate.resolve();
   await assert.rejects(stale, /owner|fenc|stale/i);
   assert.equal(backend.calls.filter((call) => call === "launch").length, 0);
+  first.readOnlyStore.close();
+  second.readOnlyStore.close();
+});
+
+test("expired unbound launch is atomically orphaned without takeover cleanup or relaunch", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-launch-orphan-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "state.sqlite");
+  const stateKey = new Uint8Array(32).fill(4);
+  const backend = new Backend();
+  const clock = new Clock();
+  const firstOutputs = new Outputs();
+  const launchGate = deferred();
+  backend.launchGate = launchGate.promise;
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    firstOutputs,
+  );
+  const stale = first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    backend.calls.filter((call) => call === "launch").length !== 1;
+    attempt += 1
+  )
+    await Promise.resolve();
+  const launching = first.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(launching.state, "launching");
+  assert.equal(launching.backendBinding, undefined);
+  assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
+
+  clock.current = new Date(clock.current.getTime() + 301_000);
+  const secondOutputs = new Outputs();
+  const second = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    secondOutputs,
+  );
+  assert.deepEqual(await second.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "orphaned" },
+  ]);
+  const orphaned = second.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(orphaned.state, "orphaned");
+  assert.equal(orphaned.backendBinding, undefined);
+  assert.equal(orphaned.ownerId, launching.ownerId);
+  assert.equal(orphaned.fencingToken, launching.fencingToken + 1);
+  assert.deepEqual(secondOutputs.calls, []);
+  assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
+
+  await assert.rejects(
+    second.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+    }),
+    /orphaned|outcome_unknown/i,
+  );
+  assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
+  launchGate.resolve();
+  await assert.rejects(stale, /owner|fenc|stale/i);
+  const afterStaleReturn = second.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(afterStaleReturn.state, "orphaned");
+  assert.equal(afterStaleReturn.backendBinding, undefined);
+  assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
+  assert.equal(backend.calls.filter((call) => call === "observe").length, 0);
+  assert.equal(
+    [...firstOutputs.calls, ...secondOutputs.calls].some((call) =>
+      call.startsWith("cleanup:"),
+    ),
+    false,
+  );
+  first.readOnlyStore.close();
+  second.readOnlyStore.close();
+});
+
+test("expired bound active recovery retains takeover reconciliation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-bound-recovery-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "state.sqlite");
+  const stateKey = new Uint8Array(32).fill(8);
+  const backend = new Backend();
+  const clock = new Clock();
+  const firstOutputs = new Outputs();
+  const observeGate = deferred();
+  backend.observeGate = observeGate.promise;
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    firstOutputs,
+  );
+  const stale = first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    first.readOnlyStore.readByInvocation("invoke-1")?.state !== "running";
+    attempt += 1
+  )
+    await Promise.resolve();
+  const running = first.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.ok(running.backendBinding);
+
+  clock.current = new Date(clock.current.getTime() + 301_000);
+  backend.observeGate = undefined;
+  const secondOutputs = new Outputs();
+  const second = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    secondOutputs,
+  );
+  assert.deepEqual(await second.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "cleaned" },
+  ]);
+  const cleaned = second.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(cleaned.ownerId === running.ownerId, false);
+  assert.equal(cleaned.fencingToken, running.fencingToken + 1);
+  assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
+  assert.equal(backend.calls.filter((call) => call === "reconcile").length, 1);
+
+  observeGate.resolve();
+  await assert.rejects(stale, /owner|fenc|stale|unavailable/i);
+  assert.equal(
+    second.readOnlyStore.readByInvocation("invoke-1")?.state,
+    "cleaned",
+  );
   first.readOnlyStore.close();
   second.readOnlyStore.close();
 });
@@ -1226,6 +1376,8 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
     f.backend.launchGate = undefined;
     f.backend.observeGate = undefined;
     f.backend.verifyGate = undefined;
+    if (state === "launching")
+      f.clock.current = new Date(f.clock.current.getTime() + 301_000);
     await f.runtime.reconcileStartup();
     assert.equal(f.store.readByInvocation("invoke-1")?.state, want, `${state}`);
   }

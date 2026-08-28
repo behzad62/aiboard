@@ -340,10 +340,36 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           snapshot.result?.outcome !== "launch_failed")
       )
         continue;
-      if (
-        snapshot.ownerId !== this.ownerId &&
-        Date.parse(snapshot.leaseExpiresAt) > this.options.clock.now().getTime()
-      ) {
+      const leaseIsLive =
+        Date.parse(snapshot.leaseExpiresAt) >
+        this.options.clock.now().getTime();
+      if (snapshot.state === "launching" && !snapshot.backendBinding) {
+        if (leaseIsLive) {
+          outcomes.push({ invocationId, state: "leased" });
+          continue;
+        }
+        try {
+          snapshot = this.writer.apply({
+            type: "orphan_unbound_launch",
+            invocationId,
+            expectedRevision: snapshot.revision,
+            ownerId: snapshot.ownerId,
+            fencingToken: snapshot.fencingToken + 1,
+            at: this.now(),
+            detail: "Restart found launch without durable identity.",
+          });
+        } catch {}
+        let current: DurableSubprocessRecord | undefined;
+        try {
+          current = this.options.store.readByInvocation(invocationId);
+        } catch {}
+        outcomes.push({
+          invocationId,
+          state: current?.state ?? "corrupt",
+        });
+        continue;
+      }
+      if (snapshot.ownerId !== this.ownerId && leaseIsLive) {
         outcomes.push({ invocationId, state: "leased" });
         continue;
       }
