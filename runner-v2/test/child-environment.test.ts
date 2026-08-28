@@ -113,6 +113,40 @@ test("factory atomically blocks non-consuming and reentrant grant redemption att
   assert.equal(attempts, 1);
 });
 
+test("snapshots a getter-backed opaque grant id before reservation and redemption", () => {
+  const record: GrantRecord = {
+    grantId: "grant_real", runId: "run_1", invocationId: "call_1",
+    names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_SNAPSHOT_VALUE" },
+  };
+  let resolverAttempts = 0;
+  const runner = createChildEnvironmentFactory({
+    credentialResolver: {
+      consume: (grantId) => {
+        resolverAttempts += 1;
+        if (grantId !== "grant_real") throw new Error("SENTINEL_UNEXPECTED_GRANT");
+        return record;
+      },
+    },
+    now: () => new Date(NOW),
+  });
+  let reads = 0;
+  const getterBackedInput = {
+    ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1",
+    get credentialGrantId(): string {
+      reads += 1;
+      return reads === 2 ? "reservation_decoy" : "grant_real";
+    },
+  };
+
+  runner.prepare(getterBackedInput);
+  assert.equal(reads, 1);
+  assert.equal(resolverAttempts, 1);
+  assert.throws(() => runner.prepare({
+    ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: "grant_real",
+  }), GENERIC_GRANT_ERROR);
+  assert.equal(resolverAttempts, 1);
+});
+
 test("rejects non-credential, Runner, and canonical-colliding authoritative grant names", () => {
   for (const [id, names, values] of [
     ["path", ["PATH"], { PATH: "/other" }], ["runner", ["Runner_Control_Port"], { Runner_Control_Port: "1" }],

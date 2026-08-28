@@ -60,6 +60,13 @@ export interface CreateChildEnvironmentFactoryOptions {
 }
 
 interface EnvironmentEntry { readonly name: string; readonly value: string }
+interface PrepareChildEnvironmentSnapshot {
+  readonly ambient: Readonly<Record<string, string | undefined>>;
+  readonly explicitOverrides?: Readonly<Record<string, string | undefined>>;
+  readonly runId?: string;
+  readonly invocationId?: string;
+  readonly credentialGrantId?: string;
+}
 
 /**
  * Runner wires this factory once with private, atomically-consuming grant
@@ -74,13 +81,14 @@ export function createChildEnvironmentFactory(
 
   return Object.freeze({
     prepare(input: PrepareChildEnvironmentInput): PreparedChildEnvironment {
+      const request = snapshotPrepareChildEnvironmentInput(input);
       const environment = new Map<string, EnvironmentEntry>();
       const removedNames: string[] = [];
       const explicitSafeNames: string[] = [];
       const grantedNames: string[] = [];
       const decisions: ChildEnvironmentDecision[] = [];
 
-      for (const [name, value] of sortedEntries(input.ambient)) {
+      for (const [name, value] of sortedEntries(request.ambient)) {
         if (value === undefined) continue;
         assertEnvironmentEntry(name, value);
         if (isForbiddenChildEnvironmentName(name)) {
@@ -90,7 +98,7 @@ export function createChildEnvironmentFactory(
       }
       const inheritedNames = names(environment);
 
-      for (const [name, value] of sortedEntries(input.explicitOverrides ?? {})) {
+      for (const [name, value] of sortedEntries(request.explicitOverrides ?? {})) {
         if (value === undefined) continue;
         assertEnvironmentEntry(name, value);
         if (isForbiddenChildEnvironmentName(name)) decisions.push({ kind: "rejected_explicit", name });
@@ -101,9 +109,9 @@ export function createChildEnvironmentFactory(
         }
       }
 
-      if (input.credentialGrantId !== undefined) {
-        reserveCredentialGrantId(input.credentialGrantId, redeemedGrantIds);
-        const grant = consumeAndValidateGrant(options.credentialResolver, input, now);
+      if (request.credentialGrantId !== undefined) {
+        reserveCredentialGrantId(request.credentialGrantId, redeemedGrantIds);
+        const grant = consumeAndValidateGrant(options.credentialResolver, request, now);
         for (const name of grant.names) {
           setEnvironment(environment, name, grant.values.get(canonicalName(name))!);
           grantedNames.push(name);
@@ -132,6 +140,18 @@ export function createChildEnvironmentFactory(
   });
 }
 
+function snapshotPrepareChildEnvironmentInput(
+  input: PrepareChildEnvironmentInput,
+): PrepareChildEnvironmentSnapshot {
+  return Object.freeze({
+    ambient: input.ambient,
+    explicitOverrides: input.explicitOverrides,
+    runId: input.runId,
+    invocationId: input.invocationId,
+    credentialGrantId: input.credentialGrantId,
+  });
+}
+
 function reserveCredentialGrantId(grantId: string, redeemedGrantIds: Set<string>): void {
   if (!nonEmpty(grantId)) throw invalidGrant();
   const canonical = grantId.trim().toUpperCase();
@@ -141,7 +161,7 @@ function reserveCredentialGrantId(grantId: string, redeemedGrantIds: Set<string>
 
 function consumeAndValidateGrant(
   resolver: RunnerOwnedChildEnvironmentCredentialResolver,
-  input: PrepareChildEnvironmentInput,
+  input: PrepareChildEnvironmentSnapshot,
   now: () => Date,
 ): { names: readonly string[]; values: ReadonlyMap<string, string> } {
   if (!nonEmpty(input.credentialGrantId)) throw invalidGrant();
