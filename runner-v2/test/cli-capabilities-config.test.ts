@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -83,7 +84,7 @@ test("CLI rejects malformed capability configuration before Git preflight or rea
     assert.doesNotMatch(stderr, /git/i);
   } finally {
     if (runner) await terminateCliChild(runner);
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -122,7 +123,7 @@ test("CLI rejects an invalid extension package before listening", async () => {
     assert.equal(outcome.stdout, "");
     assert.match(outcome.stderr, /reserved tool fs\.read/i);
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -180,7 +181,7 @@ test("CLI closes a failed extension startup before listening", async () => {
       "started\nclosed\n",
     );
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -236,7 +237,7 @@ test("CLI accepts a valid external capability configuration before listening", a
         if (readinessSucceeded) assertSuccessfulCliShutdown(close);
       }
     } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      await removeFixtureRoot(root);
     }
   }
 });
@@ -293,7 +294,7 @@ test("CLI rejects an active legacy Build without a capability contract before li
     }
     assert.equal(existsSync(join(state, "builds", runId)), false);
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -334,7 +335,7 @@ test("CLI records a non-capability runtime recovery failure with its initializat
         if (readinessSucceeded) assertSuccessfulCliShutdown(close);
       }
     } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
+      await removeFixtureRoot(root);
     }
   }
 });
@@ -394,7 +395,7 @@ test("CLI keeps a terminal legacy Build readable without recovering it against c
     try {
       if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
     } finally {
-      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      await removeFixtureRoot(root);
     }
   }
 });
@@ -502,7 +503,7 @@ test("CLI rejects a changed active extension before evaluating or starting it", 
     }
     assert.equal(existsSync(join(state, "builds", runId)), false);
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -585,7 +586,7 @@ test("CLI rejects a syntactically invalid changed active extension before prefli
       recovered.close();
     }
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -669,7 +670,7 @@ test("CLI fails an active Build when its matching snapshot extension cannot star
       recovered.close();
     }
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -713,7 +714,7 @@ test("CLI rejects a capability configuration placed inside the project", async (
     assert.match(stderr, /capabilities configuration must be outside the project directory/i);
   } finally {
     if (runner) await terminateCliChild(runner);
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeFixtureRoot(root);
   }
 });
 
@@ -897,6 +898,21 @@ function saveActiveBuild(
   } finally {
     specs.close();
     supervisor.close();
+  }
+}
+
+async function removeFixtureRoot(root: string): Promise<void> {
+  const retryableCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+  const maxAttempts = 200;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!code || !retryableCodes.has(code) || attempt >= maxAttempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 }
 

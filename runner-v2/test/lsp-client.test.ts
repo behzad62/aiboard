@@ -4,10 +4,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -84,7 +83,7 @@ test("LSP client initializes over partial frames, synchronizes exact versions, c
     });
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -167,7 +166,7 @@ test("LSP client returns typed bounded errors for missing executables, malformed
     assert.equal(state.cancellations.length, 1);
   } finally {
     await timeout.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -234,7 +233,7 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
       }
     }
     await completesBefore(client.close(), 500).catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -283,7 +282,7 @@ test("LSP client bounds a stalled Windows Job-host bootstrap without an unhandle
       process.kill(hostPid, "SIGKILL");
       await waitFor(() => !processExists(hostPid));
     }
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -308,7 +307,7 @@ test("LSP client launches a safe Windows command-shell shim through the Job Obje
     assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -321,7 +320,7 @@ test("LSP client launches a direct executable in a space and Unicode workspace",
     assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -371,7 +370,7 @@ test("LSP client launches the attested canonical executable and rejects a byte r
     await replaced.close();
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -388,7 +387,7 @@ test("LSP client cannot bypass the restart limit through an explicit start", asy
     assert.equal(client.stats().starts, 1);
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -409,7 +408,7 @@ test("LSP client force-closes a server that does not answer shutdown", async () 
     assert.equal(client.stats().state, "closed");
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -445,7 +444,7 @@ test("LSP client retries termination after a failed close while the server remai
       process.kill(pid, "SIGKILL");
       await waitFor(() => !processExists(pid));
     }
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -476,7 +475,7 @@ test("LSP client retains a fast versionless publish as explicitly non-authoritat
     assert.equal(client.publishedDiagnosticsForOpenDocuments()[0]?.unversioned, true);
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -513,7 +512,7 @@ test("LSP client never relabels delayed versionless v1 diagnostics as authoritat
     assert.equal(await client.waitForPublishedDiagnostics(uri, 2), undefined);
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -550,7 +549,7 @@ test("LSP client rejects an explicit stale publish after an explicitly versioned
     assert.equal(await client.waitForPublishedDiagnostics(uri, 2), undefined);
   } finally {
     await client.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -580,7 +579,7 @@ test("LSP client shutdown owns and terminates language-server descendants", asyn
       process.kill(descendantPid, "SIGKILL");
       await waitFor(() => !processExists(descendantPid));
     }
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -624,7 +623,7 @@ test("LSP client restarts a crashed server only within the configured limit and 
     assert.equal(exhausted.stats().restarts, 1);
   } finally {
     await exhausted.close().catch(() => undefined);
-    fixture.close();
+    await fixture.close();
   }
 });
 
@@ -670,13 +669,23 @@ function workspace(name: string) {
         },
       });
     },
-    close: () => rmSync(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 40,
-      retryDelay: 50,
-    }),
+    close: () => removeFixtureRoot(root),
   };
+}
+
+async function removeFixtureRoot(root: string): Promise<void> {
+  const retryableCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+  const maxAttempts = 200;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!code || !retryableCodes.has(code) || attempt >= maxAttempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 }
 
 function isLspError(code: string) {
