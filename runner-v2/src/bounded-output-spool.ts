@@ -16,6 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 export type OutputStream = "stdout" | "stderr";
 export type OutputLossReasonCode =
   | "spill_cap_exceeded"
+  | "private_spill_unavailable"
   | "spill_root_invalid"
   | "spill_open_failed"
   | "spill_write_failed"
@@ -58,10 +59,19 @@ export interface OutputSpillFile {
   close(): Promise<void>;
 }
 
+export interface OutputSpillStorageAttestation {
+  readonly currentPrincipalPrivacy: boolean;
+  readonly identityStableDeletion: boolean;
+  readonly unlinkedEntries: boolean;
+  readonly currentPrincipalIdentity?: string;
+}
+
 export interface OutputSpillStorage {
+  attest(): Promise<OutputSpillStorageAttestation>;
   prepareRoot(root: string): Promise<void>;
   openExclusive(path: string): Promise<OutputSpillFile>;
   remove(path: string): Promise<void>;
+  removeIdentityStable(path: string, expectedIdentity: string): Promise<void>;
   list(root: string): Promise<string[]>;
 }
 
@@ -110,6 +120,7 @@ interface OwnedSpillRoot {
   readonly rootIdentity: string;
   readonly markerIdentity: string;
   readonly entryPrefix: string;
+  readonly currentPrincipalIdentity?: string;
 }
 
 const DEFAULT_TAIL_BYTES = 128 * 1024;
@@ -137,6 +148,8 @@ export class BoundedOutputSpool {
   private finalizePromise?: Promise<BoundedOutputSpoolResult>;
   private cleanupPromise?: Promise<void>;
   private ownedRoot?: OwnedSpillRoot;
+  private storageAttestation?: OutputSpillStorageAttestation;
+  private spillCapabilityUnavailable = false;
 
   constructor(options: BoundedOutputSpoolOptions) {
     this.spillRoot = resolve(requiredText(options.spillRoot, "spillRoot"));
@@ -211,7 +224,8 @@ export class BoundedOutputSpool {
             this.ownedRoot,
             state.spillPath,
             state.spillProofPath,
-            state.spillIdentity
+            state.spillIdentity,
+            this.storage
           );
         } catch (error) {
           terminalError ??= error;
@@ -267,9 +281,30 @@ export class BoundedOutputSpool {
 
   private async ensureOpen(state: MutableStreamState): Promise<boolean> {
     if (state.spillFile) return true;
+    if (!this.storageAttestation && !this.spillCapabilityUnavailable) {
+      try {
+        const attestation = await this.storage.attest();
+        if (!attestation.currentPrincipalPrivacy || !attestation.identityStableDeletion) {
+          this.spillCapabilityUnavailable = true;
+        } else {
+          this.storageAttestation = Object.freeze({ ...attestation });
+        }
+      } catch {
+        this.spillCapabilityUnavailable = true;
+      }
+    }
+    if (this.spillCapabilityUnavailable || !this.storageAttestation) {
+      this.addLoss(state, "private_spill_unavailable", 0);
+      return false;
+    }
     if (!this.ownedRoot) {
       try {
-        this.ownedRoot = await prepareOwnedRoot(this.spillRoot, this.projectRoot, this.ownershipId);
+        this.ownedRoot = await prepareOwnedRoot(
+          this.spillRoot,
+          this.projectRoot,
+          this.ownershipId,
+          this.storageAttestation.currentPrincipalIdentity
+        );
       } catch {
         this.addLoss(state, "spill_root_invalid", 0);
         return false;
@@ -282,18 +317,22 @@ export class BoundedOutputSpool {
       );
       state.spillFile = await this.storage.openExclusive(state.spillPath);
       state.spillIdentity = state.spillFile.identity;
-      state.spillProofPath = `${state.spillPath}${ENTRY_PROOF_SUFFIX}`;
-      await writeFile(
-        state.spillProofPath,
-        JSON.stringify({
-          version: 1,
-          ownershipId: this.ownedRoot.ownershipId,
-          rootId: this.ownedRoot.rootId,
-          entry: basename(state.spillPath),
-          identity: state.spillIdentity,
-        }),
-        { flag: "wx", mode: 0o600 }
-      );
+      if (this.storageAttestation.unlinkedEntries) {
+        state.spillPath = undefined;
+      } else {
+        state.spillProofPath = `${state.spillPath}${ENTRY_PROOF_SUFFIX}`;
+        await writeFile(
+          state.spillProofPath,
+          JSON.stringify({
+            version: 1,
+            ownershipId: this.ownedRoot.ownershipId,
+            rootId: this.ownedRoot.rootId,
+            entry: basename(state.spillPath),
+            identity: state.spillIdentity,
+          }),
+          { flag: "wx", mode: 0o600 }
+        );
+      }
       return true;
     } catch {
       this.addLoss(state, "spill_open_failed", 0);
@@ -304,6 +343,7 @@ export class BoundedOutputSpool {
           state.spillPath,
           state.spillProofPath,
           state.spillIdentity,
+          this.storage,
           true
         ).catch(() => undefined);
       }
@@ -338,7 +378,7 @@ export class BoundedOutputSpool {
         state.spillFile = undefined;
       }
     }
-    if (!state.spillPath || state.spillBytes === 0 || closeFailed || !artifactBytes) return;
+    if (state.spillBytes === 0 || closeFailed || !artifactBytes) return;
     if (this.artifactStore) {
       try {
         const artifact = await this.artifactStore.put(
@@ -413,14 +453,47 @@ export class BoundedOutputSpool {
 
 export function createNodeOutputSpillStorage(): OutputSpillStorage {
   return {
+    attest: async () => {
+      const currentPrincipalIdentity = process.getuid?.();
+      const available = process.platform !== "win32" && currentPrincipalIdentity !== undefined;
+      return {
+        currentPrincipalPrivacy: available,
+        identityStableDeletion: available,
+        unlinkedEntries: available,
+        ...(currentPrincipalIdentity === undefined
+          ? {}
+          : { currentPrincipalIdentity: currentPrincipalIdentity.toString() }),
+      };
+    },
     prepareRoot: async (root) => await mkdir(root, { recursive: true, mode: 0o700 }).then(() => undefined),
     openExclusive: async (path) => {
       const handle = await open(path, "wx+", 0o600);
-      return nodeSpillFile(handle, fileIdentity(await handle.stat()));
+      try {
+        const entry = await handle.stat();
+        const currentPrincipalIdentity = process.getuid?.();
+        if (
+          currentPrincipalIdentity !== undefined &&
+          !attestPrivateDirectoryForPrincipal(
+            { ownerIdentity: entry.uid.toString(), mode: entry.mode },
+            currentPrincipalIdentity.toString()
+          )
+        ) {
+          throw new Error("Output spill entry is not private to the current principal.");
+        }
+        if (process.platform !== "win32" && currentPrincipalIdentity !== undefined) await unlink(path);
+        return nodeSpillFile(handle, fileIdentity(entry));
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        await unlink(path).catch(() => undefined);
+        throw error;
+      }
     },
     remove: async (path) => await unlink(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error;
     }),
+    removeIdentityStable: async () => {
+      throw new Error("Identity-stable linked-entry deletion is unavailable.");
+    },
     list: async (root) => await readdir(root).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
       throw error;
@@ -429,8 +502,18 @@ export function createNodeOutputSpillStorage(): OutputSpillStorage {
 }
 
 export async function cleanupOutputSpillRoot(
-  options: Pick<BoundedOutputSpoolOptions, "spillRoot" | "projectRoot" | "ownershipId">
+  options: Pick<BoundedOutputSpoolOptions, "spillRoot" | "projectRoot" | "ownershipId"> & {
+    readonly storage?: OutputSpillStorage;
+  }
 ): Promise<void> {
+  const storage = options.storage ?? createNodeOutputSpillStorage();
+  let attestation: OutputSpillStorageAttestation;
+  try {
+    attestation = await storage.attest();
+  } catch {
+    return;
+  }
+  if (!attestation.currentPrincipalPrivacy || !attestation.identityStableDeletion) return;
   const root = resolve(requiredText(options.spillRoot, "spillRoot"));
   try {
     await lstat(root);
@@ -441,14 +524,20 @@ export async function cleanupOutputSpillRoot(
   const lease = await validateOwnedRoot(
     root,
     resolve(requiredText(options.projectRoot, "projectRoot")),
-    ownershipIdentity(options.ownershipId)
+    ownershipIdentity(options.ownershipId),
+    false,
+    attestation.currentPrincipalIdentity
   );
-  for (const name of await readdir(lease.canonicalRoot)) {
-    if (!name.startsWith(lease.entryPrefix) || !name.endsWith(`${SPILL_SUFFIX}${ENTRY_PROOF_SUFFIX}`)) continue;
-    const proofPath = join(lease.canonicalRoot, name);
-    const path = proofPath.slice(0, -ENTRY_PROOF_SUFFIX.length);
-    const proof = await readEntryProof(lease, path, proofPath).catch(() => undefined);
-    if (proof) await removeOwnedEntry(lease, path, proofPath, proof.identity).catch(() => undefined);
+  if (!attestation.unlinkedEntries) {
+    for (const name of await readdir(lease.canonicalRoot)) {
+      if (!name.startsWith(lease.entryPrefix) || !name.endsWith(`${SPILL_SUFFIX}${ENTRY_PROOF_SUFFIX}`)) continue;
+      const proofPath = join(lease.canonicalRoot, name);
+      const path = proofPath.slice(0, -ENTRY_PROOF_SUFFIX.length);
+      const proof = await readEntryProof(lease, path, proofPath).catch(() => undefined);
+      if (proof) {
+        await removeOwnedEntry(lease, path, proofPath, proof.identity, storage).catch(() => undefined);
+      }
+    }
   }
   await removeOwnedRootIfEmpty(lease);
 }
@@ -456,7 +545,8 @@ export async function cleanupOutputSpillRoot(
 async function prepareOwnedRoot(
   root: string,
   projectRoot: string,
-  ownershipId: string
+  ownershipId: string,
+  currentPrincipalIdentity?: string
 ): Promise<OwnedSpillRoot> {
   const projectReal = await realpath(projectRoot);
   let created = false;
@@ -482,7 +572,7 @@ async function prepareOwnedRoot(
     }
   }
   try {
-    return await validateOwnedRoot(root, projectReal, ownershipId, true);
+    return await validateOwnedRoot(root, projectReal, ownershipId, true, currentPrincipalIdentity);
   } catch (error) {
     if (created) {
       await unlink(join(root, OWNER_MARKER)).catch(() => undefined);
@@ -496,12 +586,22 @@ async function validateOwnedRoot(
   root: string,
   projectRoot: string,
   ownershipId: string,
-  projectAlreadyReal = false
+  projectAlreadyReal = false,
+  currentPrincipalIdentity?: string
 ): Promise<OwnedSpillRoot> {
   const rootEntry = await lstat(root);
   if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) throw new Error("Output spill root is not a private directory.");
   if (process.platform !== "win32" && (rootEntry.mode & 0o077) !== 0) {
     throw new Error("Output spill root permissions are not restrictive.");
+  }
+  if (
+    currentPrincipalIdentity !== undefined &&
+    !attestPrivateDirectoryForPrincipal(
+      { ownerIdentity: rootEntry.uid.toString(), mode: rootEntry.mode },
+      currentPrincipalIdentity
+    )
+  ) {
+    throw new Error("Output spill root is not private to the current principal.");
   }
   const [rootReal, projectReal] = await Promise.all([
     realpath(root),
@@ -515,6 +615,15 @@ async function validateOwnedRoot(
   if (!markerEntry.isFile() || markerEntry.isSymbolicLink()) throw new Error("Output spill ownership marker is invalid.");
   if (process.platform !== "win32" && (markerEntry.mode & 0o077) !== 0) {
     throw new Error("Output spill ownership marker permissions are not restrictive.");
+  }
+  if (
+    currentPrincipalIdentity !== undefined &&
+    !attestPrivateDirectoryForPrincipal(
+      { ownerIdentity: markerEntry.uid.toString(), mode: markerEntry.mode },
+      currentPrincipalIdentity
+    )
+  ) {
+    throw new Error("Output spill ownership marker is not private to the current principal.");
   }
   const marker = JSON.parse(await readFile(markerPath, "utf8")) as Record<string, unknown>;
   if (
@@ -534,7 +643,15 @@ async function validateOwnedRoot(
     rootIdentity: fileIdentity(rootEntry),
     markerIdentity: fileIdentity(markerEntry),
     entryPrefix: `${SPILL_PREFIX}${createHash("sha256").update(`${ownershipId}\0${rootId}`).digest("hex").slice(0, 20)}-`,
+    ...(currentPrincipalIdentity === undefined ? {} : { currentPrincipalIdentity }),
   };
+}
+
+export function attestPrivateDirectoryForPrincipal(
+  directory: { readonly ownerIdentity: string; readonly mode: number },
+  currentPrincipalIdentity: string
+): boolean {
+  return directory.ownerIdentity === currentPrincipalIdentity && (directory.mode & 0o077) === 0;
 }
 
 async function removeOwnedEntry(
@@ -542,9 +659,16 @@ async function removeOwnedEntry(
   path: string,
   proofPath: string | undefined,
   expectedIdentity?: string,
+  storage?: OutputSpillStorage,
   allowMissingProof = false
 ): Promise<void> {
-  const current = await validateOwnedRoot(lease.canonicalRoot, lease.projectRoot, lease.ownershipId, true);
+  const current = await validateOwnedRoot(
+    lease.canonicalRoot,
+    lease.projectRoot,
+    lease.ownershipId,
+    true,
+    lease.currentPrincipalIdentity
+  );
   assertSameOwnedRoot(lease, current);
   const name = basename(path);
   if (!name.startsWith(lease.entryPrefix) || !name.endsWith(SPILL_SUFFIX)) {
@@ -552,6 +676,15 @@ async function removeOwnedEntry(
   }
   const entry = await lstat(path);
   if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Output spill entry identity changed.");
+  if (
+    lease.currentPrincipalIdentity !== undefined &&
+    !attestPrivateDirectoryForPrincipal(
+      { ownerIdentity: entry.uid.toString(), mode: entry.mode },
+      lease.currentPrincipalIdentity
+    )
+  ) {
+    throw new Error("Output spill entry is not private to the current principal.");
+  }
   if (!expectedIdentity || fileIdentity(entry) !== expectedIdentity) {
     throw new Error("Output spill entry identity changed.");
   }
@@ -559,7 +692,8 @@ async function removeOwnedEntry(
     if (!proofPath) throw new Error("Output spill entry ownership proof is missing.");
     await readEntryProof(lease, path, proofPath, expectedIdentity);
   }
-  await unlink(path);
+  if (!storage || !expectedIdentity) throw new Error("Identity-stable spill deletion is unavailable.");
+  await storage.removeIdentityStable(path, expectedIdentity);
   if (proofPath && !allowMissingProof) await unlink(proofPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;
   });
@@ -573,6 +707,15 @@ async function readEntryProof(
 ): Promise<{ identity: string }> {
   const proofEntry = await lstat(proofPath);
   if (!proofEntry.isFile() || proofEntry.isSymbolicLink()) throw new Error("Output spill entry proof is invalid.");
+  if (
+    lease.currentPrincipalIdentity !== undefined &&
+    !attestPrivateDirectoryForPrincipal(
+      { ownerIdentity: proofEntry.uid.toString(), mode: proofEntry.mode },
+      lease.currentPrincipalIdentity
+    )
+  ) {
+    throw new Error("Output spill entry proof is not private to the current principal.");
+  }
   const proof = JSON.parse(await readFile(proofPath, "utf8")) as Record<string, unknown>;
   if (
     proof.version !== 1 ||
@@ -588,7 +731,13 @@ async function readEntryProof(
 }
 
 async function removeOwnedRootIfEmpty(lease: OwnedSpillRoot): Promise<void> {
-  const current = await validateOwnedRoot(lease.canonicalRoot, lease.projectRoot, lease.ownershipId, true);
+  const current = await validateOwnedRoot(
+    lease.canonicalRoot,
+    lease.projectRoot,
+    lease.ownershipId,
+    true,
+    lease.currentPrincipalIdentity
+  );
   assertSameOwnedRoot(lease, current);
   const entries = await readdir(lease.canonicalRoot);
   if (entries.some((entry) => entry !== OWNER_MARKER)) return;

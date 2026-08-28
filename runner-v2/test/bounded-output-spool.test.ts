@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,12 +7,14 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import {
   BoundedOutputSpool,
+  attestPrivateDirectoryForPrincipal,
   cleanupOutputSpillRoot,
   createNodeOutputSpillStorage,
   type BoundedOutputSpoolOptions,
   type BoundedOutputStreamResult,
   type OutputSpillFile,
   type OutputSpillStorage,
+  type OutputSpillStorageAttestation,
 } from "../src/bounded-output-spool.js";
 
 const KIB = 1024;
@@ -29,11 +31,27 @@ function spoolOptions(
   spillRoot: string,
   overrides: Partial<BoundedOutputSpoolOptions> = {}
 ): BoundedOutputSpoolOptions {
+  const storage = overrides.storage ?? createNodeOutputSpillStorage();
   return {
     spillRoot,
     projectRoot: process.cwd(),
     ownershipId: "runner-test-owner",
     ...overrides,
+    storage: {
+      ...storage,
+      attest: async () => ({
+        currentPrincipalPrivacy: true,
+        identityStableDeletion: true,
+        unlinkedEntries: false,
+      }),
+      removeIdentityStable: async (path, identity) => {
+        const entry = await lstat(path);
+        if (`${entry.dev.toString()}:${entry.ino.toString()}` !== identity) {
+          throw new Error("Output spill entry identity changed.");
+        }
+        await unlink(path);
+      },
+    },
   };
 }
 
@@ -46,6 +64,174 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   const promise = new Promise<T>((accept) => { resolve = accept; });
   return { promise, resolve };
 }
+
+test("principal privacy attestation rejects owner mismatch independently of restrictive mode", () => {
+  assert.equal(attestPrivateDirectoryForPrincipal({ ownerIdentity: "1001", mode: 0o700 }, "1001"), true);
+  assert.equal(attestPrivateDirectoryForPrincipal({ ownerIdentity: "1002", mode: 0o700 }, "1001"), false);
+});
+
+test("principal privacy attestation rejects permissive mode independently of owner", () => {
+  assert.equal(attestPrivateDirectoryForPrincipal({ ownerIdentity: "1001", mode: 0o755 }, "1001"), false);
+  assert.equal(attestPrivateDirectoryForPrincipal({ ownerIdentity: "1001", mode: 0o707 }, "1001"), false);
+});
+
+for (const [name, attestation] of [
+  ["privacy unavailable", { currentPrincipalPrivacy: false, identityStableDeletion: true, unlinkedEntries: false }],
+  ["stable deletion unavailable", { currentPrincipalPrivacy: true, identityStableDeletion: false, unlinkedEntries: false }],
+] as const) {
+  test(`continues tail-only without disk writes when ${name}`, async (t) => {
+    const root = await temporaryRoot(t);
+    const nodeStorage = createNodeOutputSpillStorage();
+    let rootPreparations = 0;
+    let opens = 0;
+    const storage: OutputSpillStorage = {
+      ...nodeStorage,
+      attest: async (): Promise<OutputSpillStorageAttestation> => attestation,
+      prepareRoot: async () => { rootPreparations += 1; },
+      openExclusive: async (path) => { opens += 1; return await nodeStorage.openExclusive(path); },
+    };
+    const spool = new BoundedOutputSpool({ ...spoolOptions(root), tailBytes: 64, storage });
+
+    await spool.write("stdout", Buffer.from("first private spill unavailable chunk"));
+    await spool.write("stdout", Buffer.from(" and draining continues"));
+    const output = stream(await spool.finalize(), "stdout");
+
+    assert.equal(rootPreparations, 0);
+    assert.equal(opens, 0);
+    assert.equal(output.totalBytes, 60);
+    assert.equal(output.spillBytes, 0);
+    assert.equal(output.lossyBytes, 60);
+    assert.equal(output.lossyOutput, true);
+    assert.equal(output.lossReason?.code, "private_spill_unavailable");
+    await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  });
+}
+
+test("treats unavailable attestation as tail-only without trying disk", async (t) => {
+  const root = await temporaryRoot(t);
+  const nodeStorage = createNodeOutputSpillStorage();
+  let opens = 0;
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => { throw new Error("capability unavailable"); },
+    openExclusive: async (path) => { opens += 1; return await nodeStorage.openExclusive(path); },
+  };
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+
+  await spool.write("stdout", Buffer.from("tail only"));
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(opens, 0);
+  assert.equal(output.lossReason?.code, "private_spill_unavailable");
+  assert.equal(output.lossyBytes, 9);
+});
+
+test("built-in backend creates no spill when it cannot attest current-principal privacy", async (t) => {
+  if (process.platform !== "win32") return;
+  const root = await temporaryRoot(t);
+  const spool = new BoundedOutputSpool({
+    spillRoot: root,
+    projectRoot: process.cwd(),
+    ownershipId: "runner-test-owner",
+  });
+
+  await spool.write("stdout", Buffer.from("tail only"));
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(output.lossReason?.code, "private_spill_unavailable");
+  assert.equal(output.spillBytes, 0);
+  await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
+test("rejects an attested principal mismatch before opening a spill entry", async (t) => {
+  const root = await temporaryRoot(t);
+  const nodeStorage = createNodeOutputSpillStorage();
+  let opens = 0;
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => ({
+      currentPrincipalPrivacy: true,
+      identityStableDeletion: true,
+      unlinkedEntries: false,
+      currentPrincipalIdentity: "principal-that-cannot-own-the-test-root",
+    }),
+    openExclusive: async (path) => { opens += 1; return await nodeStorage.openExclusive(path); },
+  };
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+
+  await spool.write("stdout", Buffer.from("tail only"));
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(opens, 0);
+  assert.equal(output.lossReason?.code, "spill_root_invalid");
+  assert.equal(output.lossyOutput, true);
+});
+
+test("built-in descriptor-stable backend leaves no linked spill entry", async (t) => {
+  if (process.platform === "win32") return;
+  const root = await temporaryRoot(t);
+  let artifactBytes = "";
+  const spool = new BoundedOutputSpool({
+    spillRoot: root,
+    projectRoot: process.cwd(),
+    ownershipId: "runner-test-owner",
+    artifactStore: {
+      put: async (bytes) => {
+        artifactBytes = Buffer.from(bytes).toString();
+        return { hash: "descriptor-artifact" };
+      },
+    },
+  });
+
+  await spool.write("stdout", Buffer.from("descriptor bytes"));
+  assert.deepEqual(await createNodeOutputSpillStorage().list(root), [".output-spool-owner.json"]);
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(artifactBytes, "descriptor bytes");
+  assert.equal(output.spillArtifactId, "descriptor-artifact");
+  assert.deepEqual(await createNodeOutputSpillStorage().list(root), []);
+});
+
+test("an attested descriptor-only spill is artifact-ingested without a linked path", async (t) => {
+  const root = await temporaryRoot(t);
+  let retained = Buffer.alloc(0);
+  let artifactBytes = Buffer.alloc(0);
+  const nodeStorage = createNodeOutputSpillStorage();
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => ({
+      currentPrincipalPrivacy: true,
+      identityStableDeletion: true,
+      unlinkedEntries: true,
+    }),
+    openExclusive: async () => ({
+      identity: "descriptor-only",
+      write: async (bytes) => {
+        retained = Buffer.concat([retained, Buffer.from(bytes)]);
+        return bytes.byteLength;
+      },
+      sealAndRead: async () => Buffer.from(retained),
+      close: async () => undefined,
+    }),
+  };
+  const spool = new BoundedOutputSpool({
+    ...spoolOptions(root),
+    storage,
+    artifactStore: {
+      put: async (bytes) => {
+        artifactBytes = Buffer.from(bytes);
+        return { hash: "descriptor-only-artifact" };
+      },
+    },
+  });
+
+  await spool.write("stdout", Buffer.from("descriptor bytes"));
+  const output = stream(await spool.finalize(), "stdout");
+
+  assert.equal(artifactBytes.toString(), "descriptor bytes");
+  assert.equal(output.spillArtifactId, "descriptor-only-artifact");
+  assert.equal(output.spillState, "artifact_ingested");
+});
 
 test("finalize seals synchronously, drains accepted writes, and rejects later writes before queueing", async (t) => {
   const root = await temporaryRoot(t);
@@ -584,6 +770,30 @@ test("cleanup refuses a foreign regular file swapped over an owned spill identit
 
   await assert.rejects(spool.finalize(), /identity changed/);
   assert.equal(await readFile(spillPath, "utf8"), "foreign");
+});
+
+test("linked-entry cleanup is enforced by the attested identity-stable adapter operation", async (t) => {
+  const root = await temporaryRoot(t);
+  const nodeStorage = createNodeOutputSpillStorage();
+  let spillPath = "";
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => ({
+      currentPrincipalPrivacy: true,
+      identityStableDeletion: true,
+      unlinkedEntries: false,
+    }),
+    openExclusive: async (path) => {
+      spillPath = path;
+      return await nodeStorage.openExclusive(path);
+    },
+    removeIdentityStable: async () => { throw new Error("stable deletion refusal"); },
+  };
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+  await spool.write("stdout", Buffer.from("owned"));
+
+  await assert.rejects(spool.finalize(), /stable deletion refusal/);
+  assert.equal(await readFile(spillPath, "utf8"), "owned");
 });
 
 test("cleanup revalidates the root after it is replaced by an alias", async (t) => {
