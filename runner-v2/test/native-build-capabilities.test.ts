@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
@@ -21,11 +32,16 @@ import {
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
+import {
+  toolInvocationFingerprint,
+  toolInvocationKey,
+} from "../src/tool-ledger.js";
 
 test("NativeBuildFactory loads configured capabilities and reports provider audit metadata", async () => {
   const fixture = createFixture("metadata");
@@ -648,7 +664,7 @@ test("NativeBuildFactory serves a terminal legacy Build from read-only durable s
     });
 
     const prepared = await factory.prepareSpec(buildSpec(runId));
-    handle = await factory.createHistorical(prepared);
+    handle = await factory.createHistorical(prepared, "completed");
 
     assert.equal(handle.runtime.projection().status, "completed");
     assert.equal(handle.usage().scopeId, runId);
@@ -664,16 +680,24 @@ test("NativeBuildFactory serves a terminal legacy Build from read-only durable s
       extensions: prepared.capabilityContract!.extensions,
       languageServers: prepared.capabilityContract!.languageServers,
     });
-    assert.deepEqual(await handle.transcript(), { turns: [], cursor: 0 });
+    assert.deepEqual(await handle.transcript(), {
+      turns: [],
+      cursor: 0,
+      historicalProvenance: "durable",
+    });
     assert.deepEqual(await handle.files(), {
       source: "integration",
       revision: "",
       appliedToProject: false,
       omittedFileCount: 0,
       files: [],
+      historicalProvenance: "unavailable",
     });
     assert.deepEqual(handle.runtime.events(), []);
     await assert.rejects(handle.runtime.step(), /read-only/i);
+    assert.throws(() => handle!.compact(), /read-only/i);
+    await assert.rejects(handle!.projectHandoff("keep_integration_branch"), /read-only/i);
+    assert.throws(() => handle!.cleanup(), /read-only/i);
     assert.equal(
       existsSync(join(root, "extensions", "fixture.factory", "started.txt")),
       false,
@@ -704,18 +728,23 @@ test("NativeBuildFactory keeps missing terminal stores absent and projects empty
     const root = runRoot(fixture.state, runId);
     assert.equal(existsSync(root), false);
 
-    handle = await factory.createHistorical(prepared);
+    handle = await factory.createHistorical(prepared, "completed");
 
     assert.equal(handle.runtime.projection().status, "completed");
     assert.equal(handle.usage().scopeId, runId);
     assert.deepEqual((await handle.observability()).events, []);
-    assert.deepEqual(await handle.transcript(), { turns: [], cursor: 0 });
+    assert.deepEqual(await handle.transcript(), {
+      turns: [],
+      cursor: 0,
+      historicalProvenance: "unavailable",
+    });
     assert.deepEqual(await handle.files(), {
       source: "integration",
       revision: "",
       appliedToProject: false,
       omittedFileCount: 0,
       files: [],
+      historicalProvenance: "unavailable",
     });
     assert.equal(existsSync(root), false);
   } finally {
@@ -724,6 +753,777 @@ test("NativeBuildFactory keeps missing terminal stores absent and projects empty
     fixture.cleanup();
   }
 });
+
+test("NativeBuildFactory historical readers do not create mutable global stores", async () => {
+  const fixture = createFixture("historical-no-global-authority");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    assert.equal(existsSync(join(fixture.state, "project-memory.sqlite")), false);
+    assert.equal(existsSync(join(fixture.state, "managed-processes")), false);
+
+    handle = await factory.createHistorical(buildSpec("historical_no_global_authority"), "stopped");
+    await handle.observability();
+    await handle.close();
+    handle = undefined;
+
+    assert.equal(existsSync(join(fixture.state, "project-memory.sqlite")), false);
+    assert.equal(existsSync(join(fixture.state, "managed-processes")), false);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory retries aggregate historical cleanup after a transient close failure", async () => {
+  const fixture = createFixture("historical-close-retry");
+  const runId = "capability_historical_close_retry";
+  const root = runRoot(fixture.state, runId);
+  const existingSnapshots = historicalTemporarySnapshots();
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  const originalClose = DatabaseSync.prototype.close;
+  let closeAttempts = 0;
+  let faultedDatabase: DatabaseSync | undefined;
+  const captureFaultedDatabase = (database: DatabaseSync): void => {
+    faultedDatabase ??= database;
+  };
+  let createdSnapshots: string[] = [];
+  try {
+    mkdirSync(root, { recursive: true });
+    const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+    evidence.close();
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    handle = await factory.createHistorical(buildSpec(runId), "stopped");
+    createdSnapshots = [...historicalTemporarySnapshots()]
+      .filter((directory) => !existingSnapshots.has(directory));
+    assert.equal(createdSnapshots.length, 1);
+
+    DatabaseSync.prototype.close = function closeWithTransientFault(this: DatabaseSync): void {
+      closeAttempts += 1;
+      if (closeAttempts === 1) {
+        captureFaultedDatabase(this);
+        throw new Error("injected historical close failure");
+      }
+      originalClose.call(this);
+    };
+    const firstClose = handle.close();
+    const duplicateClose = handle.close();
+    for (const close of [firstClose, duplicateClose]) {
+      await assert.rejects(
+        async () => { await close; },
+        (error: unknown) => error instanceof AggregateError &&
+          error.errors.some((entry) => entry instanceof Error &&
+            entry.message === "injected historical close failure"),
+      );
+    }
+    assert.equal(closeAttempts, 1);
+
+    await handle.close();
+    handle = undefined;
+    assert.equal(closeAttempts, 2);
+  } finally {
+    DatabaseSync.prototype.close = originalClose;
+    // A deliberately faulted old eager-close implementation cannot retry;
+    // release the injected handle so the fault proof itself leaves no temp
+    // snapshot behind.
+    if (faultedDatabase) {
+      try { originalClose.call(faultedDatabase); } catch { /* already closed */ }
+    }
+    await handle?.close();
+    for (const directory of createdSnapshots) {
+      const path = join(tmpdir(), directory);
+      if (existsSync(path)) {
+        rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
+    }
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory retains every locked historical snapshot and retries aggregate removal", async () => {
+  const fixture = createFixture("historical-snapshot-removal-retry");
+  const runId = "capability_historical_snapshot_removal_retry";
+  const root = runRoot(fixture.state, runId);
+  const existingSnapshots = historicalTemporarySnapshots();
+  const lockedSnapshots: DatabaseSync[] = [];
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+    const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+    evidence.close();
+    ledger.close();
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    handle = await factory.createHistorical(buildSpec(runId), "stopped");
+    const snapshotDirectories = [...historicalTemporarySnapshots()]
+      .filter((directory) => !existingSnapshots.has(directory));
+    assert.equal(snapshotDirectories.length, 2);
+    for (const directory of snapshotDirectories) {
+      const database = readdirSync(join(tmpdir(), directory))
+        .find((entry) => entry.endsWith(".sqlite"));
+      assert.ok(database);
+      lockedSnapshots.push(new DatabaseSync(join(tmpdir(), directory, database), { readOnly: true }));
+    }
+
+    await assert.rejects(
+      async () => { await handle!.close(); },
+      (error: unknown) => error instanceof AggregateError &&
+        error.errors.length === snapshotDirectories.length,
+    );
+    assert.deepEqual(
+      snapshotDirectories.map((directory) => existsSync(join(tmpdir(), directory))),
+      [true, true],
+    );
+
+    for (const database of lockedSnapshots.splice(0)) database.close();
+    await handle.close();
+    handle = undefined;
+    assert.deepEqual(
+      snapshotDirectories.map((directory) => existsSync(join(tmpdir(), directory))),
+      [false, false],
+    );
+  } finally {
+    for (const database of lockedSnapshots.splice(0)) database.close();
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory preserves opening and cleanup failures while constructing historical readers", async () => {
+  const fixture = createFixture("historical-construction-cleanup");
+  const runId = "capability_historical_construction_cleanup";
+  const root = runRoot(fixture.state, runId);
+  const existingSnapshots = historicalTemporarySnapshots();
+  const originalClose = DatabaseSync.prototype.close;
+  let interceptedDatabase: DatabaseSync | undefined;
+  const captureFaultedDatabase = (database: DatabaseSync): void => {
+    interceptedDatabase ??= database;
+  };
+  let factory: NativeBuildFactory | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+    evidence.close();
+    // The last optional store is deliberately invalid, after evidence has
+    // opened, so construction must report both failures during unwind.
+    mkdirSync(join(fixture.state, "project-memory.sqlite"));
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    DatabaseSync.prototype.close = function closeWithConstructionFault(this: DatabaseSync): void {
+      captureFaultedDatabase(this);
+      throw new Error("injected historical construction cleanup failure");
+    };
+
+    await assert.rejects(
+      factory.createHistorical(buildSpec(runId), "failed"),
+      (error: unknown) => error instanceof AggregateError &&
+        error.errors.some((entry) => entry instanceof Error && /must be a regular file/i.test(entry.message)) &&
+        error.errors.some((entry) => entry instanceof Error &&
+          entry.message === "injected historical construction cleanup failure"),
+    );
+  } finally {
+    DatabaseSync.prototype.close = originalClose;
+    // The deliberately faulted close did not release this private snapshot.
+    // Release it only after the production path has reported its aggregate.
+    if (interceptedDatabase) originalClose.call(interceptedDatabase);
+    for (const directory of historicalTemporarySnapshots()) {
+      if (!existingSnapshots.has(directory)) {
+        rmSync(join(tmpdir(), directory), { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
+    }
+    await factory?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory reconstructs terminal observations only from durable run records", async () => {
+  const fixture = createFixture("historical-durable-observations");
+  const runId = "capability_historical_durable_observations";
+  const root = runRoot(fixture.state, runId);
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let sessions: SqliteAgentSessionStore | undefined;
+  let budget: SqliteBudgetLedger | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let memory: SqliteProjectMemoryStore | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+    ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+    sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+    budget = new SqliteBudgetLedger(join(root, "budget.sqlite"), { limitsFor: () => ({}) });
+    scheduler = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+      evidenceStore: evidence,
+      artifacts,
+    });
+    memory = new SqliteProjectMemoryStore(join(fixture.state, "project-memory.sqlite"));
+
+    scheduler.append({
+      runId,
+      type: "run.initialized",
+      occurredAt: "2026-08-28T00:00:00.000Z",
+      actor: { role: "runner", id: "fixture" },
+      idempotencyKey: "initialized",
+      payload: { objective: "Recover durable observations." },
+    });
+    evidence.record({
+      runId,
+      taskId: "task_1",
+      actor: { role: "worker", id: "worker_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "Durable evidence",
+        capturedAt: "2026-08-28T00:00:01.000Z",
+        screenshotArtifactHash: "a".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: "2026-08-28T00:00:01.000Z",
+      idempotencyKey: "evidence",
+    });
+    await sessions.create({
+      sessionId: "worker:historical:1",
+      runId,
+      actor: { role: "worker", id: "worker_1" },
+      occurredAt: "2026-08-28T00:00:02.000Z",
+    });
+    await sessions.checkpoint(
+      "worker:historical:1",
+      {
+        messages: [
+          { id: "assistant", role: "assistant", content: "Durable transcript." },
+        ],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:03.000Z",
+    );
+    const skillCall = {
+      type: "tool_call" as const,
+      callId: "skills",
+      name: "list_skills",
+      arguments: {},
+    };
+    const skillContext = { runId, sessionId: "worker:historical:1" };
+    const skillKey = toolInvocationKey(skillContext, skillCall.callId);
+    const skillFingerprint = toolInvocationFingerprint(skillCall);
+    ledger.begin({
+      key: skillKey,
+      fingerprint: skillFingerprint,
+      callId: skillCall.callId,
+      toolName: skillCall.name,
+      runId,
+      sessionId: skillContext.sessionId,
+      replaySafe: true,
+      effect: "none",
+      access: { capability: "skills" },
+      outsideWorkspace: false,
+      occurredAt: "2026-08-28T00:00:04.000Z",
+    });
+    ledger.complete(skillKey, skillFingerprint, {
+      callId: skillCall.callId,
+      toolName: skillCall.name,
+      content: [{
+        type: "json",
+        value: [{
+          id: "project:historical",
+          name: "Historical skill",
+          description: "Captured skill metadata.",
+          relativePath: ".agents/skills/historical/SKILL.md",
+          digest: "b".repeat(64),
+          byteLength: 42,
+          source: "project",
+        }],
+      }],
+      isError: false,
+    }, "2026-08-28T00:00:05.000Z");
+    budget.reserve({
+      scopeId: runId,
+      reservationId: "model_historical",
+      kind: "model",
+      attribution: {
+        runtimeId: "historical:model",
+        providerId: "historical-provider",
+        modelId: "historical-model",
+        role: "worker",
+        sessionId: skillContext.sessionId,
+      },
+      estimate: { inputTokens: 10, outputTokens: 3, estimatedCostMicros: 15 },
+      costBasis: {
+        kind: "api_estimate",
+        inputCostMicrosPerMillion: 1,
+        outputCostMicrosPerMillion: 1,
+        cachedInputCostMicrosPerMillion: 0,
+        cacheWriteInputCostMicrosPerMillion: 0,
+      },
+      occurredAt: "2026-08-28T00:00:06.000Z",
+      idempotencyKey: "reserve:model",
+    });
+    budget.settle({
+      scopeId: runId,
+      reservationId: "model_historical",
+      actual: { inputTokens: 7, outputTokens: 2, estimatedCostMicros: 9 },
+      tokenSources: { inputTokens: "reported", outputTokens: "reported" },
+      costBasis: {
+        kind: "api_estimate",
+        inputCostMicrosPerMillion: 1,
+        outputCostMicrosPerMillion: 1,
+        cachedInputCostMicrosPerMillion: 0,
+        cacheWriteInputCostMicrosPerMillion: 0,
+      },
+      occurredAt: "2026-08-28T00:00:07.000Z",
+      idempotencyKey: "settle:model",
+    });
+    const durableMemory = memory.propose({
+      projectId: "fixture-project",
+      runId,
+      actor: { role: "architect", id: "architect_1" },
+      content: "Durable historical memory.",
+      concepts: ["history"],
+      occurredAt: "2026-08-28T00:00:08.000Z",
+      idempotencyKey: "memory",
+    });
+    const processDirectory = join(fixture.state, "managed-processes", "process_historical");
+    mkdirSync(processDirectory, { recursive: true });
+    const stdoutPath = join(processDirectory, "stdout.log");
+    const stderrPath = join(processDirectory, "stderr.log");
+    writeFileSync(stdoutPath, "durable stdout\n");
+    writeFileSync(stderrPath, "durable stderr\n");
+    writeFileSync(join(fixture.state, "managed-processes", "process_historical.json"), JSON.stringify({
+      processId: "process_historical",
+      pid: 4242,
+      runId,
+      sessionId: skillContext.sessionId,
+      actor: { role: "worker", id: "worker_1" },
+      command: process.execPath,
+      args: ["--version"],
+      cwd: fixture.project,
+      environmentKeys: ["PATH"],
+      startedAt: "2026-08-28T00:00:09.000Z",
+      updatedAt: "2026-08-28T00:00:10.000Z",
+      status: "stopped",
+      exitCode: 0,
+      signal: null,
+      stdoutPath,
+      stderrPath,
+    }, null, 2));
+
+    memory.close(); memory = undefined;
+    scheduler.close(); scheduler = undefined;
+    budget.close(); budget = undefined;
+    sessions.close(); sessions = undefined;
+    ledger.close(); ledger = undefined;
+    evidence.close(); evidence = undefined;
+    const before = historicalStateSnapshot(fixture.state);
+
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    handle = await factory.createHistorical(buildSpec(runId), "stopped");
+    assert.equal(handle.runtime.projection().status, "stopped");
+    assert.equal(handle.runtime.events().length, 1);
+    const usage = handle.usage();
+    assert.equal(usage.historicalProvenance, "durable");
+    assert.deepEqual(usage.models.map((model) => ({
+      runtimeId: model.runtimeId,
+      providerId: model.providerId,
+      modelId: model.modelId,
+      roles: model.roles,
+      status: model.status,
+      calls: model.calls,
+      inputTokens: model.inputTokens,
+      outputTokens: model.outputTokens,
+      estimatedCostMicros: model.estimatedCostMicros,
+    })), [{
+      runtimeId: "historical:model",
+      providerId: "historical-provider",
+      modelId: "historical-model",
+      roles: ["worker"],
+      status: "unavailable",
+      calls: 1,
+      inputTokens: 7,
+      outputTokens: 2,
+      estimatedCostMicros: 9,
+    }]);
+    assert.deepEqual(await handle.transcript(), {
+      turns: [{
+        id: "worker:historical:1:assistant",
+        sessionId: "worker:historical:1",
+        actor: { role: "worker", id: "worker_1" },
+        sequence: 2,
+        ordinal: 0,
+        occurredAt: "2026-08-28T00:00:03.000Z",
+        text: "Durable transcript.",
+      }],
+      cursor: 2,
+      historicalProvenance: "durable",
+    });
+    assert.deepEqual(await handle.files(), {
+      source: "integration",
+      revision: "",
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+      historicalProvenance: "unavailable",
+    });
+    const snapshot = await handle.observability();
+    assert.equal(snapshot.evidence.length, 1);
+    assert.deepEqual(snapshot.memories.map((entry) => entry.id), [durableMemory.id]);
+    assert.deepEqual(snapshot.skills.map((skill) => skill.id), ["project:historical"]);
+    assert.equal(snapshot.processes[0]?.processId, "process_historical");
+    assert.equal(snapshot.processes[0]?.status, "stopped");
+    assert.deepEqual(snapshot.historical, {
+      terminalState: "stopped",
+      provenance: {
+        usage: "durable",
+        transcript: "durable",
+        evidence: "durable",
+        memories: "durable",
+        skills: "durable",
+        processes: "durable",
+        capabilities: "unavailable",
+        events: "durable",
+        files: "unavailable",
+      },
+    });
+    await handle.close();
+    handle = undefined;
+    await factory.close();
+    factory = undefined;
+    assert.deepEqual(historicalStateSnapshot(fixture.state), before);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    memory?.close();
+    scheduler?.close();
+    budget?.close();
+    sessions?.close();
+    ledger?.close();
+    evidence?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory replays unmigrated terminal transcript and evidence without writes", async () => {
+  const fixture = createFixture("historical-unmigrated-observations");
+  const runId = "capability_historical_unmigrated_observations";
+  const root = runRoot(fixture.state, runId);
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  let sessions: SqliteAgentSessionStore | undefined;
+  let rawEvidence: DatabaseSync | undefined;
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+    await sessions.create({
+      sessionId: "architect:unmigrated",
+      runId,
+      actor: { role: "architect", id: "architect_1" },
+      occurredAt: "2026-08-28T00:00:00.000Z",
+    });
+    await sessions.checkpoint(
+      "architect:unmigrated",
+      {
+        messages: [{ id: "assistant", role: "assistant", content: "Legacy transcript." }],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:01.000Z",
+    );
+    sessions.close();
+    sessions = undefined;
+    const sessionDatabase = new DatabaseSync(join(root, "sessions.sqlite"));
+    try {
+      sessionDatabase.exec(`
+        DROP TABLE agent_transcript_turns;
+        DROP TABLE agent_transcript_checkpoints;
+      `);
+    } finally {
+      sessionDatabase.close();
+    }
+    rawEvidence = new DatabaseSync(join(root, "evidence.sqlite"));
+    rawEvidence.exec(`
+      CREATE TABLE evidence_records (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        evidence_id TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        fact_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        UNIQUE(run_id, idempotency_key)
+      );
+    `);
+    rawEvidence.prepare(`
+      INSERT INTO evidence_records (
+        evidence_id, run_id, task_id, actor_json, fact_json, created_at, idempotency_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "evidence_unmigrated",
+      runId,
+      "task_legacy",
+      JSON.stringify({ role: "worker", id: "worker_1" }),
+      JSON.stringify({
+        kind: "browser_screenshot",
+        label: "Unmigrated evidence",
+        capturedAt: "2026-08-28T00:00:02.000Z",
+        screenshotArtifactHash: "d".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      }),
+      "2026-08-28T00:00:02.000Z",
+      "unmigrated-evidence",
+    );
+    rawEvidence.close();
+    rawEvidence = undefined;
+    const before = historicalStateSnapshot(fixture.state);
+
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    handle = await factory.createHistorical(buildSpec(runId), "failed");
+    assert.equal(handle.runtime.projection().status, "failed");
+    assert.deepEqual(await handle.transcript(), {
+      turns: [{
+        id: "architect:unmigrated:assistant",
+        sessionId: "architect:unmigrated",
+        actor: { role: "architect", id: "architect_1" },
+        sequence: 2,
+        ordinal: 0,
+        occurredAt: "2026-08-28T00:00:01.000Z",
+        text: "Legacy transcript.",
+      }],
+      cursor: 2,
+      historicalProvenance: "legacy_replay",
+    });
+    const snapshot = await handle.observability();
+    assert.equal(snapshot.evidence[0]?.id, "evidence_unmigrated");
+    assert.equal(snapshot.evidence[0]?.attempt, undefined);
+    assert.equal(snapshot.historical?.provenance.transcript, "legacy_replay");
+    assert.equal(snapshot.historical?.provenance.evidence, "legacy_replay");
+    await handle.close();
+    handle = undefined;
+    await factory.close();
+    factory = undefined;
+    assert.deepEqual(historicalStateSnapshot(fixture.state), before);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    sessions?.close();
+    rawEvidence?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory historical copies preserve WAL-visible durable observations", async () => {
+  const fixture = createFixture("historical-wal-observation");
+  const runId = "capability_historical_wal_observation";
+  const root = runRoot(fixture.state, runId);
+  const databasePath = join(root, "evidence.sqlite");
+  let raw: DatabaseSync | undefined;
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+  try {
+    mkdirSync(root, { recursive: true });
+    raw = new DatabaseSync(databasePath);
+    raw.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE evidence_records (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        evidence_id TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        fact_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        attempt INTEGER,
+        UNIQUE(run_id, idempotency_key)
+      );
+    `);
+    raw.prepare(`
+      INSERT INTO evidence_records (
+        evidence_id, run_id, task_id, actor_json, fact_json,
+        created_at, idempotency_key, attempt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "evidence_wal",
+      runId,
+      "task_wal",
+      JSON.stringify({ role: "worker", id: "worker_1" }),
+      JSON.stringify({
+        kind: "browser_screenshot",
+        label: "WAL-visible evidence",
+        capturedAt: "2026-08-28T00:00:00.000Z",
+        screenshotArtifactHash: "c".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      }),
+      "2026-08-28T00:00:00.000Z",
+      "wal-evidence",
+      1,
+    );
+    assert.equal(existsSync(`${databasePath}-wal`), true);
+    const before = historicalStateSnapshot(fixture.state);
+
+    factory = createFactory(fixture.project, fixture.state, "unused", {
+      extensions: [],
+      languageServers: [],
+    });
+    handle = await factory.createHistorical(buildSpec(runId), "completed");
+    assert.deepEqual((await handle.observability()).evidence.map((record) => record.id), [
+      "evidence_wal",
+    ]);
+    await handle.close();
+    handle = undefined;
+    await factory.close();
+    factory = undefined;
+    assert.deepEqual(historicalStateSnapshot(fixture.state), before);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    raw?.close();
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory preserves the authoritative terminal state when scheduler history is absent", async () => {
+  for (const terminalState of ["failed", "stopped"] as const) {
+    const fixture = createFixture(`historical-terminal-${terminalState}`);
+    let factory: NativeBuildFactory | undefined;
+    let handle: Awaited<ReturnType<NativeBuildFactory["createHistorical"]>> | undefined;
+    try {
+      const runId = `capability_historical_${terminalState}`;
+      const baseline = await captureGitBaseline({
+        projectPath: fixture.project,
+        stateDirectory: fixture.state,
+        runId,
+      });
+      factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+        extensions: [],
+        languageServers: [],
+      });
+      const prepared = await factory.prepareSpec(buildSpec(runId));
+
+      handle = await (factory.createHistorical as unknown as (
+        spec: typeof prepared,
+        state: typeof terminalState,
+      ) => ReturnType<NativeBuildFactory["createHistorical"]>)(prepared, terminalState);
+
+      assert.equal(handle.runtime.projection().status, terminalState);
+    } finally {
+      await handle?.close();
+      await factory?.close();
+      fixture.cleanup();
+    }
+  }
+});
+
+function historicalStateSnapshot(root: string): {
+  directories: string[];
+  files: Array<{
+    path: string;
+    digest: string;
+    byteLength: number;
+    mtimeMs: number;
+    sqliteSchema?: Array<{ type: string; name: string; tableName: string; sql: string | null }>;
+  }>;
+} {
+  const directories: string[] = [];
+  const files: Array<{
+    path: string;
+    digest: string;
+    byteLength: number;
+    mtimeMs: number;
+    sqliteSchema?: Array<{ type: string; name: string; tableName: string; sql: string | null }>;
+  }> = [];
+  const visit = (directory: string) => {
+    const normalized = relative(root, directory).replace(/\\/g, "/") || ".";
+    directories.push(normalized);
+    for (const entry of readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const bytes = readFileSync(path);
+      const relativePath = relative(root, path).replace(/\\/g, "/");
+      const detail: (typeof files)[number] = {
+        path: relativePath,
+        digest: createHash("sha256").update(bytes).digest("hex"),
+        byteLength: bytes.byteLength,
+        mtimeMs: statSync(path).mtimeMs,
+      };
+      if (path.endsWith(".sqlite")) {
+        detail.sqliteSchema = historicalSqliteSchema(path);
+      }
+      files.push(detail);
+    }
+  };
+  visit(root);
+  return { directories: directories.sort(), files: files.sort((left, right) => left.path.localeCompare(right.path)) };
+}
+
+function historicalTemporarySnapshots(): Set<string> {
+  return new Set(
+    readdirSync(tmpdir(), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("aiboard-historical-sqlite-"))
+      .map((entry) => entry.name),
+  );
+}
+
+function historicalSqliteSchema(
+  source: string,
+): Array<{ type: string; name: string; tableName: string; sql: string | null }> {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-historical-schema-"));
+  const copy = join(directory, "snapshot.sqlite");
+  try {
+    copyFileSync(source, copy);
+    for (const suffix of ["-wal", "-shm"] as const) {
+      const sidecar = `${source}${suffix}`;
+      if (existsSync(sidecar) && statSync(sidecar).isFile()) {
+        copyFileSync(sidecar, `${copy}${suffix}`);
+      }
+    }
+    const database = new DatabaseSync(copy, { readOnly: true });
+    try {
+      return database.prepare(
+        "SELECT type, name, tbl_name AS tableName, sql FROM sqlite_master ORDER BY type, name",
+      ).all() as Array<{ type: string; name: string; tableName: string; sql: string | null }>;
+    } finally {
+      database.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 function createFactory(
   projectRoot: string,

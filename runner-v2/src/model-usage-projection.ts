@@ -5,6 +5,7 @@ import type {
 } from "./budget-ledger.js";
 import type { ProviderUsageConfig } from "./provider-config-store.js";
 import type { ProviderFailureKind, ProviderHealthState } from "./provider-health.js";
+import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
 
 export type NativeModelUsageStatus =
   | "healthy"
@@ -53,6 +54,8 @@ export interface NativeModelUsageProjection {
 export interface NativeBuildUsageProjection extends BudgetProjection {
   models: NativeModelUsageProjection[];
   attributedModelReservationCount: number;
+  /** Present only on a terminal reader; it does not imply live model availability. */
+  historicalProvenance?: HistoricalReadProvenance;
 }
 
 export interface ProjectNativeModelUsageInput {

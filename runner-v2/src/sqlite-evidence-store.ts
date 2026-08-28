@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { AgentActor } from "./agent-contracts.js";
+import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
 import {
   evidenceFactArtifactHashes,
   type EvidenceFact,
@@ -68,6 +69,9 @@ export class SqliteEvidenceStore implements EvidenceStore {
   }
 
   record(input: RecordEvidenceInput): EvidenceRecord {
+    if (this.readOnly) {
+      throw new Error("A read-only evidence store cannot record evidence.");
+    }
     validate(input);
     const id = `evidence_${createHash("sha256")
       .update(`${input.runId}\0${input.taskId}\0${input.idempotencyKey}`)
@@ -87,8 +91,7 @@ export class SqliteEvidenceStore implements EvidenceStore {
     try {
       const existing = this.database
         .prepare(
-          `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                  created_at, idempotency_key, attempt
+          `SELECT ${this.selectColumns()}
            FROM evidence_records WHERE run_id = ? AND idempotency_key = ?`
         )
         .get(input.runId, input.idempotencyKey) as EvidenceRow | undefined;
@@ -136,16 +139,14 @@ export class SqliteEvidenceStore implements EvidenceStore {
     const rows = input.taskId
       ? this.database
           .prepare(
-            `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                    created_at, idempotency_key, attempt
+            `SELECT ${this.selectColumns()}
              FROM evidence_records WHERE run_id = ? AND task_id = ?
              ORDER BY sequence LIMIT ?`
           )
           .all(input.runId, input.taskId, limit)
       : this.database
           .prepare(
-            `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                    created_at, idempotency_key, attempt
+            `SELECT ${this.selectColumns()}
              FROM evidence_records WHERE run_id = ?
              ORDER BY sequence LIMIT ?`
           )
@@ -172,8 +173,7 @@ export class SqliteEvidenceStore implements EvidenceStore {
         : [input.runId, input.taskId, ...batch];
       const rows = this.database
         .prepare(
-          `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                  created_at, idempotency_key, attempt
+          `SELECT ${this.selectColumns()}
            FROM evidence_records
            WHERE run_id = ?${taskClause} AND evidence_id IN (${placeholders})
            ORDER BY sequence`
@@ -191,11 +191,14 @@ export class SqliteEvidenceStore implements EvidenceStore {
     this.database.close();
   }
 
+  historicalProvenance(): HistoricalReadProvenance {
+    if (!this.readOnly) return "durable";
+    if (!this.hasTable("evidence_records")) return "unavailable";
+    return this.hasAttemptColumn() ? "durable" : "legacy_replay";
+  }
+
   private migrateAttemptColumn(): void {
-    const columns = this.database
-      .prepare("PRAGMA table_info(evidence_records)")
-      .all() as Array<{ name?: unknown }>;
-    if (columns.some((column) => column.name === "attempt")) return;
+    if (this.hasAttemptColumn()) return;
 
     let transactionStarted = false;
     try {
@@ -214,6 +217,31 @@ export class SqliteEvidenceStore implements EvidenceStore {
       }
       throw error;
     }
+  }
+
+  private selectColumns(): string {
+    return `evidence_id, run_id, task_id, actor_json, fact_json,
+            created_at, idempotency_key, ${
+              this.hasAttemptColumn() ? "attempt" : "NULL AS attempt"
+            }`;
+  }
+
+  private hasAttemptColumn(): boolean {
+    return (
+      this.database
+        .prepare("PRAGMA table_info(evidence_records)")
+        .all() as Array<{ name?: unknown }>
+    ).some((column) => column.name === "attempt");
+  }
+
+  private hasTable(tableName: string): boolean {
+    return Boolean(
+      this.database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        )
+        .get(tableName),
+    );
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -79,6 +79,90 @@ test("raw pre-P1 evidence WAL fixtures migrate and preserve rows through exact l
   } finally {
     store?.close();
     fixture.raw.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read-only legacy evidence omits a pre-attempt column without modifying durable bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-evidence-read-only-legacy-"));
+  const database = join(root, "evidence.sqlite");
+  const raw = new DatabaseSync(database);
+  let store: SqliteEvidenceStore | undefined;
+  try {
+    raw.exec(`
+      CREATE TABLE evidence_records (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        evidence_id TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        fact_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        UNIQUE(run_id, idempotency_key)
+      );
+    `);
+    raw.prepare(`
+      INSERT INTO evidence_records (
+        evidence_id, run_id, task_id, actor_json, fact_json, created_at, idempotency_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy_evidence",
+      "run_legacy",
+      "task_legacy",
+      JSON.stringify({ role: "worker", id: "worker_legacy" }),
+      JSON.stringify({
+        kind: "browser_screenshot",
+        label: "Legacy screenshot",
+        capturedAt: "2026-08-28T00:00:00.000Z",
+        screenshotArtifactHash: "a".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      }),
+      "2026-08-28T00:00:00.000Z",
+      "legacy-evidence",
+    );
+    raw.close();
+    const beforeBytes = readFileSync(database);
+    const beforeMtime = statSync(database).mtimeMs;
+
+    store = new SqliteEvidenceStore(database, { readOnly: true });
+    assert.deepEqual(store.list({ runId: "run_legacy" }), [
+      {
+        id: "legacy_evidence",
+        runId: "run_legacy",
+        taskId: "task_legacy",
+        actor: { role: "worker", id: "worker_legacy" },
+        status: "observed",
+        fact: {
+          kind: "browser_screenshot",
+          label: "Legacy screenshot",
+          capturedAt: "2026-08-28T00:00:00.000Z",
+          screenshotArtifactHash: "a".repeat(64),
+          mediaType: "image/png",
+          byteLength: 1,
+        },
+        createdAt: "2026-08-28T00:00:00.000Z",
+        idempotencyKey: "legacy-evidence",
+      },
+    ]);
+    store.close();
+    store = undefined;
+    assert.deepEqual(readFileSync(database), beforeBytes);
+    assert.equal(statSync(database).mtimeMs, beforeMtime);
+    const check = new DatabaseSync(database, { readOnly: true });
+    try {
+      assert.equal(hasAttemptColumn(check), false);
+    } finally {
+      check.close();
+    }
+  } finally {
+    store?.close();
+    try {
+      raw.close();
+    } catch {
+      // The fixture may already be closed before the read-only check.
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });

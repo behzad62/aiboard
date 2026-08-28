@@ -141,6 +141,8 @@ export interface IntegrationFileSnapshot {
   appliedToProject: boolean;
   omittedFileCount: number;
   files: IntegrationFile[];
+  /** Present only when a terminal reader reports historical file state. */
+  historicalProvenance?: import("./historical-read-provenance.js").HistoricalReadProvenance;
 }
 
 export class IntegrationManager {

@@ -659,6 +659,148 @@ test("Git bootstrap failure becomes a durable failed run before model work", asy
   }
 });
 
+test("terminal historical Build reads expose durable provenance through every GET endpoint and audit", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-historical-build-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const runId = "run_historical";
+  supervisor.createRun({
+    runId,
+    projectPath: directory,
+    permissionProfile: "project",
+    idempotencyKey: "create",
+  });
+  supervisor.captureBaseline(runId, "baseline", "a".repeat(40), "refs/aiboard/baseline");
+  supervisor.start(runId, "start");
+  supervisor.requestStop(runId, "stop-request", "Historical restart.");
+  supervisor.confirmStopped(runId, "stopped", "Historical restart.");
+  const projection = {
+    runId,
+    initialObjective: "Historical endpoint coverage.",
+    runPolicy: "finish" as const,
+    status: "stopped" as const,
+    planRevision: 0,
+    tasks: {},
+    guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 0,
+  };
+  const usage = {
+    scopeId: runId,
+    reservations: {},
+    activeSegments: {},
+    effective: {
+      modelCalls: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostMicros: 0,
+      activeMs: 0,
+      artifactBytes: 0,
+    },
+    lifetime: {
+      modelCalls: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostMicros: 0,
+      activeMs: 0,
+      artifactBytes: 0,
+    },
+    window: { index: 1 },
+    lastSequence: 0,
+    attributedModelReservationCount: 0,
+    models: [],
+    historicalProvenance: "unavailable" as const,
+  };
+  const historical = {
+    terminalState: "stopped" as const,
+    provenance: {
+      usage: "unavailable" as const,
+      transcript: "legacy_replay" as const,
+      evidence: "legacy_replay" as const,
+      memories: "unavailable" as const,
+      skills: "durable" as const,
+      processes: "durable" as const,
+      capabilities: "durable" as const,
+      events: "durable" as const,
+      files: "unavailable" as const,
+    },
+  };
+  const builds = {
+    projection: (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return projection;
+    },
+    usage: (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return usage;
+    },
+    observability: async (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return {
+        runId,
+        budget: usage,
+        toolCallCount: 0,
+        agents: [],
+        tools: [],
+        evidence: [],
+        memories: [],
+        skills: [],
+        processes: [],
+        providers: [],
+        events: [],
+        git: { integrationBranch: "", integrationRevision: "", commits: [] },
+        historical,
+      };
+    },
+    transcript: async (requestedRunId: string, afterSequence = 0) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return { turns: [], cursor: afterSequence, historicalProvenance: "legacy_replay" as const };
+    },
+    files: async (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return {
+        source: "integration" as const,
+        revision: "",
+        appliedToProject: false,
+        omittedFileCount: 0,
+        files: [],
+        historicalProvenance: "unavailable" as const,
+      };
+    },
+    events: (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return [];
+    },
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({ supervisor, token, bootstrapRun, builds });
+  try {
+    const { url } = await server.start(0);
+    for (const endpoint of ["", "/transcript", "/files", "/usage", "/observability", "/audit"]) {
+      const response = await fetch(`${url}/v2/runs/${runId}/build${endpoint}`, authorized());
+      assert.equal(response.status, 200, endpoint || "/build");
+      const body = await json(response);
+      if (endpoint === "/audit") {
+        assert.equal((body.run as { state: string }).state, "stopped");
+        assert.equal((body.build as { status: string }).status, "stopped");
+        assert.deepEqual(
+          (body.observability as { historical: unknown }).historical,
+          historical,
+        );
+      }
+    }
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("native Build projections and pump controls are runner-owned API routes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-control-build-"));
   const supervisor = new RunSupervisor(

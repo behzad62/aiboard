@@ -44,6 +44,9 @@ export interface NativeBuildRuntimeHandle {
   close(): void | Promise<void>;
 }
 
+/** Authoritative lifecycle states that may be projected by a terminal reader. */
+export type HistoricalTerminalState = "completed" | "failed" | "stopped";
+
 export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
@@ -54,7 +57,17 @@ export interface NativeBuildManagerOptions {
   /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
   shouldRecoverSpec?(spec: NativeBuildSpec): boolean | Promise<boolean>;
   /** Opens storage-backed terminal projections without constructing a live runtime. */
-  createHistoricalRuntime?(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
+  createHistoricalRuntime?(
+    spec: NativeBuildSpec,
+    terminalState: HistoricalTerminalState,
+  ): Promise<NativeBuildRuntimeHandle>;
+  /**
+   * The RunSupervisor-derived terminal state. Historical Build reads must not
+   * infer completion from an incomplete or absent scheduler log.
+   */
+  terminalStateForHistoricalSpec?(
+    spec: NativeBuildSpec,
+  ): HistoricalTerminalState | undefined | Promise<HistoricalTerminalState | undefined>;
   /** Records a durable recovery validation failure without starting the rejected Build. */
   onRecoverySpecError?(runId: string, error: unknown): void;
   shouldAutoRun?(runId: string): boolean;
@@ -232,7 +245,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async step(runId: string): Promise<BuildStepResult> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.executeWithFinalization(
       runId,
       handle,
@@ -241,7 +254,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.executeWithFinalization(
       runId,
       handle,
@@ -251,9 +264,8 @@ export class NativeBuildManager implements BuildControlPlane {
 
   activate(runId: string): void {
     this.assertOpen();
+    const handle = this.requireMutable(runId);
     if (this.pumps.has(runId)) return;
-    const handle = this.require(runId);
-    if (handle.historical) return;
     const projection = handle.runtime.projection();
     if (
       projection.status !== "running" &&
@@ -271,9 +283,10 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     input: UserGuidanceControlInput
   ): Promise<SchedulerProjection> {
+    this.requireMutable(runId);
     const result = await this.withRuntimeActivity(async () =>
       this.serialized(async () => {
-        const handle = this.require(runId);
+        const handle = this.requireMutable(runId);
         const submitted = typeof handle.runtime.submitManagedUserGuidance === "function"
           ? handle.runtime.submitManagedUserGuidance(input)
           : handle.runtime.submitUserGuidance(input);
@@ -313,8 +326,9 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     input: ArchitectQuestionAnswerControlInput
   ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
     const projection = await this.withRuntimeActivity(async () =>
-      this.require(runId).runtime.answerArchitectQuestion(input)
+      handle.runtime.answerArchitectQuestion(input)
     );
     this.wake(runId);
     return projection;
@@ -334,7 +348,7 @@ export class NativeBuildManager implements BuildControlPlane {
     reason: string,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () => {
       const projection = handle.runtime.pause(reason, idempotencyKey);
       await handle.finalVerificationCleanup?.quiesceRun();
@@ -343,17 +357,17 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () =>
       handle.runtime.resume(idempotencyKey)
     );
   }
 
   async continue(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
     if (!this.options.specs.get(runId).benchmark) {
       throw new Error("Non-renewing continuation is restricted to benchmark Builds.");
     }
-    const handle = this.require(runId);
     return await this.withRuntimeActivity(async () =>
       handle.runtime.continue(idempotencyKey)
     );
@@ -364,7 +378,7 @@ export class NativeBuildManager implements BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () =>
       handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey)
     );
@@ -375,7 +389,7 @@ export class NativeBuildManager implements BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string,
   ): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     const projection = await this.withRuntimeActivity(async () =>
       handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey)
     );
@@ -388,6 +402,7 @@ export class NativeBuildManager implements BuildControlPlane {
     choice: ProjectHandoffChoice,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
+    this.requireMutable(runId);
     return await this.selectProjectHandoffAs(
       runId,
       choice,
@@ -402,6 +417,7 @@ export class NativeBuildManager implements BuildControlPlane {
     idempotencyKey: string,
     actor: SchedulerActor
   ): Promise<SchedulerProjection> {
+    this.requireMutable(runId);
     const releaseActivity = await this.acquireRuntimeActivity();
     const compaction = this.requestLiveCompaction();
     let selected: SchedulerProjection;
@@ -426,8 +442,10 @@ export class NativeBuildManager implements BuildControlPlane {
     actor: SchedulerActor
   ): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
-      const handle = this.handles.get(runId);
-      if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
+      // This path already owns a runtime-activity lease. It must finish an
+      // in-flight automatic handoff when close begins, while still refusing
+      // historical handles without reopening public mutation authority.
+      const handle = this.requireMutableWithinActivity(runId);
       const projection = handle.runtime.projection();
       if (projection.projectHandoff?.status === "selected") {
         if (projection.projectHandoff.choice !== choice) {
@@ -513,7 +531,13 @@ export class NativeBuildManager implements BuildControlPlane {
     const existing = this.handles.get(spec.runId);
     if (existing) return existing;
     if (!this.options.createHistoricalRuntime) return undefined;
-    const handle = await this.options.createHistoricalRuntime(spec);
+    const terminalState = await this.options.terminalStateForHistoricalSpec?.(spec);
+    if (!isHistoricalTerminalState(terminalState)) {
+      throw new Error(
+        `Historical Build ${spec.runId} requires an authoritative terminal RunSupervisor state.`,
+      );
+    }
+    const handle = await this.options.createHistoricalRuntime(spec, terminalState);
     if (handle.runtime.id !== spec.runId) {
       await handle.close();
       throw new Error(`Build runtime identity mismatch for ${spec.runId}.`);
@@ -526,6 +550,7 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     handle: NativeBuildRuntimeHandle
   ): Promise<void> {
+    if (handle.historical) throw historicalReadOnlyError(runId);
     let releaseActivity: (() => void) | undefined;
     try {
       releaseActivity = await this.acquireRuntimeActivity();
@@ -827,6 +852,19 @@ export class NativeBuildManager implements BuildControlPlane {
     return handle;
   }
 
+  private requireMutable(runId: string): NativeBuildRuntimeHandle {
+    const handle = this.require(runId);
+    if (handle.historical) throw historicalReadOnlyError(runId);
+    return handle;
+  }
+
+  private requireMutableWithinActivity(runId: string): NativeBuildRuntimeHandle {
+    const handle = this.handles.get(runId);
+    if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
+    if (handle.historical) throw historicalReadOnlyError(runId);
+    return handle;
+  }
+
   private assertOpen(): void {
     if (this.closed || this.closing) throw new Error("Native Build manager is closed.");
   }
@@ -844,6 +882,14 @@ export class NativeBuildManager implements BuildControlPlane {
       release();
     }
   }
+}
+
+function historicalReadOnlyError(runId: string): Error {
+  return new Error(`Historical Build ${runId} is read-only.`);
+}
+
+function isHistoricalTerminalState(value: unknown): value is HistoricalTerminalState {
+  return value === "completed" || value === "failed" || value === "stopped";
 }
 
 function eventLoopYield(): Promise<void> {

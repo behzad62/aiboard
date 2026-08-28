@@ -3,6 +3,9 @@ import { resolve, sep } from "node:path";
 
 import type { AgentActor } from "./agent-contracts.js";
 import type { AgentTranscriptPage } from "./agent-session-store.js";
+import type {
+  HistoricalReadProvenanceBySurface,
+} from "./historical-read-provenance.js";
 import type { BudgetProjection } from "./budget-ledger.js";
 import type { EvidenceRecord } from "./evidence-store.js";
 import type { ManagedProcessObservation } from "./managed-process.js";
@@ -177,6 +180,11 @@ export interface BuildObservabilitySnapshot {
   capabilities?: BuildCapabilitiesObservation;
   finalVerification?: FinalVerificationObservability;
   independentVerifier?: IndependentVerifierObservability;
+  /** Terminal-reader provenance so absent legacy stores are never shown as live empty state. */
+  historical?: {
+    terminalState: "completed" | "failed" | "stopped";
+    provenance: HistoricalReadProvenanceBySurface;
+  };
 }
 
 export function projectIndependentVerifierObservability(

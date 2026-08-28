@@ -413,7 +413,12 @@ export interface SchedulerProjection {
   /** Optional for event-log compatibility with runs created before P3.1. */
   initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
-  status: "running" | "paused" | "completed";
+  /**
+   * Live scheduler events use running/paused/completed. Terminal historical
+   * readers additionally project the authoritative RunSupervisor failed or
+   * stopped state without recreating mutable scheduler authority.
+   */
+  status: "running" | "paused" | "completed" | "failed" | "stopped";
   /**
    * Legacy plans remain readable, but an active plan without criteria must
    * pass through one append-only Architect upgrade before it can proceed.

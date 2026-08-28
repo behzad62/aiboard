@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -361,6 +361,74 @@ test("transcript projects only stable assistant text turns across agent roles", 
     assert.deepEqual(await store.transcript("run_1", 0), completeBeforeCompaction);
   } finally {
     store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read-only transcript replay serves legacy checkpoints without transcript projection tables", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-legacy-transcript-"));
+  const database = join(root, "sessions.sqlite");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  let writer: SqliteAgentSessionStore | undefined;
+  let reader: SqliteAgentSessionStore | undefined;
+  try {
+    writer = new SqliteAgentSessionStore(database, artifacts);
+    await writer.create({
+      sessionId: "architect:run_legacy",
+      runId: "run_legacy",
+      actor: { role: "architect", id: "architect_1" },
+      occurredAt: "2026-08-28T00:00:00.000Z",
+    });
+    await writer.checkpoint(
+      "architect:run_legacy",
+      {
+        messages: [
+          { id: "system", role: "system", content: "System" },
+          { id: "assistant", role: "assistant", content: "Recovered from durable checkpoint." },
+        ],
+        turns: 1,
+        seenCallIds: [],
+      },
+      "2026-08-28T00:00:01.000Z",
+    );
+    await writer.transcript("run_legacy");
+    writer.close();
+    writer = undefined;
+
+    const legacy = new DatabaseSync(database);
+    try {
+      legacy.exec(`
+        DROP TABLE agent_transcript_turns;
+        DROP TABLE agent_transcript_checkpoints;
+      `);
+    } finally {
+      legacy.close();
+    }
+    const beforeBytes = readFileSync(database);
+    const beforeMtime = statSync(database).mtimeMs;
+
+    reader = new SqliteAgentSessionStore(database, artifacts, { readOnly: true });
+    assert.deepEqual(await reader.transcript("run_legacy"), {
+      turns: [
+        {
+          id: "architect:run_legacy:assistant",
+          sessionId: "architect:run_legacy",
+          actor: { role: "architect", id: "architect_1" },
+          sequence: 2,
+          ordinal: 1,
+          occurredAt: "2026-08-28T00:00:01.000Z",
+          text: "Recovered from durable checkpoint.",
+        },
+      ],
+      cursor: 2,
+    });
+    reader.close();
+    reader = undefined;
+    assert.deepEqual(readFileSync(database), beforeBytes);
+    assert.equal(statSync(database).mtimeMs, beforeMtime);
+  } finally {
+    reader?.close();
+    writer?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

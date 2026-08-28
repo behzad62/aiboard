@@ -13,7 +13,10 @@ import {
   preflightRecoveredRunnerCapabilities,
   preflightRunnerCapabilities,
 } from "./native-build-factory.js";
-import { NativeBuildManager } from "./native-build-manager.js";
+import {
+  NativeBuildManager,
+  type HistoricalTerminalState,
+} from "./native-build-manager.js";
 import { createMcpTools, McpManager, type McpServerSpec } from "./mcp-tools.js";
 import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
@@ -152,7 +155,12 @@ async function main(): Promise<void> {
         join(options.stateDirectory, "build-specs.sqlite")
       ),
       createRuntime: (spec) => buildFactory.create(spec),
-      createHistoricalRuntime: (spec) => buildFactory.createHistorical(spec),
+      createHistoricalRuntime: (spec, terminalState) =>
+        buildFactory.createHistorical(spec, terminalState),
+      terminalStateForHistoricalSpec: (spec) => {
+        const state = supervisor.getRun(spec.runId).state;
+        return isTerminalRunState(state) ? state : undefined;
+      },
       prepareSpec: (spec) => buildFactory.prepareSpec(spec),
       shouldRecoverSpec: (spec) =>
         !isTerminalRunState(supervisor.getRun(spec.runId).state),
@@ -285,7 +293,7 @@ function syncAutonomousBuildLifecycle(
   }
 }
 
-function isTerminalRunState(state: RunState): boolean {
+function isTerminalRunState(state: RunState): state is HistoricalTerminalState {
   return state === "stopped" || state === "completed" || state === "failed";
 }
 

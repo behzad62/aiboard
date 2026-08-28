@@ -2740,6 +2740,7 @@ test("terminal legacy Builds retain read-only historical projections without con
   let liveRuntimeConstructed = 0;
   let recoveryValidationCalls = 0;
   let historicalHandles = 0;
+  let observedTerminalState: unknown;
   const projection: SchedulerProjection = {
     ...fakeRuntime("run_1").projection(),
     status: "completed",
@@ -2770,6 +2771,7 @@ test("terminal legacy Builds retain read-only historical projections without con
   const manager = new NativeBuildManager({
     specs,
     shouldRecoverSpec: () => false,
+    terminalStateForHistoricalSpec: () => "completed",
     validateRecoveredSpec: async () => {
       recoveryValidationCalls += 1;
       throw new Error("terminal historical reads must not validate live capabilities");
@@ -2778,8 +2780,9 @@ test("terminal legacy Builds retain read-only historical projections without con
       liveRuntimeConstructed += 1;
       throw new Error("terminal historical reads must not construct a live runtime");
     },
-    createHistoricalRuntime: async () => {
+    createHistoricalRuntime: async (_spec, terminalState) => {
       historicalHandles += 1;
+      observedTerminalState = terminalState;
       return {
         runtime: historicalRuntime,
         usage: () => ({ ...emptyBudget("run_1"), lastSequence: 3 }),
@@ -2824,6 +2827,7 @@ test("terminal legacy Builds retain read-only historical projections without con
     assert.equal(liveRuntimeConstructed, 0);
     assert.equal(recoveryValidationCalls, 0);
     assert.equal(historicalHandles, 1);
+    assert.equal(observedTerminalState, "completed");
     assert.equal(manager.projection("run_1").status, "completed");
     assert.equal(manager.usage("run_1").lastSequence, 3);
     assert.equal((await manager.observability("run_1")).events.length, 1);
@@ -2831,6 +2835,115 @@ test("terminal legacy Builds retain read-only historical projections without con
     assert.equal((await manager.files("run_1")).files[0]?.content, "preserved\n");
     assert.equal(manager.events("run_1").length, 1);
     await assert.rejects(manager.step("run_1"), /read-only/i);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("historical Builds reject every manager mutation before invoking a replayed runtime", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-historical-mutations-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  const mutations: string[] = [];
+  const projection: SchedulerProjection = {
+    ...fakeRuntime("run_1").projection(),
+    status: "completed",
+    projectHandoff: {
+      status: "requested",
+      summary: "Historical handoff",
+      options: ["keep_integration_branch", "apply_to_project"],
+    },
+  };
+  const mutation = <T>(name: string, value: T): T => {
+    mutations.push(name);
+    return value;
+  };
+  const historicalRuntime = {
+    id: "run_1",
+    projection: () => projection,
+    events: () => [],
+    step: async () => mutation("step", { status: "idle" as const }),
+    runUntilBlocked: async () => mutation("runUntilBlocked", { status: "idle" as const }),
+    pause: () => mutation("pause", projection),
+    resume: () => mutation("resume", projection),
+    continue: () => mutation("continue", projection),
+    selectArchitectHandoff: () => mutation("selectArchitectHandoff", projection),
+    selectVerifierRuntime: () => mutation("selectVerifierRuntime", projection),
+    submitUserGuidance: () => mutation("submitUserGuidance", projection),
+    submitManagedUserGuidance: () => mutation("submitManagedUserGuidance", projection),
+    completeManagedUserGuidanceInterruption: () => mutation("completeManagedUserGuidanceInterruption", projection),
+    answerArchitectQuestion: () => mutation("answerArchitectQuestion", projection),
+    selectProjectHandoff: () => mutation("selectProjectHandoff", projection),
+  } as unknown as BuildRuntime;
+  const manager = new NativeBuildManager({
+    specs,
+    shouldRecoverSpec: () => false,
+    terminalStateForHistoricalSpec: () => "stopped",
+    createRuntime: async () => {
+      throw new Error("historical mutation guards must not construct a live runtime");
+    },
+    createHistoricalRuntime: async () => ({
+      runtime: historicalRuntime,
+      historical: true,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      transcript: async () => ({ turns: [], cursor: 0 }),
+      files: async () => ({
+        source: "integration",
+        revision: "",
+        appliedToProject: false,
+        omittedFileCount: 0,
+        files: [],
+      }),
+      compact: () => undefined,
+      projectHandoff: async () => mutation("projectHandoff", {
+        integrationRevision: "",
+        integrationBranch: "",
+        appliedToProject: false,
+      }),
+      cleanup: () => undefined,
+      close: () => undefined,
+    }),
+  });
+  try {
+    specs.save({
+      ...spec,
+      benchmark: {
+        attemptId: "historical-mutations",
+        allowedCommands: [],
+        hiddenPaths: [],
+        protectedPaths: [],
+      },
+    });
+    await manager.recover();
+
+    assert.throws(() => manager.activate("run_1"), /read-only/i);
+    const pumps = (manager as unknown as { pumps: Map<string, Promise<void>> }).pumps;
+    pumps.set("run_1", Promise.resolve());
+    assert.throws(
+      () => manager.activate("run_1"),
+      /read-only/i,
+      "historical activation must reject before an idempotent pump shortcut",
+    );
+    pumps.delete("run_1");
+    await assert.rejects(manager.step("run_1"), /read-only/i);
+    await assert.rejects(manager.runUntilBlocked("run_1"), /read-only/i);
+    await assert.rejects(manager.submitUserGuidance("run_1", {
+      guidanceId: "guidance", text: "Do not mutate history.", version: 1, idempotencyKey: "guidance",
+    }), /read-only/i);
+    await assert.rejects(manager.answerArchitectQuestion("run_1", {
+      questionId: "question", expectedVersion: 1, answer: "No.", idempotencyKey: "answer",
+    }), /read-only/i);
+    await assert.rejects(manager.pause("run_1", "historical", "pause"), /read-only/i);
+    await assert.rejects(manager.resume("run_1", "resume"), /read-only/i);
+    await assert.rejects(manager.continue("run_1", "continue"), /read-only/i);
+    await assert.rejects(manager.selectArchitectHandoff("run_1", "runtime", "architect"), /read-only/i);
+    await assert.rejects(manager.selectVerifierRuntime("run_1", "runtime", "verifier"), /read-only/i);
+    await assert.rejects(
+      manager.selectProjectHandoff("run_1", "keep_integration_branch", "project"),
+      /read-only/i,
+    );
+    assert.deepEqual(mutations, []);
   } finally {
     await manager.close();
     rmSync(root, { recursive: true, force: true });

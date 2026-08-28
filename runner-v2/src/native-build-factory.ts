@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,7 @@ import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import {
   rebuildBudgetProjection,
+  type BudgetProjection,
   type ModelCostBasisSnapshot,
 } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
@@ -48,8 +49,14 @@ import {
 } from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
 import { LanguageProviderRouter } from "./language-provider-router.js";
-import { ManagedProcessService } from "./managed-process.js";
-import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
+import {
+  ManagedProcessService,
+  readHistoricalManagedProcessObservations,
+} from "./managed-process.js";
+import type {
+  HistoricalTerminalState,
+  NativeBuildRuntimeHandle,
+} from "./native-build-manager.js";
 import {
   projectNativeModelUsage,
   type NativeModelUsageRuntime,
@@ -102,7 +109,11 @@ import type { BuildRiskAssessmentInput } from "./risk-policy.js";
 import {
   SkillCatalog,
   type SharedSkillRoot,
+  type SkillMetadata,
 } from "./skill-catalog.js";
+import type {
+  HistoricalReadProvenance,
+} from "./historical-read-provenance.js";
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
@@ -132,9 +143,9 @@ export interface NativeBuildFactoryOptions {
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly artifactReachability: ArtifactReachabilityGuard;
-  private readonly memoryStore: SqliteProjectMemoryStore;
+  private memoryStore: SqliteProjectMemoryStore | undefined;
   private readonly browserBackend: PlaywrightBrowserBackend;
-  private readonly managedProcesses: ManagedProcessService;
+  private managedProcesses: ManagedProcessService | undefined;
   private closed = false;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
@@ -143,15 +154,9 @@ export class NativeBuildFactory {
       options.stateDirectory,
       this.artifacts
     );
-    this.memoryStore = new SqliteProjectMemoryStore(
-      join(options.stateDirectory, "project-memory.sqlite")
-    );
     this.browserBackend = new PlaywrightBrowserBackend(
       join(options.stateDirectory, "browser-sessions")
     );
-    this.managedProcesses = new ManagedProcessService({
-      stateDirectory: join(options.stateDirectory, "managed-processes"),
-    });
   }
 
   async prepareSpec(spec: NativeBuildSpec): Promise<NativeBuildSpec> {
@@ -318,7 +323,7 @@ export class NativeBuildFactory {
     const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      stopRun: (runId) => this.managedProcesses.stopRun(runId),
+      stopRun: (runId) => this.liveManagedProcesses().stopRun(runId),
       closeBrowserRun: (runId) => this.browserBackend.closeRun(runId),
       workspaceManager: verificationWorkspace,
       diagnostics: new FinalVerificationDiagnosticsArchive({
@@ -354,7 +359,7 @@ export class NativeBuildFactory {
       sessions,
       evidenceStore,
       skillCatalog,
-      memoryStore: this.memoryStore,
+      memoryStore: this.liveMemoryStore(),
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
       capabilityRegistry: runCapabilities.registry,
@@ -365,7 +370,7 @@ export class NativeBuildFactory {
       browserBackend: this.browserBackend,
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-      managedProcesses: this.managedProcesses,
+      managedProcesses: this.liveManagedProcesses(),
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -384,7 +389,7 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       skillCatalog,
-      memoryStore: this.memoryStore,
+      memoryStore: this.liveMemoryStore(),
       evidenceStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
@@ -538,7 +543,7 @@ export class NativeBuildFactory {
           attempt: input.attempt,
           generationId: input.generationId,
           currentIntegrationRevision: () => integrationManager.revision,
-          managedProcessService: this.managedProcesses,
+          managedProcessService: this.liveManagedProcesses(),
           browserBackend: this.browserBackend,
           validatePortLease: async (lease) => await finalVerificationPorts.validate(
             lease,
@@ -705,10 +710,10 @@ export class NativeBuildFactory {
           tools: toolCalls.slice(-1_000),
           evidence: evidenceStore.list({ runId: spec.runId, limit: 1_000 }),
           memories: [...rebuildProjectMemories(
-            this.memoryStore.events(spec.projectId)
+            this.liveMemoryStore().events(spec.projectId)
           ).values()],
           skills: await skillCatalog.discover(),
-          processes: this.managedProcesses.listRun(spec.runId).slice(-100).map(
+          processes: this.liveManagedProcesses().listRun(spec.runId).slice(-100).map(
             (process) => ({
               ...process,
               stdout: process.stdout.slice(-8 * 1024),
@@ -757,7 +762,7 @@ export class NativeBuildFactory {
           : integrationManager.descriptor(false),
       cleanup: async () => {
         await cleanupSettledNativeBuild(
-          () => this.managedProcesses.stopRun(spec.runId),
+          () => this.liveManagedProcesses().stopRun(spec.runId),
           [
             () => runCapabilities.close(),
             () => sessions.compactRun(spec.runId),
@@ -791,43 +796,117 @@ export class NativeBuildFactory {
     return this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig();
   }
 
+  /** Mutable global stores are constructed only for a live runtime. */
+  private liveMemoryStore(): SqliteProjectMemoryStore {
+    return this.memoryStore ??= new SqliteProjectMemoryStore(
+      join(this.options.stateDirectory, "project-memory.sqlite"),
+    );
+  }
+
+  /** Historical readers must never reconcile or persist managed-process state. */
+  private liveManagedProcesses(): ManagedProcessService {
+    return this.managedProcesses ??= new ManagedProcessService({
+      stateDirectory: join(this.options.stateDirectory, "managed-processes"),
+    });
+  }
+
   /**
    * Reopens only durable records for a terminal Build. It deliberately does
    * not load capability code, construct models, or start owned processes.
    */
-  async createHistorical(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
+  async createHistorical(
+    spec: NativeBuildSpec,
+    terminalState: HistoricalTerminalState,
+  ): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    assertHistoricalTerminalState(terminalState);
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     let evidenceStore: SqliteEvidenceStore | undefined;
     let ledger: SqliteToolLedger | undefined;
     let sessions: SqliteAgentSessionStore | undefined;
     let budgetLedger: SqliteBudgetLedger | undefined;
     let schedulerStore: SqliteSchedulerStore | undefined;
+    let historicalMemoryStore: SqliteProjectMemoryStore | undefined;
+    const historicalSqliteSnapshots: string[] = [];
+    const closedHistoricalStores = new Set<HistoricalCloseable>();
+    const removedHistoricalSqliteSnapshots = new Set<string>();
+    const closeHistoricalResources = async (): Promise<unknown[]> => {
+      const failures: unknown[] = [];
+      // Close in reverse acquisition order. Each successful close/removal is
+      // remembered so a transient failure can be retried without double-closing
+      // resources that were already released.
+      const stores: Array<HistoricalCloseable | undefined> = [
+        historicalMemoryStore,
+        schedulerStore,
+        budgetLedger,
+        sessions,
+        ledger,
+        evidenceStore,
+      ];
+      for (const store of stores) {
+        if (!store || closedHistoricalStores.has(store)) continue;
+        try {
+          store.close();
+          closedHistoricalStores.add(store);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      for (const directory of [...historicalSqliteSnapshots].reverse()) {
+        if (removedHistoricalSqliteSnapshots.has(directory)) continue;
+        try {
+          await rm(directory, { recursive: true, force: true });
+          removedHistoricalSqliteSnapshots.add(directory);
+        } catch (error) {
+          // Leave a failed directory recorded for a later close retry.
+          failures.push(error);
+        }
+      }
+      return failures;
+    };
     try {
       const evidencePath = join(runRoot, "evidence.sqlite");
       const ledgerPath = join(runRoot, "tools.sqlite");
       const sessionsPath = join(runRoot, "sessions.sqlite");
       const budgetPath = join(runRoot, "budget.sqlite");
       const schedulerPath = join(runRoot, "scheduler.sqlite");
+      const memoryPath = join(this.options.stateDirectory, "project-memory.sqlite");
+      const managedProcessPath = join(this.options.stateDirectory, "managed-processes");
+      const snapshotStorePath = async (source: string): Promise<string> => {
+        const snapshot = await materializeHistoricalSqliteSnapshot(source);
+        historicalSqliteSnapshots.push(snapshot.directory);
+        return snapshot.databasePath;
+      };
       if (hasHistoricalStore(evidencePath)) {
-        evidenceStore = new SqliteEvidenceStore(evidencePath, { readOnly: true });
+        evidenceStore = new SqliteEvidenceStore(await snapshotStorePath(evidencePath), {
+          readOnly: true,
+        });
       }
       if (hasHistoricalStore(ledgerPath)) {
-        ledger = new SqliteToolLedger(ledgerPath, { readOnly: true });
+        ledger = new SqliteToolLedger(await snapshotStorePath(ledgerPath), { readOnly: true });
       }
       if (hasHistoricalStore(sessionsPath)) {
-        sessions = new SqliteAgentSessionStore(sessionsPath, this.artifacts, { readOnly: true });
+        sessions = new SqliteAgentSessionStore(
+          await snapshotStorePath(sessionsPath),
+          this.artifacts,
+          { readOnly: true },
+        );
       }
       if (hasHistoricalStore(budgetPath)) {
-        budgetLedger = new SqliteBudgetLedger(budgetPath, {
+        budgetLedger = new SqliteBudgetLedger(await snapshotStorePath(budgetPath), {
           limitsFor: () => spec.budgetLimits,
           readOnly: true,
         });
       }
       if (hasHistoricalStore(schedulerPath)) {
-        schedulerStore = new SqliteSchedulerStore(schedulerPath, {
+        schedulerStore = new SqliteSchedulerStore(await snapshotStorePath(schedulerPath), {
           evidenceStore,
           artifacts: this.artifacts,
+          readOnly: true,
+        });
+      }
+      if (hasHistoricalStore(memoryPath)) {
+        historicalMemoryStore = new SqliteProjectMemoryStore(await snapshotStorePath(memoryPath), {
           readOnly: true,
         });
       }
@@ -846,9 +925,55 @@ export class NativeBuildFactory {
         schedulerStore?.readRun(spec.runId, afterSequence) ?? [];
       const budgetProjection = () =>
         budgetLedger?.snapshot(spec.runId) ?? rebuildBudgetProjection(spec.runId, []);
+      const usageProvenance: HistoricalReadProvenance = budgetLedger
+        ? "durable"
+        : "unavailable";
+      const transcriptProvenance = (): HistoricalReadProvenance =>
+        sessions?.historicalTranscriptProvenance() ?? "unavailable";
+      const evidenceProvenance = (): HistoricalReadProvenance =>
+        evidenceStore?.historicalProvenance() ?? "unavailable";
+      const memoryProvenance = (): HistoricalReadProvenance =>
+        historicalMemoryStore?.historicalProvenance() ?? "unavailable";
+      const processProvenance: HistoricalReadProvenance = hasHistoricalDirectory(managedProcessPath)
+        ? "durable"
+        : "unavailable";
+      const historicalUsage = () => {
+        const budget = budgetProjection();
+        return {
+          ...budget,
+          attributedModelReservationCount: Object.values(budget.reservations).filter(
+            (reservation) => reservation.kind === "model" && reservation.attribution,
+          ).length,
+          models: usageProvenance === "durable"
+            ? projectNativeModelUsage({
+                budget,
+                runtimes: historicalModelUsageRuntimes(budget),
+                providerHealth: providerHealthFromSchedulerEvents(readEvents()),
+              })
+            : [],
+          historicalProvenance: usageProvenance,
+        };
+      };
+      const historicalSkills = (): {
+        skills: SkillMetadata[];
+        provenance: HistoricalReadProvenance;
+      } => {
+        if (!ledger) return { skills: [], provenance: "unavailable" };
+        const skills = skillsFromHistoricalToolLedger(ledger.listRun(spec.runId));
+        return skills
+          ? { skills, provenance: "durable" }
+          : { skills: [], provenance: "unavailable" };
+      };
+      const historicalMemories = (): import("./project-memory.js").ProjectMemoryEntry[] => {
+        if (memoryProvenance() === "unavailable") return [];
+        return [...rebuildProjectMemories(
+          historicalMemoryStore!.events(spec.projectId),
+        ).values()].filter((memory) => memory.runId === spec.runId);
+      };
       const projection = () => historicalSchedulerProjection(
         spec,
         readEvents(),
+        terminalState,
       );
       const readOnlyError = (): never => {
         throw new Error(`Historical Build ${spec.runId} is read-only.`);
@@ -871,24 +996,23 @@ export class NativeBuildFactory {
         selectProjectHandoff: () => readOnlyError(),
       } as unknown as BuildRuntime;
       let closed = false;
+      let closing: Promise<void> | undefined;
       return {
         runtime,
         historical: true,
-        usage: () => {
-          const budget = budgetProjection();
-          return {
-            ...budget,
-            attributedModelReservationCount: Object.values(budget.reservations).filter(
-              (reservation) => reservation.kind === "model" && reservation.attribution,
-            ).length,
-            models: [],
-          };
-        },
+        usage: historicalUsage,
         observability: async (): Promise<BuildObservabilitySnapshot> => {
           const schedulerEvents = readEvents();
-          const schedulerProjection = historicalSchedulerProjection(spec, schedulerEvents);
-          const agentSessions = sessions ? await sessions.listRun(spec.runId) : [];
+          const schedulerProjection = historicalSchedulerProjection(
+            spec,
+            schedulerEvents,
+            terminalState,
+          );
+          const agentSessions = transcriptProvenance() === "unavailable"
+            ? []
+            : await sessions!.listRun(spec.runId);
           const toolCalls = ledger ? summarizeToolCalls(ledger.listRun(spec.runId)) : [];
+          const skillSnapshot = historicalSkills();
           const finalGeneration = schedulerProjection.finalVerification?.current;
           const diagnostics = finalGeneration
             ? await loadFinalVerificationDiagnostics({
@@ -905,7 +1029,7 @@ export class NativeBuildFactory {
             ?? schedulerProjection.integrationRevision;
           return {
             runId: spec.runId,
-            budget: budgetProjection(),
+            budget: historicalUsage(),
             toolCallCount: toolCalls.length,
             agents: agentSessions.map((session) => ({
               sessionId: session.sessionId,
@@ -920,10 +1044,14 @@ export class NativeBuildFactory {
               lastSequence: session.lastSequence,
             })),
             tools: toolCalls.slice(-1_000),
-            evidence: evidenceStore?.list({ runId: spec.runId, limit: 1_000 }) ?? [],
-            memories: [],
-            skills: [],
-            processes: [],
+            evidence: evidenceProvenance() === "unavailable"
+              ? []
+              : evidenceStore!.list({ runId: spec.runId, limit: 1_000 }),
+            memories: historicalMemories(),
+            skills: skillSnapshot.skills,
+            processes: processProvenance === "durable"
+              ? readHistoricalManagedProcessObservations(managedProcessPath, spec.runId)
+              : [],
             providers: Object.values(schedulerProjection.runtime.providerHealth),
             events: schedulerEvents.slice(-1_000),
             git: {
@@ -943,6 +1071,24 @@ export class NativeBuildFactory {
                   },
                 }
               : {}),
+            historical: {
+              terminalState,
+              provenance: {
+                usage: usageProvenance,
+                transcript: transcriptProvenance(),
+                evidence: evidenceProvenance(),
+                memories: memoryProvenance(),
+                skills: skillSnapshot.provenance,
+                processes: processProvenance,
+                capabilities: spec.capabilityContract ? "durable" : "unavailable",
+                events: schedulerStore ? "durable" : "unavailable",
+                files: integrationRevision ||
+                  (schedulerProjection.projectHandoff?.appliedToProject &&
+                    schedulerProjection.projectHandoff.projectRevision)
+                  ? "durable"
+                  : "unavailable",
+              },
+            },
             finalVerification: projectFinalVerificationObservability(
               schedulerProjection,
               diagnostics,
@@ -951,10 +1097,13 @@ export class NativeBuildFactory {
               projectIndependentVerifierObservability(schedulerProjection),
           };
         },
-        transcript: async (afterSequence = 0) =>
-          sessions
-            ? await sessions.transcript(spec.runId, afterSequence)
-            : { turns: [], cursor: afterSequence },
+        transcript: async (afterSequence = 0) => {
+          const provenance = transcriptProvenance();
+          const page = provenance === "unavailable"
+            ? { turns: [], cursor: afterSequence }
+            : await sessions!.transcript(spec.runId, afterSequence);
+          return { ...page, historicalProvenance: provenance };
+        },
         files: async () => {
           const schedulerProjection = projection();
           const handoff = schedulerProjection.projectHandoff;
@@ -967,36 +1116,49 @@ export class NativeBuildFactory {
               appliedToProject: false,
               omittedFileCount: 0,
               files: [],
+              historicalProvenance: "unavailable",
             };
           }
-          return await historicalIntegrationManager().historicalFiles({
+          return {
+            ...(await historicalIntegrationManager().historicalFiles({
             integrationRevision,
             appliedToProject: handoff?.appliedToProject,
             projectRevision: handoff?.projectRevision,
-          });
+            })),
+            historicalProvenance: "durable",
+          };
         },
-        compact: () => undefined,
+        compact: () => readOnlyError(),
         projectHandoff: async () => readOnlyError(),
-        cleanup: () => undefined,
-        close: () => {
+        cleanup: () => readOnlyError(),
+        close: async () => {
           if (closed) return;
-          closed = true;
-          schedulerStore?.close();
-          budgetLedger?.close();
-          sessions?.close();
-          ledger?.close();
-          evidenceStore?.close();
+          if (closing) return await closing;
+          const attempt = (async (): Promise<void> => {
+            const failures = await closeHistoricalResources();
+            if (failures.length > 0) {
+              throw new AggregateError(
+                failures,
+                `Could not close all historical Build ${spec.runId} resources.`,
+              );
+            }
+            closed = true;
+          })();
+          closing = attempt;
+          try {
+            await attempt;
+          } finally {
+            if (closing === attempt) closing = undefined;
+          }
         },
       };
     } catch (error) {
-      try {
-        schedulerStore?.close();
-        budgetLedger?.close();
-        sessions?.close();
-        ledger?.close();
-        evidenceStore?.close();
-      } catch {
-        // Preserve the original historical-read opening failure.
+      const cleanupFailures = await closeHistoricalResources();
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          `Could not open historical Build ${spec.runId} and clean up its resources.`,
+        );
       }
       throw error;
     }
@@ -1005,11 +1167,11 @@ export class NativeBuildFactory {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.memoryStore.close();
+    this.memoryStore?.close();
     if (this.options.closeProviderConfigs !== false) {
       this.options.providerConfigs.close();
     }
-    this.managedProcesses.close();
+    this.managedProcesses?.close();
     await this.browserBackend.closeAll();
   }
 
@@ -1761,6 +1923,142 @@ function boundedErrorMessage(error: unknown): string {
   return message.length <= 512 ? message : `${message.slice(0, 512)}…`;
 }
 
+/** Derives usage identities solely from settled, attributable budget records. */
+function historicalModelUsageRuntimes(
+  budget: BudgetProjection,
+): NativeModelUsageRuntime[] {
+  const runtimes = new Map<string, {
+    providerId: string;
+    modelId: string;
+    roles: Set<NativeModelUsageRuntime["roles"][number]>;
+  }>();
+  for (const reservation of Object.values(budget.reservations)) {
+    if (
+      reservation.kind !== "model" ||
+      reservation.status !== "settled" ||
+      !reservation.actual ||
+      !reservation.attribution
+    ) continue;
+    const attribution = reservation.attribution;
+    const existing = runtimes.get(attribution.runtimeId);
+    if (
+      existing &&
+      (existing.providerId !== attribution.providerId ||
+        existing.modelId !== attribution.modelId)
+    ) {
+      throw new Error(
+        `Historical model attribution conflicts for ${attribution.runtimeId}.`,
+      );
+    }
+    const runtime = existing ?? {
+      providerId: attribution.providerId,
+      modelId: attribution.modelId,
+      roles: new Set<NativeModelUsageRuntime["roles"][number]>(),
+    };
+    runtime.roles.add(attribution.role);
+    runtimes.set(attribution.runtimeId, runtime);
+  }
+  return [...runtimes.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([runtimeId, runtime]) => ({
+      runtimeId,
+      providerId: runtime.providerId,
+      modelId: runtime.modelId,
+      // A terminal reader intentionally does not consult current provider config.
+      billingBasis: "unknown" as const,
+      transport: "openai-compatible" as const,
+      roles: [...runtime.roles],
+      selectable: false,
+    }));
+}
+
+/** Returns the latest durable `list_skills` result for this run, if recorded. */
+function skillsFromHistoricalToolLedger(
+  events: readonly ToolLedgerEvent[],
+): SkillMetadata[] | undefined {
+  let latest: SkillMetadata[] | undefined;
+  for (const event of events) {
+    const result = event.result;
+    if (
+      event.type !== "tool.completed" ||
+      event.toolName !== "list_skills" ||
+      !result ||
+      result.isError
+    ) continue;
+    for (const block of result.content) {
+      if (block.type !== "json" || !Array.isArray(block.value)) continue;
+      latest = block.value.map((value, index) => historicalSkillMetadata(value, index));
+    }
+  }
+  return latest?.map((skill) => ({ ...skill }));
+}
+
+function historicalSkillMetadata(value: unknown, index: number): SkillMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Historical list_skills result ${index} is malformed.`);
+  }
+  const skill = value as Record<string, unknown>;
+  if (
+    typeof skill.id !== "string" ||
+    typeof skill.name !== "string" ||
+    typeof skill.description !== "string" ||
+    typeof skill.relativePath !== "string" ||
+    typeof skill.digest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(skill.digest) ||
+    !Number.isSafeInteger(skill.byteLength) ||
+    (skill.byteLength as number) < 0 ||
+    (skill.source !== "project" && skill.source !== "built-in" && skill.source !== "user")
+  ) {
+    throw new Error(`Historical list_skills result ${index} is malformed.`);
+  }
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    relativePath: skill.relativePath,
+    digest: skill.digest,
+    byteLength: skill.byteLength as number,
+    source: skill.source as SkillMetadata["source"],
+  };
+}
+
+/**
+ * Node's SQLite read-only connections may still create WAL shared-memory
+ * sidecars beside the opened file. Historical reads therefore open a private
+ * copy outside Runner state, including WAL-visible committed content.
+ */
+async function materializeHistoricalSqliteSnapshot(source: string): Promise<{
+  directory: string;
+  databasePath: string;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "aiboard-historical-sqlite-"));
+  const databasePath = join(directory, basename(source));
+  try {
+    await copyFile(source, databasePath);
+    for (const suffix of ["-wal", "-shm"] as const) {
+      const sidecar = `${source}${suffix}`;
+      if (hasOptionalHistoricalFile(sidecar)) {
+        await copyFile(sidecar, `${databasePath}${suffix}`);
+      }
+    }
+    return { directory, databasePath };
+  } catch (error) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Could not materialize historical SQLite snapshot ${source}.`,
+      );
+    }
+    throw error;
+  }
+}
+
+interface HistoricalCloseable {
+  close(): void;
+}
+
 /**
  * Historical readers never bootstrap a database. A terminal Build may predate
  * one of these optional stores, in which case callers receive the equivalent
@@ -1777,16 +2075,41 @@ function hasHistoricalStore(path: string): boolean {
   throw new Error(`Historical Runner store ${path} must be a regular file.`);
 }
 
+function hasOptionalHistoricalFile(path: string): boolean {
+  try {
+    const metadata = statSync(path);
+    if (metadata.isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  throw new Error(`Historical Runner store sidecar ${path} must be a regular file.`);
+}
+
+function hasHistoricalDirectory(path: string): boolean {
+  try {
+    const metadata = statSync(path);
+    if (metadata.isDirectory()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  throw new Error(`Historical Runner directory ${path} must be a directory.`);
+}
+
 function historicalSchedulerProjection(
   spec: NativeBuildSpec,
   events: readonly SchedulerEvent[],
+  terminalState: HistoricalTerminalState,
 ): SchedulerProjection {
-  if (events.length > 0) return rebuildSchedulerProjection(events);
+  if (events.length > 0) {
+    return { ...rebuildSchedulerProjection(events), status: terminalState };
+  }
   return {
     runId: spec.runId,
     initialObjective: spec.objective,
     runPolicy: spec.runPolicy,
-    status: "completed",
+    status: terminalState,
     planRevision: 0,
     tasks: {},
     guidance: {},
@@ -1798,4 +2121,10 @@ function historicalSchedulerProjection(
     runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
     lastSequence: 0,
   };
+}
+
+function assertHistoricalTerminalState(value: unknown): asserts value is HistoricalTerminalState {
+  if (value !== "completed" && value !== "failed" && value !== "stopped") {
+    throw new Error("Historical Build requires an authoritative terminal RunSupervisor state.");
+  }
 }

@@ -14,6 +14,7 @@ import type {
 } from "./agent-session-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ChangeSet } from "./change-set.js";
+import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
 
 interface EventRow {
   sequence: number;
@@ -297,6 +298,13 @@ export class SqliteAgentSessionStore {
 
   async transcript(runId: string, afterSequence = 0): Promise<AgentTranscriptPage> {
     if (!this.readOnly) await this.ensureTranscriptProjection(runId);
+    if (
+      this.readOnly &&
+      (!this.hasTable("agent_transcript_turns") ||
+        !this.hasTable("agent_transcript_checkpoints"))
+    ) {
+      return await this.replayLegacyTranscript(runId, afterSequence);
+    }
     const rows = this.database
       .prepare(
         `SELECT id, session_id, actor_json, sequence, ordinal, occurred_at, text
@@ -599,6 +607,80 @@ export class SqliteAgentSessionStore {
     }
   }
 
+  historicalTranscriptProvenance(): HistoricalReadProvenance {
+    if (!this.readOnly) return "durable";
+    if (!this.hasTable("agent_session_events")) return "unavailable";
+    return this.hasTable("agent_transcript_turns") &&
+      this.hasTable("agent_transcript_checkpoints")
+      ? "durable"
+      : "legacy_replay";
+  }
+
+  /**
+   * Legacy terminal databases can predate the derived transcript tables. A
+   * historical reader must reconstruct their stable assistant text in memory
+   * rather than creating a current projection schema while serving a read.
+   */
+  private async replayLegacyTranscript(
+    runId: string,
+    afterSequence: number,
+  ): Promise<AgentTranscriptPage> {
+    if (!this.hasTable("agent_session_events")) {
+      return { turns: [], cursor: afterSequence };
+    }
+    const sessions = new Map(
+      this.createdEvents(runId).map((event) => [
+        event.sessionId,
+        event.payload.actor as AgentActor,
+      ]),
+    );
+    if (sessions.size === 0) return { turns: [], cursor: afterSequence };
+    const checkpoints = (
+      this.database
+        .prepare(
+          `SELECT sequence, session_id, event_type, occurred_at,
+                  idempotency_key, payload_json, artifact_hash
+           FROM agent_session_events
+           WHERE event_type = 'session.checkpointed' ORDER BY sequence ASC`,
+        )
+        .all() as unknown as EventRow[]
+    )
+      .map(decodeEvent)
+      .filter((event) => sessions.has(event.sessionId));
+    const seenTurnIds = new Set<string>();
+    const turns: AgentTranscriptPage["turns"] = [];
+    let cursor = afterSequence;
+    for (const event of checkpoints) {
+      cursor = Math.max(cursor, event.sequence);
+      if (!event.artifactHash) {
+        throw new Error(`Checkpoint event ${event.sequence} has no artifact.`);
+      }
+      await this.artifacts.verify(event.artifactHash);
+      const checkpoint = parseCheckpoint(
+        await this.artifacts.get(event.artifactHash),
+        event.sequence,
+      );
+      checkpoint.messages.forEach((message, ordinal) => {
+        const text = assistantText(message);
+        if (text === undefined) return;
+        const id = `${event.sessionId}:${message.id}`;
+        if (seenTurnIds.has(id)) return;
+        seenTurnIds.add(id);
+        if (event.sequence <= afterSequence) return;
+        turns.push({
+          id,
+          sessionId: event.sessionId,
+          actor: sessions.get(event.sessionId)!,
+          sequence: event.sequence,
+          ordinal,
+          occurredAt: event.occurredAt,
+          text,
+        });
+      });
+    }
+    return { turns, cursor };
+  }
+
   private insertTranscriptCheckpoint(
     sequence: number,
     runId: string,
@@ -725,6 +807,16 @@ export class SqliteAgentSessionStore {
     )
       .map(decodeEvent)
       .filter((event) => event.payload.runId === runId);
+  }
+
+  private hasTable(tableName: string): boolean {
+    return Boolean(
+      this.database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        )
+        .get(tableName),
+    );
   }
 }
 
