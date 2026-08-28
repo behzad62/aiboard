@@ -1,32 +1,41 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import {
+  lstat,
   mkdir,
   open,
   readFile,
   readdir,
+  realpath,
   rmdir,
   unlink,
+  writeFile,
 } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type OutputStream = "stdout" | "stderr";
 export type OutputLossReasonCode =
   | "spill_cap_exceeded"
+  | "spill_root_invalid"
   | "spill_open_failed"
   | "spill_write_failed"
   | "spill_close_failed"
+  | "spill_identity_failed"
   | "artifact_ingestion_failed";
 export type OutputSpillState = "empty" | "discarded" | "artifact_ingested" | "lossy";
 
 export interface OutputLossReason {
   readonly code: OutputLossReasonCode;
   readonly stream: OutputStream;
+  readonly lostBytes: number;
 }
 
 export interface BoundedOutputStreamResult {
   readonly stream: OutputStream;
   readonly tail: string;
+  readonly tailBytesBase64: string;
+  readonly tailByteLength: number;
+  readonly tailDisplayTruncated: boolean;
   readonly totalBytes: number;
   readonly truncated: boolean;
   readonly spillState: OutputSpillState;
@@ -35,6 +44,7 @@ export interface BoundedOutputStreamResult {
   readonly lossyBytes: number;
   readonly lossyOutput: boolean;
   readonly lossReason?: OutputLossReason;
+  readonly lossReasons: readonly OutputLossReason[];
 }
 
 export interface BoundedOutputSpoolResult {
@@ -42,16 +52,16 @@ export interface BoundedOutputSpoolResult {
 }
 
 export interface OutputSpillFile {
+  readonly identity: string;
   write(bytes: Uint8Array): Promise<number>;
+  sealAndRead(expectedBytes: number, maximumBytes: number): Promise<Buffer>;
   close(): Promise<void>;
 }
 
 export interface OutputSpillStorage {
   prepareRoot(root: string): Promise<void>;
   openExclusive(path: string): Promise<OutputSpillFile>;
-  read(path: string): Promise<Buffer>;
   remove(path: string): Promise<void>;
-  removeRootIfEmpty(root: string): Promise<void>;
   list(root: string): Promise<string[]>;
 }
 
@@ -61,6 +71,8 @@ export interface OutputArtifactStore {
 
 export interface BoundedOutputSpoolOptions {
   readonly spillRoot: string;
+  readonly projectRoot: string;
+  readonly ownershipId: string;
   readonly tailBytes?: number;
   readonly spillBytes?: number;
   readonly artifactStore?: OutputArtifactStore;
@@ -73,20 +85,44 @@ interface MutableStreamState {
   totalBytes: number;
   spillBytes: number;
   lossyBytes: number;
-  lossReason?: OutputLossReason;
+  lossReason?: MutableOutputLossReason;
+  lossReasons: MutableOutputLossReason[];
+  spillUnavailable: boolean;
   spillPath?: string;
+  spillProofPath?: string;
   spillFile?: OutputSpillFile;
+  spillIdentity?: string;
   spillArtifactId?: string;
   finalized: boolean;
+}
+
+interface MutableOutputLossReason {
+  code: OutputLossReasonCode;
+  stream: OutputStream;
+  lostBytes: number;
+}
+
+interface OwnedSpillRoot {
+  readonly canonicalRoot: string;
+  readonly projectRoot: string;
+  readonly ownershipId: string;
+  readonly rootId: string;
+  readonly rootIdentity: string;
+  readonly markerIdentity: string;
+  readonly entryPrefix: string;
 }
 
 const DEFAULT_TAIL_BYTES = 128 * 1024;
 const DEFAULT_SPILL_BYTES = 64 * 1024 * 1024;
 const SPILL_PREFIX = "output-spill-";
 const SPILL_SUFFIX = ".tmp";
+const OWNER_MARKER = ".output-spool-owner.json";
+const ENTRY_PROOF_SUFFIX = ".owner.json";
 
 export class BoundedOutputSpool {
   private readonly spillRoot: string;
+  private readonly projectRoot: string;
+  private readonly ownershipId: string;
   private readonly tailBytes: number;
   private readonly maximumSpillBytes: number;
   private readonly artifactStore?: OutputArtifactStore;
@@ -97,47 +133,101 @@ export class BoundedOutputSpool {
   ]);
   private operation = Promise.resolve();
   private result?: BoundedOutputSpoolResult;
+  private terminal: "open" | "finalizing" | "cleaning" | "finalized" | "cleaned" = "open";
+  private finalizePromise?: Promise<BoundedOutputSpoolResult>;
+  private cleanupPromise?: Promise<void>;
+  private ownedRoot?: OwnedSpillRoot;
 
   constructor(options: BoundedOutputSpoolOptions) {
     this.spillRoot = resolve(requiredText(options.spillRoot, "spillRoot"));
+    this.projectRoot = resolve(requiredText(options.projectRoot, "projectRoot"));
+    this.ownershipId = ownershipIdentity(options.ownershipId);
     this.tailBytes = positiveInteger(options.tailBytes ?? DEFAULT_TAIL_BYTES, "tailBytes");
     this.maximumSpillBytes = positiveInteger(options.spillBytes ?? DEFAULT_SPILL_BYTES, "spillBytes");
     this.artifactStore = options.artifactStore;
     this.storage = options.storage ?? createNodeOutputSpillStorage();
   }
 
-  async write(stream: OutputStream, chunk: Uint8Array): Promise<void> {
-    if (this.result) throw new Error("Output spool is already finalized.");
+  write(stream: OutputStream, chunk: Uint8Array): Promise<void> {
+    if (this.terminal !== "open") return Promise.reject(new Error("Output spool is sealed."));
     const bytes = Buffer.from(chunk);
     const work = this.operation.then(async () => await this.writeNow(stream, bytes));
     this.operation = work.catch(() => undefined);
-    await work;
+    return work;
   }
 
-  async finalize(): Promise<BoundedOutputSpoolResult> {
-    await this.operation;
-    if (this.result) return this.result;
-    for (const state of this.states.values()) await this.finalizeStream(state);
-    this.result = {
-      streams: (["stdout", "stderr"] as const).map((stream) => this.snapshot(this.states.get(stream)!)),
-    };
-    await this.cleanup();
-    return this.result;
+  finalize(): Promise<BoundedOutputSpoolResult> {
+    if (this.finalizePromise) return this.finalizePromise;
+    if (this.cleanupPromise) {
+      return this.cleanupPromise.then(() => {
+        throw new Error("Output spool was sealed by cleanup.");
+      });
+    }
+    if (this.terminal !== "open") return Promise.reject(new Error("Output spool was sealed by cleanup."));
+    this.terminal = "finalizing";
+    this.finalizePromise = this.operation.then(async () => {
+      for (const state of this.states.values()) await this.finalizeStream(state);
+      this.result = Object.freeze({
+        streams: Object.freeze(
+          (["stdout", "stderr"] as const).map((stream) => this.snapshot(this.states.get(stream)!))
+        ),
+      });
+      await this.cleanupNow();
+      this.terminal = "finalized";
+      return this.result;
+    });
+    this.operation = this.finalizePromise.then(() => undefined, () => undefined);
+    return this.finalizePromise;
   }
 
-  async cleanup(): Promise<void> {
-    await this.operation;
+  cleanup(): Promise<void> {
+    if (this.cleanupPromise) return this.cleanupPromise;
+    if (this.finalizePromise) return this.finalizePromise.then(() => undefined);
+    if (this.terminal !== "open") return Promise.reject(new Error("Output spool is sealed."));
+    this.terminal = "cleaning";
+    this.cleanupPromise = this.operation.then(async () => {
+      await this.cleanupNow();
+      this.terminal = "cleaned";
+    });
+    this.operation = this.cleanupPromise.catch(() => undefined);
+    return this.cleanupPromise;
+  }
+
+  private async cleanupNow(): Promise<void> {
+    let terminalError: unknown;
     for (const state of this.states.values()) {
       if (state.spillFile) {
-        await state.spillFile.close().catch(() => undefined);
+        try {
+          await state.spillFile.close();
+        } catch (error) {
+          terminalError ??= error;
+        }
         state.spillFile = undefined;
       }
       if (state.spillPath) {
-        await this.storage.remove(state.spillPath).catch(() => undefined);
+        try {
+          if (!this.ownedRoot) throw new Error("Output spill root ownership is unavailable.");
+          await removeOwnedEntry(
+            this.ownedRoot,
+            state.spillPath,
+            state.spillProofPath,
+            state.spillIdentity
+          );
+        } catch (error) {
+          terminalError ??= error;
+        }
         state.spillPath = undefined;
+        state.spillProofPath = undefined;
       }
     }
-    await this.storage.removeRootIfEmpty(this.spillRoot).catch(() => undefined);
+    if (this.ownedRoot) {
+      try {
+        await removeOwnedRootIfEmpty(this.ownedRoot);
+      } catch (error) {
+        terminalError ??= error;
+      }
+    }
+    if (terminalError) throw terminalError;
   }
 
   private async writeNow(stream: OutputStream, bytes: Buffer): Promise<void> {
@@ -149,7 +239,7 @@ export class BoundedOutputSpool {
     state.totalBytes += bytes.byteLength;
     state.tail = appendTail(state.tail, bytes, this.tailBytes);
     if (state.lossReason && state.lossReason.code !== "spill_cap_exceeded") {
-      state.lossyBytes += bytes.byteLength;
+      this.addLoss(state, state.lossReason.code, bytes.byteLength);
       return;
     }
 
@@ -158,7 +248,7 @@ export class BoundedOutputSpool {
     const overflow = bytes.byteLength - spillable.byteLength;
     if (spillable.byteLength > 0) {
       if (!(await this.ensureOpen(state))) {
-        state.lossyBytes += bytes.byteLength;
+        this.addLoss(state, state.lossReason!.code, bytes.byteLength);
         return;
       }
       try {
@@ -166,31 +256,60 @@ export class BoundedOutputSpool {
         if (written !== spillable.byteLength) throw new Error("Short spill write.");
         state.spillBytes += written;
       } catch {
-        this.markLoss(state, "spill_write_failed");
-        state.lossyBytes += bytes.byteLength;
+        this.addLoss(state, "spill_write_failed", bytes.byteLength);
         return;
       }
     }
     if (overflow > 0) {
-      this.markLoss(state, "spill_cap_exceeded");
-      state.lossyBytes += overflow;
+      this.addLoss(state, "spill_cap_exceeded", overflow);
     }
   }
 
   private async ensureOpen(state: MutableStreamState): Promise<boolean> {
     if (state.spillFile) return true;
+    if (!this.ownedRoot) {
+      try {
+        this.ownedRoot = await prepareOwnedRoot(this.spillRoot, this.projectRoot, this.ownershipId);
+      } catch {
+        this.addLoss(state, "spill_root_invalid", 0);
+        return false;
+      }
+    }
     try {
-      await this.storage.prepareRoot(this.spillRoot);
       state.spillPath = resolve(
-        this.spillRoot,
-        `${SPILL_PREFIX}${state.stream}-${randomUUID()}${SPILL_SUFFIX}`
+        this.ownedRoot.canonicalRoot,
+        `${this.ownedRoot.entryPrefix}${state.stream}-${randomUUID()}${SPILL_SUFFIX}`
       );
       state.spillFile = await this.storage.openExclusive(state.spillPath);
+      state.spillIdentity = state.spillFile.identity;
+      state.spillProofPath = `${state.spillPath}${ENTRY_PROOF_SUFFIX}`;
+      await writeFile(
+        state.spillProofPath,
+        JSON.stringify({
+          version: 1,
+          ownershipId: this.ownedRoot.ownershipId,
+          rootId: this.ownedRoot.rootId,
+          entry: basename(state.spillPath),
+          identity: state.spillIdentity,
+        }),
+        { flag: "wx", mode: 0o600 }
+      );
       return true;
     } catch {
-      this.markLoss(state, "spill_open_failed");
-      if (state.spillPath) await this.storage.remove(state.spillPath).catch(() => undefined);
+      this.addLoss(state, "spill_open_failed", 0);
+      if (state.spillFile && state.spillPath && this.ownedRoot) {
+        await state.spillFile.close().catch(() => undefined);
+        await removeOwnedEntry(
+          this.ownedRoot,
+          state.spillPath,
+          state.spillProofPath,
+          state.spillIdentity,
+          true
+        ).catch(() => undefined);
+      }
+      state.spillFile = undefined;
       state.spillPath = undefined;
+      state.spillProofPath = undefined;
       return false;
     }
   }
@@ -199,47 +318,73 @@ export class BoundedOutputSpool {
     if (state.finalized) return;
     state.finalized = true;
     let closeFailed = false;
+    let artifactBytes: Buffer | undefined;
+    if (state.spillFile && state.spillBytes > 0 && this.artifactStore) {
+      try {
+        artifactBytes = await state.spillFile.sealAndRead(state.spillBytes, this.maximumSpillBytes);
+        if (artifactBytes.byteLength !== state.spillBytes) throw new Error("Spill identity or length changed.");
+      } catch {
+        artifactBytes = undefined;
+        this.addUnavailableSpillLoss(state, "spill_identity_failed");
+      }
+    }
     if (state.spillFile) {
       try {
         await state.spillFile.close();
       } catch {
         closeFailed = true;
-        state.lossReason = { code: "spill_close_failed", stream: state.stream };
-        state.lossyBytes = state.totalBytes;
+        this.addUnavailableSpillLoss(state, "spill_close_failed");
       } finally {
         state.spillFile = undefined;
       }
     }
-    if (!state.spillPath || state.spillBytes === 0 || closeFailed) return;
+    if (!state.spillPath || state.spillBytes === 0 || closeFailed || !artifactBytes) return;
     if (this.artifactStore) {
       try {
-        const bytes = await this.storage.read(state.spillPath);
         const artifact = await this.artifactStore.put(
-          bytes,
+          artifactBytes,
           "application/octet-stream",
           `${state.stream} process output`
         );
         state.spillArtifactId = artifact.hash;
       } catch {
-        this.markLoss(state, "artifact_ingestion_failed");
-        state.lossyBytes = Math.max(state.lossyBytes, state.spillBytes);
+        this.addUnavailableSpillLoss(state, "artifact_ingestion_failed");
       }
     }
   }
 
-  private markLoss(state: MutableStreamState, code: OutputLossReasonCode): void {
-    state.lossReason ??= { code, stream: state.stream };
+  private addLoss(state: MutableStreamState, code: OutputLossReasonCode, bytes: number): void {
+    const existing = state.lossReasons.find((reason) => reason.code === code);
+    if (existing) {
+      existing.lostBytes += bytes;
+      state.lossReason = existing;
+    } else {
+      const reason = { code, stream: state.stream, lostBytes: bytes };
+      state.lossReasons.push(reason);
+      state.lossReason = reason;
+    }
+    state.lossyBytes += bytes;
+  }
+
+  private addUnavailableSpillLoss(state: MutableStreamState, code: OutputLossReasonCode): void {
+    const newlyLost = state.spillUnavailable ? 0 : state.spillBytes;
+    state.spillUnavailable = true;
+    this.addLoss(state, code, newlyLost);
   }
 
   private snapshot(state: MutableStreamState): BoundedOutputStreamResult {
-    const marker = state.lossReason ? Buffer.from(`[runner output lossy: ${state.lossReason.code}]\n`) : Buffer.alloc(0);
-    const retainedTail = state.lossReason
-      ? utf8AlignedSuffix(state.tail, Math.max(0, this.tailBytes - marker.byteLength))
-      : state.tail;
-    const tail = state.lossReason
-      ? Buffer.concat([marker, retainedTail])
-      : retainedTail;
-    const retainedOutputBytes = retainedTail.byteLength;
+    const exactTail = state.tail;
+    const markerText = state.lossReasons.length > 0
+      ? `[runner output lossy: ${state.lossReasons.map((reason) => reason.code).join(",")}]\n`
+      : "";
+    const marker = Buffer.from(markerText).subarray(0, this.tailBytes);
+    const displaySource = suffix(exactTail, Math.max(0, this.tailBytes - marker.byteLength));
+    const display = decodeUtf8Display(displaySource);
+    const tail = `${marker.toString("utf8")}${display.text}`;
+    const frozenReasons = Object.freeze(
+      state.lossReasons.map((reason) => Object.freeze({ ...reason }))
+    );
+    const frozenPrimary = frozenReasons.at(-1);
     const spillState: OutputSpillState = state.lossReason
       ? "lossy"
       : state.spillArtifactId
@@ -247,31 +392,34 @@ export class BoundedOutputSpool {
         : state.spillBytes > 0
           ? "discarded"
           : "empty";
-    return {
+    return Object.freeze({
       stream: state.stream,
-      tail: decodeUtf8Tail(tail),
+      tail,
+      tailBytesBase64: exactTail.toString("base64"),
+      tailByteLength: exactTail.byteLength,
+      tailDisplayTruncated: exactTail.byteLength > displaySource.byteLength || display.truncated,
       totalBytes: state.totalBytes,
-      truncated: state.totalBytes > retainedOutputBytes,
+      truncated: state.totalBytes > exactTail.byteLength,
       spillState,
       ...(state.spillArtifactId ? { spillArtifactId: state.spillArtifactId } : {}),
       spillBytes: state.spillBytes,
       lossyBytes: state.lossyBytes,
       lossyOutput: Boolean(state.lossReason),
-      ...(state.lossReason ? { lossReason: state.lossReason } : {}),
-    };
+      ...(frozenPrimary ? { lossReason: frozenPrimary } : {}),
+      lossReasons: frozenReasons,
+    });
   }
 }
 
 export function createNodeOutputSpillStorage(): OutputSpillStorage {
   return {
     prepareRoot: async (root) => await mkdir(root, { recursive: true, mode: 0o700 }).then(() => undefined),
-    openExclusive: async (path) => nodeSpillFile(await open(path, "wx", 0o600)),
-    read: async (path) => await readFile(path),
+    openExclusive: async (path) => {
+      const handle = await open(path, "wx+", 0o600);
+      return nodeSpillFile(handle, fileIdentity(await handle.stat()));
+    },
     remove: async (path) => await unlink(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error;
-    }),
-    removeRootIfEmpty: async (root) => await rmdir(root).catch((error: NodeJS.ErrnoException) => {
-      if (!new Set(["ENOENT", "ENOTEMPTY", "EEXIST"]).has(error.code ?? "")) throw error;
     }),
     list: async (root) => await readdir(root).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
@@ -281,27 +429,248 @@ export function createNodeOutputSpillStorage(): OutputSpillStorage {
 }
 
 export async function cleanupOutputSpillRoot(
-  spillRoot: string,
-  storage: OutputSpillStorage = createNodeOutputSpillStorage()
+  options: Pick<BoundedOutputSpoolOptions, "spillRoot" | "projectRoot" | "ownershipId">
 ): Promise<void> {
-  const root = resolve(requiredText(spillRoot, "spillRoot"));
-  for (const name of await storage.list(root)) {
-    if (name.startsWith(SPILL_PREFIX) && name.endsWith(SPILL_SUFFIX)) {
-      await storage.remove(resolve(root, name));
-    }
+  const root = resolve(requiredText(options.spillRoot, "spillRoot"));
+  try {
+    await lstat(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
   }
-  await storage.removeRootIfEmpty(root).catch(() => undefined);
+  const lease = await validateOwnedRoot(
+    root,
+    resolve(requiredText(options.projectRoot, "projectRoot")),
+    ownershipIdentity(options.ownershipId)
+  );
+  for (const name of await readdir(lease.canonicalRoot)) {
+    if (!name.startsWith(lease.entryPrefix) || !name.endsWith(`${SPILL_SUFFIX}${ENTRY_PROOF_SUFFIX}`)) continue;
+    const proofPath = join(lease.canonicalRoot, name);
+    const path = proofPath.slice(0, -ENTRY_PROOF_SUFFIX.length);
+    const proof = await readEntryProof(lease, path, proofPath).catch(() => undefined);
+    if (proof) await removeOwnedEntry(lease, path, proofPath, proof.identity).catch(() => undefined);
+  }
+  await removeOwnedRootIfEmpty(lease);
 }
 
-function nodeSpillFile(handle: FileHandle): OutputSpillFile {
+async function prepareOwnedRoot(
+  root: string,
+  projectRoot: string,
+  ownershipId: string
+): Promise<OwnedSpillRoot> {
+  const projectReal = await realpath(projectRoot);
+  let created = false;
+  try {
+    await lstat(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parentReal = await realpath(dirname(root));
+    const candidate = join(parentReal, basename(root));
+    assertExternal(candidate, projectReal);
+    await mkdir(candidate, { mode: 0o700 });
+    created = true;
+    const marker = {
+      version: 1,
+      ownershipId,
+      rootId: randomUUID(),
+    };
+    try {
+      await writeFile(join(candidate, OWNER_MARKER), JSON.stringify(marker), { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      await rmdir(candidate).catch(() => undefined);
+      throw error;
+    }
+  }
+  try {
+    return await validateOwnedRoot(root, projectReal, ownershipId, true);
+  } catch (error) {
+    if (created) {
+      await unlink(join(root, OWNER_MARKER)).catch(() => undefined);
+      await rmdir(root).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+async function validateOwnedRoot(
+  root: string,
+  projectRoot: string,
+  ownershipId: string,
+  projectAlreadyReal = false
+): Promise<OwnedSpillRoot> {
+  const rootEntry = await lstat(root);
+  if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) throw new Error("Output spill root is not a private directory.");
+  if (process.platform !== "win32" && (rootEntry.mode & 0o077) !== 0) {
+    throw new Error("Output spill root permissions are not restrictive.");
+  }
+  const [rootReal, projectReal] = await Promise.all([
+    realpath(root),
+    projectAlreadyReal ? Promise.resolve(projectRoot) : realpath(projectRoot),
+  ]);
+  if (!samePath(rootReal, root)) throw new Error("Output spill root aliases another path.");
+  assertExternal(rootReal, projectReal);
+
+  const markerPath = join(rootReal, OWNER_MARKER);
+  const markerEntry = await lstat(markerPath);
+  if (!markerEntry.isFile() || markerEntry.isSymbolicLink()) throw new Error("Output spill ownership marker is invalid.");
+  if (process.platform !== "win32" && (markerEntry.mode & 0o077) !== 0) {
+    throw new Error("Output spill ownership marker permissions are not restrictive.");
+  }
+  const marker = JSON.parse(await readFile(markerPath, "utf8")) as Record<string, unknown>;
+  if (
+    marker.version !== 1 ||
+    marker.ownershipId !== ownershipId ||
+    typeof marker.rootId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(marker.rootId)
+  ) {
+    throw new Error("Output spill ownership marker does not match.");
+  }
+  const rootId = marker.rootId;
   return {
+    canonicalRoot: rootReal,
+    projectRoot: projectReal,
+    ownershipId,
+    rootId,
+    rootIdentity: fileIdentity(rootEntry),
+    markerIdentity: fileIdentity(markerEntry),
+    entryPrefix: `${SPILL_PREFIX}${createHash("sha256").update(`${ownershipId}\0${rootId}`).digest("hex").slice(0, 20)}-`,
+  };
+}
+
+async function removeOwnedEntry(
+  lease: OwnedSpillRoot,
+  path: string,
+  proofPath: string | undefined,
+  expectedIdentity?: string,
+  allowMissingProof = false
+): Promise<void> {
+  const current = await validateOwnedRoot(lease.canonicalRoot, lease.projectRoot, lease.ownershipId, true);
+  assertSameOwnedRoot(lease, current);
+  const name = basename(path);
+  if (!name.startsWith(lease.entryPrefix) || !name.endsWith(SPILL_SUFFIX)) {
+    throw new Error("Output spill entry is not owned by this spool.");
+  }
+  const entry = await lstat(path);
+  if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Output spill entry identity changed.");
+  if (!expectedIdentity || fileIdentity(entry) !== expectedIdentity) {
+    throw new Error("Output spill entry identity changed.");
+  }
+  if (!allowMissingProof) {
+    if (!proofPath) throw new Error("Output spill entry ownership proof is missing.");
+    await readEntryProof(lease, path, proofPath, expectedIdentity);
+  }
+  await unlink(path);
+  if (proofPath && !allowMissingProof) await unlink(proofPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
+
+async function readEntryProof(
+  lease: OwnedSpillRoot,
+  path: string,
+  proofPath: string,
+  expectedIdentity?: string
+): Promise<{ identity: string }> {
+  const proofEntry = await lstat(proofPath);
+  if (!proofEntry.isFile() || proofEntry.isSymbolicLink()) throw new Error("Output spill entry proof is invalid.");
+  const proof = JSON.parse(await readFile(proofPath, "utf8")) as Record<string, unknown>;
+  if (
+    proof.version !== 1 ||
+    proof.ownershipId !== lease.ownershipId ||
+    proof.rootId !== lease.rootId ||
+    proof.entry !== basename(path) ||
+    typeof proof.identity !== "string" ||
+    (expectedIdentity !== undefined && proof.identity !== expectedIdentity)
+  ) {
+    throw new Error("Output spill entry proof does not match.");
+  }
+  return { identity: proof.identity };
+}
+
+async function removeOwnedRootIfEmpty(lease: OwnedSpillRoot): Promise<void> {
+  const current = await validateOwnedRoot(lease.canonicalRoot, lease.projectRoot, lease.ownershipId, true);
+  assertSameOwnedRoot(lease, current);
+  const entries = await readdir(lease.canonicalRoot);
+  if (entries.some((entry) => entry !== OWNER_MARKER)) return;
+  await unlink(join(lease.canonicalRoot, OWNER_MARKER));
+  await rmdir(lease.canonicalRoot);
+}
+
+function assertSameOwnedRoot(expected: OwnedSpillRoot, current: OwnedSpillRoot): void {
+  if (
+    current.rootId !== expected.rootId ||
+    current.rootIdentity !== expected.rootIdentity ||
+    current.markerIdentity !== expected.markerIdentity
+  ) {
+    throw new Error("Output spill root identity changed.");
+  }
+}
+
+function assertExternal(root: string, projectRoot: string): void {
+  if (samePath(root, projectRoot) || isWithin(root, projectRoot)) {
+    throw new Error("Output spill root must be outside the project.");
+  }
+}
+
+function isWithin(candidate: string, parent: string): boolean {
+  const rel = relative(normalizePath(parent), normalizePath(candidate));
+  return !isAbsolute(rel) && rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+function samePath(left: string, right: string): boolean {
+  return normalizePath(left) === normalizePath(right);
+}
+
+function normalizePath(path: string): string {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function ownershipIdentity(value: string): string {
+  const identity = requiredText(value, "ownershipId");
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(identity)) throw new Error("ownershipId is invalid.");
+  return identity;
+}
+
+function nodeSpillFile(handle: FileHandle, identity: string): OutputSpillFile {
+  return {
+    identity,
     write: async (bytes) => (await handle.write(bytes)).bytesWritten,
+    sealAndRead: async (expectedBytes, maximumBytes) => {
+      if (expectedBytes > maximumBytes) throw new Error("Output spill exceeds its bound.");
+      await handle.sync();
+      const current = await handle.stat();
+      if (identity !== fileIdentity(current) || current.size !== expectedBytes) {
+        throw new Error("Output spill identity or length changed.");
+      }
+      const bytes = Buffer.alloc(expectedBytes);
+      let offset = 0;
+      while (offset < expectedBytes) {
+        const read = await handle.read(bytes, offset, expectedBytes - offset, offset);
+        if (read.bytesRead === 0) throw new Error("Output spill ended early.");
+        offset += read.bytesRead;
+      }
+      return bytes;
+    },
     close: async () => await handle.close(),
   };
 }
 
 function freshState(stream: OutputStream): MutableStreamState {
-  return { stream, tail: Buffer.alloc(0), totalBytes: 0, spillBytes: 0, lossyBytes: 0, finalized: false };
+  return {
+    stream,
+    tail: Buffer.alloc(0),
+    totalBytes: 0,
+    spillBytes: 0,
+    lossyBytes: 0,
+    lossReasons: [],
+    spillUnavailable: false,
+    finalized: false,
+  };
+}
+
+function fileIdentity(value: { dev: number | bigint; ino: number | bigint }): string {
+  return `${value.dev.toString()}:${value.ino.toString()}`;
 }
 
 function appendTail(current: Buffer, incoming: Buffer, maximum: number): Buffer {
@@ -314,15 +683,21 @@ function suffix(bytes: Buffer, maximum: number): Buffer {
   return bytes.byteLength <= maximum ? bytes : bytes.subarray(bytes.byteLength - maximum);
 }
 
-function utf8AlignedSuffix(bytes: Buffer, maximum: number): Buffer {
-  const candidate = suffix(bytes, maximum);
+function decodeUtf8Display(bytes: Buffer): { text: string; truncated: boolean } {
   let start = 0;
-  while (start < candidate.byteLength && (candidate[start]! & 0xc0) === 0x80) start += 1;
-  return candidate.subarray(start);
-}
-
-function decodeUtf8Tail(bytes: Buffer): string {
-  return utf8AlignedSuffix(bytes, bytes.byteLength).toString("utf8");
+  while (start < bytes.byteLength && (bytes[start]! & 0xc0) === 0x80) start += 1;
+  for (let trim = 0; trim <= Math.min(3, bytes.byteLength - start); trim += 1) {
+    const candidate = bytes.subarray(start, bytes.byteLength - trim);
+    try {
+      return {
+        text: new TextDecoder("utf-8", { fatal: true }).decode(candidate),
+        truncated: start > 0 || trim > 0,
+      };
+    } catch {
+      // An incomplete trailing scalar can require dropping up to three bytes.
+    }
+  }
+  return { text: "", truncated: true };
 }
 
 function positiveInteger(value: number, name: string): number {
