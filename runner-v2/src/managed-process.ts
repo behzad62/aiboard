@@ -102,6 +102,10 @@ export interface ManagedProcessServiceOptions {
   supervisorScriptPath?: string;
 }
 
+export interface ManagedProcessOwnershipSnapshot extends ManagedProcessSnapshot {
+  ownershipReleased: boolean;
+}
+
 /**
  * Reads terminal process records without reconciling supervisor state or
  * persisting an inferred exit. Historical Build endpoints must report only
@@ -499,6 +503,44 @@ export class ManagedProcessService {
       stdout: tail(record.stdoutPath, this.maxPollBytes),
       stderr: tail(record.stderrPath, this.maxPollBytes),
     };
+  }
+
+  /** Authenticated ownership view used by the durable Windows backend adapter. */
+  async reconcileOwnership(
+    processId: string,
+    context: ToolExecutionContext
+  ): Promise<ManagedProcessOwnershipSnapshot> {
+    const record = this.ownedRecord(processId, context);
+    if (!validSupervisorIdentity(record.supervisor)) {
+      throw new ManagedProcessError(
+        "process_control_unavailable",
+        `Process ${processId} lacks authenticated supervisor identity.`
+      );
+    }
+    let status = readSupervisorStatus(record.supervisor.statusPath);
+    if (!status || !matchesSupervisor(record, status)) {
+      throw new ManagedProcessError(
+        "process_control_unavailable",
+        `Process ${processId} has no matching durable supervisor status.`
+      );
+    }
+    if (!status.ownershipReleased && validSupervisorEndpoint(record.supervisor)) {
+      status = await supervisorRequest(
+        record.supervisor,
+        "/status",
+        "GET",
+        undefined,
+        this.stopDeadlineMs + 250
+      );
+      if (!matchesSupervisor(record, status)) {
+        throw new ManagedProcessError(
+          "process_control_unavailable",
+          `Supervisor identity mismatch for ${processId}.`
+        );
+      }
+    }
+    this.applySupervisorStatus(record, status);
+    return { ...this.snapshot(record), ownershipReleased: status.ownershipReleased };
   }
 
   private persist(record: ManagedProcessRecord): void {

@@ -17,6 +17,7 @@ import {
   type ProcessBackend,
   type ProcessBackendRegistration,
 } from "../src/process-backend.js";
+import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "../src/windows-process-backend.js";
 
 const capabilities = {
   tree_termination: "enforced",
@@ -330,4 +331,37 @@ test("normal reattestation rejects copied identity while explicit trusted restar
       ] as never),
     /registration authority/i,
   );
+});
+
+test("portable Windows baseline is available without Job Objects but strict guarantees require the Job enhancement", async () => {
+  const baseline = createWindowsProcessBackend({ jobObjects: "unavailable" });
+  const job = new WindowsJobObjectProcessBackend({} as never);
+  const trusted = createProcessBackendRegistry([
+    createProcessBackendRegistration({
+      stableAdapterId: "windows-portable",
+      backendId: "runner-windows-supervisor-v1",
+      codeDigest: "3".repeat(64),
+      configDigest: "4".repeat(64),
+      backend: baseline,
+    }),
+    createProcessBackendRegistration({
+      stableAdapterId: "windows-job",
+      backendId: "runner-windows-job-v1",
+      codeDigest: "5".repeat(64),
+      configDigest: "6".repeat(64),
+      backend: job,
+    }),
+  ]);
+  assert.equal((await selectProcessBackend(trusted, [])).attestation.backendId, "runner-windows-supervisor-v1");
+  assert.equal((await selectProcessBackend(trusted, ["tree_termination", "crash_cleanup"])).attestation.backendId, "runner-windows-job-v1");
+  const baselineOnly = createProcessBackendRegistry([
+    createProcessBackendRegistration({
+      stableAdapterId: "windows-portable-only",
+      backendId: "runner-windows-supervisor-v1",
+      codeDigest: "7".repeat(64),
+      configDigest: "8".repeat(64),
+      backend: baseline,
+    }),
+  ]);
+  await assert.rejects(selectProcessBackend(baselineOnly, ["tree_termination"]), /required semantic capabilities/i);
 });

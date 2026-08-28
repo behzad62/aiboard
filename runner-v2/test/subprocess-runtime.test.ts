@@ -377,6 +377,32 @@ test("caller can provide only an opaque grant id and forged grant/result fields 
   assert.equal(backend.calls.includes("launch"), false);
 });
 
+test("runtime denies a semantic tree guarantee when the active adapter attests only partial ownership", async () => {
+  const f = fixture();
+  f.backend.probeValue = {
+    attestationVersion: 1,
+    backendId: "fake",
+    verified: true,
+    platformLabel: "portable-windows-baseline",
+    capabilities: {
+      tree_termination: "partial",
+      crash_cleanup: "unavailable",
+      verified_emptiness: "partial",
+      write_confinement: "unavailable",
+    },
+  };
+  await assert.rejects(
+    f.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+    }),
+    (error: SubprocessRuntimeError) => error.code === "backend_unavailable",
+  );
+  assert.equal(f.backend.calls.includes("launch"), false);
+  assert.equal(f.store.readByInvocation("invoke-1")?.state, "launch_not_proven");
+});
+
 test("runtime factory rejects malicious structural authority and launch sees a deep immutable intent snapshot", async () => {
   const f = fixture();
   assert.throws(
