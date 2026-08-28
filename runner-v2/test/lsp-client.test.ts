@@ -17,6 +17,7 @@ import { LspClient, LspClientError } from "../src/lsp-client.js";
 import { resolveLanguageServerExecutable } from "../src/language-server-executable.js";
 
 const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
+const stalledWindowsJobHost = resolve("runner-v2/test/fixtures/lsp-stalled-job-host.ps1");
 
 test("LSP client initializes over partial frames, synchronizes exact versions, cancels, and shuts down", async () => {
   const fixture = workspace("partial Ω");
@@ -233,6 +234,55 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
       }
     }
     await completesBefore(client.close(), 500).catch(() => undefined);
+    fixture.close();
+  }
+});
+
+test("LSP client bounds a stalled Windows Job-host bootstrap without an unhandled rejection", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const fixture = workspace("stalled job host bootstrap");
+  assert.throws(
+    () => fixture.client({ windowsJobHostPathForTest: "relative.ps1" }),
+    isLspError("invalid_configuration"),
+  );
+  const pidMarker = join(fixture.root, "stalled-job-host.pid");
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  const client = new LspClient({
+    command: process.execPath,
+    args: Array.from(
+      { length: 128 },
+      (_value, index) => `${index}:`.padEnd(3_500, "x"),
+    ),
+    workspaceRoot: fixture.workspace,
+    env: {
+      ...process.env,
+      LSP_FIXTURE_STALLED_JOB_HOST_PID_FILE: pidMarker,
+    },
+    writeTimeoutMs: 1_000,
+    shutdownTimeoutMs: 250,
+    restartLimit: 0,
+    windowsJobHostPathForTest: stalledWindowsJobHost,
+  });
+  let hostPid = 0;
+  try {
+    await rejectsBefore(client.start(), 2_000, isLspError("write_failed"));
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    assert.deepEqual(unhandled, []);
+    await waitFor(() => existsSync(pidMarker));
+    hostPid = Number(await readFile(pidMarker, "utf8"));
+    assert.ok(Number.isSafeInteger(hostPid) && hostPid > 0);
+    await completesBefore(client.close(), 1_000);
+    await waitFor(() => !processExists(hostPid));
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandled);
+    await completesBefore(client.close(), 500).catch(() => undefined);
+    if (hostPid > 0 && processExists(hostPid)) {
+      process.kill(hostPid, "SIGKILL");
+      await waitFor(() => !processExists(hostPid));
+    }
     fixture.close();
   }
 });

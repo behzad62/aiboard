@@ -79,6 +79,8 @@ export interface LspClientOptions {
   restartLimit?: number;
   maxFrameBytes?: number;
   maxPendingRequests?: number;
+  /** Test-only fault seam; production always uses the bundled Job-host script. */
+  windowsJobHostPathForTest?: string;
   /** Test-only fault seam; production uses the supplied process-tree terminator directly. */
   processTreeTerminationHook?: (
     terminate: () => Promise<void>,
@@ -199,6 +201,7 @@ export class LspClient {
   private readonly restartLimit: number;
   private readonly maxFrameBytes: number;
   private readonly maxPendingRequests: number;
+  private readonly windowsJobHostPath: string;
   private readonly processTreeTerminationHook?: LspClientOptions["processTreeTerminationHook"];
   private readonly documents = new Map<string, OpenDocument>();
   private readonly diagnostics = new Map<string, PublishedDiagnosticsCache>();
@@ -280,6 +283,9 @@ export class LspClient {
     this.maxPendingRequests = positiveInteger(
       options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS,
       "maxPendingRequests",
+    );
+    this.windowsJobHostPath = validateWindowsJobHostPathForTest(
+      options.windowsJobHostPathForTest,
     );
     this.processTreeTerminationHook = options.processTreeTerminationHook;
   }
@@ -681,7 +687,7 @@ export class LspClient {
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            WINDOWS_JOB_HOST_PATH,
+            this.windowsJobHostPath,
             "--aiboard-lsp-pipe",
           ]
         : this.args,
@@ -1494,6 +1500,33 @@ function configurationError(message: string): LspClientError {
   return new LspClientError("invalid_configuration", message);
 }
 
+function validateWindowsJobHostPathForTest(value: string | undefined): string {
+  if (value === undefined) return WINDOWS_JOB_HOST_PATH;
+  if (
+    typeof value !== "string" ||
+    !isAbsolute(value) ||
+    value.includes("\0") ||
+    !value.toLowerCase().endsWith(".ps1")
+  ) {
+    throw configurationError("Test-only LSP Job-host path must be an absolute .ps1 file path.");
+  }
+  try {
+    const path = realpathSync(value);
+    if (!statSync(path).isFile() || !path.toLowerCase().endsWith(".ps1")) {
+      throw configurationError("Test-only LSP Job-host path must identify a .ps1 file.");
+    }
+    return path;
+  } catch (error) {
+    if (error instanceof LspClientError) throw error;
+    throw new LspClientError(
+      "invalid_configuration",
+      "Test-only LSP Job-host path must identify an existing .ps1 file.",
+      false,
+      { cause: error },
+    );
+  }
+}
+
 function negotiatedDiagnosticSupport(
   capabilities: Record<string, unknown>,
 ): LspDiagnosticSupport {
@@ -1514,6 +1547,9 @@ function createJobHostStartup(): JobHostStartup {
     resolveReady = resolvePromise;
     rejectReady = rejectPromise;
   });
+  // Startup can fail before bootstrapWindowsJobHost reaches its await. Attach
+  // ownership immediately while preserving ready's original typed rejection.
+  void ready.catch(() => undefined);
   const startup: JobHostStartup = {
     buffer: "",
     settled: false,
