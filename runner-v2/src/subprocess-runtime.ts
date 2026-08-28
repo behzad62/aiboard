@@ -20,6 +20,7 @@ import {
   semanticRequestFingerprint,
   type DurableBackendBinding,
   type DurableEnvironmentAudit,
+  type DurableProcessCommand,
   type DurableProcessRuntimeWriter,
   type DurableProcessStore,
   type DurableProcessStoreKernel,
@@ -40,6 +41,7 @@ import {
   type ConsumedExecutionGrant,
   type ProcessBackendBinding,
   type ProcessBackendRegistry,
+  type ProcessEffectFence,
   type SelectedProcessBackend,
 } from "./process-backend.js";
 
@@ -70,13 +72,23 @@ export interface SubprocessRuntimeClock {
 }
 export interface ProcessOutputSession {
   readonly ownerId: string;
-  write(stream: OutputStream, bytes: Uint8Array): Promise<void>;
-  finalize(): Promise<BoundedOutputSpoolResult>;
-  cleanup(): Promise<void>;
+  write(
+    stream: OutputStream,
+    bytes: Uint8Array,
+    fence: ProcessEffectFence,
+  ): Promise<void>;
+  finalize(fence: ProcessEffectFence): Promise<BoundedOutputSpoolResult>;
+  cleanup(fence: ProcessEffectFence): Promise<void>;
 }
 export interface ProcessOutputFactory {
-  prepare(ownerId: string): Promise<ProcessOutputSession>;
-  reopen(ownerId: string): Promise<ProcessOutputSession>;
+  prepare(
+    ownerId: string,
+    fence: ProcessEffectFence,
+  ): Promise<ProcessOutputSession>;
+  reopen(
+    ownerId: string,
+    fence: ProcessEffectFence,
+  ): Promise<ProcessOutputSession>;
 }
 export interface SubprocessRuntimeKernelOptions {
   readonly registry: ProcessBackendRegistry;
@@ -89,6 +101,8 @@ export interface SubprocessRuntimeKernelOptions {
   readonly outputs: ProcessOutputFactory;
   readonly createLogicalProcessId?: (invocationId: string) => string;
   readonly escalationGraceMs?: readonly [number, number];
+  readonly leaseDurationMs?: number;
+  readonly leaseHeartbeatMs?: number;
 }
 export interface SubprocessRuntimeKernel {
   readonly runtime: SubprocessRuntime;
@@ -161,20 +175,26 @@ interface InternalRuntimeOptions {
   readonly outputs: ProcessOutputFactory;
   readonly createLogicalProcessId?: (id: string) => string;
   readonly escalationGraceMs?: readonly [number, number];
+  readonly leaseDurationMs?: number;
+  readonly leaseHeartbeatMs?: number;
 }
 
 class RunnerSubprocessRuntime implements SubprocessRuntime {
   private readonly writer: DurableProcessRuntimeWriter;
   private readonly termination = new Map<string, Promise<void>>();
+  private readonly fences = new Map<string, number>();
   private readonly createId: (invocationId: string) => string;
   private readonly grace: readonly [number, number];
   private readonly ownerId = safeOwnerId(`owner-${randomUUID()}`);
-  private readonly leaseMs = 300_000;
+  private readonly leaseMs: number;
+  private readonly heartbeatMs: number;
   constructor(private readonly options: InternalRuntimeOptions) {
     this.writer = options.writer;
     this.createId =
       options.createLogicalProcessId ?? ((id) => `proc_${id}_${randomUUID()}`);
     this.grace = options.escalationGraceMs ?? [250, 1000];
+    this.leaseMs = options.leaseDurationMs ?? 300_000;
+    this.heartbeatMs = options.leaseHeartbeatMs ?? 100_000;
   }
 
   invoke(value: SubprocessInvocation): Promise<GenericProcessResult> {
@@ -253,6 +273,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         return Promise.resolve(resultFromRecord(claim.record));
       return this.observeExisting(claim.record.invocationId);
     }
+    this.fences.set(claim.record.invocationId, claim.record.fencingToken);
     return this.runClaimed(request, claim.record);
   }
 
@@ -309,7 +330,14 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           "exited",
           "verifying_empty",
           "backend_unavailable",
+          "cleanup_blocked",
         ].includes(snapshot.state)
+      )
+        continue;
+      if (
+        snapshot.state === "cleanup_blocked" &&
+        (snapshot.backendBinding ||
+          snapshot.result?.outcome !== "launch_failed")
       )
         continue;
       if (
@@ -320,15 +348,18 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         continue;
       }
       try {
-        if (snapshot.ownerId !== this.ownerId)
+        if (snapshot.ownerId !== this.ownerId) {
           snapshot = this.writer.apply({
             type: "takeover_lease",
             invocationId,
             expectedRevision: snapshot.revision,
             ownerId: this.ownerId,
+            fencingToken: snapshot.fencingToken + 1,
             at: this.now(),
             leaseExpiresAt: this.leaseExpiry(),
           });
+        }
+        this.fences.set(invocationId, snapshot.fencingToken);
         await this.reconcileRecord(snapshot);
       } catch (error) {
         await this.classifyReconciliationFailure(snapshot, error);
@@ -352,9 +383,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     record = this.renew(record);
     let output: ProcessOutputSession;
     try {
-      output = await this.options.outputs.prepare(record.outputOwnerId);
+      output = await this.fencedEffect(record.invocationId, (fence) =>
+        this.options.outputs.prepare(record.outputOwnerId, fence),
+      );
       record = this.current(record.invocationId);
-      record = this.writer.apply({
+      record = this.mutate({
         type: "mark_output_prepared",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -362,7 +395,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       });
     } catch (error) {
       record = this.current(record.invocationId);
-      this.writer.apply({
+      this.mutate({
         type: "record_output_prepare_failure",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -384,15 +417,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         this.options.clock.now(),
       );
     } catch (error) {
-      await output.cleanup().catch(() => undefined);
-      record = this.current(record.invocationId);
-      this.writer.apply({
-        type: "fail_launch",
-        invocationId: record.invocationId,
-        expectedRevision: record.revision,
-        at: this.now(),
-        detail: "Execution grant was invalid.",
-      });
+      await this.failBeforeLaunch(
+        record,
+        output,
+        "Execution grant was invalid.",
+      );
       throw error;
     }
     let preparedEnvironment;
@@ -405,15 +434,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         credentialGrantId: request.credentialGrantId,
       });
     } catch (error) {
-      await output.cleanup().catch(() => undefined);
-      record = this.current(record.invocationId);
-      this.writer.apply({
-        type: "fail_launch",
-        invocationId: record.invocationId,
-        expectedRevision: record.revision,
-        at: this.now(),
-        detail: "Child environment preparation failed.",
-      });
+      await this.failBeforeLaunch(
+        record,
+        output,
+        "Child environment preparation failed.",
+      );
       throw error;
     }
     const audit: DurableEnvironmentAudit = {
@@ -423,7 +448,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       grantedNames: [...preparedEnvironment.audit.grantedNames],
     };
     record = this.current(record.invocationId);
-    record = this.writer.apply({
+    record = this.mutate({
       type: "record_environment",
       invocationId: record.invocationId,
       expectedRevision: record.revision,
@@ -438,15 +463,17 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }));
     let selected: SelectedProcessBackend;
     try {
-      selected = await selectProcessBackend(
-        this.options.registry,
-        request.intent.requestedCapabilities,
+      selected = await this.fencedEffect(record.invocationId, (fence) =>
+        selectProcessBackend(
+          this.options.registry,
+          request.intent.requestedCapabilities,
+          fence,
+        ),
       );
     } catch (error) {
-      await output.cleanup().catch(() => undefined);
-      this.applyFailure(
+      await this.failBeforeLaunch(
         record,
-        "backend_unavailable",
+        output,
         "No verified backend satisfies invocation.",
       );
       throw new SubprocessRuntimeError(
@@ -456,17 +483,20 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
     }
     const stopPromise = this.stopTrigger(request);
-    const launchPromise = this.options.environments.withChildEnvironment(
-      preparedEnvironment.capability,
-      (environment) =>
-        selected.backend.launch(
-          deepFreeze({
-            intent: request.intent,
-            grant,
-            environment: snapshotChildEnvironment(environment),
-            outputOwnerId: record.outputOwnerId,
-          }),
-        ),
+    const launchPromise = this.fencedEffect(record.invocationId, (fence) =>
+      this.options.environments.withChildEnvironment(
+        preparedEnvironment.capability,
+        (environment) =>
+          selected.backend.launch(
+            deepFreeze({
+              intent: request.intent,
+              grant,
+              environment: snapshotChildEnvironment(environment),
+              outputOwnerId: record.outputOwnerId,
+              fence,
+            }),
+          ),
+      ),
     );
     let rawLaunch: unknown;
     let first:
@@ -480,15 +510,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         stopPromise.then((stop) => ({ kind: "stop" as const, stop })),
       ]);
     } catch (error) {
-      await output.cleanup().catch(() => undefined);
-      record = this.current(record.invocationId);
-      this.writer.apply({
-        type: "fail_launch",
-        invocationId: record.invocationId,
-        expectedRevision: record.revision,
-        at: this.now(),
-        detail: "Launch failed before identity was proven.",
-      });
+      await this.failBeforeLaunch(
+        record,
+        output,
+        "Launch failed before identity was proven.",
+      );
       throw new SubprocessRuntimeError(
         "launch_not_proven",
         "Process launch was not proven.",
@@ -500,15 +526,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       try {
         rawLaunch = await launchPromise;
       } catch (error) {
-        await output.cleanup().catch(() => undefined);
-        record = this.current(record.invocationId);
-        this.writer.apply({
-          type: "fail_launch",
-          invocationId: record.invocationId,
-          expectedRevision: record.revision,
-          at: this.now(),
-          detail: "Launch did not return identity.",
-        });
+        await this.failBeforeLaunch(
+          record,
+          output,
+          "Launch did not return identity.",
+        );
         throw new SubprocessRuntimeError(
           "launch_not_proven",
           "Process launch was not proven.",
@@ -520,15 +542,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     try {
       launch = parseProcessLaunchResult(rawLaunch);
     } catch (error) {
-      await output.cleanup().catch(() => undefined);
-      record = this.current(record.invocationId);
-      this.writer.apply({
-        type: "fail_launch",
-        invocationId: record.invocationId,
-        expectedRevision: record.revision,
-        at: this.now(),
-        detail: "Malformed launch result.",
-      });
+      await this.failBeforeLaunch(record, output, "Malformed launch result.");
       throw new SubprocessRuntimeError(
         "launch_not_proven",
         "Process launch was not proven.",
@@ -545,15 +559,19 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       ...launch,
     };
     record = this.current(record.invocationId);
-    record = this.writer.apply({
+    record = this.mutate({
       type: "bind_launch",
       invocationId: record.invocationId,
       expectedRevision: record.revision,
       at: this.now(),
       binding,
     });
-    const observePromise = selected.backend.observe(binding, (stream, bytes) =>
-      output.write(stream, bytes),
+    const observePromise = this.fencedEffect(record.invocationId, (fence) =>
+      selected.backend.observe(
+        binding,
+        (stream, bytes) => output.write(stream, bytes, fence),
+        fence,
+      ),
     );
     try {
       if (record.stopIntent) {
@@ -615,7 +633,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
     }
     record = this.current(record.invocationId);
-    record = this.writer.apply({
+    record = this.mutate({
       type: "record_exit",
       invocationId: record.invocationId,
       expectedRevision: record.revision,
@@ -639,9 +657,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     if (record.state === "exited") {
       let disposition: ProcessOutputDisposition[];
       try {
-        disposition = outputDisposition(await output.finalize());
+        disposition = outputDisposition(
+          await this.fencedEffect(record.invocationId, (fence) =>
+            output.finalize(fence),
+          ),
+        );
       } catch {
-        await output.cleanup().catch(() => undefined);
+        await this.cleanupOutput(record, output).catch(() => undefined);
         const failed = this.applyFailure(
           record,
           "cleanup_blocked",
@@ -655,7 +677,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         );
         return resultFromFailure(failed);
       }
-      record = this.writer.apply({
+      record = this.mutate({
         type: "begin_verify",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -669,16 +691,18 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     try {
       if (!backend) {
         try {
-          backend = await reattestProcessBackend(
-            this.options.registry,
-            binding,
+          backend = await this.fencedEffect(record.invocationId, (fence) =>
+            reattestProcessBackend(this.options.registry, binding, fence),
           );
         } catch {
-          backend = await adoptProcessBackendAfterRestart(
-            this.options.registry,
-            binding,
+          backend = await this.fencedEffect(record.invocationId, (fence) =>
+            adoptProcessBackendAfterRestart(
+              this.options.registry,
+              binding,
+              fence,
+            ),
           );
-          record = this.writer.apply({
+          record = this.mutate({
             type: "adopt_backend",
             invocationId: record.invocationId,
             expectedRevision: record.revision,
@@ -710,7 +734,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     let verification;
     try {
       verification = parseProcessEmptyVerification(
-        await backend.backend.verifyEmpty(binding),
+        await this.fencedEffect(record.invocationId, (fence) =>
+          backend.backend.verifyEmpty(binding, fence),
+        ),
       );
     } catch {
       const failed = this.applyFailure(
@@ -742,11 +768,14 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       return resultFromFailure(failed);
     }
     try {
-      const fresh = await reattestProcessBackend(
-        this.options.registry,
-        binding,
+      const fresh = await this.fencedEffect(record.invocationId, (fence) =>
+        reattestProcessBackend(this.options.registry, binding, fence),
       );
-      parseProcessReleaseResult(await fresh.backend.release(binding));
+      parseProcessReleaseResult(
+        await this.fencedEffect(record.invocationId, (fence) =>
+          fresh.backend.release(binding, fence),
+        ),
+      );
     } catch {
       const failed = this.applyFailure(
         record,
@@ -769,7 +798,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ? { proofArtifactId: verification.proofArtifactId }
         : {}),
     };
-    record = this.writer.apply({
+    record = this.mutate({
       type: "complete",
       invocationId: record.invocationId,
       expectedRevision: record.revision,
@@ -819,11 +848,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       if (prior && prior.outcome !== "requested") {
         if (prior.outcome === "exited") return;
         if (index < this.grace.length)
-          await this.options.clock.sleep(this.grace[index]!);
+          await this.fencedEffect(record.invocationId, () =>
+            this.options.clock.sleep(this.grace[index]!),
+          );
         continue;
       }
       if (!prior) {
-        record = this.writer.apply({
+        record = this.mutate({
           type: "start_escalation",
           invocationId: record.invocationId,
           expectedRevision: record.revision,
@@ -834,18 +865,23 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       let outcome: "running" | "exited" | "failed" = "failed";
       let detail: string | undefined;
       try {
-        const selected = await reattestProcessBackend(
-          this.options.registry,
-          record.backendBinding!,
+        const selected = await this.fencedEffect(record.invocationId, (fence) =>
+          reattestProcessBackend(
+            this.options.registry,
+            record.backendBinding!,
+            fence,
+          ),
         );
         outcome = parseProcessSignalResult(
-          await selected.backend.signal(record.backendBinding!, action),
+          await this.fencedEffect(record.invocationId, (fence) =>
+            selected.backend.signal(record.backendBinding!, action, fence),
+          ),
         ).state;
       } catch (error) {
         detail = error instanceof Error ? error.message : "Signal failed";
       }
       record = this.current(record.invocationId);
-      record = this.writer.apply({
+      record = this.mutate({
         type: "finish_escalation",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -867,7 +903,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       }
       if (outcome === "exited") return;
       if (index < this.grace.length)
-        await this.options.clock.sleep(this.grace[index]!);
+        await this.fencedEffect(record.invocationId, () =>
+          this.options.clock.sleep(this.grace[index]!),
+        );
     }
   }
 
@@ -877,11 +915,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     let record = this.current(snapshot.invocationId);
     let output: ProcessOutputSession;
     try {
-      output = record.outputPrepared
-        ? await this.options.outputs.reopen(record.outputOwnerId)
-        : await this.options.outputs.prepare(record.outputOwnerId);
+      output = await this.fencedEffect(record.invocationId, (fence) =>
+        record.outputPrepared
+          ? this.options.outputs.reopen(record.outputOwnerId, fence)
+          : this.options.outputs.prepare(record.outputOwnerId, fence),
+      );
       if (!record.outputPrepared) {
-        record = this.writer.apply({
+        record = this.mutate({
           type: "mark_output_prepared",
           invocationId: record.invocationId,
           expectedRevision: record.revision,
@@ -895,9 +935,35 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         { cause: error },
       );
     }
+    if (
+      record.state === "cleanup_blocked" &&
+      !record.backendBinding &&
+      record.result?.outcome === "launch_failed"
+    ) {
+      try {
+        await this.cleanupOutput(record, output);
+      } catch {
+        this.blockPrelaunchCleanup(record);
+        return;
+      }
+      record = this.current(record.invocationId);
+      this.mutate({
+        type: "settle_output_cleanup",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+      });
+      return;
+    }
     if (record.state === "prepared") {
-      await output.cleanup();
-      this.writer.apply({
+      try {
+        await this.cleanupOutput(record, output);
+      } catch {
+        this.blockPrelaunchCleanup(record);
+        return;
+      }
+      record = this.current(record.invocationId);
+      this.mutate({
         type: "fail_launch",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -907,7 +973,6 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       return;
     }
     if (record.state === "launching") {
-      await output.cleanup();
       this.applyFailure(
         record,
         "orphaned",
@@ -926,17 +991,23 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
     let selected: SelectedProcessBackend;
     try {
-      selected = await reattestProcessBackend(
-        this.options.registry,
-        record.backendBinding,
+      selected = await this.fencedEffect(record.invocationId, (fence) =>
+        reattestProcessBackend(
+          this.options.registry,
+          record.backendBinding!,
+          fence,
+        ),
       );
     } catch {
-      selected = await adoptProcessBackendAfterRestart(
-        this.options.registry,
-        record.backendBinding,
+      selected = await this.fencedEffect(record.invocationId, (fence) =>
+        adoptProcessBackendAfterRestart(
+          this.options.registry,
+          record.backendBinding!,
+          fence,
+        ),
       );
       const prior = record.backendBinding;
-      record = this.writer.apply({
+      record = this.mutate({
         type: "adopt_backend",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -953,7 +1024,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     const activeBinding = record.backendBinding!;
     const reconciliation = parseProcessReconciliation(
-      await selected.backend.reconcile(activeBinding),
+      await this.fencedEffect(record.invocationId, (fence) =>
+        selected.backend.reconcile(activeBinding, fence),
+      ),
     );
     if (reconciliation.state === "identity_mismatch") {
       this.applyFailure(
@@ -976,8 +1049,12 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       let observation;
       try {
         observation = parseProcessObservation(
-          await selected.backend.observe(activeBinding, (stream, bytes) =>
-            output.write(stream, bytes),
+          await this.fencedEffect(record.invocationId, (fence) =>
+            selected.backend.observe(
+              activeBinding,
+              (stream, bytes) => output.write(stream, bytes, fence),
+              fence,
+            ),
           ),
         );
       } catch (error) {
@@ -988,7 +1065,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         );
       }
       record = this.current(record.invocationId);
-      record = this.writer.apply({
+      record = this.mutate({
         type: "record_exit",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -1003,7 +1080,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       });
     } else {
       record = this.current(record.invocationId);
-      record = this.writer.apply({
+      record = this.mutate({
         type: "record_exit",
         invocationId: record.invocationId,
         expectedRevision: record.revision,
@@ -1040,7 +1117,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       return;
     try {
       if (record.state === "prepared")
-        this.writer.apply({
+        this.mutate({
           type: "fail_launch",
           invocationId: record.invocationId,
           expectedRevision: record.revision,
@@ -1071,13 +1148,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
   }
   private applyCurrent(
     record: DurableSubprocessRecord,
-    make: (
-      revision: number,
-    ) => Parameters<DurableProcessRuntimeWriter["apply"]>[0],
+    make: (revision: number) => DurableProcessCommand,
   ): DurableSubprocessRecord {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        return this.writer.apply(make(record.revision));
+        return this.mutate(make(record.revision));
       } catch (error) {
         if (
           !/revision conflict/i.test(
@@ -1090,6 +1165,16 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       }
     }
     throw new Error("unreachable");
+  }
+  private mutate(command: DurableProcessCommand): DurableSubprocessRecord {
+    const fencingToken = this.fences.get(command.invocationId);
+    if (fencingToken === undefined)
+      throw new Error("Process owner fencing authority is unavailable.");
+    return this.writer.apply({
+      ...command,
+      ownerId: this.ownerId,
+      fencingToken,
+    });
   }
   private applyFailure(
     record: DurableSubprocessRecord,
@@ -1107,7 +1192,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       state === "cleanup_blocked"
         ? terminalResult(record, this.now(), "cleanup_failed")
         : undefined;
-    return this.writer.apply({
+    return this.mutate({
       type: "fail",
       invocationId: record.invocationId,
       expectedRevision: record.revision,
@@ -1116,6 +1201,55 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       detail,
       ...(cleanup ? { cleanup } : {}),
       ...(result ? { result } : {}),
+    });
+  }
+  private async cleanupOutput(
+    record: DurableSubprocessRecord,
+    output: ProcessOutputSession,
+  ): Promise<void> {
+    await this.fencedEffect(record.invocationId, (fence) =>
+      output.cleanup(fence),
+    );
+  }
+  private async failBeforeLaunch(
+    record: DurableSubprocessRecord,
+    output: ProcessOutputSession,
+    detail: string,
+  ): Promise<void> {
+    try {
+      await this.cleanupOutput(record, output);
+    } catch {
+      this.blockPrelaunchCleanup(record);
+      return;
+    }
+    record = this.current(record.invocationId);
+    this.mutate({
+      type: "fail_launch",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      detail,
+    });
+  }
+  private blockPrelaunchCleanup(
+    record: DurableSubprocessRecord,
+  ): DurableSubprocessRecord {
+    record = this.current(record.invocationId);
+    const at = this.now();
+    return this.mutate({
+      type: "fail",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at,
+      state: "cleanup_blocked",
+      detail: "Recoverable output owner cleanup failed.",
+      cleanup: {
+        state: "failed",
+        failedAt: at,
+        code: "output_cleanup_failed",
+        detail: "Recoverable output owner cleanup failed.",
+      },
+      result: { outcome: "launch_failed", finishedAt: at },
     });
   }
   private current(id: string): DurableSubprocessRecord {
@@ -1165,14 +1299,82 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     ).toISOString();
   }
   private renew(record: DurableSubprocessRecord): DurableSubprocessRecord {
-    return this.writer.apply({
+    return this.mutate({
       type: "renew_lease",
       invocationId: record.invocationId,
       expectedRevision: record.revision,
-      ownerId: this.ownerId,
       at: this.now(),
       leaseExpiresAt: this.leaseExpiry(),
     });
+  }
+  private fence(invocationId: string): ProcessEffectFence {
+    const fencingToken = this.fences.get(invocationId);
+    if (fencingToken === undefined)
+      throw new Error("Process owner fencing authority is unavailable.");
+    return Object.freeze({ ownerId: this.ownerId, fencingToken });
+  }
+  private assertFence(invocationId: string, fence: ProcessEffectFence): void {
+    const record = this.current(invocationId);
+    if (
+      record.ownerId !== fence.ownerId ||
+      record.fencingToken !== fence.fencingToken ||
+      this.fences.get(invocationId) !== fence.fencingToken
+    )
+      throw new Error("Process owner fencing token is stale.");
+  }
+  private async fencedEffect<T>(
+    invocationId: string,
+    effect: (fence: ProcessEffectFence) => Promise<T>,
+  ): Promise<T> {
+    const fence = this.fence(invocationId);
+    this.assertFence(invocationId, fence);
+    const heartbeat = this.startHeartbeat(invocationId, fence);
+    let result: T | undefined;
+    let failure: unknown;
+    try {
+      result = await effect(fence);
+    } catch (error) {
+      failure = error;
+    }
+    const heartbeatFailure = await heartbeat.stop();
+    this.assertFence(invocationId, fence);
+    if (heartbeatFailure) throw heartbeatFailure;
+    if (failure) throw failure;
+    return result as T;
+  }
+  private startHeartbeat(
+    invocationId: string,
+    fence: ProcessEffectFence,
+  ): { stop(): Promise<unknown> } {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pending = Promise.resolve();
+    let failure: unknown;
+    const schedule = () => {
+      if (stopped || failure) return;
+      timer = setTimeout(() => {
+        pending = Promise.resolve()
+          .then(() => {
+            this.assertFence(invocationId, fence);
+            const current = this.current(invocationId);
+            this.renew(current);
+          })
+          .catch((error) => {
+            failure = error;
+          })
+          .finally(schedule);
+      }, this.heartbeatMs);
+      timer.unref?.();
+    };
+    schedule();
+    return {
+      stop: async () => {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        await pending;
+        return failure;
+      },
+    };
   }
   private stopTrigger(request: SnapshotInvocation): Promise<StopTrigger> {
     const candidates: Promise<StopTrigger>[] = [];
@@ -1223,6 +1425,8 @@ export function createSubprocessRuntimeKernel(
       "outputs",
       "createLogicalProcessId",
       "escalationGraceMs",
+      "leaseDurationMs",
+      "leaseHeartbeatMs",
     ]),
     "runtime kernel options",
   );
@@ -1249,6 +1453,16 @@ export function createSubprocessRuntimeKernel(
   )
     throw new Error("Runner state key is invalid.");
   const grants = new GrantVault(stateKey);
+  const leaseDurationMs = positiveInteger(
+    options.leaseDurationMs ?? 300_000,
+    "leaseDurationMs",
+  );
+  const leaseHeartbeatMs = positiveInteger(
+    options.leaseHeartbeatMs ?? Math.max(1, Math.floor(leaseDurationMs / 3)),
+    "leaseHeartbeatMs",
+  );
+  if (leaseHeartbeatMs >= leaseDurationMs)
+    throw new Error("Lease heartbeat must be shorter than the lease duration.");
   const clock = Object.freeze({
     now: options.clock.now.bind(options.clock),
     sleep: options.clock.sleep.bind(options.clock),
@@ -1272,6 +1486,8 @@ export function createSubprocessRuntimeKernel(
     clock,
     environments,
     outputs,
+    leaseDurationMs,
+    leaseHeartbeatMs,
     ...(options.createLogicalProcessId
       ? { createLogicalProcessId: options.createLogicalProcessId }
       : {}),
@@ -1283,7 +1499,29 @@ export function createSubprocessRuntimeKernel(
         }
       : {}),
   });
-  const runtime = Object.freeze(new RunnerSubprocessRuntime(internal));
+  const core = new RunnerSubprocessRuntime(internal);
+  const runtimeObject = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(runtimeObject, {
+    invoke: {
+      value: core.invoke.bind(core),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    },
+    cancel: {
+      value: core.cancel.bind(core),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    },
+    reconcileStartup: {
+      value: core.reconcileStartup.bind(core),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    },
+  });
+  const runtime = Object.freeze(runtimeObject) as unknown as SubprocessRuntime;
   const grantsController = Object.freeze({
     issue: (value: unknown) => grants.issue(value),
     revoke: (id: string) => grants.revoke(id),
@@ -1602,6 +1840,11 @@ function safeOwnerId(value: string): string {
 }
 function nonNegative(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+function positiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0)
+    throw new Error(`${label} is invalid.`);
+  return value as number;
 }
 function digestText(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))

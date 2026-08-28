@@ -83,6 +83,33 @@ export interface DurableSubprocessResult {
   readonly startedAt?: string;
   readonly finishedAt: string;
 }
+export type DurableProcessMutationKind =
+  | "prepared"
+  | "renew_lease"
+  | "takeover_lease"
+  | "mark_launching"
+  | "mark_output_prepared"
+  | "record_environment"
+  | "record_output_prepare_failure"
+  | "bind_launch"
+  | "adopt_backend"
+  | "request_stop"
+  | "start_escalation"
+  | "finish_escalation"
+  | "record_exit"
+  | "begin_verify"
+  | "complete"
+  | "fail_launch"
+  | "fail"
+  | "settle_output_cleanup";
+export interface DurableProcessMutation {
+  readonly kind: DurableProcessMutationKind;
+  readonly revision: number;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly at: string;
+  readonly data: Readonly<Record<string, unknown>>;
+}
 
 export interface DurableSubprocessRecord {
   readonly schemaVersion: typeof DURABLE_SUBPROCESS_SCHEMA_VERSION;
@@ -95,6 +122,7 @@ export interface DurableSubprocessRecord {
   readonly requestFingerprint: string;
   readonly retryKey: string;
   readonly ownerId: string;
+  readonly fencingToken: number;
   readonly leaseExpiresAt: string;
   readonly outputOwnerId: string;
   readonly outputPrepared: boolean;
@@ -110,11 +138,16 @@ export interface DurableSubprocessRecord {
   readonly outputPrepareFailure?: DurableOutputPrepareFailure;
   readonly output?: readonly ProcessOutputDisposition[];
   readonly result?: DurableSubprocessResult;
+  readonly mutations: readonly DurableProcessMutation[];
 }
 export type PreparedSubprocessRecord = DurableSubprocessRecord & {
   readonly state: "prepared";
   readonly revision: 0;
 };
+export type PreparedSubprocessClaim = Omit<
+  PreparedSubprocessRecord,
+  "fencingToken" | "mutations"
+>;
 export interface DurableClaimResult {
   readonly record: DurableSubprocessRecord;
   readonly won: boolean;
@@ -125,7 +158,6 @@ export type DurableProcessCommand =
       readonly type: "renew_lease";
       readonly invocationId: string;
       readonly expectedRevision: number;
-      readonly ownerId: string;
       readonly at: string;
       readonly leaseExpiresAt: string;
     }
@@ -133,7 +165,6 @@ export type DurableProcessCommand =
       readonly type: "takeover_lease";
       readonly invocationId: string;
       readonly expectedRevision: number;
-      readonly ownerId: string;
       readonly at: string;
       readonly leaseExpiresAt: string;
     }
@@ -244,11 +275,22 @@ export type DurableProcessCommand =
       readonly cleanup?: ProcessCleanupStatus;
       readonly result?: DurableSubprocessResult;
       readonly output?: readonly ProcessOutputDisposition[];
+    }
+  | {
+      readonly type: "settle_output_cleanup";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
     };
 
+type OwnedDurableProcessCommand = DurableProcessCommand & {
+  readonly ownerId: string;
+  readonly fencingToken: number;
+};
+
 export interface DurableProcessRuntimeWriter {
-  claim(record: PreparedSubprocessRecord): DurableClaimResult;
-  apply(command: DurableProcessCommand): DurableSubprocessRecord;
+  claim(record: PreparedSubprocessClaim): DurableClaimResult;
+  apply(command: OwnedDurableProcessCommand): DurableSubprocessRecord;
 }
 export interface DurableProcessStore {
   readonly coordinationId: string;
@@ -287,15 +329,13 @@ abstract class AuthorityStore implements DurableProcessStore {
   }
   runtimeWriter(): DurableProcessRuntimeWriter {
     return Object.freeze({
-      claim: (record: PreparedSubprocessRecord) => this.claim(record),
-      apply: (command: DurableProcessCommand) => this.apply(command),
+      claim: (record: PreparedSubprocessClaim) => this.claim(record),
+      apply: (command: OwnedDurableProcessCommand) => this.apply(command),
     });
   }
-  protected abstract claim(
-    record: PreparedSubprocessRecord,
-  ): DurableClaimResult;
+  protected abstract claim(record: PreparedSubprocessClaim): DurableClaimResult;
   protected abstract apply(
-    command: DurableProcessCommand,
+    command: OwnedDurableProcessCommand,
   ): DurableSubprocessRecord;
   abstract readByInvocation(
     invocationId: string,
@@ -314,8 +354,8 @@ class InMemoryDurableProcessStore extends AuthorityStore {
       this.records.set(record.invocationId, record);
     }
   }
-  protected claim(record: PreparedSubprocessRecord): DurableClaimResult {
-    const parsed = parseDurableSubprocessRecord(record);
+  protected claim(record: PreparedSubprocessClaim): DurableClaimResult {
+    const parsed = initializePreparedRecord(record);
     const existing = this.records.get(parsed.invocationId);
     if (existing) {
       const claim = claimRetry(existing, parsed);
@@ -325,7 +365,9 @@ class InMemoryDurableProcessStore extends AuthorityStore {
     this.records.set(parsed.invocationId, parsed);
     return Object.freeze({ record: cloneRecord(parsed), won: true });
   }
-  protected apply(command: DurableProcessCommand): DurableSubprocessRecord {
+  protected apply(
+    command: OwnedDurableProcessCommand,
+  ): DurableSubprocessRecord {
     const current = requiredRecord(
       this.records.get(command.invocationId),
       command.invocationId,
@@ -366,11 +408,18 @@ class SqliteDurableProcessStore extends AuthorityStore {
     if (!readOnly) mkdirSync(dirname(path), { recursive: true });
     this.database = new DatabaseSync(path, { readOnly });
     this.database.exec("PRAGMA busy_timeout = 5000");
-    if (!readOnly) this.migrateSchema();
+    if (!readOnly) {
+      try {
+        this.migrateSchema();
+      } catch (error) {
+        this.database.close();
+        throw error;
+      }
+    }
   }
-  protected claim(record: PreparedSubprocessRecord): DurableClaimResult {
+  protected claim(record: PreparedSubprocessClaim): DurableClaimResult {
     this.assertWritable();
-    const parsed = parseDurableSubprocessRecord(record);
+    const parsed = initializePreparedRecord(record);
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const existing = this.readByInvocation(parsed.invocationId);
@@ -411,7 +460,9 @@ class SqliteDurableProcessStore extends AuthorityStore {
       throw error;
     }
   }
-  protected apply(command: DurableProcessCommand): DurableSubprocessRecord {
+  protected apply(
+    command: OwnedDurableProcessCommand,
+  ): DurableSubprocessRecord {
     this.assertWritable();
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -481,30 +532,41 @@ class SqliteDurableProcessStore extends AuthorityStore {
     return hmac(this.integrityKey, `${id}\0${revision}\0${json}`);
   }
   private migrateSchema(): void {
-    this.database.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE");
-    try {
-      this.database.exec(
-        "CREATE TABLE IF NOT EXISTS durable_processes (invocation_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, record_json TEXT NOT NULL, integrity TEXT NOT NULL)",
-      );
-      const columns = new Set(
-        (
-          this.database
-            .prepare("PRAGMA table_info(durable_processes)")
-            .all() as unknown as Array<{ name: string }>
-        ).map(({ name }) => name),
-      );
-      if (!columns.has("revision"))
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      let began = false;
+      try {
+        this.database.exec("PRAGMA journal_mode = WAL");
+        this.database.exec("BEGIN IMMEDIATE");
+        began = true;
         this.database.exec(
-          "ALTER TABLE durable_processes ADD COLUMN revision INTEGER",
+          "CREATE TABLE IF NOT EXISTS durable_processes (invocation_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, record_json TEXT NOT NULL, integrity TEXT NOT NULL)",
         );
-      if (!columns.has("integrity"))
-        this.database.exec(
-          "ALTER TABLE durable_processes ADD COLUMN integrity TEXT",
+        const columns = new Set(
+          (
+            this.database
+              .prepare("PRAGMA table_info(durable_processes)")
+              .all() as unknown as Array<{ name: string }>
+          ).map(({ name }) => name),
         );
-      this.database.exec("COMMIT");
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
+        if (!columns.has("revision"))
+          this.database.exec(
+            "ALTER TABLE durable_processes ADD COLUMN revision INTEGER",
+          );
+        if (!columns.has("integrity"))
+          this.database.exec(
+            "ALTER TABLE durable_processes ADD COLUMN integrity TEXT",
+          );
+        this.database.exec("COMMIT");
+        return;
+      } catch (error) {
+        if (began) {
+          try {
+            this.database.exec("ROLLBACK");
+          } catch {}
+        }
+        if (!isSqliteBusy(error) || attempt === 7) throw error;
+        synchronousBackoff(25 * (attempt + 1));
+      }
     }
   }
 }
@@ -609,7 +671,7 @@ const LEGAL_HISTORY: Readonly<
   orphaned: [],
   identity_mismatch: [],
   outcome_unknown: [],
-  cleanup_blocked: [],
+  cleanup_blocked: ["cleanup_blocked", "launch_not_proven"],
 };
 const BASE_KEYS = [
   "schemaVersion",
@@ -622,6 +684,7 @@ const BASE_KEYS = [
   "requestFingerprint",
   "retryKey",
   "ownerId",
+  "fencingToken",
   "leaseExpiresAt",
   "outputOwnerId",
   "outputPrepared",
@@ -631,6 +694,7 @@ const BASE_KEYS = [
   "environmentAudit",
   "escalation",
   "cleanup",
+  "mutations",
 ];
 const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
   prepared: ["stopIntent", "outputPrepareFailure"],
@@ -654,6 +718,7 @@ const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
     "backendBinding",
     "stopIntent",
     "observation",
+    "outputPrepareFailure",
     "output",
     "result",
   ],
@@ -663,6 +728,20 @@ export function parseDurableSubprocessRecord(
   value: unknown,
 ): DurableSubprocessRecord {
   const object = strictRecord(value, "durable process record");
+  const record = parseRecordShape(object);
+  const derived = deriveRecord(record.mutations);
+  if (canonicalJson(record) !== canonicalJson(derived))
+    throw new Error(
+      "Durable process projection does not match its mutation log.",
+    );
+  assertStateInvariants(record);
+  assertDurableProcessValue(record);
+  return deepFreeze(structuredClone(record));
+}
+
+function parseRecordShape(
+  object: Record<string, unknown>,
+): DurableSubprocessRecord {
   const state = requiredEnum(object.state, STATES, "state");
   assertKeys(
     object,
@@ -685,6 +764,7 @@ export function parseDurableSubprocessRecord(
     requestFingerprint: digest(object.requestFingerprint, "requestFingerprint"),
     retryKey: digest(object.retryKey, "retryKey"),
     ownerId: safeId(object.ownerId, "ownerId"),
+    fencingToken: requiredInteger(object.fencingToken, "fencingToken", 1),
     leaseExpiresAt: dateText(object.leaseExpiresAt, "leaseExpiresAt"),
     outputOwnerId: safeId(object.outputOwnerId, "outputOwnerId"),
     outputPrepared: requiredBoolean(object.outputPrepared, "outputPrepared"),
@@ -716,259 +796,561 @@ export function parseDurableSubprocessRecord(
     ...(object.result === undefined
       ? {}
       : { result: parseResult(object.result) }),
+    mutations: parseMutations(object.mutations),
   };
-  assertStateInvariants(record);
-  assertDurableExecutionSafetyValue(record);
-  return deepFreeze(structuredClone(record));
+  return record;
 }
 
-function applyCommand(
-  current: DurableSubprocessRecord,
-  command: DurableProcessCommand,
-): DurableSubprocessRecord {
-  if (command.expectedRevision !== current.revision)
-    throw new Error(`Process revision conflict for ${current.invocationId}.`);
-  let next: DurableSubprocessRecord;
-  if (command.type === "renew_lease") {
-    if (current.ownerId !== command.ownerId)
-      throw new Error("Process lease owner mismatch.");
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      leaseExpiresAt: dateText(command.leaseExpiresAt, "leaseExpiresAt"),
-      history: [
-        ...current.history,
-        { state: current.state, at: command.at, reason: "lease_renewed" },
-      ],
-    };
-  } else if (command.type === "takeover_lease") {
-    if (Date.parse(current.leaseExpiresAt) > Date.parse(command.at))
-      throw new Error("Process lease is still live.");
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      ownerId: safeId(command.ownerId, "ownerId"),
-      leaseExpiresAt: dateText(command.leaseExpiresAt, "leaseExpiresAt"),
-      history: [
-        ...current.history,
-        { state: current.state, at: command.at, reason: "lease_takeover" },
-      ],
-    };
-  } else if (command.type === "mark_output_prepared") {
-    requireState(current, ["prepared"]);
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      outputPrepared: true,
-      outputPrepareFailure: undefined,
-      history: [
-        ...current.history,
-        { state: "prepared", at: command.at, reason: "output_prepared" },
-      ],
-    };
-  } else if (command.type === "record_environment") {
-    requireState(current, ["prepared"]);
-    if (!current.outputPrepared)
-      throw new Error("Output ownership is not prepared.");
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      environmentAudit: command.environmentAudit,
-      history: [
-        ...current.history,
-        { state: "prepared", at: command.at, reason: "environment_prepared" },
-      ],
-    };
-  } else if (command.type === "record_output_prepare_failure") {
-    requireState(current, ["prepared"]);
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      outputPrepareFailure: { failedAt: command.at, detail: command.detail },
-      leaseExpiresAt: command.at,
-      history: [
-        ...current.history,
-        { state: "prepared", at: command.at, reason: "output_prepare_failed" },
-      ],
-    };
-  } else if (command.type === "mark_launching") {
-    requireState(current, ["prepared"]);
-    if (!current.outputPrepared)
-      throw new Error("Output ownership is not prepared.");
-    next = move(current, "launching", command.at);
-  } else if (command.type === "bind_launch") {
-    requireState(current, ["launching"]);
-    next = move(
-      { ...current, backendBinding: command.binding },
-      current.stopIntent ? "stopping" : "running",
-      command.at,
-    );
-  } else if (command.type === "adopt_backend") {
-    requireState(current, [
-      "running",
-      "stopping",
-      "exited",
-      "verifying_empty",
-      "backend_unavailable",
-    ]);
-    if (
-      !current.backendBinding ||
-      current.backendBinding.opaqueIdentity !==
-        command.binding.opaqueIdentity ||
-      current.backendBinding.birthFingerprint.discriminator !==
-        command.binding.birthFingerprint.discriminator
-    )
-      throw new Error("Backend adoption cannot change process identity.");
-    next = {
-      ...current,
-      backendBinding: command.binding,
-      revision: current.revision + 1,
-      history: [
-        ...current.history,
-        {
-          state: current.state,
-          at: command.at,
-          reason: "backend_restart_adopted",
-        },
-      ],
-    };
-  } else if (command.type === "request_stop") {
-    requireState(current, [
-      "prepared",
-      "launching",
-      "running",
-      "stopping",
-      "backend_unavailable",
-    ]);
-    const stopIntent = current.stopIntent ?? {
-      reason: command.reason,
-      requestedAt: command.at,
-    };
-    const state =
-      current.state === "running" || current.state === "backend_unavailable"
-        ? "stopping"
-        : current.state;
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      stopIntent,
-      state,
-      history: [
-        ...current.history,
-        { state, at: command.at, reason: stopIntent.reason },
-      ],
-    };
-  } else if (command.type === "start_escalation") {
-    requireState(current, ["stopping"]);
-    if (current.escalation.some((entry) => entry.outcome === "requested"))
-      throw new Error("An escalation effect is already pending.");
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      escalation: [
-        ...current.escalation,
-        {
-          action: command.action,
-          requestedAt: command.requestedAt,
-          outcome: "requested",
-        },
-      ],
-      history: [
-        ...current.history,
-        {
-          state: "stopping",
-          at: command.requestedAt,
-          reason: `${command.action}_requested`,
-        },
-      ],
-    };
-  } else if (command.type === "finish_escalation") {
-    requireState(current, ["stopping"]);
-    const index = current.escalation.length - 1;
-    const pending = current.escalation[index];
-    if (
-      !pending ||
-      pending.outcome !== "requested" ||
-      pending.action !== command.action
-    )
-      throw new Error("Escalation completion has no matching durable request.");
-    const completed = {
-      ...pending,
-      completedAt: command.completedAt,
-      outcome: command.outcome,
-      ...(command.detail ? { detail: command.detail } : {}),
-    };
-    next = {
-      ...current,
-      revision: current.revision + 1,
-      escalation: [...current.escalation.slice(0, index), completed],
-      history: [
-        ...current.history,
-        {
-          state: "stopping",
-          at: command.completedAt,
-          reason: `${command.action}_${command.outcome}`,
-        },
-      ],
-    };
-  } else if (command.type === "record_exit") {
-    requireState(current, ["running", "stopping", "backend_unavailable"]);
-    next = move(
-      { ...current, observation: command.observation },
-      "exited",
-      command.at,
-    );
-  } else if (command.type === "begin_verify") {
-    requireState(current, ["exited"]);
-    next = move(
-      { ...current, output: command.output },
-      "verifying_empty",
-      command.at,
-    );
-  } else if (command.type === "complete") {
-    requireState(current, ["verifying_empty"]);
-    next = move(
-      { ...current, cleanup: command.cleanup, result: command.result },
-      "cleaned",
-      command.at,
-    );
-  } else if (command.type === "fail_launch") {
-    requireState(current, ["prepared", "launching"]);
-    next = move(
-      {
-        ...current,
-        result: { outcome: "launch_failed", finishedAt: command.at },
-        cleanup: { state: "not_required" },
-      },
-      "launch_not_proven",
-      command.at,
-      command.detail,
-    );
-  } else {
-    requireState(current, [
-      "prepared",
-      "launching",
-      "running",
-      "stopping",
-      "exited",
-      "verifying_empty",
-      "backend_unavailable",
-    ]);
-    next = move(
-      {
-        ...current,
-        ...(command.cleanup ? { cleanup: command.cleanup } : {}),
-        ...(command.result ? { result: command.result } : {}),
-        ...(command.output ? { output: command.output } : {}),
-      },
-      command.state,
-      command.at,
-      command.detail,
-    );
-  }
-  return parseDurableSubprocessRecord(next);
+function initializePreparedRecord(
+  value: PreparedSubprocessClaim,
+): PreparedSubprocessRecord {
+  const o = strictRecord(value, "prepared process claim");
+  const allowed = new Set([
+    "schemaVersion",
+    "revision",
+    "logicalProcessId",
+    "invocationId",
+    "runId",
+    "taskId",
+    "sessionId",
+    "requestFingerprint",
+    "retryKey",
+    "ownerId",
+    "leaseExpiresAt",
+    "outputOwnerId",
+    "outputPrepared",
+    "state",
+    "history",
+    "requiredCapabilities",
+    "environmentAudit",
+    "escalation",
+    "cleanup",
+  ]);
+  assertKeys(o, allowed, "prepared process claim");
+  const history = parseHistory(o.history, "prepared");
+  const audit = parseAudit(o.environmentAudit);
+  const escalation = parseEscalation(o.escalation);
+  const cleanup = parseCleanup(o.cleanup);
+  if (
+    o.schemaVersion !== 2 ||
+    o.revision !== 0 ||
+    o.state !== "prepared" ||
+    o.outputPrepared !== false ||
+    history.length !== 1 ||
+    history[0]?.state !== "prepared" ||
+    history[0]?.reason !== undefined ||
+    escalation.length !== 0 ||
+    cleanup.state !== "pending" ||
+    Object.values(audit).some((names) => names.length !== 0)
+  )
+    throw new Error("Prepared process claim is invalid.");
+  const mutation = parseMutation({
+    kind: "prepared",
+    revision: 0,
+    ownerId: safeId(o.ownerId, "ownerId"),
+    fencingToken: 1,
+    at: dateText(history[0].at, "prepared at"),
+    data: {
+      logicalProcessId: text(o.logicalProcessId, "logicalProcessId"),
+      invocationId: text(o.invocationId, "invocationId"),
+      runId: text(o.runId, "runId"),
+      ...(o.taskId === undefined ? {} : { taskId: text(o.taskId, "taskId") }),
+      ...(o.sessionId === undefined
+        ? {}
+        : { sessionId: text(o.sessionId, "sessionId") }),
+      requestFingerprint: digest(o.requestFingerprint, "requestFingerprint"),
+      retryKey: digest(o.retryKey, "retryKey"),
+      leaseExpiresAt: dateText(o.leaseExpiresAt, "leaseExpiresAt"),
+      outputOwnerId: safeId(o.outputOwnerId, "outputOwnerId"),
+      requiredCapabilities: parseCapabilities(o.requiredCapabilities),
+    },
+  });
+  const derived = deriveRecord([mutation]) as PreparedSubprocessRecord;
+  const supplied = canonicalJson(o);
+  const expectedObject = structuredClone(derived) as unknown as Record<
+    string,
+    unknown
+  >;
+  delete expectedObject.fencingToken;
+  delete expectedObject.mutations;
+  if (supplied !== canonicalJson(expectedObject))
+    throw new Error("Prepared process claim does not match its mutation.");
+  assertStateInvariants(derived);
+  assertDurableProcessValue(derived);
+  return deepFreeze(structuredClone(derived));
 }
-function move(
+
+function parseMutations(value: unknown): DurableProcessMutation[] {
+  if (!Array.isArray(value) || value.length < 1)
+    throw new Error("Durable process mutation log is invalid.");
+  return value.map(parseMutation);
+}
+
+function parseMutation(value: unknown): DurableProcessMutation {
+  const o = strictRecord(value, "process mutation");
+  assertExactKeys(
+    o,
+    ["kind", "revision", "ownerId", "fencingToken", "at", "data"],
+    [],
+    "process mutation",
+  );
+  const kind = requiredEnum(
+    o.kind,
+    new Set<DurableProcessMutationKind>([
+      "prepared",
+      "renew_lease",
+      "takeover_lease",
+      "mark_launching",
+      "mark_output_prepared",
+      "record_environment",
+      "record_output_prepare_failure",
+      "bind_launch",
+      "adopt_backend",
+      "request_stop",
+      "start_escalation",
+      "finish_escalation",
+      "record_exit",
+      "begin_verify",
+      "complete",
+      "fail_launch",
+      "fail",
+      "settle_output_cleanup",
+    ]),
+    "mutation kind",
+  );
+  const data = strictRecord(o.data, "mutation data");
+  const keysByKind: Record<
+    DurableProcessMutationKind,
+    { required: readonly string[]; optional?: readonly string[] }
+  > = {
+    prepared: {
+      required: [
+        "logicalProcessId",
+        "invocationId",
+        "runId",
+        "requestFingerprint",
+        "retryKey",
+        "leaseExpiresAt",
+        "outputOwnerId",
+        "requiredCapabilities",
+      ],
+      optional: ["taskId", "sessionId"],
+    },
+    renew_lease: { required: ["leaseExpiresAt"] },
+    takeover_lease: { required: ["leaseExpiresAt"] },
+    mark_launching: { required: [] },
+    mark_output_prepared: { required: [] },
+    record_environment: { required: ["environmentAudit"] },
+    record_output_prepare_failure: { required: ["detail"] },
+    bind_launch: { required: ["binding"] },
+    adopt_backend: { required: ["binding"] },
+    request_stop: { required: ["reason"] },
+    start_escalation: { required: ["action"] },
+    finish_escalation: {
+      required: ["action", "outcome"],
+      optional: ["detail"],
+    },
+    record_exit: { required: ["observation"] },
+    begin_verify: { required: ["output"] },
+    complete: { required: ["cleanup", "result"] },
+    fail_launch: { required: ["detail"] },
+    fail: {
+      required: ["state", "detail"],
+      optional: ["cleanup", "result", "output"],
+    },
+    settle_output_cleanup: { required: [] },
+  };
+  const shape = keysByKind[kind];
+  assertExactKeys(
+    data,
+    shape.required,
+    shape.optional ?? [],
+    `${kind} mutation data`,
+  );
+  return deepFreeze({
+    kind,
+    revision: requiredInteger(o.revision, "mutation revision", 0),
+    ownerId: safeId(o.ownerId, "mutation ownerId"),
+    fencingToken: requiredInteger(o.fencingToken, "mutation fencingToken", 1),
+    at: dateText(o.at, "mutation at"),
+    data: deepFreeze(structuredClone(data)),
+  });
+}
+
+function deriveRecord(
+  mutations: readonly DurableProcessMutation[],
+): DurableSubprocessRecord {
+  const first = mutations[0];
+  if (
+    !first ||
+    first.kind !== "prepared" ||
+    first.revision !== 0 ||
+    first.fencingToken !== 1
+  )
+    throw new Error("Durable process mutation origin is invalid.");
+  const initial = first.data;
+  let record: DurableSubprocessRecord = {
+    schemaVersion: 2,
+    revision: 0,
+    logicalProcessId: text(initial.logicalProcessId, "logicalProcessId"),
+    invocationId: text(initial.invocationId, "invocationId"),
+    runId: text(initial.runId, "runId"),
+    ...optionalText(initial, "taskId"),
+    ...optionalText(initial, "sessionId"),
+    requestFingerprint: digest(
+      initial.requestFingerprint,
+      "requestFingerprint",
+    ),
+    retryKey: digest(initial.retryKey, "retryKey"),
+    ownerId: first.ownerId,
+    fencingToken: first.fencingToken,
+    leaseExpiresAt: dateText(initial.leaseExpiresAt, "leaseExpiresAt"),
+    outputOwnerId: safeId(initial.outputOwnerId, "outputOwnerId"),
+    outputPrepared: false,
+    state: "prepared",
+    history: [{ state: "prepared", at: first.at }],
+    requiredCapabilities: parseCapabilities(initial.requiredCapabilities),
+    environmentAudit: {
+      inheritedNames: [],
+      removedNames: [],
+      explicitSafeNames: [],
+      grantedNames: [],
+    },
+    escalation: [],
+    cleanup: { state: "pending" },
+    mutations: [first],
+  };
+  for (let index = 1; index < mutations.length; index += 1) {
+    const mutation = mutations[index]!;
+    if (mutation.revision !== record.revision + 1)
+      throw new Error("Durable process mutation sequence is invalid.");
+    if (mutation.kind === "takeover_lease") {
+      if (
+        Date.parse(record.leaseExpiresAt) > Date.parse(mutation.at) ||
+        mutation.fencingToken !== record.fencingToken + 1
+      )
+        throw new Error("Durable process lease takeover is invalid.");
+    } else if (
+      mutation.ownerId !== record.ownerId ||
+      mutation.fencingToken !== record.fencingToken
+    ) {
+      throw new Error("Durable process mutation fence is invalid.");
+    }
+    record = reduceMutation(record, mutation);
+    assertStateInvariants(record);
+  }
+  return record;
+}
+
+function reduceMutation(
+  current: DurableSubprocessRecord,
+  mutation: DurableProcessMutation,
+): DurableSubprocessRecord {
+  const data = mutation.data;
+  const base = {
+    ...current,
+    revision: mutation.revision,
+    mutations: [...current.mutations, mutation],
+  };
+  switch (mutation.kind) {
+    case "prepared":
+      throw new Error("Prepared mutation may appear only once.");
+    case "renew_lease":
+      return historyOnly(
+        {
+          ...base,
+          leaseExpiresAt: dateText(data.leaseExpiresAt, "leaseExpiresAt"),
+        },
+        mutation.at,
+        "lease_renewed",
+      );
+    case "takeover_lease":
+      return historyOnly(
+        {
+          ...base,
+          ownerId: mutation.ownerId,
+          fencingToken: mutation.fencingToken,
+          leaseExpiresAt: dateText(data.leaseExpiresAt, "leaseExpiresAt"),
+        },
+        mutation.at,
+        "lease_takeover",
+      );
+    case "mark_output_prepared":
+      requireState(current, ["prepared"]);
+      {
+        const { outputPrepareFailure: _failure, ...withoutFailure } = base;
+        return historyOnly(
+          { ...withoutFailure, outputPrepared: true },
+          mutation.at,
+          "output_prepared",
+        );
+      }
+    case "record_environment":
+      requireState(current, ["prepared"]);
+      if (!current.outputPrepared)
+        throw new Error("Output ownership is not prepared.");
+      return historyOnly(
+        { ...base, environmentAudit: parseAudit(data.environmentAudit) },
+        mutation.at,
+        "environment_prepared",
+      );
+    case "record_output_prepare_failure":
+      requireState(current, ["prepared"]);
+      return historyOnly(
+        {
+          ...base,
+          outputPrepareFailure: {
+            failedAt: mutation.at,
+            detail: text(data.detail, "detail"),
+          },
+          leaseExpiresAt: mutation.at,
+        },
+        mutation.at,
+        "output_prepare_failed",
+      );
+    case "mark_launching":
+      requireState(current, ["prepared"]);
+      if (!current.outputPrepared)
+        throw new Error("Output ownership is not prepared.");
+      return moveDerived(base, "launching", mutation.at);
+    case "bind_launch": {
+      requireState(current, ["launching"]);
+      const binding = parseBinding(data.binding);
+      return moveDerived(
+        { ...base, backendBinding: binding },
+        current.stopIntent ? "stopping" : "running",
+        mutation.at,
+      );
+    }
+    case "adopt_backend": {
+      requireState(current, [
+        "running",
+        "stopping",
+        "exited",
+        "verifying_empty",
+        "backend_unavailable",
+      ]);
+      const binding = parseBinding(data.binding);
+      if (
+        !current.backendBinding ||
+        current.backendBinding.opaqueIdentity !== binding.opaqueIdentity ||
+        current.backendBinding.birthFingerprint.discriminator !==
+          binding.birthFingerprint.discriminator
+      )
+        throw new Error("Backend adoption cannot change process identity.");
+      return historyOnly(
+        { ...base, backendBinding: binding },
+        mutation.at,
+        "backend_restart_adopted",
+      );
+    }
+    case "request_stop": {
+      requireState(current, [
+        "prepared",
+        "launching",
+        "running",
+        "stopping",
+        "backend_unavailable",
+      ]);
+      const reason = requiredEnum(
+        data.reason,
+        new Set<"cancelled" | "timed_out">(["cancelled", "timed_out"]),
+        "stop reason",
+      );
+      const stopIntent = current.stopIntent ?? {
+        reason,
+        requestedAt: mutation.at,
+      };
+      const state =
+        current.state === "running" || current.state === "backend_unavailable"
+          ? "stopping"
+          : current.state;
+      return historyOnly(
+        { ...base, stopIntent, state },
+        mutation.at,
+        stopIntent.reason,
+      );
+    }
+    case "start_escalation": {
+      requireState(current, ["stopping"]);
+      if (current.escalation.some((entry) => entry.outcome === "requested"))
+        throw new Error("An escalation effect is already pending.");
+      const action = requiredEnum(
+        data.action,
+        new Set<ProcessEscalationAction>([
+          "interrupt",
+          "terminate",
+          "force_terminate",
+        ]),
+        "action",
+      );
+      return historyOnly(
+        {
+          ...base,
+          escalation: [
+            ...current.escalation,
+            { action, requestedAt: mutation.at, outcome: "requested" },
+          ],
+        },
+        mutation.at,
+        `${action}_requested`,
+      );
+    }
+    case "finish_escalation": {
+      requireState(current, ["stopping"]);
+      const action = requiredEnum(
+        data.action,
+        new Set<ProcessEscalationAction>([
+          "interrupt",
+          "terminate",
+          "force_terminate",
+        ]),
+        "action",
+      );
+      const outcome = requiredEnum(
+        data.outcome,
+        new Set<"running" | "exited" | "failed">([
+          "running",
+          "exited",
+          "failed",
+        ]),
+        "outcome",
+      );
+      const pending = current.escalation.at(-1);
+      if (
+        !pending ||
+        pending.outcome !== "requested" ||
+        pending.action !== action
+      )
+        throw new Error(
+          "Escalation completion has no matching durable request.",
+        );
+      const completed: DurableEscalationEntry = {
+        ...pending,
+        completedAt: mutation.at,
+        outcome,
+        ...optionalText(data, "detail"),
+      };
+      return historyOnly(
+        {
+          ...base,
+          escalation: [...current.escalation.slice(0, -1), completed],
+        },
+        mutation.at,
+        `${action}_${outcome}`,
+      );
+    }
+    case "record_exit":
+      requireState(current, ["running", "stopping", "backend_unavailable"]);
+      return moveDerived(
+        { ...base, observation: parseObservation(data.observation) },
+        "exited",
+        mutation.at,
+      );
+    case "begin_verify":
+      requireState(current, ["exited"]);
+      return moveDerived(
+        { ...base, output: parseOutput(data.output) },
+        "verifying_empty",
+        mutation.at,
+      );
+    case "complete":
+      requireState(current, ["verifying_empty"]);
+      return moveDerived(
+        {
+          ...base,
+          cleanup: parseCleanup(data.cleanup),
+          result: parseResult(data.result),
+        },
+        "cleaned",
+        mutation.at,
+      );
+    case "fail_launch":
+      requireState(current, ["prepared", "launching"]);
+      return moveDerived(
+        {
+          ...base,
+          result: { outcome: "launch_failed", finishedAt: mutation.at },
+          cleanup: { state: "not_required" },
+        },
+        "launch_not_proven",
+        mutation.at,
+        text(data.detail, "detail"),
+      );
+    case "fail": {
+      requireState(current, [
+        "prepared",
+        "launching",
+        "running",
+        "stopping",
+        "exited",
+        "verifying_empty",
+        "backend_unavailable",
+        "cleanup_blocked",
+      ]);
+      const state = requiredEnum(
+        data.state,
+        new Set<
+          | "orphaned"
+          | "identity_mismatch"
+          | "backend_unavailable"
+          | "outcome_unknown"
+          | "cleanup_blocked"
+        >([
+          "orphaned",
+          "identity_mismatch",
+          "backend_unavailable",
+          "outcome_unknown",
+          "cleanup_blocked",
+        ]),
+        "failure state",
+      );
+      return moveDerived(
+        {
+          ...base,
+          ...(data.cleanup === undefined
+            ? {}
+            : { cleanup: parseCleanup(data.cleanup) }),
+          ...(data.result === undefined
+            ? {}
+            : { result: parseResult(data.result) }),
+          ...(data.output === undefined
+            ? {}
+            : { output: parseOutput(data.output) }),
+        },
+        state,
+        mutation.at,
+        text(data.detail, "detail"),
+      );
+    }
+    case "settle_output_cleanup":
+      requireState(current, ["cleanup_blocked"]);
+      if (current.backendBinding || current.result?.outcome !== "launch_failed")
+        throw new Error("Output cleanup settlement is invalid.");
+      {
+        const { outputPrepareFailure: _failure, ...withoutFailure } = base;
+        return moveDerived(
+          { ...withoutFailure, cleanup: { state: "not_required" } },
+          "launch_not_proven",
+          mutation.at,
+          "output_owner_cleaned",
+        );
+      }
+  }
+}
+
+function historyOnly(
+  current: DurableSubprocessRecord,
+  at: string,
+  reason: string,
+): DurableSubprocessRecord {
+  return {
+    ...current,
+    history: [...current.history, { state: current.state, at, reason }],
+  };
+}
+
+function moveDerived(
   current: DurableSubprocessRecord,
   state: DurableSubprocessState,
   at: string,
@@ -976,10 +1358,91 @@ function move(
 ): DurableSubprocessRecord {
   return {
     ...current,
-    revision: current.revision + 1,
     state,
     history: [...current.history, { state, at, ...(reason ? { reason } : {}) }],
   };
+}
+
+function commandData(
+  command: OwnedDurableProcessCommand,
+): Readonly<Record<string, unknown>> {
+  switch (command.type) {
+    case "renew_lease":
+    case "takeover_lease":
+      return { leaseExpiresAt: command.leaseExpiresAt };
+    case "record_environment":
+      return { environmentAudit: command.environmentAudit };
+    case "record_output_prepare_failure":
+    case "fail_launch":
+      return { detail: command.detail };
+    case "bind_launch":
+    case "adopt_backend":
+      return { binding: command.binding };
+    case "request_stop":
+      return { reason: command.reason };
+    case "start_escalation":
+      return { action: command.action };
+    case "finish_escalation":
+      return {
+        action: command.action,
+        outcome: command.outcome,
+        ...(command.detail === undefined ? {} : { detail: command.detail }),
+      };
+    case "record_exit":
+      return { observation: command.observation };
+    case "begin_verify":
+      return { output: command.output };
+    case "complete":
+      return { cleanup: command.cleanup, result: command.result };
+    case "fail":
+      return {
+        state: command.state,
+        detail: command.detail,
+        ...(command.cleanup === undefined ? {} : { cleanup: command.cleanup }),
+        ...(command.result === undefined ? {} : { result: command.result }),
+        ...(command.output === undefined ? {} : { output: command.output }),
+      };
+    case "mark_launching":
+    case "mark_output_prepared":
+    case "settle_output_cleanup":
+      return {};
+  }
+}
+
+function applyCommand(
+  current: DurableSubprocessRecord,
+  command: OwnedDurableProcessCommand,
+): DurableSubprocessRecord {
+  if (command.expectedRevision !== current.revision)
+    throw new Error(`Process revision conflict for ${current.invocationId}.`);
+  if (command.type === "takeover_lease") {
+    if (Date.parse(current.leaseExpiresAt) > Date.parse(command.at))
+      throw new Error("Process lease is still live.");
+    if (command.fencingToken !== current.fencingToken + 1)
+      throw new Error("Process fencing token is invalid.");
+  } else if (
+    command.ownerId !== current.ownerId ||
+    command.fencingToken !== current.fencingToken
+  ) {
+    throw new Error("Process lease owner or fencing token is stale.");
+  }
+  const mutation = parseMutation({
+    kind: command.type,
+    revision: current.revision + 1,
+    ownerId: command.ownerId,
+    fencingToken: command.fencingToken,
+    at:
+      command.type === "start_escalation"
+        ? command.requestedAt
+        : command.type === "finish_escalation"
+          ? command.completedAt
+          : command.at,
+    data: commandData(command),
+  });
+  const next = deriveRecord([...current.mutations, mutation]);
+  assertStateInvariants(next);
+  assertDurableProcessValue(next);
+  return deepFreeze(structuredClone(next));
 }
 function compareRetry(
   existing: DurableSubprocessRecord,
@@ -1002,18 +1465,16 @@ function claimRetry(
   const now = incoming.history[0]!.at;
   if (
     existing.state === "prepared" &&
-    !existing.outputPrepared &&
     Date.parse(existing.leaseExpiresAt) <= Date.parse(now)
   ) {
-    const record = parseDurableSubprocessRecord({
-      ...existing,
+    const record = applyCommand(existing, {
+      type: "takeover_lease",
+      invocationId: existing.invocationId,
+      expectedRevision: existing.revision,
       ownerId: incoming.ownerId,
+      fencingToken: existing.fencingToken + 1,
+      at: now,
       leaseExpiresAt: incoming.leaseExpiresAt,
-      revision: existing.revision + 1,
-      history: [
-        ...existing.history,
-        { state: "prepared", at: now, reason: "lease_takeover" },
-      ],
     });
     return Object.freeze({ record, won: true });
   }
@@ -1022,9 +1483,11 @@ function claimRetry(
 function assertStateInvariants(record: DurableSubprocessRecord): void {
   if (
     record.history[0]?.state !== "prepared" ||
-    record.history.length !== record.revision + 1
+    record.history.length !== record.revision + 1 ||
+    record.mutations.length !== record.revision + 1 ||
+    record.mutations.at(-1)?.revision !== record.revision
   )
-    throw new Error("Durable process history/revision is invalid.");
+    throw new Error("Durable process mutation/history/revision is invalid.");
   if (record.state !== "prepared" && !record.outputPrepared)
     throw new Error(
       "Durable process output must be prepared from launching onward.",
@@ -1487,6 +1950,16 @@ function assertKeys(
   const key = Object.keys(object).find((candidate) => !allowed.has(candidate));
   if (key) throw new Error(`${label} contains unknown field ${key}.`);
 }
+function assertExactKeys(
+  object: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  assertKeys(object, new Set([...required, ...optional]), label);
+  const missing = required.find((key) => !Object.hasOwn(object, key));
+  if (missing) throw new Error(`${label} is missing ${missing}.`);
+}
 function text(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim())
     throw new Error(`${label} is invalid.`);
@@ -1578,6 +2051,21 @@ function requiredRecord(
 function cloneRecord(record: DurableSubprocessRecord): DurableSubprocessRecord {
   return parseDurableSubprocessRecord(record);
 }
+function assertDurableProcessValue(record: DurableSubprocessRecord): void {
+  const snapshot = structuredClone(record) as unknown as Record<
+    string,
+    unknown
+  >;
+  delete snapshot.fencingToken;
+  if (Array.isArray(snapshot.mutations)) {
+    snapshot.mutations = snapshot.mutations.map((entry) => {
+      const mutation = { ...(entry as Record<string, unknown>) };
+      delete mutation.fencingToken;
+      return mutation;
+    });
+  }
+  assertDurableExecutionSafetyValue(snapshot);
+}
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
     Object.freeze(value);
@@ -1609,6 +2097,20 @@ function hmac(key: Uint8Array, value: string): string {
 function safeEqual(left: string, right: unknown): boolean {
   if (typeof right !== "string" || !/^[a-f0-9]{64}$/.test(right)) return false;
   return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+function isSqliteBusy(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { errcode?: unknown; message?: unknown };
+  return (
+    value.errcode === 5 ||
+    value.errcode === 6 ||
+    (typeof value.message === "string" &&
+      /database (?:is )?(?:locked|busy)/i.test(value.message))
+  );
+}
+function synchronousBackoff(milliseconds: number): void {
+  const view = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(view, 0, 0, milliseconds);
 }
 function resultMatches(record: DurableSubprocessRecord): boolean {
   const result = record.result!;

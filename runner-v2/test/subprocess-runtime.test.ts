@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
+import { inspect } from "node:util";
 
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
 import type { ExecutionInvocationIntent } from "../src/execution-safety-contracts.js";
@@ -72,25 +73,35 @@ class Outputs implements ProcessOutputFactory {
   prepareGate?: Promise<void>;
   finalizeGate?: Promise<void>;
   failPrepare = false;
-  async prepare(ownerId: string) {
+  failCleanupFor = new Set<string>();
+  readonly fences: unknown[] = [];
+  async prepare(ownerId: string, fence?: unknown) {
     this.calls.push(`prepare:${ownerId}`);
+    this.fences.push(fence);
     await this.prepareGate;
     if (this.failPrepare) throw new Error("prepare failed");
     return this.session(ownerId);
   }
-  async reopen(ownerId: string) {
+  async reopen(ownerId: string, fence?: unknown) {
     this.calls.push(`reopen:${ownerId}`);
+    this.fences.push(fence);
     if (this.failReopenFor.has(ownerId)) throw new Error("reopen failed");
     return this.session(ownerId);
   }
   private session(ownerId: string) {
     return {
       ownerId,
-      write: async (_stream: "stdout" | "stderr", bytes: Uint8Array) => {
+      write: async (
+        _stream: "stdout" | "stderr",
+        bytes: Uint8Array,
+        fence?: unknown,
+      ) => {
+        this.fences.push(fence);
         this.chunks.push(Buffer.from(bytes).toString());
       },
-      finalize: async () => {
+      finalize: async (fence?: unknown) => {
         this.calls.push(`finalize:${ownerId}`);
+        this.fences.push(fence);
         await this.finalizeGate;
         if (this.failFinalizeFor.has(ownerId))
           throw new Error("finalize failed");
@@ -129,8 +140,10 @@ class Outputs implements ProcessOutputFactory {
           ],
         };
       },
-      cleanup: async () => {
+      cleanup: async (fence?: unknown) => {
         this.calls.push(`cleanup:${ownerId}`);
+        this.fences.push(fence);
+        if (this.failCleanupFor.has(ownerId)) throw new Error("cleanup failed");
       },
     };
   }
@@ -138,6 +151,7 @@ class Outputs implements ProcessOutputFactory {
 
 class Backend implements ProcessBackend {
   readonly calls: string[] = [];
+  readonly fences: unknown[] = [];
   probeValue: unknown = {
     attestationVersion: 1,
     backendId: "fake",
@@ -164,15 +178,18 @@ class Backend implements ProcessBackend {
   verifyGate?: Promise<void>;
   onSignal?: (action: string) => void;
   onRelease?: () => void;
-  probe = async () => {
+  probe = async (fence?: unknown) => {
     this.calls.push("probe");
+    if (fence) this.fences.push(fence);
     return this.probeValue;
   };
   observe = async (
     _binding: ProcessBackendBinding,
     output: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>,
+    fence?: unknown,
   ) => {
     this.calls.push("observe");
+    this.fences.push(fence);
     await output("stdout", Buffer.from("child"));
     await this.observeGate;
     return this.observeValue;
@@ -180,26 +197,35 @@ class Backend implements ProcessBackend {
   onLaunch?: (request: ProcessLaunchRequest) => void;
   launch = async (request: ProcessLaunchRequest) => {
     this.calls.push("launch");
+    this.fences.push(request.fence);
     this.onLaunch?.(request);
     await this.launchGate;
     return this.launchValue;
   };
-  signal = async (_binding: ProcessBackendBinding, action: string) => {
+  signal = async (
+    _binding: ProcessBackendBinding,
+    action: string,
+    fence?: unknown,
+  ) => {
     this.calls.push(`signal:${action}`);
+    this.fences.push(fence);
     this.onSignal?.(action);
     return this.signalValues.shift() ?? { state: "exited" };
   };
-  verifyEmpty = async () => {
+  verifyEmpty = async (_binding?: unknown, fence?: unknown) => {
     this.calls.push("verify");
+    this.fences.push(fence);
     await this.verifyGate;
     return this.verifyValue;
   };
-  reconcile = async () => {
+  reconcile = async (_binding?: unknown, fence?: unknown) => {
     this.calls.push("reconcile");
+    this.fences.push(fence);
     return this.reconcileValue;
   };
-  release = async () => {
+  release = async (_binding?: unknown, fence?: unknown) => {
     this.calls.push("release");
+    this.fences.push(fence);
     this.onRelease?.();
     return this.releaseValue;
   };
@@ -391,6 +417,52 @@ test("runtime factory rejects malicious structural authority and launch sees a d
   await operation;
 });
 
+test("runtime is a closure facade exposing only intended invocation methods", () => {
+  const { runtime } = fixture();
+  assert.deepEqual(Reflect.ownKeys(runtime).sort(), [
+    "cancel",
+    "invoke",
+    "reconcileStartup",
+  ]);
+  assert.equal(Object.getOwnPropertySymbols(runtime).length, 0);
+  assert.equal(Object.getPrototypeOf(runtime), null);
+  const exposed = inspect(runtime, { showHidden: true, depth: 8 });
+  assert.doesNotMatch(
+    exposed,
+    /writer|vault|stateKey|registry|options|grantBindingDigest|integrityKey/i,
+  );
+  assert.equal(JSON.stringify(runtime), "{}");
+});
+
+test("every output and backend effect receives the durable owner fencing token", async () => {
+  const f = fixture();
+  f.backend.onLaunch = (request) => {
+    assert.deepEqual((request as { fence?: unknown }).fence, {
+      ownerId: f.store.readByInvocation("invoke-1")?.ownerId,
+      fencingToken: 1,
+    });
+  };
+  await f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.ok(f.outputs.fences.length >= 3);
+  assert.ok(
+    f.outputs.fences.every(
+      (value) =>
+        (value as { fencingToken?: number } | undefined)?.fencingToken === 1,
+    ),
+  );
+  assert.ok(f.backend.fences.length >= 6);
+  assert.ok(
+    f.backend.fences.every(
+      (value) =>
+        (value as { fencingToken?: number } | undefined)?.fencingToken === 1,
+    ),
+  );
+});
+
 test("durable claim and output owner exist before first await so immediate cancel is queued", async () => {
   const f = fixture();
   const gate = deferred();
@@ -441,6 +513,31 @@ test("crash-safe output intent precedes idempotent prepare and prepare failure i
     "launch_not_proven",
   );
   assert.ok(f.outputs.calls.includes("cleanup:output-proc-invoke-1"));
+});
+
+test("failed prelaunch output cleanup remains recoverable until owner cleanup succeeds", async () => {
+  const f = fixture();
+  f.outputs.failPrepare = true;
+  await assert.rejects(
+    f.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+    }),
+  );
+  f.outputs.failPrepare = false;
+  f.outputs.failCleanupFor.add("output-proc-invoke-1");
+  await f.runtime.reconcileStartup();
+  const blocked = f.store.readByInvocation("invoke-1");
+  assert.equal(blocked?.state, "cleanup_blocked");
+  assert.equal(blocked?.cleanup.state, "failed");
+  assert.equal(blocked?.result?.outcome, "launch_failed");
+  f.outputs.failCleanupFor.clear();
+  await f.runtime.reconcileStartup();
+  assert.equal(
+    f.store.readByInvocation("invoke-1")?.state,
+    "launch_not_proven",
+  );
 });
 
 test("Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked", async () => {
@@ -629,7 +726,49 @@ test("separate OS processes contend through SQLite with one pre-effect owner", a
   assert.ok(rows.every((row) => row.outcome === "exited"));
 });
 
-test("live durable lease is not stolen and an expired pre-effect claim is taken over by CAS", async (t) => {
+test("separate OS processes retry writable SQLite initialization across a transient schema lock", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-init-lock-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "state.sqlite");
+  const lock = new DatabaseSync(path);
+  lock.exec("CREATE TABLE lock_holder (value INTEGER); BEGIN EXCLUSIVE");
+  const fixturePath = join(
+    process.cwd(),
+    "runner-v2",
+    "test",
+    "fixtures",
+    "sqlite-runtime-contender.mts",
+  );
+  const cli = join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+  const run = (name: string) =>
+    new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, fixturePath, root, name], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("error", reject);
+      child.on("exit", (code) =>
+        code === 0 ? resolve() : reject(new Error(stderr || `exit ${code}`)),
+      );
+    });
+  const contenders = Promise.all([run("a"), run("b")]);
+  await new Promise((resolve) => setTimeout(resolve, 5_250));
+  lock.exec("COMMIT");
+  lock.close();
+  await contenders;
+  const rows = await Promise.all(
+    ["a", "b"].map(async (name) =>
+      JSON.parse(await readFile(join(root, `${name}.json`), "utf8")),
+    ),
+  );
+  assert.equal(
+    rows.reduce((sum, row: { prepares: number }) => sum + row.prepares, 0),
+    1,
+  );
+});
+
+test("live owner heartbeat prevents lease stealing throughout a blocked output effect", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-lease-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const path = join(root, "state.sqlite");
@@ -637,7 +776,8 @@ test("live durable lease is not stolen and an expired pre-effect claim is taken 
   const backend = new Backend();
   const clock = new Clock();
   const firstOutputs = new Outputs();
-  firstOutputs.prepareGate = new Promise(() => undefined);
+  const prepareGate = deferred();
+  firstOutputs.prepareGate = prepareGate.promise;
   const registry = backendRegistry(backend);
   const environments = createChildEnvironmentFactory({
     credentialResolver: {
@@ -655,6 +795,7 @@ test("live durable lease is not stolen and an expired pre-effect claim is taken 
     environments,
     outputs: firstOutputs,
     createLogicalProcessId: (id) => `proc-${id}`,
+    leaseHeartbeatMs: 10,
   });
   first.grantsController.issue(grantValue());
   void first.runtime.invoke({
@@ -681,10 +822,58 @@ test("live durable lease is not stolen and an expired pre-effect claim is taken 
   ]);
   assert.equal(secondOutputs.calls.length, 0);
   clock.current = new Date(clock.current.getTime() + 301_000);
+  await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(await second.runtime.reconcileStartup(), [
-    { invocationId: "invoke-1", state: "launch_not_proven" },
+    { invocationId: "invoke-1", state: "leased" },
   ]);
-  assert.ok(secondOutputs.calls.includes("prepare:output-proc-invoke-1"));
+  assert.equal(secondOutputs.calls.length, 0);
+  prepareGate.resolve();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    first.readOnlyStore.readByInvocation("invoke-1")?.state !== "cleaned";
+    attempt += 1
+  )
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  first.readOnlyStore.close();
+  second.readOnlyStore.close();
+});
+
+test("stale owner completing an uncertain effect is rejected after safe expiry takeover", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-stale-fence-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "state.sqlite");
+  const stateKey = new Uint8Array(32).fill(3);
+  const backend = new Backend();
+  const clock = new Clock();
+  const firstOutputs = new Outputs();
+  const gate = deferred();
+  firstOutputs.prepareGate = gate.promise;
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    firstOutputs,
+  );
+  const stale = first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  clock.current = new Date(clock.current.getTime() + 301_000);
+  const secondOutputs = new Outputs();
+  const second = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    secondOutputs,
+  );
+  await second.runtime.reconcileStartup();
+  gate.resolve();
+  await assert.rejects(stale, /owner|fenc|stale/i);
+  assert.equal(backend.calls.filter((call) => call === "launch").length, 0);
   first.readOnlyStore.close();
   second.readOnlyStore.close();
 });

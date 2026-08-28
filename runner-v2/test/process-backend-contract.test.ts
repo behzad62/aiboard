@@ -105,9 +105,15 @@ test("fresh revalidation returns the exact immutable implementation snapshot use
     attestationDigest: selected.attestationDigest,
   };
   const fresh = await reattestProcessBackend(trusted, binding);
-  assert.deepEqual(await fresh.backend.release({} as never), {
-    released: true,
-  });
+  assert.deepEqual(
+    await fresh.backend.release({} as never, {
+      ownerId: "owner",
+      fencingToken: 1,
+    }),
+    {
+      released: true,
+    },
+  );
   assert.equal(releases, 1);
 });
 
@@ -308,9 +314,15 @@ test("normal reattestation rejects copied identity while explicit trusted restar
     adopted.implementationGeneration,
     selected.implementationGeneration,
   );
-  assert.deepEqual(await adopted.backend.release({} as never), {
-    released: true,
-  });
+  assert.deepEqual(
+    await adopted.backend.release({} as never, {
+      ownerId: "owner",
+      fencingToken: 1,
+    }),
+    {
+      released: true,
+    },
+  );
   assert.throws(
     () =>
       createProcessBackendRegistry([

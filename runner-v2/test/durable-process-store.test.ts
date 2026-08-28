@@ -12,7 +12,8 @@ import {
   parseDurableSubprocessRecord,
   type DurableProcessStoreKernel,
   type DurableProcessRuntimeWriter,
-  type PreparedSubprocessRecord,
+  type DurableSubprocessRecord,
+  type PreparedSubprocessClaim,
 } from "../src/durable-process-store.js";
 
 const stateKey = new Uint8Array(32).fill(7);
@@ -35,8 +36,8 @@ const semantic = {
 } as const;
 const fingerprint = semanticRequestFingerprint(stateKey, semantic);
 const prepared = (
-  overrides: Partial<PreparedSubprocessRecord> = {},
-): PreparedSubprocessRecord => ({
+  overrides: Partial<PreparedSubprocessClaim> = {},
+): PreparedSubprocessClaim => ({
   schemaVersion: 2,
   revision: 0,
   logicalProcessId: "proc-1",
@@ -61,9 +62,10 @@ const prepared = (
   cleanup: { state: "pending" },
   ...overrides,
 });
-function writerFor(
-  kernel: DurableProcessStoreKernel,
-): DurableProcessRuntimeWriter {
+function writerFor(kernel: DurableProcessStoreKernel): {
+  claim: DurableProcessRuntimeWriter["claim"];
+  apply(command: Record<string, unknown>): DurableSubprocessRecord;
+} {
   for (const key of Object.getOwnPropertySymbols(kernel)) {
     const value = Object.getOwnPropertyDescriptor(kernel, key)?.value as
       DurableProcessRuntimeWriter | undefined;
@@ -72,7 +74,19 @@ function writerFor(
       typeof value.claim === "function" &&
       typeof value.apply === "function"
     )
-      return value;
+      return {
+        claim: value.claim,
+        apply: (command) => {
+          const invocationId = command.invocationId as string;
+          const current = kernel.store.readByInvocation(invocationId);
+          if (!current) throw new Error(`Unknown process ${invocationId}.`);
+          return value.apply({
+            ...command,
+            ownerId: command.ownerId ?? current.ownerId,
+            fencingToken: command.fencingToken ?? current.fencingToken,
+          } as never);
+        },
+      };
   }
   throw new Error("missing test writer");
 }
@@ -91,8 +105,11 @@ test("Runner-created store kernel rejects structural authority and claims output
 });
 
 test("strict per-state parser rejects forged prepared completion and illegal state fields", () => {
+  const base = writerFor(createInMemoryDurableProcessKernel(stateKey)).claim(
+    prepared(),
+  ).record;
   const forged = {
-    ...prepared(),
+    ...base,
     result: { outcome: "exited", finishedAt: "x" },
     backendBinding: {
       registryId: "r",
@@ -108,26 +125,23 @@ test("strict per-state parser rejects forged prepared completion and illegal sta
     /durable process record|prepared/i,
   );
   assert.throws(
-    () => parseDurableSubprocessRecord({ ...prepared(), unknown: true }),
+    () => parseDurableSubprocessRecord({ ...base, unknown: true }),
     /unknown field/i,
   );
   assert.throws(
     () =>
       parseDurableSubprocessRecord({
-        ...prepared(),
+        ...base,
         cleanup: { state: "verified_empty", verifiedAt: "x" },
       }),
-    /durable process record|prepared|cleanup/i,
+    /durable process record|prepared|cleanup|projection/i,
   );
   assert.throws(
     () =>
       parseDurableSubprocessRecord({
-        ...prepared(),
+        ...base,
         state: "backend_unavailable",
-        history: [
-          ...prepared().history,
-          { state: "backend_unavailable", at: "x" },
-        ],
+        history: [...base.history, { state: "backend_unavailable", at: "x" }],
         result: { outcome: "exited", finishedAt: "x" },
       }),
     /cannot contain a result|unknown field/i,
@@ -135,21 +149,21 @@ test("strict per-state parser rejects forged prepared completion and illegal sta
   assert.throws(
     () =>
       parseDurableSubprocessRecord({
-        ...prepared(),
+        ...base,
         state: "cleaned",
-        history: [...prepared().history, { state: "cleaned", at: "x" }],
+        history: [...base.history, { state: "cleaned", at: "x" }],
       }),
-    /illegal transition|requires|history/i,
+    /illegal transition|requires|history|projection/i,
   );
   assert.throws(
     () =>
       parseDurableSubprocessRecord({
-        ...prepared(),
+        ...base,
         revision: 2,
         outputPrepared: true,
         state: "running",
         history: [
-          ...prepared().history,
+          ...base.history,
           { state: "launching", at: "b" },
           { state: "running", at: "c" },
         ],
@@ -170,22 +184,157 @@ test("strict per-state parser rejects forged prepared completion and illegal sta
   );
 });
 
+test("closed mutation log is the sole authority for prepared and terminal row facts", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  const claimed = writer.claim(prepared()).record;
+  assert.deepEqual(
+    claimed.mutations.map((entry) => (entry as { readonly kind: string }).kind),
+    ["prepared"],
+  );
+  assert.throws(
+    () =>
+      parseDurableSubprocessRecord({
+        ...claimed,
+        outputPrepared: true,
+        environmentAudit: {
+          inheritedNames: ["FORGED"],
+          removedNames: [],
+          explicitSafeNames: [],
+          grantedNames: [],
+        },
+      }),
+    /mutation|derived|projection/i,
+  );
+  assert.throws(
+    () =>
+      parseDurableSubprocessRecord({
+        ...claimed,
+        revision: 1,
+        history: [
+          ...claimed.history,
+          {
+            state: "prepared",
+            at: "2026-01-01T00:00:01.000Z",
+            reason: "forged_duplicate",
+          },
+        ],
+        mutations: [
+          ...claimed.mutations,
+          {
+            ...claimed.mutations[0],
+            revision: 1,
+            at: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      }),
+    /prepared mutation|mutation.*invalid|sequence/i,
+  );
+
+  let record = writer.apply({
+    type: "mark_output_prepared",
+    invocationId: "invoke-1",
+    expectedRevision: claimed.revision,
+    at: "2026-01-01T00:00:01.000Z",
+  });
+  record = writer.apply({
+    type: "record_environment",
+    invocationId: "invoke-1",
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:02.000Z",
+    environmentAudit: {
+      inheritedNames: ["PATH"],
+      removedNames: [],
+      explicitSafeNames: [],
+      grantedNames: [],
+    },
+  });
+  assert.throws(
+    () =>
+      parseDurableSubprocessRecord({
+        ...record,
+        leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+    /mutation|derived|projection/i,
+  );
+  assert.throws(
+    () =>
+      parseDurableSubprocessRecord({
+        ...record,
+        history: record.history.map((entry, index) =>
+          index === 1 ? { ...entry, reason: "forged_kind" } : entry,
+        ),
+      }),
+    /mutation|derived|projection/i,
+  );
+});
+
+test("monotonic fencing rejects a stale owner even after it rereads the new revision", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  const initial = writer.claim(prepared()).record as DurableSubprocessRecord & {
+    readonly fencingToken?: number;
+  };
+  assert.equal(initial.fencingToken, 1);
+  const taken = writer.apply({
+    type: "takeover_lease",
+    invocationId: "invoke-1",
+    expectedRevision: initial.revision,
+    ownerId: "owner-2",
+    fencingToken: 2,
+    at: "2026-01-01T00:06:00.000Z",
+    leaseExpiresAt: "2026-01-01T00:11:00.000Z",
+  } as never) as typeof initial;
+  assert.equal(taken.fencingToken, 2);
+  assert.throws(
+    () =>
+      writer.apply({
+        type: "mark_output_prepared",
+        invocationId: "invoke-1",
+        expectedRevision: taken.revision,
+        ownerId: "owner-1",
+        fencingToken: 1,
+        at: "2026-01-01T00:06:01.000Z",
+      } as never),
+    /owner|fenc/i,
+  );
+});
+
 test("terminal parser cross-validates history revision observation stop result escalation and cleanup", () => {
-  const valid = {
-    ...prepared(),
-    revision: 6,
-    outputPrepared: true,
-    state: "cleaned" as const,
-    history: [
-      { state: "prepared" as const, at: "a" },
-      { state: "prepared" as const, at: "b" },
-      { state: "launching" as const, at: "c" },
-      { state: "running" as const, at: "d" },
-      { state: "exited" as const, at: "e" },
-      { state: "verifying_empty" as const, at: "f" },
-      { state: "cleaned" as const, at: "g" },
-    ],
-    backendBinding: {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  const preparedBase = writer.claim(prepared()).record;
+  let valid = preparedBase;
+  valid = writer.apply({
+    type: "mark_output_prepared",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:01.000Z",
+  });
+  valid = writer.apply({
+    type: "record_environment",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:02.000Z",
+    environmentAudit: {
+      inheritedNames: ["PATH"],
+      removedNames: [],
+      explicitSafeNames: [],
+      grantedNames: [],
+    },
+  });
+  valid = writer.apply({
+    type: "mark_launching",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:03.000Z",
+  });
+  valid = writer.apply({
+    type: "bind_launch",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:04.000Z",
+    binding: {
       registryId: "registry",
       backendId: "fake",
       implementationGeneration: "generation",
@@ -193,44 +342,72 @@ test("terminal parser cross-validates history revision observation stop result e
       attestationVersion: 1,
       attestationDigest: "c".repeat(64),
       opaqueIdentity: "identity",
-      birthFingerprint: { observedAt: "d", discriminator: "birth" },
-      startedAt: "d",
+      birthFingerprint: {
+        observedAt: "2026-01-01T00:00:04.000Z",
+        discriminator: "birth",
+      },
+      startedAt: "2026-01-01T00:00:04.000Z",
     },
-    observation: { exitCode: 0, observedAt: "e" },
-    output: [
-      {
-        stream: "stdout" as const,
-        tail: "",
-        totalBytes: 0,
-        truncated: false,
-        spillBytes: 0,
-        lossyBytes: 0,
-      },
-      {
-        stream: "stderr" as const,
-        tail: "",
-        totalBytes: 0,
-        truncated: false,
-        spillBytes: 0,
-        lossyBytes: 0,
-      },
-    ],
-    cleanup: { state: "verified_empty" as const, verifiedAt: "g" },
-    result: {
-      outcome: "exited" as const,
+  });
+  valid = writer.apply({
+    type: "record_exit",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:05.000Z",
+    observation: {
       exitCode: 0,
-      startedAt: "d",
-      finishedAt: "g",
+      observedAt: "2026-01-01T00:00:05.000Z",
     },
-  };
+  });
+  const output = [
+    {
+      stream: "stdout" as const,
+      tail: "",
+      totalBytes: 0,
+      truncated: false,
+      spillBytes: 0,
+      lossyBytes: 0,
+    },
+    {
+      stream: "stderr" as const,
+      tail: "",
+      totalBytes: 0,
+      truncated: false,
+      spillBytes: 0,
+      lossyBytes: 0,
+    },
+  ];
+  valid = writer.apply({
+    type: "begin_verify",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:06.000Z",
+    output,
+  });
+  valid = writer.apply({
+    type: "complete",
+    invocationId: "invoke-1",
+    expectedRevision: valid.revision,
+    at: "2026-01-01T00:00:07.000Z",
+    cleanup: {
+      state: "verified_empty",
+      verifiedAt: "2026-01-01T00:00:07.000Z",
+    },
+    result: {
+      outcome: "exited",
+      exitCode: 0,
+      startedAt: "2026-01-01T00:00:04.000Z",
+      finishedAt: "2026-01-01T00:00:07.000Z",
+    },
+  });
   assert.doesNotThrow(() => parseDurableSubprocessRecord(valid));
   assert.throws(
     () => parseDurableSubprocessRecord({ ...valid, outputPrepared: false }),
-    /output.*prepared/i,
+    /output.*prepared|projection/i,
   );
   assert.throws(
     () => parseDurableSubprocessRecord({ ...valid, revision: 5 }),
-    /history|revision/i,
+    /history|revision|projection/i,
   );
   assert.throws(
     () =>
@@ -238,7 +415,7 @@ test("terminal parser cross-validates history revision observation stop result e
         ...valid,
         history: [{ state: "running", at: "a" }, ...valid.history.slice(1)],
       }),
-    /history/i,
+    /history|projection/i,
   );
   assert.throws(
     () =>
@@ -246,7 +423,7 @@ test("terminal parser cross-validates history revision observation stop result e
         ...valid,
         result: { ...valid.result, exitCode: 9 },
       }),
-    /consistent|invalid/i,
+    /consistent|invalid|projection/i,
   );
   assert.throws(
     () =>
@@ -254,12 +431,12 @@ test("terminal parser cross-validates history revision observation stop result e
         ...valid,
         stopIntent: { reason: "cancelled", requestedAt: "d" },
       }),
-    /consistent|invalid/i,
+    /consistent|invalid|projection/i,
   );
   assert.throws(
     () =>
       parseDurableSubprocessRecord({
-        ...prepared(),
+        ...preparedBase,
         escalation: [
           {
             action: "interrupt",
@@ -269,12 +446,12 @@ test("terminal parser cross-validates history revision observation stop result e
           },
         ],
       }),
-    /escalation/i,
+    /escalation|projection/i,
   );
   assert.throws(
     () =>
       parseDurableSubprocessRecord({
-        ...prepared(),
+        ...preparedBase,
         stopIntent: { reason: "cancelled", requestedAt: "a" },
         escalation: [
           {
@@ -285,7 +462,7 @@ test("terminal parser cross-validates history revision observation stop result e
           },
         ],
       }),
-    /escalation/i,
+    /escalation|projection/i,
   );
 });
 
@@ -403,7 +580,17 @@ test("SQLite corruption fails closed on reopen instead of returning a forged cac
       "SELECT record_json FROM durable_processes WHERE invocation_id = ?",
     )
     .get("invoke-1") as { record_json: string };
-  const forged = { ...JSON.parse(row.record_json), ownerId: "forged-owner" };
+  const stored = JSON.parse(row.record_json) as {
+    ownerId: string;
+    mutations: Array<{ ownerId: string }>;
+  };
+  const forged = {
+    ...stored,
+    ownerId: "forged-owner",
+    mutations: stored.mutations.map((mutation, index) =>
+      index === 0 ? { ...mutation, ownerId: "forged-owner" } : mutation,
+    ),
+  };
   raw
     .prepare(
       "UPDATE durable_processes SET record_json = ? WHERE invocation_id = ?",

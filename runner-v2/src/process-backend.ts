@@ -66,6 +66,10 @@ export interface ProcessBackendBinding {
   readonly rootPid?: number;
   readonly startedAt: string;
 }
+export interface ProcessEffectFence {
+  readonly ownerId: string;
+  readonly fencingToken: number;
+}
 export interface ProcessLaunchResult {
   readonly opaqueIdentity: string;
   readonly birthFingerprint: {
@@ -99,21 +103,33 @@ export interface ProcessLaunchRequest {
   readonly grant: ConsumedExecutionGrant;
   readonly environment: Readonly<Record<string, string>>;
   readonly outputOwnerId: string;
+  readonly fence: ProcessEffectFence;
 }
 export interface ProcessBackend {
-  probe(): Promise<unknown>;
+  probe(fence?: ProcessEffectFence): Promise<unknown>;
   launch(request: ProcessLaunchRequest): Promise<unknown>;
   observe(
     binding: ProcessBackendBinding,
     output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>,
+    fence: ProcessEffectFence,
   ): Promise<unknown>;
   signal(
     binding: ProcessBackendBinding,
     action: ProcessEscalationAction,
+    fence: ProcessEffectFence,
   ): Promise<unknown>;
-  verifyEmpty(binding: ProcessBackendBinding): Promise<unknown>;
-  reconcile(binding: ProcessBackendBinding): Promise<unknown>;
-  release(binding: ProcessBackendBinding): Promise<unknown>;
+  verifyEmpty(
+    binding: ProcessBackendBinding,
+    fence: ProcessEffectFence,
+  ): Promise<unknown>;
+  reconcile(
+    binding: ProcessBackendBinding,
+    fence: ProcessEffectFence,
+  ): Promise<unknown>;
+  release(
+    binding: ProcessBackendBinding,
+    fence: ProcessEffectFence,
+  ): Promise<unknown>;
 }
 
 interface TrustedEntry {
@@ -319,6 +335,7 @@ export function parseProcessReleaseResult(
 export async function selectProcessBackend(
   registry: ProcessBackendRegistry,
   required: readonly ExecutionSafetyCapabilityName[],
+  fence?: ProcessEffectFence,
 ): Promise<SelectedProcessBackend> {
   const entries = trustedEntries(registry);
   if (
@@ -327,7 +344,9 @@ export async function selectProcessBackend(
     throw unavailable();
   for (const entry of entries) {
     try {
-      const attestation = parseProcessBackendProbe(await entry.backend.probe());
+      const attestation = parseProcessBackendProbe(
+        await entry.backend.probe(fence),
+      );
       if (
         attestation.backendId === entry.backendId &&
         required.every((name) => attestation.capabilities[name] === "enforced")
@@ -352,6 +371,7 @@ export async function reattestProcessBackend(
     | "attestationVersion"
     | "attestationDigest"
   >,
+  fence?: ProcessEffectFence,
 ): Promise<SelectedProcessBackend> {
   const entry = trustedEntries(registry).find(
     (candidate) => candidate.registryId === binding.registryId,
@@ -363,7 +383,7 @@ export async function reattestProcessBackend(
     entry.implementationDigest !== binding.implementationDigest
   )
     throw new Error("Process backend attestation mismatch.");
-  return attest(entry, binding);
+  return attest(entry, binding, fence);
 }
 export async function adoptProcessBackendAfterRestart(
   registry: ProcessBackendRegistry,
@@ -374,6 +394,7 @@ export async function adoptProcessBackendAfterRestart(
     | "attestationVersion"
     | "attestationDigest"
   >,
+  fence?: ProcessEffectFence,
 ): Promise<SelectedProcessBackend> {
   const matches = trustedEntries(registry).filter(
     (entry) =>
@@ -382,7 +403,7 @@ export async function adoptProcessBackendAfterRestart(
   );
   if (matches.length !== 1)
     throw new Error("Process backend restart adoption mismatch.");
-  return attest(matches[0]!, binding);
+  return attest(matches[0]!, binding, fence);
 }
 export function digestProcessBackendAttestation(
   attestation: ProcessBackendProbe,
@@ -399,10 +420,11 @@ async function attest(
     ProcessBackendBinding,
     "backendId" | "attestationVersion" | "attestationDigest"
   >,
+  fence?: ProcessEffectFence,
 ): Promise<SelectedProcessBackend> {
   let attestation: ProcessBackendProbe;
   try {
-    attestation = parseProcessBackendProbe(await entry.backend.probe());
+    attestation = parseProcessBackendProbe(await entry.backend.probe(fence));
   } catch (error) {
     throw new Error("Process backend attestation mismatch.", { cause: error });
   }
