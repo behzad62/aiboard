@@ -43,6 +43,20 @@ export interface LocalPluginLoaderOptions {
   importModule?: (entryPath: string) => Promise<unknown>;
 }
 
+export interface RunnerExtensionCleanupDisposer {
+  close(): Promise<void>;
+}
+
+export class RunnerExtensionLoadError extends AggregateError {
+  constructor(
+    errors: readonly unknown[],
+    readonly disposer: RunnerExtensionCleanupDisposer,
+  ) {
+    super(errors, "Runner extension loading failed and cleanup remains incomplete.");
+    this.name = "RunnerExtensionLoadError";
+  }
+}
+
 export class LoadedRunnerExtensions {
   private closed = false;
 
@@ -161,13 +175,20 @@ export class LocalPluginLoader {
         executionCopies,
       );
     } catch (error) {
-      const cleanup = await closeInstances(
+      const disposer = new PendingRunnerExtensionCleanup(
         created.map((registration) => registration.instance).reverse(),
+        [...executionCopies].reverse(),
       );
-      const copyCleanup = await closeExecutionCopies([...executionCopies].reverse());
-      if (cleanup.failures.length > 0 || copyCleanup.failures.length > 0) {
+      const cleanup = await boundedCleanup(disposer);
+      if (cleanup.incomplete) {
+        throw new RunnerExtensionLoadError(
+          [error, ...cleanup.failures],
+          disposer,
+        );
+      }
+      if (cleanup.failures.length > 0) {
         throw new AggregateError(
-          [error, ...cleanup.failures, ...copyCleanup.failures],
+          [error, ...cleanup.failures],
           "Runner extension loading failed and cleanup reported errors.",
         );
       }
@@ -196,6 +217,59 @@ export class LocalPluginLoader {
     }
     return directories;
   }
+}
+
+class PendingRunnerExtensionCleanup implements RunnerExtensionCleanupDisposer {
+  private closePromise?: Promise<void>;
+  private closed = false;
+
+  constructor(
+    private pendingInstances: RunnerExtensionInstance[],
+    private pendingCopies: RunnerExtensionExecutionCopy[],
+  ) {}
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    if (this.closePromise) return await this.closePromise;
+    const attempt = this.closeOwnedResources();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      this.closed = true;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
+  }
+
+  private async closeOwnedResources(): Promise<void> {
+    const instances = await closeInstances(this.pendingInstances);
+    this.pendingInstances = instances.failedInstances;
+    const copies = await closeExecutionCopies(this.pendingCopies);
+    this.pendingCopies = copies.failedCopies;
+    const failures = [...instances.failures, ...copies.failures];
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "One or more partially loaded Runner extension resources failed to close.",
+      );
+    }
+  }
+}
+
+async function boundedCleanup(
+  disposer: RunnerExtensionCleanupDisposer,
+): Promise<{ failures: unknown[]; incomplete: boolean }> {
+  const failures: unknown[] = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await disposer.close();
+      return { failures, incomplete: false };
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return { failures, incomplete: true };
 }
 
 async function resolveContainedEntry(

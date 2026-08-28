@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +18,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { ArtifactReachabilityGuard } from "../src/artifact-reachability.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
+import { LocalPluginLoader, type LoadedRunnerExtensions } from "../src/plugin-loader.js";
 import {
   createRunnerCapabilityContract,
   RunnerCapabilityContractError,
@@ -2595,6 +2604,108 @@ test("close retries cleanup that failed after settlement", async () => {
   }
 });
 
+test("manager close shares failures then retries only the handle that still owns a child", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-handle-close-retry-"));
+  const project = join(root, "project");
+  const successState = join(root, "success-state");
+  const failedState = join(root, "failed-state");
+  const successPlugin = join(root, "success-plugin");
+  const failedPlugin = join(root, "failed-plugin");
+  for (const directory of [project, successState, failedState, successPlugin, failedPlugin]) {
+    mkdirSync(directory);
+  }
+  writeManagerCloseExtension(successPlugin, "fixture.success", false);
+  writeManagerCloseExtension(failedPlugin, "fixture.failed", true);
+  let successExtensions: LoadedRunnerExtensions | undefined;
+  let failedExtensions: LoadedRunnerExtensions | undefined;
+  let manager: NativeBuildManager | undefined;
+  let childPid = 0;
+  try {
+    successExtensions = await new LocalPluginLoader({
+      pluginDirectories: [successPlugin],
+      projectDirectory: project,
+      stateDirectory: successState,
+    }).load();
+    failedExtensions = await new LocalPluginLoader({
+      pluginDirectories: [failedPlugin],
+      projectDirectory: project,
+      stateDirectory: failedState,
+    }).load();
+    const failedPidPath = join(
+      failedState,
+      "extensions",
+      "fixture.failed",
+      "child.pid",
+    );
+    childPid = Number(readFileSync(failedPidPath, "utf8"));
+    const handles = new Map([
+      ["run_success", successExtensions],
+      ["run_failed", failedExtensions],
+    ]);
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      createRuntime: async (input) => ({
+        ...handleProjections(input.runId),
+        runtime: fakeRuntime(input.runId),
+        usage: () => emptyBudget(input.runId),
+        observability: async () => emptyObservability(input.runId),
+        projectHandoff: async () => { throw new Error("not awaiting handoff"); },
+        cleanup: () => undefined,
+        close: async () => await handles.get(input.runId)!.close(),
+      }),
+      shouldAutoRun: () => false,
+      onPumpError: () => undefined,
+      onPumpResult: () => undefined,
+    });
+    await manager.create({
+      ...spec,
+      runId: "run_success",
+      idempotencyKey: "manager-close-success",
+    });
+    await manager.create({
+      ...spec,
+      runId: "run_failed",
+      idempotencyKey: "manager-close-failed",
+    });
+
+    const firstAttempt = await Promise.allSettled([manager.close(), manager.close()]);
+    assert.deepEqual(firstAttempt.map((result) => result.status), ["rejected", "rejected"]);
+    assert.equal(processExistsForManagerTest(childPid), true);
+    assert.equal(
+      readFileSync(join(successState, "extensions", "fixture.success", "lifecycle.log"), "utf8"),
+      "start\nclose:1\n",
+    );
+    assert.equal(
+      readFileSync(join(failedState, "extensions", "fixture.failed", "lifecycle.log"), "utf8"),
+      "start\nclose:1\n",
+    );
+
+    await manager.close();
+    await waitForManagerProcess(() => !processExistsForManagerTest(childPid));
+    assert.equal(
+      readFileSync(join(successState, "extensions", "fixture.success", "lifecycle.log"), "utf8"),
+      "start\nclose:1\n",
+    );
+    assert.equal(
+      readFileSync(join(failedState, "extensions", "fixture.failed", "lifecycle.log"), "utf8"),
+      "start\nclose:1\nclose:2\n",
+    );
+    assert.deepEqual(readdirSync(join(successState, "extension-executions")), []);
+    assert.deepEqual(readdirSync(join(failedState, "extension-executions")), []);
+    manager = undefined;
+    successExtensions = undefined;
+    failedExtensions = undefined;
+  } finally {
+    await manager?.close().catch(() => undefined);
+    await failedExtensions?.close().catch(() => undefined);
+    await successExtensions?.close().catch(() => undefined);
+    if (childPid > 0 && processExistsForManagerTest(childPid)) {
+      process.kill(childPid, "SIGKILL");
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("close waits for an in-flight automatic handoff before closing resources", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-close-handoff-"));
   let releasePump!: () => void;
@@ -3271,6 +3382,81 @@ function selectedHandoffProjection(
       appliedToProject: choice === "apply_to_project",
     },
   };
+}
+
+function writeManagerCloseExtension(
+  directory: string,
+  id: string,
+  failOnceWithChild: boolean,
+): void {
+  writeFileSync(join(directory, "runner-extension.json"), JSON.stringify({
+    apiVersion: 1,
+    id,
+    name: id,
+    version: "1.0.0",
+    entry: "index.mjs",
+    capabilities: [],
+  }));
+  writeFileSync(join(directory, "index.mjs"), [
+    'import { spawn } from "node:child_process";',
+    'import { appendFile, writeFile } from "node:fs/promises";',
+    'import { join } from "node:path";',
+    "let stateDirectory;",
+    "let child;",
+    "let closeAttempts = 0;",
+    "async function stopChild() {",
+    "  if (!child || child.exitCode !== null || child.signalCode !== null) return;",
+    "  child.kill('SIGTERM');",
+    "  await new Promise((resolve, reject) => {",
+    "    const timer = setTimeout(() => reject(new Error('manager fixture child did not exit')), 2000);",
+    "    child.once('exit', () => { clearTimeout(timer); resolve(); });",
+    "  });",
+    "}",
+    "export function createExtension() {",
+    "  return {",
+    "    capabilities: () => ({ tools: [], contextContributors: [], languageProviders: [] }),",
+    "    start: async (context) => {",
+    "      stateDirectory = context.stateDirectory;",
+    ...(failOnceWithChild
+      ? [
+          "      child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });",
+          "      await writeFile(join(stateDirectory, 'child.pid'), String(child.pid));",
+        ]
+      : []),
+    "      await appendFile(join(stateDirectory, 'lifecycle.log'), 'start\\n');",
+    "    },",
+    "    close: async () => {",
+    "      closeAttempts += 1;",
+    "      await appendFile(join(stateDirectory, 'lifecycle.log'), `close:${closeAttempts}\\n`);",
+    ...(failOnceWithChild
+      ? ["      if (closeAttempts === 1) throw new Error('injected handle close failure');"]
+      : []),
+    "      await stopChild();",
+    "    },",
+    "  };",
+    "}",
+    "",
+  ].join("\n"));
+}
+
+function processExistsForManagerTest(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForManagerProcess(
+  predicate: () => boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for manager fixture process.");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 async function checkpointTwice(

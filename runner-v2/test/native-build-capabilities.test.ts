@@ -134,13 +134,16 @@ test("active recovery preflights matching snapshot extensions atomically and ret
         assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
         const cause = (error as Error & { cause?: unknown }).cause;
         assert.equal(cause instanceof AggregateError, true);
-        const messages = (cause as AggregateError).errors.map((item) => String(item));
+        const messages = nestedErrorMessages(cause);
         assert.equal(messages.some((message) => /snapshot preflight start failed/i.test(message)), true);
         assert.equal(messages.some((message) => /snapshot preflight close failed/i.test(message)), true);
         return true;
       },
     );
-    assert.equal(readFileSync(lifecycle, "utf8"), "started\nclosed\n");
+    assert.equal(
+      readFileSync(lifecycle, "utf8"),
+      "started\nclosed\nclosed\nclosed\nclosed\n",
+    );
     assert.equal(existsSync(runRoot(fixture.state, runId)), false);
   } finally {
     fixture.cleanup();
@@ -172,6 +175,87 @@ test("standalone capability preflight sweeps retryable close failures before rel
       "provider:1\nextension:1\nprovider:2\nextension:2\n",
     );
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test("capability startup retries a failed partial-start disposer until its child exits", async () => {
+  const fixture = createFixture("partial-start-disposer-retry");
+  const extensionState = join(fixture.state, "extensions", "fixture.factory");
+  const pidPath = join(extensionState, "child.pid");
+  let childPid = 0;
+  try {
+    writeProcessCleanupExtension(fixture.extension, { failStart: true });
+    await assert.rejects(
+      preflightRunnerCapabilities({
+        config: { extensions: [fixture.extension], languageServers: [] },
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) => {
+        const messages = nestedErrorMessages(error);
+        assert.equal(messages.some((message) => /injected extension start failure/i.test(message)), true);
+        assert.equal(messages.some((message) => /injected extension close failure/i.test(message)), true);
+        return true;
+      },
+    );
+    childPid = Number(readFileSync(pidPath, "utf8"));
+    await waitForProcess(() => !processExists(childPid));
+    assert.equal(
+      readFileSync(join(extensionState, "lifecycle.log"), "utf8"),
+      "start\nextension:1\nextension:2\n",
+    );
+    assert.equal(
+      !existsSync(join(fixture.state, "extension-executions")) ||
+        readdirSync(join(fixture.state, "extension-executions")).length === 0,
+      true,
+    );
+  } finally {
+    if (!childPid && existsSync(pidPath)) childPid = Number(readFileSync(pidPath, "utf8"));
+    if (childPid > 0 && processExists(childPid)) process.kill(childPid, "SIGKILL");
+    fixture.cleanup();
+  }
+});
+
+test("capability startup retries post-start router-collision cleanup in exact order", async () => {
+  const fixture = createFixture("router-collision-disposer-retry");
+  const extensionState = join(fixture.state, "extensions", "fixture.factory");
+  const pidPath = join(extensionState, "child.pid");
+  let childPid = 0;
+  try {
+    writeProcessCleanupExtension(fixture.extension, {
+      providerId: "builtin.typescript",
+    });
+    await assert.rejects(
+      preflightRunnerCapabilities({
+        config: { extensions: [fixture.extension], languageServers: [] },
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      }),
+      (error: unknown) => {
+        const messages = nestedErrorMessages(error);
+        assert.equal(messages.some((message) => /duplicate language provider builtin\.typescript/i.test(message)), true);
+        assert.equal(messages.some((message) => /injected provider close failure/i.test(message)), true);
+        assert.equal(messages.some((message) => /injected extension close failure/i.test(message)), true);
+        return true;
+      },
+    );
+    childPid = Number(readFileSync(pidPath, "utf8"));
+    await waitForProcess(() => !processExists(childPid));
+    assert.equal(
+      readFileSync(join(extensionState, "lifecycle.log"), "utf8"),
+      "start\nprovider:1\nextension:1\nprovider:2\nextension:2\n",
+    );
+    assert.equal(
+      !existsSync(join(fixture.state, "extension-executions")) ||
+        readdirSync(join(fixture.state, "extension-executions")).length === 0,
+      true,
+    );
+  } finally {
+    if (!childPid && existsSync(pidPath)) childPid = Number(readFileSync(pidPath, "utf8"));
+    if (childPid > 0 && processExists(childPid)) process.kill(childPid, "SIGKILL");
     fixture.cleanup();
   }
 });
@@ -923,6 +1007,58 @@ test("NativeBuildFactory retries real capability close failures and removes the 
     );
   } finally {
     await factory?.close().catch(() => undefined);
+    fixture.cleanup();
+  }
+});
+
+test("NativeBuildFactory retains a persistently failed pre-handle disposer for a later close", async () => {
+  const fixture = createFixture("pre-handle-disposer-retention");
+  const runId = "pre_handle_disposer_retention";
+  const root = runRoot(fixture.state, runId);
+  const pidPath = join(root, "extensions", "fixture.factory", "child.pid");
+  let factory: NativeBuildFactory | undefined;
+  let childPid = 0;
+  try {
+    writeProcessCleanupExtension(fixture.extension, {
+      failStart: true,
+      closeFailures: 5,
+    });
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, {
+      extensions: [fixture.extension],
+      languageServers: [],
+    });
+    await assert.rejects(
+      factory.create(await factory.prepareSpec(buildSpec(runId))),
+      (error: unknown) => {
+        const messages = nestedErrorMessages(error);
+        assert.equal(messages.some((message) => /injected extension start failure/i.test(message)), true);
+        assert.equal(messages.some((message) => /injected extension close failure/i.test(message)), true);
+        return true;
+      },
+    );
+    childPid = Number(readFileSync(pidPath, "utf8"));
+    assert.equal(processExists(childPid), true);
+    assert.equal(
+      readFileSync(join(root, "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
+      "start\nextension:1\nextension:2\nextension:3\nextension:4\nextension:5\n",
+    );
+
+    await factory.close();
+    factory = undefined;
+    await waitForProcess(() => !processExists(childPid));
+    assert.equal(
+      readFileSync(join(root, "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
+      "start\nextension:1\nextension:2\nextension:3\nextension:4\nextension:5\nextension:6\n",
+    );
+  } finally {
+    await factory?.close().catch(() => undefined);
+    if (!childPid && existsSync(pidPath)) childPid = Number(readFileSync(pidPath, "utf8"));
+    if (childPid > 0 && processExists(childPid)) process.kill(childPid, "SIGKILL");
     fixture.cleanup();
   }
 });
@@ -2149,6 +2285,79 @@ function writeRetryingCloseExtension(extension: string): void {
     "}",
     "",
   ].join("\n"));
+}
+
+function writeProcessCleanupExtension(
+  extension: string,
+  options: { failStart?: boolean; providerId?: string; closeFailures?: number },
+): void {
+  writeFileSync(join(extension, "runner-extension.json"), JSON.stringify({
+    apiVersion: 1,
+    id: "fixture.factory",
+    name: "Process Cleanup Fixture",
+    version: "1.0.0",
+    entry: "index.mjs",
+    capabilities: options.providerId ? ["language_intelligence"] : [],
+  }, null, 2));
+  const providers = options.providerId
+    ? `[{ descriptor: { id: ${JSON.stringify(options.providerId)}, displayName: 'Collision provider', extensions: ['.fixture'], rootMarkers: [], priority: 1 }, workspaceSymbols: empty, definition: empty, references: empty, diagnostics: empty, close: async () => { providerCloseAttempts += 1; await appendFile(join(stateDirectory, 'lifecycle.log'), \`provider:\${providerCloseAttempts}\\n\`); if (providerCloseAttempts === 1) throw new Error('injected provider close failure'); } }]`
+    : "[]";
+  writeFileSync(join(extension, "index.mjs"), [
+    'import { spawn } from "node:child_process";',
+    'import { appendFile, writeFile } from "node:fs/promises";',
+    'import { join } from "node:path";',
+    "let stateDirectory;",
+    "let child;",
+    "let providerCloseAttempts = 0;",
+    "let extensionCloseAttempts = 0;",
+    "const empty = async () => ({ status: 'ok', results: [], truncated: false });",
+    "async function stopChild() {",
+    "  if (!child || child.exitCode !== null || child.signalCode !== null) return;",
+    "  child.kill('SIGTERM');",
+    "  await new Promise((resolve, reject) => {",
+    "    const timer = setTimeout(() => reject(new Error('fixture child did not exit')), 2000);",
+    "    child.once('exit', () => { clearTimeout(timer); resolve(); });",
+    "  });",
+    "}",
+    "export function createExtension() {",
+    "  return {",
+    `    capabilities: () => ({ tools: [], contextContributors: [], languageProviders: ${providers} }),`,
+    "    start: async (context) => {",
+    "      stateDirectory = context.stateDirectory;",
+    "      child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });",
+    "      await writeFile(join(stateDirectory, 'child.pid'), String(child.pid));",
+    "      await appendFile(join(stateDirectory, 'lifecycle.log'), 'start\\n');",
+    ...(options.failStart
+      ? ["      throw new Error('injected extension start failure');"]
+      : []),
+    "    },",
+    "    close: async () => {",
+    "      extensionCloseAttempts += 1;",
+    "      await appendFile(join(stateDirectory, 'lifecycle.log'), `extension:${extensionCloseAttempts}\\n`);",
+    `      if (extensionCloseAttempts <= ${options.closeFailures ?? 1}) throw new Error('injected extension close failure');`,
+    "      await stopChild();",
+    "    },",
+    "  };",
+    "}",
+    "",
+  ].join("\n"));
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcess(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for fixture process state.");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 function nestedErrorMessages(error: unknown): string[] {

@@ -75,7 +75,12 @@ import type {
   ProviderConfigStore,
   RunnerProviderConfig,
 } from "./provider-config-store.js";
-import { LocalPluginLoader, type LoadedRunnerExtensions } from "./plugin-loader.js";
+import {
+  LocalPluginLoader,
+  RunnerExtensionLoadError,
+  type LoadedRunnerExtensions,
+  type RunnerExtensionCleanupDisposer,
+} from "./plugin-loader.js";
 import {
   emptyRunnerCapabilitiesConfig,
   type RunnerCapabilitiesConfig,
@@ -932,6 +937,14 @@ export class NativeBuildFactory {
       },
     };
     } catch (error) {
+      const pendingCapabilityCleanup = nativeCapabilityCleanupDisposer(error);
+      if (pendingCapabilityCleanup) {
+        constructionResources.add(
+          "capabilities",
+          () => pendingCapabilityCleanup.close(),
+          true,
+        );
+      }
       const primary = nativeBuildConstructionFailure(initializationStage, error);
       try {
         await constructionResources.close("failure");
@@ -1537,6 +1550,70 @@ interface ClosableLanguageProvider {
   close(): Promise<void>;
 }
 
+class NativeCapabilityStartupCleanupError extends AggregateError {
+  constructor(
+    errors: readonly unknown[],
+    readonly disposer: NativeCapabilityCleanupOwner,
+  ) {
+    super(errors, "Runner capability startup failed and cleanup remains incomplete.");
+    this.name = "NativeCapabilityStartupCleanupError";
+  }
+}
+
+class NativeCapabilityCleanupOwner {
+  private closePromise?: Promise<void>;
+  private closed = false;
+
+  constructor(
+    private pendingProviders: ClosableLanguageProvider[],
+    private pendingExtensions?: RunnerExtensionCleanupDisposer,
+  ) {
+    this.pendingProviders = uniqueClosableProviders(pendingProviders);
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    if (this.closePromise) return await this.closePromise;
+    const attempt = this.closeOwnedResources();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      this.closed = true;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
+  }
+
+  private async closeOwnedResources(): Promise<void> {
+    const failures: unknown[] = [];
+    const failedProviders: ClosableLanguageProvider[] = [];
+    for (const provider of this.pendingProviders) {
+      try {
+        await provider.close();
+      } catch (error) {
+        failures.push(error);
+        failedProviders.push(provider);
+      }
+    }
+    this.pendingProviders = failedProviders;
+    if (this.pendingExtensions) {
+      try {
+        await this.pendingExtensions.close();
+        this.pendingExtensions = undefined;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "One or more partially started Runner capability resources failed to close.",
+      );
+    }
+  }
+}
+
 class NativeRunCapabilities {
   private closePromise?: Promise<void>;
   private closed = false;
@@ -1609,23 +1686,69 @@ async function createNativeRunCapabilities(
       extensions,
     );
   } catch (error) {
-    try {
-      const extensionProviders = language
-        ? []
-        : (registry?.languageProviders().map((registration) => registration.provider) ?? [])
-          .reverse();
-      await closeCapabilityResources(
-        language ? [language] : [...extensionProviders, builtInLanguage],
-        extensions,
+    const extensionProviders = language
+      ? []
+      : (registry?.languageProviders().map((registration) => registration.provider) ?? [])
+        .reverse();
+    const disposer = new NativeCapabilityCleanupOwner(
+      language ? [language] : [...extensionProviders, builtInLanguage],
+      extensions ?? extensionCleanupDisposer(error),
+    );
+    const cleanup = await boundedCapabilityCleanup(disposer);
+    if (cleanup.incomplete) {
+      throw new NativeCapabilityStartupCleanupError(
+        [error, ...cleanup.failures],
+        disposer,
       );
-    } catch (cleanupError) {
+    }
+    if (cleanup.failures.length > 0) {
       throw new AggregateError(
-        [error, cleanupError],
+        [error, ...cleanup.failures],
         "Runner capability startup failed and cleanup reported errors.",
       );
     }
     throw error;
   }
+}
+
+async function boundedCapabilityCleanup(
+  disposer: NativeCapabilityCleanupOwner,
+): Promise<{ failures: unknown[]; incomplete: boolean }> {
+  const failures: unknown[] = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await disposer.close();
+      return { failures, incomplete: false };
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return { failures, incomplete: true };
+}
+
+function extensionCleanupDisposer(
+  error: unknown,
+): RunnerExtensionCleanupDisposer | undefined {
+  return error instanceof RunnerExtensionLoadError ? error.disposer : undefined;
+}
+
+function nativeCapabilityCleanupDisposer(
+  error: unknown,
+): NativeCapabilityCleanupOwner | undefined {
+  return error instanceof NativeCapabilityStartupCleanupError
+    ? error.disposer
+    : undefined;
+}
+
+function uniqueClosableProviders(
+  providers: readonly ClosableLanguageProvider[],
+): ClosableLanguageProvider[] {
+  const seen = new Set<ClosableLanguageProvider>();
+  return providers.filter((provider) => {
+    if (seen.has(provider)) return false;
+    seen.add(provider);
+    return true;
+  });
 }
 
 /** Validates and starts configured capabilities before accepting control-plane traffic. */

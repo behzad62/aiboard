@@ -93,6 +93,7 @@ export class NativeBuildManager implements BuildControlPlane {
   private closePromise: Promise<void> | undefined;
   private closing = false;
   private closed = false;
+  private specsClosed = false;
 
   constructor(private readonly options: NativeBuildManagerOptions) {}
 
@@ -473,13 +474,18 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async close(): Promise<void> {
-    if (!this.closePromise) {
-      this.closing = true;
-      this.activityGateClosed = true;
-      this.rejectActivityWaiters();
-      this.closePromise = this.closeAfterPumps();
+    if (this.closePromise) return await this.closePromise;
+    this.closing = true;
+    this.activityGateClosed = true;
+    this.rejectActivityWaiters();
+    const attempt = this.closeAfterPumps();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
     }
-    await this.closePromise;
   }
 
   private async closeAfterPumps(): Promise<void> {
@@ -488,24 +494,38 @@ export class NativeBuildManager implements BuildControlPlane {
     await this.waitForRuntimeActivityIdle();
     this.closed = true;
     await this.serialized(async () => {
-      const handles = [...this.handles.values()];
-      this.handles.clear();
       const failures: unknown[] = [];
-      for (const handle of handles) {
+      for (const [runId, handle] of [...this.handles.entries()]) {
+        let cleanupComplete = true;
+        let handleClosed = false;
         if (!handle.historical && handle.runtime.projection().status === "completed") {
           try {
-            await this.cleanupSettledRun(handle.runtime.id, handle);
+            await this.cleanupSettledRun(runId, handle);
+          } catch (error) {
+            failures.push(error);
+            cleanupComplete = false;
+          }
+        }
+        if (cleanupComplete) {
+          try {
+            await handle.close();
+            handleClosed = true;
           } catch (error) {
             failures.push(error);
           }
         }
+        if (cleanupComplete && handleClosed) {
+          this.handles.delete(runId);
+        }
+      }
+      if (!this.specsClosed) {
         try {
-          await handle.close();
+          this.options.specs.close();
+          this.specsClosed = true;
         } catch (error) {
           failures.push(error);
         }
       }
-      this.options.specs.close();
       if (failures.length > 0) {
         throw new AggregateError(failures, "Could not close native Build resources.");
       }
