@@ -7,7 +7,8 @@
 - Branch: codex/runner-v2-robust-build
 - Assigned baseline: 6eba9a1d5fa123a9808247624865c4f97b7bec25
 - Production family migration: none. No Git, MCP, LSP, managed-process, configured-provider, process launch, construction graph, or CLI routing was changed.
-- Initial implementation/report commit: pending; this report is staged with that implementation commit. A follow-up report-finalization commit will record its hash.
+- Implementation plus initial report commit: ddbe9008 (feat(runner): define streaming session authority contracts).
+- This report finalization update is committed immediately after the implementation commit; the handoff lists both task commit hashes.
 
 ## Files changed
 
