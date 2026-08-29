@@ -48,6 +48,8 @@ export interface ExecutionGrantAccessRequest {
 export interface ExecutionGrantIssueRequest extends ExecutionGrantBinding {
   readonly workspacePath: string;
   readonly access: readonly ExecutionGrantAccessRequest[];
+  /** Names only; credential values never enter an execution grant. */
+  readonly credentialNames?: readonly string[];
   readonly externalApproved: boolean;
   readonly destructiveApproved: boolean;
   readonly networkApproved: boolean;
@@ -62,6 +64,7 @@ export interface ConsumedExecutionGrantClaims extends ExecutionGrantBinding {
     canonicalPath: string;
     mode: ExactPathAccessMode;
   }>[];
+  readonly credentialNames: readonly string[];
   readonly externalApproved: boolean;
   readonly destructiveApproved: boolean;
   readonly networkApproved: boolean;
@@ -105,6 +108,7 @@ export interface ExecutionGrantAuthority {
 interface GrantRecord {
   readonly authority: object;
   readonly claims: ConsumedExecutionGrantClaims;
+  readonly clock: () => Date;
   state: "issued" | "consumed" | "revoked";
   revocationReason?: ExecutionGrantRevocationReason;
   isolationReserved: boolean;
@@ -146,6 +150,7 @@ export function createExecutionGrantAuthority(
         grantId: `execution-grant-${randomUUID()}`,
         workspacePath,
         access,
+        credentialNames: canonicalCredentialNames(request.credentialNames),
         externalApproved: request.externalApproved === true,
         destructiveApproved: request.destructiveApproved === true,
         networkApproved: request.networkApproved === true,
@@ -156,7 +161,14 @@ export function createExecutionGrantAuthority(
       const grant = {} as OpaqueExecutionGrant;
       Object.defineProperty(grant, RUNNER_OPAQUE_GRANT, { value: true });
       Object.freeze(grant);
-      GRANTS.set(grant, { authority: authorityIdentity, claims, state: "issued", isolationReserved: false, revokers: new Set() });
+      GRANTS.set(grant, {
+        authority: authorityIdentity,
+        claims,
+        clock,
+        state: "issued",
+        isolationReserved: false,
+        revokers: new Set(),
+      });
       owned.add(grant);
       return grant;
     },
@@ -220,6 +232,23 @@ export function createExecutionGrantAuthority(
   });
 }
 
+function canonicalCredentialNames(value: readonly string[] | undefined): readonly string[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 128) {
+    throw new ExecutionGrantError("grant_mismatch", "Execution grant credential names are invalid.");
+  }
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const name of value) {
+    if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name) || seen.has(name)) {
+      throw new ExecutionGrantError("grant_mismatch", "Execution grant credential names are invalid.");
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return Object.freeze(names);
+}
+
 async function runRevokers(revokers: Iterable<() => Promise<void>>): Promise<void> {
   const settled = await Promise.allSettled([...revokers].map((revoke) => revoke()));
   const failures = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -268,6 +297,21 @@ export function assertRunnerConsumedExecutionGrantClaims(
   if (!value || typeof value !== "object" || value[RUNNER_CONSUMED_GRANT] !== true ||
       !CONSUMED_CLAIMS.has(value as object)) {
     throw grantError("grant_forged");
+  }
+  return value;
+}
+
+/** Rejects a consumed claim as soon as its ToolBroker-owned grant is revoked or expires. */
+export function assertCurrentConsumedExecutionGrantClaims(
+  value: ConsumedExecutionGrantClaims,
+): ConsumedExecutionGrantClaims {
+  assertRunnerConsumedExecutionGrantClaims(value);
+  const record = CONSUMED_CLAIMS.get(value as object)!;
+  if (record.state === "revoked") throw grantError("grant_revoked");
+  if (Date.parse(record.claims.expiresAt) <= record.clock().getTime()) {
+    record.state = "revoked";
+    record.revocationReason = "expired";
+    throw grantError("grant_expired");
   }
   return value;
 }
@@ -397,6 +441,7 @@ function cloneClaims(
     ...value,
     actor: { ...value.actor },
     access: value.access.map((entry) => ({ ...entry })),
+    credentialNames: [...value.credentialNames],
   } as ConsumedExecutionGrantClaims;
   if (brand) {
     Object.defineProperty(clone, RUNNER_CONSUMED_GRANT, { value: true });

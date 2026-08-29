@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   ExecutionGrantError,
+  assertCurrentConsumedExecutionGrantClaims,
   createExecutionGrantAuthority,
 } from "../src/execution-grants.js";
 
@@ -68,6 +69,85 @@ test("issues a canonical opaque grant and consumes it for exactly its bound call
     assert.throws(
       () => authority.consume(grant, binding),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_consumed",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retains only the bounded approved credential names in consumed claims", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-credentials-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const authority = createExecutionGrantAuthority();
+    const binding = {
+      runId: "run-1", sessionId: "session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await authority.issue({
+      ...binding,
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" }],
+      credentialNames: ["SERVICE_TOKEN", "DB_CERT"],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    const claims = authority.consume(grant, binding);
+    assert.deepEqual(claims.credentialNames, ["SERVICE_TOKEN", "DB_CERT"]);
+    assert.throws(
+      () => (claims.credentialNames as string[]).push("FORGED"),
+      TypeError,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("clones every public credential-name result instead of sharing authority-owned arrays", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-credential-clone-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const authority = createExecutionGrantAuthority();
+    const binding = {
+      runId: "run-1", sessionId: "session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await authority.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      credentialNames: ["SERVICE_TOKEN"], externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    const consumed = authority.consume(grant, binding);
+    const snapshot = authority.activeSnapshots()[0]!;
+    assert.notStrictEqual(snapshot.credentialNames, consumed.credentialNames);
+    assert.deepEqual(snapshot.credentialNames, consumed.credentialNames);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("makes consumed claims unusable after the ToolBroker revokes their opaque grant", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-current-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const authority = createExecutionGrantAuthority();
+    const binding = {
+      runId: "run-1", sessionId: "session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await authority.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    const claims = authority.consume(grant, binding);
+    assert.equal(assertCurrentConsumedExecutionGrantClaims(claims), claims);
+    await authority.revoke(grant, "completed");
+    assert.throws(
+      () => assertCurrentConsumedExecutionGrantClaims(claims),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked",
     );
   } finally {
     await rm(root, { recursive: true, force: true });
