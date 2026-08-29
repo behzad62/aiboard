@@ -300,6 +300,89 @@ test("monotonic fencing rejects a stale owner even after it rereads the new revi
   );
 });
 
+test("blocked-exit recovery mutation is authenticated and scoped only to bound cleanup blockers", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  let record = writer.claim(prepared()).record;
+  for (const command of [
+    { type: "mark_output_prepared", at: "2026-01-01T00:00:01.000Z" },
+    {
+      type: "record_environment",
+      at: "2026-01-01T00:00:02.000Z",
+      environmentAudit: {
+        inheritedNames: [],
+        removedNames: [],
+        explicitSafeNames: [],
+        grantedNames: [],
+      },
+    },
+    { type: "mark_launching", at: "2026-01-01T00:00:03.000Z" },
+  ]) record = writer.apply({ ...command, invocationId: "invoke-1", expectedRevision: record.revision });
+  record = writer.apply({
+    type: "bind_launch",
+    invocationId: "invoke-1",
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:04.000Z",
+    binding: {
+      registryId: "registry",
+      backendId: "fake",
+      implementationGeneration: "generation",
+      implementationDigest: "b".repeat(64),
+      attestationVersion: 1,
+      attestationDigest: "c".repeat(64),
+      opaqueIdentity: "identity",
+      birthFingerprint: { observedAt: "2026-01-01T00:00:04.000Z", discriminator: "birth" },
+      startedAt: "2026-01-01T00:00:04.000Z",
+    },
+  });
+  assert.throws(() => writer.apply({
+    type: "resume_blocked_exit",
+    invocationId: "invoke-1",
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:05.000Z",
+    observation: { exitCode: 0, observedAt: "2026-01-01T00:00:05.000Z" },
+  }), /illegal.*running|cleanup_blocked/i);
+  record = writer.apply({
+    type: "fail",
+    invocationId: "invoke-1",
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:05.000Z",
+    state: "cleanup_blocked",
+    detail: "owned process remains",
+    cleanup: {
+      state: "failed",
+      failedAt: "2026-01-01T00:00:05.000Z",
+      code: "launch_cleanup_blocked",
+      detail: "owned process remains",
+    },
+    result: {
+      outcome: "cleanup_failed",
+      startedAt: "2026-01-01T00:00:04.000Z",
+      finishedAt: "2026-01-01T00:00:05.000Z",
+    },
+  });
+  assert.throws(() => writer.apply({
+    type: "resume_blocked_exit",
+    invocationId: "invoke-1",
+    expectedRevision: record.revision,
+    ownerId: "owner-stale",
+    fencingToken: record.fencingToken,
+    at: "2026-01-01T00:00:06.000Z",
+    observation: { exitCode: 0, observedAt: "2026-01-01T00:00:06.000Z" },
+  }), /owner|fenc/i);
+  record = writer.apply({
+    type: "resume_blocked_exit",
+    invocationId: "invoke-1",
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:06.000Z",
+    observation: { exitCode: 0, observedAt: "2026-01-01T00:00:06.000Z" },
+  });
+  assert.equal(record.state, "exited");
+  assert.equal(record.result, undefined);
+  assert.deepEqual(record.cleanup, { state: "pending" });
+  assert.equal(record.mutations.at(-1)?.kind, "resume_blocked_exit");
+});
+
 test("terminal parser cross-validates history revision observation stop result escalation and cleanup", () => {
   const kernel = createInMemoryDurableProcessKernel(stateKey);
   const writer = writerFor(kernel);

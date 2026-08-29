@@ -316,6 +316,43 @@ function runtimeFor(
   composed.grantsController.issue(grantValue());
   return composed;
 }
+
+async function durableLaunchBlocker(
+  t: { after(callback: () => Promise<void>): void },
+  suffix = "blocked",
+) {
+  const root = await mkdtemp(join(tmpdir(), `runner-v2-${suffix}-`));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "process.sqlite");
+  const stateKey = new Uint8Array(32).fill(7);
+  const backend = new Backend();
+  const clock = new Clock();
+  const outputs = new Outputs();
+  const first = runtimeFor({ kind: "sqlite", path }, stateKey, backend, clock, outputs);
+  const launchDetail = `owned descendant remains; evidence retained at ${root}`;
+  backend.launchError = Object.assign(new Error(launchDetail), {
+    code: "native_process_launch_cleanup_blocked",
+    evidenceDirectory: root,
+    launchResult: backend.launchValue,
+  });
+  backend.reconcileValue = { state: "running" };
+  backend.verifyValue = { empty: false, detail: "owned descendant remains" };
+  const result = await first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.equal(result.outcome, "cleanup_failed");
+  const blocked = first.readOnlyStore.readByInvocation("invoke-1");
+  assert.ok(blocked);
+  assert.equal(blocked.state, "cleanup_blocked");
+  assert.equal(blocked.cleanup.state, "failed");
+  const blockerDetail = blocked.cleanup.detail;
+  backend.launchError = undefined;
+  first.readOnlyStore.close();
+  return { path, stateKey, backend, clock, outputs, blockerDetail };
+}
+
 async function seedRecoverable(
   f: ReturnType<typeof fixture>,
   state:
@@ -604,6 +641,148 @@ test("recoverable launch cleanup blocker binds identity and persists without pre
   });
   assert.equal(retry.outcome, "cleanup_failed");
   assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+});
+
+test("restart reattests a live launch blocker and retry never relaunches", async (t) => {
+  const f = await durableLaunchBlocker(t);
+  f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+  f.backend.reconcileValue = { state: "running" };
+  const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "cleanup_blocked" },
+  ]);
+  const blocked = recovery.readOnlyStore.readByInvocation("invoke-1");
+  assert.equal(blocked?.cleanup.state, "failed");
+  assert.ok(blocked?.mutations.some((mutation) => mutation.kind === "adopt_backend"));
+  assert.equal(f.backend.calls.filter((call) => call === "reconcile").length, 2);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  f.backend.verifyValue = { empty: true, proofArtifactId: "retry-proof" };
+  const retry = await recovery.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.equal(retry.outcome, "exited");
+  assert.equal(recovery.readOnlyStore.readByInvocation("invoke-1")?.state, "cleaned");
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  recovery.readOnlyStore.close();
+});
+
+test("restart closes a launch blocker only after natural exit and verified release", async (t) => {
+  const f = await durableLaunchBlocker(t);
+  f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  f.backend.verifyValue = { empty: false, detail: "descendant still draining" };
+  const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "cleanup_blocked" },
+  ]);
+  assert.ok(recovery.readOnlyStore.readByInvocation("invoke-1")?.output);
+  f.backend.verifyValue = { empty: true, proofArtifactId: "blocked-proof" };
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "cleaned" },
+  ]);
+  const record = recovery.readOnlyStore.readByInvocation("invoke-1");
+  assert.equal(record?.cleanup.state, "verified_empty");
+  assert.equal(record?.result?.outcome, "exited");
+  assert.ok(record?.mutations.some((mutation) => mutation.kind === "resume_blocked_exit"));
+  assert.ok(f.outputs.calls.some((call) => call.startsWith("reopen:")));
+  assert.ok(f.outputs.calls.some((call) => call.startsWith("finalize:")));
+  assert.ok(f.backend.calls.includes("verify"));
+  assert.ok(f.backend.calls.includes("release"));
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  recovery.readOnlyStore.close();
+});
+
+test("restart cancellation stops only the authenticated blocked identity and completes cleanup", async (t) => {
+  const f = await durableLaunchBlocker(t);
+  f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+  f.backend.signalValues = [{ state: "exited" }];
+  f.backend.reconcileValue = { state: "running" };
+  f.backend.verifyValue = { empty: true, proofArtifactId: "cancelled-blocker-proof" };
+  f.backend.onSignal = () => {
+    f.backend.reconcileValue = { state: "exited", signal: "SIGINT" };
+  };
+  const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+
+  const accepted = await recovery.runtime.cancel("invoke-1");
+  assert.equal(accepted, true, inspect({ calls: f.backend.calls, record: recovery.readOnlyStore.readByInvocation("invoke-1") }));
+  const record = recovery.readOnlyStore.readByInvocation("invoke-1");
+  assert.equal(record?.state, "cleaned", inspect({ calls: f.backend.calls, record }));
+  assert.equal(record?.result?.outcome, "cancelled");
+  assert.deepEqual(f.backend.calls.filter((call) => call.startsWith("signal:")), ["signal:interrupt"]);
+  assert.ok(f.backend.calls.includes("release"));
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  recovery.readOnlyStore.close();
+});
+
+test("restart cancellation preserves blocker evidence when authenticated escalation cannot enforce exit", async (t) => {
+  const f = await durableLaunchBlocker(t, "unenforced-cancel");
+  f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+  f.backend.reconcileValue = { state: "running" };
+  f.backend.signalValues = [
+    { state: "running" },
+    { state: "running" },
+    { state: "running" },
+  ];
+  const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+
+  assert.equal(await recovery.runtime.cancel("invoke-1"), true);
+  const record = recovery.readOnlyStore.readByInvocation("invoke-1");
+  assert.equal(record?.state, "cleanup_blocked");
+  assert.equal(record?.cleanup.state, "failed");
+  if (record?.cleanup.state === "failed") assert.equal(record.cleanup.detail, f.blockerDetail);
+  assert.deepEqual(f.backend.calls.filter((call) => call.startsWith("signal:")), [
+    "signal:interrupt",
+    "signal:terminate",
+    "signal:force_terminate",
+  ]);
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  recovery.readOnlyStore.close();
+});
+
+test("restart preserves typed launch blockers for unavailable, unknown, and mismatched backends", async (t) => {
+  for (const mode of ["unavailable", "outcome_unknown", "identity_mismatch"] as const) {
+    const f = await durableLaunchBlocker(t, mode);
+    f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+    if (mode === "unavailable") f.backend.probeValue = new Proxy({}, {});
+    else f.backend.reconcileValue = { state: mode };
+    const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+
+    assert.deepEqual(await recovery.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "cleanup_blocked" },
+    ]);
+    const record = recovery.readOnlyStore.readByInvocation("invoke-1");
+    assert.equal(record?.state, "cleanup_blocked", mode);
+    assert.equal(record?.cleanup.state, "failed", mode);
+    if (record?.cleanup.state === "failed") {
+      assert.equal(record.cleanup.code, "launch_cleanup_blocked", mode);
+      assert.equal(record.cleanup.detail, f.blockerDetail, mode);
+    }
+    assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1, mode);
+    recovery.readOnlyStore.close();
+  }
+});
+
+test("stale restart owner cannot recover or cancel a leased launch blocker", async (t) => {
+  const f = await durableLaunchBlocker(t);
+  const stale = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+
+  assert.deepEqual(await stale.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "leased" },
+  ]);
+  assert.equal(await stale.runtime.cancel("invoke-1"), false);
+  const retry = await stale.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.equal(retry.outcome, "cleanup_failed");
+  assert.equal(f.backend.calls.filter((call) => call === "reconcile").length, 1);
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  stale.readOnlyStore.close();
 });
 
 test("Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked", async () => {

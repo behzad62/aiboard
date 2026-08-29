@@ -98,6 +98,7 @@ export type DurableProcessMutationKind =
   | "start_escalation"
   | "finish_escalation"
   | "record_exit"
+  | "resume_blocked_exit"
   | "begin_verify"
   | "complete"
   | "fail_launch"
@@ -241,6 +242,13 @@ export type DurableProcessCommand =
     }
   | {
       readonly type: "record_exit";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly observation: DurableChildObservation;
+    }
+  | {
+      readonly type: "resume_blocked_exit";
       readonly invocationId: string;
       readonly expectedRevision: number;
       readonly at: string;
@@ -680,7 +688,7 @@ const LEGAL_HISTORY: Readonly<
   orphaned: [],
   identity_mismatch: [],
   outcome_unknown: [],
-  cleanup_blocked: ["cleanup_blocked", "launch_not_proven"],
+  cleanup_blocked: ["cleanup_blocked", "exited", "launch_not_proven"],
 };
 const BASE_KEYS = [
   "schemaVersion",
@@ -920,6 +928,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
       "start_escalation",
       "finish_escalation",
       "record_exit",
+      "resume_blocked_exit",
       "begin_verify",
       "complete",
       "fail_launch",
@@ -962,6 +971,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
       optional: ["detail"],
     },
     record_exit: { required: ["observation"] },
+    resume_blocked_exit: { required: ["observation"] },
     begin_verify: { required: ["output"] },
     complete: { required: ["cleanup", "result"] },
     fail_launch: { required: ["detail"] },
@@ -1162,6 +1172,7 @@ function reduceMutation(
         "exited",
         "verifying_empty",
         "backend_unavailable",
+        "cleanup_blocked",
       ]);
       const binding = parseBinding(data.binding);
       if (
@@ -1184,6 +1195,7 @@ function reduceMutation(
         "running",
         "stopping",
         "backend_unavailable",
+        "cleanup_blocked",
       ]);
       const reason = requiredEnum(
         data.reason,
@@ -1199,13 +1211,20 @@ function reduceMutation(
           ? "stopping"
           : current.state;
       return historyOnly(
-        { ...base, stopIntent, state },
+        {
+          ...base,
+          stopIntent,
+          state,
+          ...(current.state === "cleanup_blocked" && current.result
+            ? { result: { ...current.result, outcome: stopIntent.reason } }
+            : {}),
+        },
         mutation.at,
         stopIntent.reason,
       );
     }
     case "start_escalation": {
-      requireState(current, ["stopping"]);
+      requireState(current, ["stopping", "cleanup_blocked"]);
       if (current.escalation.some((entry) => entry.outcome === "requested"))
         throw new Error("An escalation effect is already pending.");
       const action = requiredEnum(
@@ -1230,7 +1249,7 @@ function reduceMutation(
       );
     }
     case "finish_escalation": {
-      requireState(current, ["stopping"]);
+      requireState(current, ["stopping", "cleanup_blocked"]);
       const action = requiredEnum(
         data.action,
         new Set<ProcessEscalationAction>([
@@ -1280,6 +1299,26 @@ function reduceMutation(
         "exited",
         mutation.at,
       );
+    case "resume_blocked_exit": {
+      requireState(current, ["cleanup_blocked"]);
+      if (!current.backendBinding)
+        throw new Error("Blocked cleanup recovery requires backend identity.");
+      const {
+        result: _result,
+        output: _output,
+        ...withoutTerminalBlocker
+      } = base;
+      return moveDerived(
+        {
+          ...withoutTerminalBlocker,
+          cleanup: { state: "pending" },
+          observation: parseObservation(data.observation),
+        },
+        "exited",
+        mutation.at,
+        "blocked_identity_exited",
+      );
+    }
     case "begin_verify":
       requireState(current, ["exited"]);
       return moveDerived(
@@ -1423,6 +1462,7 @@ function commandData(
         ...(command.detail === undefined ? {} : { detail: command.detail }),
       };
     case "record_exit":
+    case "resume_blocked_exit":
       return { observation: command.observation };
     case "begin_verify":
       return { output: command.output };

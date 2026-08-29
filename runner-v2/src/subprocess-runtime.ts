@@ -269,6 +269,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       return Promise.reject(error);
     }
     if (!claim.won) {
+      if (claim.record.state === "cleanup_blocked" && claim.record.backendBinding)
+        return this.recoverBlockedRetry(claim.record);
       if (claim.record.result)
         return Promise.resolve(resultFromRecord(claim.record));
       return this.observeExisting(claim.record.invocationId);
@@ -287,9 +289,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         "running",
         "stopping",
         "backend_unavailable",
+        "cleanup_blocked",
       ].includes(record.state)
     )
       return false;
+    const owned = this.takeRecoveryOwnership(record);
+    if (!owned) return false;
+    record = owned;
     if (!record.stopIntent)
       record = this.applyCurrent(record, (revision) => ({
         type: "request_stop",
@@ -302,7 +308,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       return true;
     if (!record.backendBinding) return false;
     try {
-      await this.escalate(record);
+      if (record.state === "cleanup_blocked") await this.reconcileRecord(record);
+      else await this.escalate(record);
     } catch {
       return false;
     }
@@ -336,8 +343,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         continue;
       if (
         snapshot.state === "cleanup_blocked" &&
-        (snapshot.backendBinding ||
-          snapshot.result?.outcome !== "launch_failed")
+        !snapshot.backendBinding &&
+        snapshot.result?.outcome !== "launch_failed"
       )
         continue;
       const leaseIsLive =
@@ -923,11 +930,14 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         record.invocationId,
         record.stopIntent?.reason ?? "cancelled",
       );
-    if (record.state !== "stopping" || !record.backendBinding) return;
+    if (
+      (record.state !== "stopping" && record.state !== "cleanup_blocked") ||
+      !record.backendBinding
+    ) return;
     const actions = ["interrupt", "terminate", "force_terminate"] as const;
     for (let index = 0; index < actions.length; index += 1) {
       record = this.current(record.invocationId);
-      if (record.state !== "stopping") return;
+      if (record.state !== "stopping" && record.state !== "cleanup_blocked") return;
       const action = actions[index]!;
       const prior = record.escalation.find((entry) => entry.action === action);
       if (prior && prior.outcome !== "requested") {
@@ -976,6 +986,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ...(detail ? { detail } : {}),
       });
       if (outcome === "failed") {
+        if (record.state === "cleanup_blocked")
+          throw new SubprocessRuntimeError(
+            "identity_mismatch",
+            "Blocked backend authority could not be freshly revalidated.",
+          );
         this.applyFailure(
           record,
           "identity_mismatch",
@@ -1038,6 +1053,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         expectedRevision: record.revision,
         at: this.now(),
       });
+      return;
+    }
+    if (record.state === "cleanup_blocked" && record.backendBinding) {
+      await this.recoverBoundCleanup(record, output);
       return;
     }
     if (record.state === "prepared") {
@@ -1182,6 +1201,74 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     await this.finish(record, output, selected);
   }
 
+  private async recoverBoundCleanup(
+    snapshot: DurableSubprocessRecord,
+    output: ProcessOutputSession,
+  ): Promise<void> {
+    let record = this.current(snapshot.invocationId);
+    let binding = requiredBinding(record);
+    let selected: SelectedProcessBackend;
+    try {
+      selected = await this.fencedEffect(record.invocationId, (fence) =>
+        reattestProcessBackend(this.options.registry, binding, fence),
+      );
+    } catch {
+      selected = await this.fencedEffect(record.invocationId, (fence) =>
+        adoptProcessBackendAfterRestart(this.options.registry, binding, fence),
+      );
+      record = this.mutate({
+        type: "adopt_backend",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: this.now(),
+        binding: {
+          ...binding,
+          registryId: selected.registryId,
+          implementationGeneration: selected.implementationGeneration,
+          implementationDigest: selected.implementationDigest,
+          attestationVersion: selected.attestation.attestationVersion,
+          attestationDigest: selected.attestationDigest,
+        },
+      });
+      binding = requiredBinding(record);
+    }
+    let reconciliation = parseProcessReconciliation(
+      await this.fencedEffect(record.invocationId, (fence) =>
+        selected.backend.reconcile(binding, fence),
+      ),
+    );
+    if (reconciliation.state === "running" && record.stopIntent) {
+      await this.escalate(record);
+      record = this.current(record.invocationId);
+      if (record.state !== "cleanup_blocked") return;
+      binding = requiredBinding(record);
+      selected = await this.fencedEffect(record.invocationId, (fence) =>
+        reattestProcessBackend(this.options.registry, binding, fence),
+      );
+      reconciliation = parseProcessReconciliation(
+        await this.fencedEffect(record.invocationId, (fence) =>
+          selected.backend.reconcile(binding, fence),
+        ),
+      );
+    }
+    if (reconciliation.state !== "exited") return;
+    record = this.current(record.invocationId);
+    record = this.mutate({
+      type: "resume_blocked_exit",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      observation: {
+        ...(reconciliation.exitCode === undefined
+          ? {}
+          : { exitCode: reconciliation.exitCode }),
+        ...(reconciliation.signal ? { signal: reconciliation.signal } : {}),
+        observedAt: this.now(),
+      },
+    });
+    await this.finish(record, output, selected);
+  }
+
   private async classifyReconciliationFailure(
     snapshot: DurableSubprocessRecord,
     error: unknown,
@@ -1216,6 +1303,40 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           error instanceof Error ? error.message : "Reconciliation failed.",
         );
     } catch {}
+  }
+  private async recoverBlockedRetry(
+    snapshot: DurableSubprocessRecord,
+  ): Promise<GenericProcessResult> {
+    const owned = this.takeRecoveryOwnership(snapshot);
+    if (!owned) return resultFromRecord(snapshot);
+    try {
+      await this.reconcileRecord(owned);
+    } catch (error) {
+      await this.classifyReconciliationFailure(owned, error);
+    }
+    return resultFromRecord(this.current(snapshot.invocationId));
+  }
+  private takeRecoveryOwnership(
+    snapshot: DurableSubprocessRecord,
+  ): DurableSubprocessRecord | undefined {
+    let record = this.current(snapshot.invocationId);
+    if (record.ownerId !== this.ownerId) {
+      if (
+        Date.parse(record.leaseExpiresAt) >
+        this.options.clock.now().getTime()
+      ) return undefined;
+      record = this.writer.apply({
+        type: "takeover_lease",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        ownerId: this.ownerId,
+        fencingToken: record.fencingToken + 1,
+        at: this.now(),
+        leaseExpiresAt: this.leaseExpiry(),
+      });
+    }
+    this.fences.set(record.invocationId, record.fencingToken);
+    return record;
   }
   private requestStopLatest(
     invocationId: string,
