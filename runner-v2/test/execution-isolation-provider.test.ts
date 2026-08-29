@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,14 +81,23 @@ test("durable enforcement projection rejects invalid lifecycle, paths, aliases, 
     ...(recoverySummaries ? { recoverySummaries } : {}),
   });
   try {
+    const historical = { ...strict, status: "blocked", blocker: "No verified provider enforces exact-grant write confinement.",
+      providerId: undefined, implementationDigest: undefined, leaseId: undefined };
+    await writeFile(path, JSON.stringify(state([historical])));
+    assert.equal((await readExecutionEnforcementState(path)).records[0]?.status, "selection_blocked");
     for (const value of [
       state([{ ...strict, providerId: undefined }]),
+      state([{ ...historical, providerId: "partial-provider" }]),
       state([{ ...strict, status: "unconfined_explicit_full", enforcement: "unconfined_explicit_full", disclosure: "unconfined_explicit_full" }]),
       state([{ ...strict, access: [{ canonicalPath: "relative", mode: "write" }] }]),
       state([{ ...strict, access: [{ canonicalPath: root, mode: "read" }, { canonicalPath: root, mode: "write" }] }]),
       state([], [{ occurredAt: strict.occurredAt, providerId: "provider", cleanedCount: 1, blockerCount: 0, blockers: [] }]),
       state([{ ...strict, status: "cleaned" }], [{ occurredAt: strict.occurredAt, providerId: "provider", cleanedCount: 1,
         blockerCount: 0, blockers: [], operationId: "0".repeat(64), leaseIds: ["lease"] }]),
+      state([], [{ occurredAt: strict.occurredAt, providerId: "provider", cleanedCount: 0, blockerCount: 1,
+        blockers: ["unmatched"], leaseIds: [], operationId: createHash("sha256").update(JSON.stringify({
+          providerId: "provider", occurredAt: strict.occurredAt, leaseIds: [], cleaned: 0, blockers: 1,
+        })).digest("hex") }]),
     ]) {
       await writeFile(path, JSON.stringify(value));
       await assert.rejects(readExecutionEnforcementState(path), (error) =>
@@ -428,21 +438,49 @@ test("restart projection correlates multiple exact cleaned and blocked lease tra
   } finally { await first.close(); await second.close(); }
 });
 
+test("recovery replays durable cleaned evidence until projection and acknowledgement both settle", async () => {
+  for (const failure of ["projection", "ack"] as const) {
+    const fixture = await isolationFixture();
+    try {
+      const provider = fakeProvider(`fixture-handoff-${failure}`, { acknowledgementFails: failure === "ack" });
+      const statePath = join(fixture.root, `handoff-${failure}.json`);
+      const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+        createExecutionIsolationProviderRegistration({ stableProviderId: `fixture-handoff-${failure}`, codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+      ]), { ...fixture.selectorOptions, statePath });
+      await selector.acquire({ permissionProfile: "project", intent: fixture.intent, grant: fixture.claims });
+      const valid = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
+      if (failure === "projection") await writeFile(statePath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+      const first = await selector.recoverOwnedLeases();
+      assert.equal(first[0]?.cleaned, 0);
+      assert.equal(selector.activeLeases().length, 1);
+      if (failure === "projection") await writeFile(statePath, valid);
+      else provider.acknowledgementFails = false;
+      const second = await selector.recoverOwnedLeases();
+      assert.equal(second[0]?.cleaned, 1);
+      assert.deepEqual(selector.activeLeases(), []);
+      assert.equal((await readExecutionEnforcementState(statePath)).records.filter((record) => record.status === "cleaned").length, 1);
+      await fixture.authority.revoke(fixture.grant, "completed");
+      assert.equal(provider.releases, 0, "acknowledged recovery must dispose the grant listener");
+    } finally { await fixture.close(); }
+  }
+});
+
 test("dishonest recovery counts, duplicates, identities, and contradictory transitions fail closed", async () => {
   const fixture = await isolationFixture();
   try {
     const exact = {
       status: "cleaned" as const, runId: "run", invocationId: "invocation", grantId: "grant",
       leaseId: "lease", providerId: "dishonest", implementationDigest: "a".repeat(64), access: fixture.claims.access,
+      cleanupToken: "cleanup-lease", cleanedAt: "2026-08-28T10:00:00.000Z",
     };
     for (const result of [
       { cleaned: 1, blockers: [], transitions: [] },
-      { cleaned: 0, blockers: [], transitions: [{ ...exact, status: "blocked" as const, blocker: "hidden" }] },
+      { cleaned: 0, blockers: [], transitions: [{ ...exact, status: "blocked" as const, blocker: "hidden", cleanupToken: undefined, cleanedAt: undefined }] },
       { cleaned: 0, blockers: ["extra"], transitions: [] },
-      { cleaned: 0, blockers: ["wrong"], transitions: [{ ...exact, status: "blocked" as const, blocker: "actual" }] },
+      { cleaned: 0, blockers: ["wrong"], transitions: [{ ...exact, status: "blocked" as const, blocker: "actual", cleanupToken: undefined, cleanedAt: undefined }] },
       { cleaned: 2, blockers: [], transitions: [exact, exact] },
       { cleaned: 1, blockers: [], transitions: [{ ...exact, providerId: "other" }] },
-      { cleaned: 1, blockers: ["contradiction"], transitions: [exact, { ...exact, status: "blocked" as const, blocker: "contradiction" }] },
+      { cleaned: 1, blockers: ["contradiction"], transitions: [exact, { ...exact, status: "blocked" as const, blocker: "contradiction", cleanupToken: undefined, cleanedAt: undefined }] },
     ]) {
       const provider = fakeProvider("dishonest");
       provider.recoverOwned = async () => result;
@@ -469,7 +507,7 @@ test("release failure remains visible and restart cleanup invokes only owned pro
         configDigest: "b".repeat(64),
         provider,
       }),
-    ]), fixture.selectorOptions);
+    ]), { ...fixture.selectorOptions, statePath: join(fixture.root, "cleanup-recovery.json") });
     await selector.acquire({
       permissionProfile: "project",
       intent: fixture.intent,
@@ -501,11 +539,13 @@ function fakeProvider(providerId: string, mutation: {
   ociIdentity?: boolean;
   partialRecovery?: boolean;
   releaseGate?: Promise<void>;
+  acknowledgementFails?: boolean;
 } = {}): ExecutionIsolationProvider & {
   acquisitions: number;
   releases: number;
   recoveries: number;
   releaseFails: boolean;
+  acknowledgementFails: boolean;
 } {
   const cleanupTransitions: import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [];
   const provider = {
@@ -513,6 +553,7 @@ function fakeProvider(providerId: string, mutation: {
     releases: 0,
     recoveries: 0,
     releaseFails: mutation.releaseFails ?? false,
+    acknowledgementFails: mutation.acknowledgementFails ?? false,
     async attest() {
       return {
         attestationVersion: 1,
@@ -551,7 +592,7 @@ function fakeProvider(providerId: string, mutation: {
         status: "cleaned", runId: request.intent.runId, invocationId: lease.invocationId,
         grantId: lease.grantId, leaseId: lease.leaseId, providerId: lease.providerId,
         implementationDigest: lease.providerIdentity, immutableImageId: lease.immutableImageId,
-        access: lease.grantedAccess,
+        access: lease.grantedAccess, cleanupToken: `cleanup-${lease.leaseId}`, cleanedAt: "2026-08-28T10:00:00.000Z",
       });
       return lease;
     },
@@ -562,11 +603,18 @@ function fakeProvider(providerId: string, mutation: {
     },
     async recoverOwned() {
       provider.recoveries += 1;
-      const transitions = cleanupTransitions.map((transition, index) => mutation.partialRecovery && index === 1
-        ? { ...transition, status: "blocked" as const, blocker: "fixture partial cleanup blocker" }
-        : transition);
+      const transitions = cleanupTransitions.map((transition, index) => {
+        if (!mutation.partialRecovery || index !== 1) return transition;
+        const { cleanupToken: _cleanupToken, cleanedAt: _cleanedAt, ...blocked } = transition;
+        return { ...blocked, status: "blocked" as const, blocker: "fixture partial cleanup blocker" };
+      });
       const blockers = transitions.filter((transition) => transition.status === "blocked").map((transition) => transition.blocker!);
       return { cleaned: transitions.filter((transition) => transition.status === "cleaned").length, blockers, transitions };
+    },
+    async acknowledgeRecovery(transitions: readonly import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[]) {
+      if (provider.acknowledgementFails) throw new Error("fixture acknowledgement failed");
+      const ids = new Set(transitions.map((transition) => transition.leaseId));
+      for (let index = cleanupTransitions.length - 1; index >= 0; index -= 1) if (ids.has(cleanupTransitions[index]!.leaseId)) cleanupTransitions.splice(index, 1);
     },
   };
   return provider;

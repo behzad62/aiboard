@@ -86,6 +86,8 @@ export interface ExecutionIsolationCleanupTransition {
   readonly immutableImageId?: string;
   readonly access: ConsumedExecutionGrantClaims["access"];
   readonly blocker?: string;
+  readonly cleanupToken?: string;
+  readonly cleanedAt?: string;
 }
 
 export interface ExecutionIsolationProvider {
@@ -93,6 +95,7 @@ export interface ExecutionIsolationProvider {
   acquire(request: ExecutionIsolationAcquireRequest): Promise<unknown>;
   release(lease: ExecutionIsolationLease): Promise<void>;
   recoverOwned(): Promise<ExecutionIsolationRecoveryResult>;
+  acknowledgeRecovery(transitions: readonly ExecutionIsolationCleanupTransition[]): Promise<void>;
 }
 
 export interface ExecutionIsolationProviderRegistrationInput {
@@ -154,6 +157,7 @@ export interface ExecutionEnforcementRecord {
   readonly leaseId?: string;
   readonly access: ConsumedExecutionGrantClaims["access"];
   readonly blocker?: string;
+  readonly recoveryOperationId?: string;
 }
 
 export interface ExecutionEnforcementState {
@@ -198,6 +202,7 @@ export function createExecutionIsolationProviderRegistration(
     acquire: source.acquire.bind(source),
     release: source.release.bind(source),
     recoverOwned: source.recoverOwned.bind(source),
+    acknowledgeRecovery: source.acknowledgeRecovery.bind(source),
   });
   const registration = Object.freeze({
     kind: "runner-execution-isolation-provider-registration" as const,
@@ -389,16 +394,17 @@ export function createExecutionIsolationSelector(
         try {
           const result = validateRecoveryResult(await provider.provider.recoverOwned(), provider);
           const blockers = Object.freeze([...result.blockers]);
-          results.push(Object.freeze({ providerId: provider.providerId, cleaned: result.cleaned, blockers }));
           await persistRecovery(options.statePath, provider.providerId, result, clock());
-          for (const transition of result.transitions ?? []) {
-            if (transition.status !== "cleaned") continue;
+          const cleanedTransitions = (result.transitions ?? []).filter((transition) => transition.status === "cleaned");
+          await provider.provider.acknowledgeRecovery(cleanedTransitions);
+          for (const transition of cleanedTransitions) {
             const owned = active.get(transition.leaseId);
             if (owned?.provider.providerId === provider.providerId) {
               owned.disposeRevoker?.();
               active.delete(transition.leaseId);
             }
           }
+          results.push(Object.freeze({ providerId: provider.providerId, cleaned: result.cleaned, blockers }));
         } catch (error) {
           results.push(Object.freeze({
             providerId: provider.providerId,
@@ -451,6 +457,13 @@ function validateRecoveryResult(
     if ((transition.status === "blocked") !== Boolean(transition.blocker)) {
       throw new ExecutionIsolationError("isolation_recovery_blocked", "Isolation recovery blocker status is inconsistent.");
     }
+    if (transition.status === "cleaned") {
+      if (!transition.cleanupToken || !transition.cleanedAt || !Number.isFinite(Date.parse(transition.cleanedAt)) ||
+          new Date(transition.cleanedAt).toISOString() !== transition.cleanedAt) throw new ExecutionIsolationError(
+        "isolation_recovery_blocked", "Cleaned recovery descriptor lacks its durable acknowledgement identity.");
+      safeText(transition.cleanupToken);
+    } else if (transition.cleanupToken !== undefined || transition.cleanedAt !== undefined) throw new ExecutionIsolationError(
+      "isolation_recovery_blocked", "Blocked recovery descriptor cannot carry cleanup acknowledgement identity.");
     return deepFreeze({ ...transition, access: record.access });
   });
   if (transitions.filter((item) => item.status === "cleaned").length !== value.cleaned) {
@@ -485,18 +498,19 @@ function parseEnforcementState(value: unknown): ExecutionEnforcementState {
   const records = object.records.map((entry) => {
     const record = exactObject(entry, new Set([
       "occurredAt", "runId", "invocationId", "grantId", "status", "enforcement", "disclosure",
-      "providerId", "implementationDigest", "immutableImageId", "leaseId", "access", "blocker",
+      "providerId", "implementationDigest", "immutableImageId", "leaseId", "access", "blocker", "recoveryOperationId",
     ]));
     if (!statuses.has(record.status as string) || !enforcement.has(record.enforcement as string) ||
         !disclosure.has(record.disclosure as string) || !Array.isArray(record.access) ||
         record.access.length > MAX_ENFORCEMENT_ACCESS) throw new Error();
     for (const key of ["occurredAt", "runId", "invocationId", "grantId"] as const) safeText(record[key]);
     if (!Number.isFinite(Date.parse(record.occurredAt as string))) throw new Error();
-    for (const key of ["providerId", "implementationDigest", "immutableImageId", "leaseId", "blocker"] as const) {
+    for (const key of ["providerId", "implementationDigest", "immutableImageId", "leaseId", "blocker", "recoveryOperationId"] as const) {
       if (record[key] !== undefined) safeText(record[key]);
     }
     if (record.implementationDigest !== undefined) safeDigest(record.implementationDigest);
     if (record.immutableImageId !== undefined) parseImmutableImageId(record.immutableImageId);
+    if (record.recoveryOperationId !== undefined) safeDigest(record.recoveryOperationId);
     const accessKeys = new Set<string>();
     const access = record.access.map((item) => {
       const accessEntry = exactObject(item, new Set(["canonicalPath", "mode"]));
@@ -509,21 +523,25 @@ function parseEnforcementState(value: unknown): ExecutionEnforcementState {
       return { canonicalPath, mode: accessEntry.mode as "read" | "write" | "create" };
     });
     const full = record.status === "unconfined_explicit_full";
+    const historicalSelectionBlocked = record.status === "blocked" &&
+      [record.providerId, record.implementationDigest, record.immutableImageId, record.leaseId].every((field) => field === undefined);
+    const normalizedStatus = historicalSelectionBlocked ? "selection_blocked" : record.status;
     if (full !== (record.enforcement === "unconfined_explicit_full" && record.disclosure === "unconfined_explicit_full") ||
-        (full && [record.providerId, record.implementationDigest, record.immutableImageId, record.leaseId, record.blocker].some((field) => field !== undefined)) ||
+        (full && [record.providerId, record.implementationDigest, record.immutableImageId, record.leaseId, record.blocker, record.recoveryOperationId].some((field) => field !== undefined)) ||
         (!full && (record.enforcement !== "write_confinement_exact_grant" || record.disclosure !== "provider_specific_not_universal_boundary")) ||
-        ((record.status === "blocked" || record.status === "selection_blocked") !== Boolean(record.blocker)) ||
-        (["active", "revoked", "blocked", "cleaned"].includes(record.status as string) &&
-          (!record.providerId || !record.implementationDigest || !record.leaseId))) throw new Error();
-    if (record.status === "selection_blocked" && [record.providerId, record.implementationDigest, record.immutableImageId, record.leaseId].some((field) => field !== undefined)) throw new Error();
-    return { ...record, access } as unknown as ExecutionEnforcementRecord;
+        ((normalizedStatus === "blocked" || normalizedStatus === "selection_blocked") !== Boolean(record.blocker)) ||
+        (["active", "revoked", "blocked", "cleaned"].includes(normalizedStatus as string) &&
+          (!record.providerId || !record.implementationDigest || !record.leaseId)) ||
+        (record.recoveryOperationId !== undefined && !["cleaned", "blocked"].includes(normalizedStatus as string))) throw new Error();
+    if (normalizedStatus === "selection_blocked" && [record.providerId, record.implementationDigest, record.immutableImageId, record.leaseId].some((field) => field !== undefined)) throw new Error();
+    return { ...record, status: normalizedStatus, access } as unknown as ExecutionEnforcementRecord;
   });
   const recoverySummaries = object.recoverySummaries === undefined ? undefined : parseRecoverySummaries(object.recoverySummaries);
   const terminalKeys = new Set<string>();
   const activeByLease = new Map(records.filter((record) => record.status === "active" && record.leaseId).map((record) => [record.leaseId!, record]));
   for (const record of records.filter((item) => item.status === "cleaned" || item.status === "blocked")) {
     if (!record.leaseId) continue;
-    const key = `${record.occurredAt}\0${record.providerId ?? ""}\0${record.leaseId}`;
+    const key = `${record.occurredAt}\0${record.providerId ?? ""}\0${record.leaseId}\0${record.status}`;
     if (terminalKeys.has(key)) throw new Error();
     terminalKeys.add(key);
     const original = activeByLease.get(record.leaseId);
@@ -533,10 +551,11 @@ function parseEnforcementState(value: unknown): ExecutionEnforcementState {
   }
   for (const summary of recoverySummaries ?? []) {
     const related = records.filter((record) => record.occurredAt === summary.occurredAt && record.providerId === summary.providerId &&
-      (record.status === "cleaned" || record.status === "blocked"));
+      (record.status === "cleaned" || record.status === "blocked") &&
+      (summary.operationId ? record.recoveryOperationId === summary.operationId : record.recoveryOperationId === undefined));
     if (related.filter((record) => record.status === "cleaned").length !== summary.cleanedCount ||
         summary.blockers.length !== summary.blockerCount ||
-        related.filter((record) => record.status === "blocked" && record.leaseId).length > summary.blockerCount ||
+        related.filter((record) => record.status === "blocked" && record.leaseId).length !== summary.blockerCount ||
         (summary.leaseIds && (summary.leaseIds.length !== related.filter((record) => record.leaseId).length ||
           summary.leaseIds.some((leaseId) => !related.some((record) => record.leaseId === leaseId)))) ||
         (summary.operationId && summary.operationId !== recoveryOperationId(summary.providerId, summary.occurredAt,
@@ -642,15 +661,21 @@ function enforcementRecord(
 async function persistRecovery(
   statePath: string | undefined, providerId: string, result: ExecutionIsolationRecoveryResult, now: Date,
 ): Promise<void> {
-  if (!statePath || (result.blockers.length === 0 && result.cleaned === 0)) return;
+  if (!statePath) {
+    if (result.cleaned > 0) throw new ExecutionIsolationError("isolation_recovery_blocked", "Cleaned isolation evidence requires durable projection state.");
+    return;
+  }
+  if (result.blockers.length === 0 && result.cleaned === 0) return;
   if ((result.transitions?.length ?? 0) > MAX_ENFORCEMENT_RECORDS || result.blockers.length > 64) {
     throw new ExecutionIsolationError("isolation_recovery_blocked", "Recovery projection exceeds its bounded shape.");
   }
-  const occurredAt = now.toISOString();
-  for (const transition of result.transitions ?? []) {
+  const occurredAt = (result.transitions ?? []).filter((item) => item.status === "cleaned")
+    .map((item) => item.cleanedAt!).sort()[0] ?? now.toISOString();
+  const operationId = recoveryOperationId(providerId, occurredAt, (result.transitions ?? []).map((item) => item.leaseId), result.cleaned, result.blockers.length);
+  const records = (result.transitions ?? []).map((transition): ExecutionEnforcementRecord => {
     if (transition.providerId !== providerId) throw new ExecutionIsolationError(
       "isolation_recovery_blocked", "Recovery transition provider identity is invalid.");
-    await appendEnforcementRecord(statePath, {
+    return {
       occurredAt, runId: transition.runId,
       invocationId: transition.invocationId, grantId: transition.grantId,
       status: transition.status, enforcement: "write_confinement_exact_grant",
@@ -658,13 +683,14 @@ async function persistRecovery(
       implementationDigest: transition.implementationDigest,
       ...(transition.immutableImageId ? { immutableImageId: transition.immutableImageId } : {}),
       leaseId: transition.leaseId, access: transition.access,
+      recoveryOperationId: operationId,
       ...(transition.blocker ? { blocker: transition.blocker } : {}),
-    });
-  }
-  await appendRecoverySummary(statePath, {
+    };
+  });
+  await appendRecoveryOperation(statePath, records, {
     occurredAt, providerId, cleanedCount: result.cleaned,
     blockerCount: result.blockers.length, blockers: result.blockers.slice(0, 64).map((value) => value.slice(0, 512)),
-    operationId: recoveryOperationId(providerId, occurredAt, (result.transitions ?? []).map((item) => item.leaseId), result.cleaned, result.blockers.length),
+    operationId,
     leaseIds: (result.transitions ?? []).map((item) => item.leaseId),
   });
 }
@@ -673,8 +699,9 @@ function recoveryOperationId(providerId: string, occurredAt: string, leaseIds: r
   return createHash("sha256").update(JSON.stringify({ providerId, occurredAt, leaseIds: [...leaseIds].sort(), cleaned, blockers })).digest("hex");
 }
 
-async function appendRecoverySummary(
+async function appendRecoveryOperation(
   path: string,
+  records: readonly ExecutionEnforcementRecord[],
   summary: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number],
 ): Promise<void> {
   const validated = parseRecoverySummaries([summary])[0]!;
@@ -682,7 +709,8 @@ async function appendRecoverySummary(
   const next = previous.then(async () => {
     await withProjectionLock(path, async () => {
       const state = await readExecutionEnforcementState(path);
-      const updated = { ...state,
+      if (state.recoverySummaries?.some((entry) => entry.operationId === validated.operationId)) return;
+      const updated = { ...state, records: [...state.records, ...records.map((record) => structuredClone(record))],
         recoverySummaries: [...(state.recoverySummaries ?? []), structuredClone(validated)] };
       await writeBoundedEnforcementState(path, updated);
     });
@@ -702,13 +730,15 @@ async function writeBoundedEnforcementState(path: string, state: ExecutionEnforc
         Buffer.byteLength(serialized) <= MAX_ENFORCEMENT_STATE_BYTES) break;
     const oldest = records[0];
     const group = oldest?.leaseId ? summaries.find((summary) => summary.occurredAt === oldest.occurredAt &&
-      summary.providerId === oldest.providerId && summary.leaseIds?.includes(oldest.leaseId!)) : undefined;
+      summary.providerId === oldest.providerId && summary.leaseIds?.includes(oldest.leaseId!) &&
+      (oldest.recoveryOperationId ? summary.operationId === oldest.recoveryOperationId : summary.operationId === undefined)) : undefined;
     if (group) {
       const leaseIds = new Set(group.leaseIds);
       summaries.splice(summaries.indexOf(group), 1);
       for (let index = records.length - 1; index >= 0; index -= 1) {
         const record = records[index]!;
-        if (record.occurredAt === group.occurredAt && record.providerId === group.providerId && record.leaseId && leaseIds.has(record.leaseId)) records.splice(index, 1);
+        if (record.occurredAt === group.occurredAt && record.providerId === group.providerId && record.leaseId && leaseIds.has(record.leaseId) &&
+            (group.operationId ? record.recoveryOperationId === group.operationId : record.recoveryOperationId === undefined)) records.splice(index, 1);
       }
     } else if (records.length > 1) records.shift();
     else if (summaries.length > 0) {

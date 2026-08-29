@@ -221,6 +221,7 @@ test("OCI restart recovery validates durable labelled ownership and reports unkn
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("unknown-container")), false);
     const listing = calls.find((call) => call.args[0] === "ps");
     assert.ok(listing?.args.includes("--no-trunc"), "recovery must compare canonical full container ids");
+    await provider.acknowledgeRecovery(recovered.transitions?.filter((transition) => transition.status === "cleaned") ?? []);
   } finally {
     await fixture.close();
     await second.close();
@@ -253,12 +254,42 @@ test("OCI restart recovery clears a durable lease only after confirming its cont
     assert.equal(recovered.cleaned, 1);
     assert.deepEqual(recovered.blockers, []);
     assert.equal(recovered.transitions?.[0]?.status, "cleaned");
+    assert.equal(durableLeaseCount(fixture.state, "oci-stale"), 1);
+    await assert.rejects(provider.acknowledgeRecovery([{ ...recovered.transitions![0]!, cleanupToken: "wrong-token" }]),
+      /does not match its durable tombstone/i);
+    assert.equal(durableLeaseCount(fixture.state, "oci-stale"), 1);
+    await provider.acknowledgeRecovery(recovered.transitions ?? []);
     assert.equal(durableLeaseCount(fixture.state, "oci-stale"), 0);
     assert.equal(calls.some((call) => call.args[0] === "inspect"), true);
     assert.equal(calls.some((call) => call.args[0] === "rm"), false);
   } finally {
     await fixture.close();
   }
+});
+
+test("OCI cleanup-started recovery converges across pre-rm and post-rm crashes without repeat cleanup", async () => {
+  const first = await ociFixture(); const second = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = []; const cli = fakeCli(calls);
+    const provider = createOciExecutionIsolationProvider({ providerId: "oci-started", cliPath: first.cli, image: "fixture:latest", stateDirectory: first.state, cli });
+    await provider.attest();
+    await provider.acquire({ providerId: "oci-started", implementationDigest: "a".repeat(64), intent: first.intent, grant: first.claims });
+    await provider.acquire({ providerId: "oci-started", implementationDigest: "a".repeat(64), intent: { ...second.intent, invocationId: "invocation-2" }, grant: second.claims });
+    const statePath = join(first.state, "oci-leases-oci-started.json");
+    const rows = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>[];
+    for (const row of rows) row.cleanupStage = "cleanup_started";
+    await writeFile(statePath, JSON.stringify(rows));
+    cli.removeExternally("container-fixture-2");
+    cli.psOutput = "container-fixture-1\n";
+    const recovered = await provider.recoverOwned();
+    assert.equal(recovered.cleaned, 2);
+    const rmCount = calls.filter((call) => call.args[0] === "rm").length;
+    const replayed = await provider.recoverOwned();
+    assert.deepEqual(replayed.transitions, recovered.transitions);
+    assert.equal(calls.filter((call) => call.args[0] === "rm").length, rmCount);
+    await provider.acknowledgeRecovery(replayed.transitions ?? []);
+    assert.equal(durableLeaseCount(first.state, "oci-started"), 0);
+  } finally { await first.close(); await second.close(); }
 });
 
 test("overlapping OCI provider instances preserve both durable leases without orphaning", async () => {
@@ -463,6 +494,14 @@ test("real Docker fixture denies outside writes, symlink escalation, network, an
     assert.equal(restartRecovery.transitions?.[0]?.immutableImageId, acquiredImageId);
     trackedContainers.delete(containerId);
     assert.equal((await execFileResult(docker, ["inspect", containerId])).code, 1);
+    assert.equal(durableLeaseCount(fixture.state, "oci-real"), 1);
+    const replayedProvider = createOciExecutionIsolationProvider({
+      providerId: "oci-real", cliPath: docker, image: "alpine:latest", stateDirectory: fixture.state,
+    });
+    await replayedProvider.attest();
+    const replayed = await replayedProvider.recoverOwned();
+    assert.deepEqual(replayed.transitions, restartRecovery.transitions, "pending cleanup evidence must replay identically after restart");
+    await replayedProvider.acknowledgeRecovery(replayed.transitions ?? []);
     assert.equal(durableLeaseCount(fixture.state, "oci-real"), 0);
     assert.equal((await execFileResult(docker, ["ps", "-aq", "--filter", "label=ai-board.runner-v2.provider=oci-real"])).stdout.trim(), "");
 

@@ -21,6 +21,7 @@ import {
 
 import type {
   ExecutionIsolationAcquireRequest,
+  ExecutionIsolationCleanupTransition,
   ExecutionIsolationLease,
   ExecutionIsolationProvider,
   ExecutionIsolationRecoveryResult,
@@ -102,6 +103,9 @@ interface DurableOciLease {
   readonly containerId: string;
   readonly containerName: string;
   readonly runId: string;
+  readonly cleanupStage: "active" | "cleanup_started" | "cleaned_pending_ack";
+  readonly cleanupToken?: string;
+  readonly cleanedAt?: string;
 }
 
 export async function createConfiguredOciIsolationSelector(
@@ -272,7 +276,7 @@ export function createOciExecutionIsolationProvider(
       try {
         await withStateLock(statePath, async () => {
           const leases = await readLeaseState(statePath);
-          leases.push({ lease, containerId, containerName, runId: request.intent.runId });
+          leases.push({ lease, containerId, containerName, runId: request.intent.runId, cleanupStage: "active" });
           await writeLeaseState(statePath, leases);
         });
       } catch (error) {
@@ -315,7 +319,7 @@ export function createOciExecutionIsolationProvider(
         );
       }
       return await withStateLock(statePath, async () => {
-      const leases = await readLeaseState(statePath);
+      let leases = await readLeaseState(statePath);
       const byContainer = new Map(leases.map((entry) => [entry.containerId, entry]));
       const listed = await runCli([
         "ps", "--all",
@@ -331,6 +335,11 @@ export function createOciExecutionIsolationProvider(
       const blockers: string[] = [];
       const transitions: import("./execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [];
       const remaining = new Set(leases);
+      for (const owned of leases.filter((entry) => entry.cleanupStage === "cleaned_pending_ack")) {
+        transitions.push(cleanupTransition(owned, "cleaned"));
+        cleaned += 1;
+        remaining.delete(owned);
+      }
       const listedDurableLeases = new Set<DurableOciLease>();
       for (const containerId of listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
         const owned = byContainer.get(containerId);
@@ -338,6 +347,7 @@ export function createOciExecutionIsolationProvider(
           blockers.push(`Labelled container ${containerId} has no matching durable Runner lease.`);
           continue;
         }
+        if (owned.cleanupStage === "cleaned_pending_ack") continue;
         listedDurableLeases.add(owned);
         const identity = await inspectOwnedContainer(runCli, containerId);
         if (!matchesOwnedScope(identity, providerId, owned)) {
@@ -345,6 +355,11 @@ export function createOciExecutionIsolationProvider(
           blockers.push(blocker);
           transitions.push(cleanupTransition(owned, "blocked", blocker));
           continue;
+        }
+        const started = owned.cleanupStage === "cleanup_started" ? owned : { ...owned, cleanupStage: "cleanup_started" as const };
+        if (started !== owned) {
+          leases = leases.map((entry) => entry === owned ? started : entry);
+          await writeLeaseState(statePath, leases);
         }
         const removed = await runCli(["rm", "--force", containerId]);
         if (removed.exitCode !== 0) {
@@ -354,27 +369,57 @@ export function createOciExecutionIsolationProvider(
           continue;
         }
         remaining.delete(owned);
+        const pending = pendingCleanup(started, clock());
+        leases = leases.map((entry) => entry === started || entry === owned ? pending : entry);
+        await writeLeaseState(statePath, leases);
         cleaned += 1;
-        transitions.push(cleanupTransition(owned, "cleaned"));
+        transitions.push(cleanupTransition(pending, "cleaned"));
       }
       for (const owned of remaining) {
         if (listedDurableLeases.has(owned)) continue;
         const absence = await inspectContainerAbsence(runCli, owned.containerId);
         if (absence.absent) {
           remaining.delete(owned);
+          const pending = pendingCleanup(owned, clock());
+          leases = leases.map((entry) => entry === owned ? pending : entry);
+          await writeLeaseState(statePath, leases);
           cleaned += 1;
-          transitions.push(cleanupTransition(owned, "cleaned"));
+          transitions.push(cleanupTransition(pending, "cleaned"));
           continue;
         }
         const blocker = `Durable container ${owned.containerId} was omitted from the owned listing and its absence could not be verified: ${absence.detail}.`;
         blockers.push(blocker);
         transitions.push(cleanupTransition(owned, "blocked", blocker));
       }
-      await writeLeaseState(statePath, [...remaining]);
+      await writeLeaseState(statePath, leases);
       return { cleaned, blockers, transitions };
       });
     },
+
+    async acknowledgeRecovery(transitions: readonly ExecutionIsolationCleanupTransition[]) {
+      await withStateLock(statePath, async () => {
+        const leases = await readLeaseState(statePath);
+        const acknowledged = new Set<string>();
+        for (const transition of transitions) {
+          const owned = leases.find((entry) => entry.lease.leaseId === transition.leaseId);
+          if (!owned || owned.cleanupStage !== "cleaned_pending_ack" || owned.cleanupToken !== transition.cleanupToken ||
+              owned.lease.providerId !== transition.providerId || owned.lease.providerIdentity !== transition.implementationDigest ||
+              owned.lease.invocationId !== transition.invocationId || owned.lease.grantId !== transition.grantId ||
+              owned.lease.immutableImageId !== transition.immutableImageId ||
+              JSON.stringify(owned.lease.grantedAccess) !== JSON.stringify(transition.access)) {
+            throw ociError("oci_recovery_blocked", "OCI cleanup acknowledgement does not match its durable tombstone.");
+          }
+          acknowledged.add(owned.lease.leaseId);
+        }
+        await writeLeaseState(statePath, leases.filter((entry) => !acknowledged.has(entry.lease.leaseId)));
+      });
+    },
   });
+}
+
+function pendingCleanup(owned: DurableOciLease, now: Date): DurableOciLease {
+  return { ...owned, cleanupStage: "cleaned_pending_ack", cleanupToken: owned.cleanupToken ?? `cleanup-${randomUUID()}`,
+    cleanedAt: owned.cleanedAt ?? now.toISOString() };
 }
 
 function cleanupTransition(
@@ -389,6 +434,7 @@ function cleanupTransition(
     ...(owned.lease.immutableImageId ? { immutableImageId: owned.lease.immutableImageId } : {}),
     access: owned.lease.grantedAccess,
     ...(blocker ? { blocker: blocker.slice(0, 512) } : {}),
+    ...(status === "cleaned" ? { cleanupToken: owned.cleanupToken, cleanedAt: owned.cleanedAt } : {}),
   };
 }
 
@@ -639,7 +685,7 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
   const leaseIds = new Set<string>();
   const containerIds = new Set<string>();
   return value.map((value) => {
-      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId"]);
+      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId", "cleanupStage", "cleanupToken", "cleanedAt"]);
       const lease = exactLeaseObject(row.lease, ["leaseId", "providerId", "invocationId", "grantId", "grantedAccess", "acquiredAt", "expiresAt", "state", "providerIdentity", "immutableImageId"]);
       const textField = (input: unknown, pattern?: RegExp) => {
         if (typeof input !== "string" || !input || input.length > 512 || input.includes("\0") || (pattern && !pattern.test(input))) throw new Error();
@@ -669,13 +715,20 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
       const expectedName = `aiboard-${createHash("sha256").update(`${lease.providerId}\0${runId}\0${invocationId}\0${leaseId}`).digest("hex").slice(0, 32)}`;
       const containerName = textField(row.containerName, /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/);
       if (containerName !== expectedName) throw new Error();
+      const cleanupStage = row.cleanupStage === undefined ? "active" : row.cleanupStage;
+      if (!["active", "cleanup_started", "cleaned_pending_ack"].includes(String(cleanupStage)) ||
+          (cleanupStage === "cleaned_pending_ack") !== (row.cleanupToken !== undefined && row.cleanedAt !== undefined) ||
+          (cleanupStage !== "cleaned_pending_ack" && (row.cleanupToken !== undefined || row.cleanedAt !== undefined)) ||
+          (row.cleanedAt !== undefined && !canonicalTimestamp(row.cleanedAt))) throw new Error();
       return {
         lease: {
           leaseId, providerId: textField(lease.providerId), invocationId, grantId: textField(lease.grantId),
           grantedAccess: access, acquiredAt: textField(lease.acquiredAt), ...(lease.expiresAt === undefined ? {} : { expiresAt: textField(lease.expiresAt) }),
           state: "active" as const, providerIdentity: lease.providerIdentity, immutableImageId: lease.immutableImageId,
         },
-        containerId, containerName, runId,
+        containerId, containerName, runId, cleanupStage: cleanupStage as DurableOciLease["cleanupStage"],
+        ...(row.cleanupToken === undefined ? {} : { cleanupToken: textField(row.cleanupToken) }),
+        ...(row.cleanedAt === undefined ? {} : { cleanedAt: textField(row.cleanedAt) }),
       };
   });
 }

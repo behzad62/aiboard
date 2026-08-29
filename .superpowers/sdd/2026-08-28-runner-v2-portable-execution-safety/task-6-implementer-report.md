@@ -293,3 +293,36 @@ Verified every `task-6-review-4.md` probe against HEAD before repair; all four f
 - Final Runner-owned Docker label listing and `runner-oci-*`/`runner-enforcement-*` TEMP/lock queries returned empty; no fixture process remained.
 
 Residual risk remains only canonical Task 7 process-family routing. No Task 7 implementation or universal-boundary claim was introduced.
+
+## Governed Fix Round 5/5 — final review 5
+
+Read and reproduced both `task-6-review-5.md` findings before editing. Both were valid; no pushback.
+
+### Durable idempotent recovery handoff
+
+- Provider recovery now uses an exact acknowledgement contract. Every cleaned transition carries a stable bounded cleanup token and canonical cleaned timestamp. Selector order is validate -> idempotently persist exact recovery operation -> acknowledge exact cleaned transitions -> remove active ownership/dispose listener.
+- Projection failure performs no acknowledgement/removal. Retry returns the identical provider transition. Acknowledgement failure after projection leaves ownership/provider tombstone; retry deduplicates the exact operation digest, acknowledges, then clears without another projection or external cleanup.
+- All transitions plus their exact summary are appended under one projection lock and one atomic replace; no partial recovery group can become durable between transition and summary writes.
+- OCI durable rows use exact bounded `active`, `cleanup_started`, and `cleaned_pending_ack` stages. Old valid Task 6 active rows without the stage normalize safely to active. Before rm, recovery atomically persists `cleanup_started`; after rm/confirmed absence it atomically persists stable pending token/timestamp and retains full run/invocation/grant/lease/provider/implementation/image/access identity. Pending replay performs no rm. Exact acknowledgement validates all identities and removes only matching pending rows.
+- Fake selector test covers projection failure and ack failure: first recovery returns a typed blocker and retains one active lease; second succeeds with one cleaned record, one ack, zero provider release repetition, and issuer revoke inert.
+- Crash-stage fake OCI test starts two durable rows at `cleanup_started`, one live before rm and one externally absent after rm. Recovery converges both to pending; new recovery returns identical descriptors with unchanged rm count; exact ack clears. Wrong-token ack rejects and preserves state.
+- Real Docker restart fixture now proves container removal, one pending tombstone, a newly instantiated provider replaying the identical transition with the container absent, exact ack, and zero tombstone/label residue.
+- Mutation RED: temporarily removed pending tombstones before acknowledgement. `npx tsx --test --test-name-pattern="cleanup-started recovery" runner-v2/test/oci-execution-isolation-provider.test.ts` failed 0/1 because restart returned no descriptors. Reverted; GREEN 1/1.
+
+### Projection exactness and backwards compatibility
+
+- Recovery summaries now require exact blockerCount equality with exact correlated blocked transitions, exact cleaned counts, exact lease IDs, and a recomputed canonical operation digest. Recovery records carry their operation ID, preventing same-timestamp prior terminal history from contaminating correlation or group retention.
+- Exact pre-Round4 prelaunch `status:"blocked"` records with no provider/implementation/image/lease fields normalize deterministically to `selection_blocked` on read. New writes use `selection_blocked`. One-field provider variants and partial provider-specific blocked records reject; Full/strict matrices remain closed.
+- Mutation RED: temporarily weakened blocker equality back to `>`; `npx tsx --test --test-name-pattern="invalid lifecycle" runner-v2/test/execution-isolation-provider.test.ts` failed 0/1 because the reviewer contradiction with one unmatched blocker was accepted. Reverted; GREEN 1/1.
+
+### Literal final evidence
+
+- Focused Task 6: `npx tsx --test --test-reporter=dot runner-v2/test/execution-grants.test.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts runner-v2/test/tool-broker.test.ts runner-v2/test/runner-capabilities-config.test.ts runner-v2/test/runner-capability-contract.test.ts runner-v2/test/native-build-capabilities.test.ts` — exit 0, 88/88 pass.
+- Detailed isolation/OCI: `npx tsx --test runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts` — 30/30 pass, 0 fail, 0 skip, including all real-Docker fixtures.
+- Broad CLI/native: `npx tsx --test --test-reporter=dot runner-v2/test/cli-capabilities-config.test.ts runner-v2/test/native-build-capabilities.test.ts runner-v2/test/native-build-initialization.test.ts` — 51/51 pass.
+- Inherited Task 1–5: `npx tsx --test --test-reporter=dot runner-v2/test/execution-safety-contracts.test.ts runner-v2/test/child-environment.test.ts runner-v2/test/bounded-output-spool.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/posix-process-backend.test.ts runner-v2/test/windows-process-backend.test.ts runner-v2/test/managed-process.test.ts` — 192/192 pass.
+- `npm run typecheck:runner-v2` and targeted ESLint over all Round 5 source/tests — exit 0.
+- `git diff --check` — exit 0, autocrlf notices only. Static scope scan found no exact Node pin, install command, ambient environment forwarding, Task 7 route, or platform-only product semantic.
+- Final Runner-owned Docker label listing and `runner-oci-*`/`runner-enforcement-*` TEMP/lock queries returned empty; no fixture process remained.
+
+All Task 6 recovery evidence is now retained until durable projection and exact acknowledgement. Residual boundary is only canonical Task 7 routing.
