@@ -267,6 +267,16 @@ test("closed mutation log is the sole authority for prepared and terminal row fa
       }),
     /mutation|derived|projection/i,
   );
+  const reordered = structuredClone(record) as unknown as Record<string, unknown>;
+  reordered.mutations = [
+    record.mutations[0]!,
+    record.mutations[2]!,
+    record.mutations[1]!,
+  ];
+  assert.throws(
+    () => parseDurableSubprocessRecord(reordered),
+    /mutation sequence|projection|invalid/i,
+  );
 });
 
 test("monotonic fencing rejects a stale owner even after it rereads the new revision", () => {
@@ -347,7 +357,7 @@ test("effect journal rejects takeover, stale settlement, and replay until semant
     effectId: "effect-read",
     leaseExpiresAt: "2026-01-01T00:10:00.000Z",
   });
-  assert.equal(record.pendingEffect, undefined);
+  assert.deepEqual(record.pendingEffects, []);
   assert.throws(
     () =>
       writer.apply({
@@ -378,7 +388,7 @@ test("effect journal rejects takeover, stale settlement, and replay until semant
     effectId: "effect-write",
     leaseExpiresAt: "2026-01-01T00:10:00.000Z",
   });
-  assert.equal(record.pendingEffect?.phase, "completed");
+  assert.equal(record.pendingEffects[0]?.phase, "completed");
   assert.throws(
     () =>
       writer.apply({
@@ -398,8 +408,260 @@ test("effect journal rejects takeover, stale settlement, and replay until semant
     expectedRevision: record.revision,
     at: "2026-01-01T00:00:06.000Z",
   });
-  assert.equal(record.pendingEffect, undefined);
+  assert.equal(record.pendingEffects[0]?.family, "output_finalize");
   assert.equal(record.outputPrepared, true);
+  const legacy = structuredClone(record) as unknown as Record<string, unknown>;
+  legacy.pendingEffect = record.pendingEffects[0];
+  delete legacy.pendingEffects;
+  assert.equal(
+    parseDurableSubprocessRecord(legacy).pendingEffects[0]?.effectId,
+    "effect-write",
+  );
+});
+
+test("effect journal preserves concurrent markers and consumes only the exact family effect id", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  let record = writer.claim(prepared()).record;
+  for (const [effectId, family] of [
+    ["effect-reopen", "output_reopen"],
+    ["effect-reconcile", "backend_reconcile"],
+  ] as const) {
+    record = writer.apply({
+      type: "begin_effect",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: "2026-01-01T00:00:01.000Z",
+      effectId,
+      family,
+      resolution: "commit",
+    });
+  }
+  assert.deepEqual(
+    (record as unknown as { pendingEffects: readonly { effectId: string }[] })
+      .pendingEffects.map(({ effectId }) => effectId),
+    ["effect-reopen", "effect-reconcile"],
+  );
+  for (const effectId of ["effect-reconcile", "effect-reopen"] as const) {
+    record = writer.apply({
+      type: "complete_effect",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: "2026-01-01T00:00:02.000Z",
+      effectId,
+      leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+    });
+    if (effectId === "effect-reconcile")
+      assert.deepEqual(
+        (record as unknown as {
+          pendingEffects: readonly { effectId: string; phase: string }[];
+        }).pendingEffects.map(({ effectId: id, phase }) => ({ id, phase })),
+        [
+          { id: "effect-reopen", phase: "started" },
+          { id: "effect-reconcile", phase: "completed" },
+        ],
+      );
+  }
+  record = writer.apply({
+    type: "mark_output_prepared",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:03.000Z",
+  });
+  assert.equal(
+    (record as unknown as { pendingEffects: readonly unknown[] }).pendingEffects
+      .length,
+    2,
+  );
+  record = writer.apply({
+    type: "record_output_reopen",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:04.000Z",
+    effectId: "effect-reopen",
+  });
+  assert.deepEqual(
+    (record as unknown as { pendingEffects: readonly { effectId: string }[] })
+      .pendingEffects.map(({ effectId }) => effectId),
+    ["effect-reconcile"],
+  );
+  assert.throws(
+    () =>
+      writer.apply({
+        type: "record_output_reopen",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: "2026-01-01T00:00:05.000Z",
+        effectId: "effect-reconcile",
+      }),
+    /family|consumer|effect/i,
+  );
+  assert.equal(
+    (kernel.store.readByInvocation("invoke-1") as unknown as {
+      pendingEffects: readonly unknown[];
+    }).pendingEffects.length,
+    1,
+  );
+});
+
+test("effect family consumer matrix accepts only the exact semantic mutation", () => {
+  const families = [
+    "output_reopen",
+    "backend_reconcile",
+    "backend_observe",
+    "backend_signal",
+    "output_finalize",
+    "backend_verify_empty",
+    "backend_release",
+  ] as const;
+  type Family = (typeof families)[number];
+  const binding = {
+    registryId: "registry",
+    backendId: "fake",
+    implementationGeneration: "generation",
+    implementationDigest: "b".repeat(64),
+    attestationVersion: 1,
+    attestationDigest: "c".repeat(64),
+    opaqueIdentity: "identity",
+    birthFingerprint: {
+      observedAt: "2026-01-01T00:00:00.000Z",
+      discriminator: "birth",
+    },
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const setup = (family: Family) => {
+    const kernel = createInMemoryDurableProcessKernel(stateKey);
+    const writer = writerFor(kernel);
+    let record = writer.claim(prepared()).record;
+    const apply = (command: Record<string, unknown>) => {
+      record = writer.apply({
+        ...command,
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+      });
+    };
+    const running = () => {
+      apply({ type: "mark_output_prepared", at: "2026-01-01T00:00:01.000Z" });
+      apply({
+        type: "record_environment",
+        at: "2026-01-01T00:00:02.000Z",
+        environmentAudit: {
+          inheritedNames: [],
+          removedNames: [],
+          explicitSafeNames: [],
+          grantedNames: [],
+        },
+      });
+      apply({ type: "mark_launching", at: "2026-01-01T00:00:03.000Z" });
+      apply({ type: "bind_launch", at: "2026-01-01T00:00:04.000Z", binding });
+    };
+    if (["backend_observe", "backend_signal", "output_finalize", "backend_release"].includes(family))
+      running();
+    if (family === "backend_signal") {
+      apply({ type: "request_stop", at: "2026-01-01T00:00:05.000Z", reason: "cancelled" });
+      apply({ type: "start_escalation", requestedAt: "2026-01-01T00:00:06.000Z", action: "interrupt" });
+    }
+    if (family === "output_finalize" || family === "backend_release")
+      apply({
+        type: "record_exit",
+        at: "2026-01-01T00:00:05.000Z",
+        observation: { exitCode: 0, observedAt: "2026-01-01T00:00:05.000Z" },
+      });
+    if (family === "backend_release") {
+      apply({ type: "begin_verify", at: "2026-01-01T00:00:06.000Z", output: [] });
+      apply({
+        type: "begin_effect",
+        at: "2026-01-01T00:00:07.000Z",
+        effectId: "seed-verify",
+        family: "backend_verify_empty",
+        resolution: "commit",
+      });
+      apply({
+        type: "complete_effect",
+        at: "2026-01-01T00:00:08.000Z",
+        effectId: "seed-verify",
+        leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+      });
+      apply({
+        type: "record_empty_verification",
+        at: "2026-01-01T00:00:09.000Z",
+        effectId: "seed-verify",
+        verification: { empty: true, proofArtifactId: "proof" },
+      });
+    }
+    return { kernel, writer, get record() { return record; }, apply };
+  };
+  const consumer = (family: Family, effectId: string) => {
+    const common = { at: "2026-01-01T00:01:00.000Z", effectId };
+    switch (family) {
+      case "output_reopen":
+        return { ...common, type: "record_output_reopen" };
+      case "backend_reconcile":
+        return { ...common, type: "record_reconciliation", outcome: "running" };
+      case "backend_observe":
+        return {
+          ...common,
+          type: "record_exit",
+          observation: { exitCode: 0, observedAt: common.at },
+        };
+      case "backend_signal":
+        return {
+          ...common,
+          type: "finish_escalation",
+          action: "interrupt",
+          completedAt: common.at,
+          outcome: "exited",
+        };
+      case "output_finalize":
+        return { ...common, type: "begin_verify", output: [] };
+      case "backend_verify_empty":
+        return {
+          ...common,
+          type: "record_empty_verification",
+          verification: { empty: true, proofArtifactId: "proof" },
+        };
+      case "backend_release":
+        return {
+          ...common,
+          type: "complete",
+          cleanup: { state: "verified_empty", verifiedAt: common.at },
+          result: {
+            outcome: "exited",
+            exitCode: 0,
+            startedAt: binding.startedAt,
+            finishedAt: common.at,
+          },
+        };
+    }
+  };
+
+  for (const family of families) {
+    const context = setup(family);
+    const effectId = `effect-${family}`;
+    context.apply({
+      type: "begin_effect",
+      at: "2026-01-01T00:00:10.000Z",
+      effectId,
+      family,
+      resolution: "commit",
+    });
+    context.apply({
+      type: "complete_effect",
+      at: "2026-01-01T00:00:11.000Z",
+      effectId,
+      leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+    });
+    for (const wrong of families.filter((candidate) => candidate !== family)) {
+      assert.throws(
+        () => context.apply(consumer(wrong, effectId)),
+        /wrong semantic consumer family/i,
+        `${family} must reject ${wrong}`,
+      );
+      assert.equal(context.record.pendingEffects[0]?.effectId, effectId);
+    }
+    context.apply(consumer(family, effectId));
+    assert.deepEqual(context.record.pendingEffects, [], family);
+  }
 });
 
 test("completed effect marker survives SQLite restart and tampering fails integrity", async (t) => {
@@ -419,6 +681,15 @@ test("completed effect marker survives SQLite restart and tampering fails integr
     resolution: "commit",
   });
   record = writer.apply({
+    type: "begin_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:01.500Z",
+    effectId: "effect-reopen",
+    family: "output_reopen",
+    resolution: "commit",
+  });
+  record = writer.apply({
     type: "complete_effect",
     invocationId: record.invocationId,
     expectedRevision: record.revision,
@@ -426,13 +697,39 @@ test("completed effect marker survives SQLite restart and tampering fails integr
     effectId: "effect-release",
     leaseExpiresAt: "2026-01-01T00:05:00.000Z",
   });
-  assert.equal(record.pendingEffect?.phase, "completed");
+  record = writer.apply({
+    type: "complete_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:02.500Z",
+    effectId: "effect-reopen",
+    leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+  });
+  assert.deepEqual(
+    record.pendingEffects.map(({ family, phase }) => ({ family, phase })),
+    [
+      { family: "backend_release", phase: "completed" },
+      { family: "output_reopen", phase: "completed" },
+    ],
+  );
   first.store.close();
 
   const reopened = openSqliteDurableProcessKernel(path, stateKey);
   const persisted = reopened.store.readByInvocation("invoke-1")!;
-  assert.equal(persisted.pendingEffect?.family, "backend_release");
-  assert.equal(persisted.pendingEffect?.phase, "completed");
+  assert.equal(persisted.pendingEffects[0]?.family, "backend_release");
+  assert.equal(persisted.pendingEffects[0]?.phase, "completed");
+  assert.equal(persisted.pendingEffects[1]?.family, "output_reopen");
+  const legacyProjection = structuredClone(persisted) as unknown as Record<
+    string,
+    unknown
+  >;
+  legacyProjection.pendingEffect = persisted.pendingEffects[0];
+  delete legacyProjection.pendingEffects;
+  assert.throws(
+    () => parseDurableSubprocessRecord(legacyProjection),
+    /projection|mutation|journal/i,
+    "a singular legacy projection cannot erase a concurrent marker",
+  );
   assert.throws(
     () =>
       writerFor(reopened).apply({
@@ -453,9 +750,9 @@ test("completed effect marker survives SQLite restart and tampering fails integr
     .prepare("SELECT record_json FROM durable_processes WHERE invocation_id = ?")
     .get("invoke-1") as { record_json: string };
   const forged = JSON.parse(row.record_json) as {
-    pendingEffect: { family: string };
+    pendingEffects: Array<{ family: string }>;
   };
-  forged.pendingEffect.family = "backend_reconcile";
+  forged.pendingEffects[0]!.family = "backend_reconcile";
   raw
     .prepare("UPDATE durable_processes SET record_json = ? WHERE invocation_id = ?")
     .run(JSON.stringify(forged), "invoke-1");

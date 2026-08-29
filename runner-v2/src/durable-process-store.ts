@@ -75,9 +75,17 @@ export interface DurableOutputPrepareFailure {
   readonly failedAt: string;
   readonly detail: string;
 }
+export type DurableProcessEffectFamily =
+  | "output_reopen"
+  | "backend_reconcile"
+  | "backend_observe"
+  | "backend_signal"
+  | "output_finalize"
+  | "backend_verify_empty"
+  | "backend_release";
 export interface DurablePendingEffect {
   readonly effectId: string;
-  readonly family: string;
+  readonly family: DurableProcessEffectFamily;
   readonly phase: "started" | "completed";
   readonly resolution: "settle" | "commit";
   readonly ownerId: string;
@@ -85,6 +93,9 @@ export interface DurablePendingEffect {
   readonly startedAt: string;
   readonly completedAt?: string;
 }
+export type DurableEmptyVerification =
+  | { readonly empty: true; readonly proofArtifactId?: string }
+  | { readonly empty: false; readonly detail: string };
 export interface DurableSubprocessResult {
   readonly outcome:
     "exited" | "timed_out" | "cancelled" | "launch_failed" | "cleanup_failed";
@@ -114,6 +125,9 @@ export type DurableProcessMutationKind =
   | "fail_launch"
   | "fail"
   | "settle_output_cleanup"
+  | "record_output_reopen"
+  | "record_reconciliation"
+  | "record_empty_verification"
   | "begin_effect"
   | "settle_effect"
   | "complete_effect";
@@ -151,7 +165,8 @@ export interface DurableSubprocessRecord {
   readonly stopIntent?: DurableStopIntent;
   readonly observation?: DurableChildObservation;
   readonly outputPrepareFailure?: DurableOutputPrepareFailure;
-  readonly pendingEffect?: DurablePendingEffect;
+  readonly pendingEffects: readonly DurablePendingEffect[];
+  readonly emptyVerification?: DurableEmptyVerification;
   readonly output?: readonly ProcessOutputDisposition[];
   readonly result?: DurableSubprocessResult;
   readonly mutations: readonly DurableProcessMutation[];
@@ -162,7 +177,7 @@ export type PreparedSubprocessRecord = DurableSubprocessRecord & {
 };
 export type PreparedSubprocessClaim = Omit<
   PreparedSubprocessRecord,
-  "fencingToken" | "mutations"
+  "fencingToken" | "mutations" | "pendingEffects" | "emptyVerification"
 >;
 export interface DurableClaimResult {
   readonly record: DurableSubprocessRecord;
@@ -176,7 +191,7 @@ export type DurableProcessCommand =
       readonly expectedRevision: number;
       readonly at: string;
       readonly effectId: string;
-      readonly family: string;
+      readonly family: DurableProcessEffectFamily;
       readonly resolution: "settle" | "commit";
     }
   | {
@@ -186,6 +201,31 @@ export type DurableProcessCommand =
       readonly at: string;
       readonly effectId: string;
       readonly leaseExpiresAt: string;
+    }
+  | {
+      readonly type: "record_output_reopen";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+    }
+  | {
+      readonly type: "record_reconciliation";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+      readonly outcome: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
+      readonly exitCode?: number;
+      readonly signal?: string;
+    }
+  | {
+      readonly type: "record_empty_verification";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+      readonly verification: DurableEmptyVerification;
     }
   | {
       readonly type: "renew_lease";
@@ -270,6 +310,7 @@ export type DurableProcessCommand =
       readonly completedAt: string;
       readonly outcome: "running" | "exited" | "failed";
       readonly detail?: string;
+      readonly effectId?: string;
     }
   | {
       readonly type: "record_exit";
@@ -277,6 +318,7 @@ export type DurableProcessCommand =
       readonly expectedRevision: number;
       readonly at: string;
       readonly observation: DurableChildObservation;
+      readonly effectId?: string;
     }
   | {
       readonly type: "resume_blocked_exit";
@@ -291,6 +333,7 @@ export type DurableProcessCommand =
       readonly expectedRevision: number;
       readonly at: string;
       readonly output: readonly ProcessOutputDisposition[];
+      readonly effectId?: string;
     }
   | {
       readonly type: "complete";
@@ -299,6 +342,7 @@ export type DurableProcessCommand =
       readonly at: string;
       readonly cleanup: ProcessCleanupStatus;
       readonly result: DurableSubprocessResult;
+      readonly effectId?: string;
     }
   | {
       readonly type: "fail_launch";
@@ -663,6 +707,26 @@ const STATES = new Set<DurableSubprocessState>([
   "outcome_unknown",
   "cleanup_blocked",
 ]);
+const EFFECT_FAMILIES = new Set<DurableProcessEffectFamily>([
+  "output_reopen",
+  "backend_reconcile",
+  "backend_observe",
+  "backend_signal",
+  "output_finalize",
+  "backend_verify_empty",
+  "backend_release",
+]);
+const EFFECT_CONSUMERS: Readonly<
+  Record<DurableProcessEffectFamily, DurableProcessMutationKind>
+> = Object.freeze({
+  output_reopen: "record_output_reopen",
+  backend_reconcile: "record_reconciliation",
+  backend_observe: "record_exit",
+  backend_signal: "finish_escalation",
+  output_finalize: "begin_verify",
+  backend_verify_empty: "record_empty_verification",
+  backend_release: "complete",
+});
 const LEGAL_HISTORY: Readonly<
   Record<DurableSubprocessState, readonly DurableSubprocessState[]>
 > = {
@@ -743,6 +807,8 @@ const BASE_KEYS = [
   "escalation",
   "cleanup",
   "pendingEffect",
+  "pendingEffects",
+  "emptyVerification",
   "mutations",
 ];
 const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
@@ -751,7 +817,13 @@ const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
   running: ["backendBinding"],
   stopping: ["backendBinding", "stopIntent"],
   exited: ["backendBinding", "stopIntent", "observation"],
-  verifying_empty: ["backendBinding", "stopIntent", "observation", "output"],
+  verifying_empty: [
+    "backendBinding",
+    "stopIntent",
+    "observation",
+    "output",
+    "emptyVerification",
+  ],
   cleaned: ["backendBinding", "stopIntent", "observation", "output", "result"],
   launch_not_proven: ["result"],
   orphaned: ["stopIntent"],
@@ -770,6 +842,7 @@ const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
     "outputPrepareFailure",
     "output",
     "result",
+    "emptyVerification",
   ],
 };
 
@@ -797,6 +870,14 @@ function parseRecordShape(
     new Set([...BASE_KEYS, ...OPTIONAL_BY_STATE[state]]),
     "durable process record",
   );
+  if (object.pendingEffect !== undefined && object.pendingEffects !== undefined)
+    throw new Error("Durable process record has conflicting effect journals.");
+  const pendingEffects =
+    object.pendingEffects === undefined
+      ? object.pendingEffect === undefined
+        ? []
+        : [parsePendingEffect(object.pendingEffect)]
+      : parsePendingEffects(object.pendingEffects);
   const record: DurableSubprocessRecord = {
     schemaVersion: requiredInteger(
       object.schemaVersion,
@@ -839,9 +920,10 @@ function parseRecordShape(
             object.outputPrepareFailure,
           ),
         }),
-    ...(object.pendingEffect === undefined
+    pendingEffects,
+    ...(object.emptyVerification === undefined
       ? {}
-      : { pendingEffect: parsePendingEffect(object.pendingEffect) }),
+      : { emptyVerification: parseEmptyVerification(object.emptyVerification) }),
     ...(object.output === undefined
       ? {}
       : { output: parseOutput(object.output) }),
@@ -925,6 +1007,8 @@ function initializePreparedRecord(
   >;
   delete expectedObject.fencingToken;
   delete expectedObject.mutations;
+  delete expectedObject.pendingEffects;
+  delete expectedObject.emptyVerification;
   if (supplied !== canonicalJson(expectedObject))
     throw new Error("Prepared process claim does not match its mutation.");
   assertStateInvariants(derived);
@@ -969,6 +1053,9 @@ function parseMutation(value: unknown): DurableProcessMutation {
       "fail_launch",
       "fail",
       "settle_output_cleanup",
+      "record_output_reopen",
+      "record_reconciliation",
+      "record_empty_verification",
       "begin_effect",
       "settle_effect",
       "complete_effect",
@@ -1006,18 +1093,26 @@ function parseMutation(value: unknown): DurableProcessMutation {
     start_escalation: { required: ["action"] },
     finish_escalation: {
       required: ["action", "outcome"],
-      optional: ["detail"],
+      optional: ["detail", "effectId"],
     },
-    record_exit: { required: ["observation"] },
+    record_exit: { required: ["observation"], optional: ["effectId"] },
     resume_blocked_exit: { required: ["observation"] },
-    begin_verify: { required: ["output"] },
-    complete: { required: ["cleanup", "result"] },
+    begin_verify: { required: ["output"], optional: ["effectId"] },
+    complete: { required: ["cleanup", "result"], optional: ["effectId"] },
     fail_launch: { required: ["detail"] },
     fail: {
       required: ["state", "detail"],
       optional: ["cleanup", "result", "output"],
     },
     settle_output_cleanup: { required: [] },
+    record_output_reopen: { required: ["effectId"] },
+    record_reconciliation: {
+      required: ["effectId", "outcome"],
+      optional: ["exitCode", "signal"],
+    },
+    record_empty_verification: {
+      required: ["effectId", "verification"],
+    },
     begin_effect: {
       required: ["effectId", "family", "resolution"],
     },
@@ -1082,6 +1177,7 @@ function deriveRecord(
     },
     escalation: [],
     cleanup: { state: "pending" },
+    pendingEffects: [],
     mutations: [first],
   };
   for (let index = 1; index < mutations.length; index += 1) {
@@ -1090,7 +1186,7 @@ function deriveRecord(
       throw new Error("Durable process mutation sequence is invalid.");
     if (mutation.kind === "takeover_lease") {
       if (
-        record.pendingEffect ||
+        record.pendingEffects.length > 0 ||
         Date.parse(record.leaseExpiresAt) > Date.parse(mutation.at) ||
         mutation.fencingToken !== record.fencingToken + 1
       )
@@ -1122,17 +1218,9 @@ function reduceMutation(
   mutation: DurableProcessMutation,
 ): DurableSubprocessRecord {
   const data = mutation.data;
-  const consumeCompletedEffect =
-    current.pendingEffect?.phase === "completed" &&
-    ![
-      "renew_lease",
-      "begin_effect",
-      "settle_effect",
-      "complete_effect",
-    ].includes(mutation.kind);
-  const { pendingEffect: _pendingEffect, ...withoutPendingEffect } = current;
+  const consumed = consumeEffectForMutation(current, mutation);
   const base = {
-    ...(consumeCompletedEffect ? withoutPendingEffect : current),
+    ...consumed,
     revision: mutation.revision,
     mutations: [...current.mutations, mutation],
   };
@@ -1140,37 +1228,50 @@ function reduceMutation(
     case "prepared":
       throw new Error("Prepared mutation may appear only once.");
     case "begin_effect":
-      if (current.pendingEffect)
-        throw new Error("A durable process effect is already unresolved.");
+      if (
+        current.pendingEffects.some(
+          ({ effectId }) => effectId === safeId(data.effectId, "effectId"),
+        )
+      )
+        throw new Error("A durable process effect ID is already unresolved.");
       return historyOnly(
         {
           ...base,
-          pendingEffect: {
-            effectId: safeId(data.effectId, "effectId"),
-            family: safeId(data.family, "effect family"),
-            phase: "started",
-            resolution: requiredEnum(
-              data.resolution,
-              new Set<"settle" | "commit">(["settle", "commit"]),
-              "effect resolution",
-            ),
-            ownerId: mutation.ownerId,
-            fencingToken: mutation.fencingToken,
-            startedAt: mutation.at,
-          },
+          pendingEffects: [
+            ...current.pendingEffects,
+            {
+              effectId: safeId(data.effectId, "effectId"),
+              family: requiredEnum(
+                data.family,
+                EFFECT_FAMILIES,
+                "effect family",
+              ),
+              phase: "started",
+              resolution: requiredEnum(
+                data.resolution,
+                new Set<"settle" | "commit">(["settle", "commit"]),
+                "effect resolution",
+              ),
+              ownerId: mutation.ownerId,
+              fencingToken: mutation.fencingToken,
+              startedAt: mutation.at,
+            },
+          ],
         },
         mutation.at,
-        `effect_${safeId(data.family, "effect family")}_started`,
+        `effect_${requiredEnum(data.family, EFFECT_FAMILIES, "effect family")}_started`,
       );
     case "settle_effect": {
       const effect = requiredPendingEffect(current, data.effectId, "started");
-      const { pendingEffect: _effect, ...withoutEffect } = current;
       return historyOnly(
         {
-          ...withoutEffect,
+          ...current,
           revision: mutation.revision,
           mutations: [...current.mutations, mutation],
           leaseExpiresAt: dateText(data.leaseExpiresAt, "leaseExpiresAt"),
+          pendingEffects: current.pendingEffects.filter(
+            ({ effectId }) => effectId !== effect.effectId,
+          ),
         },
         mutation.at,
         `effect_${effect.family}_settled`,
@@ -1184,11 +1285,11 @@ function reduceMutation(
         {
           ...base,
           leaseExpiresAt: dateText(data.leaseExpiresAt, "leaseExpiresAt"),
-          pendingEffect: {
-            ...effect,
-            phase: "completed",
-            completedAt: mutation.at,
-          },
+          pendingEffects: current.pendingEffects.map((candidate) =>
+            candidate.effectId === effect.effectId
+              ? { ...effect, phase: "completed" as const, completedAt: mutation.at }
+              : candidate,
+          ),
         },
         mutation.at,
         `effect_${effect.family}_completed`,
@@ -1415,6 +1516,7 @@ function reduceMutation(
       const {
         result: _result,
         output: _output,
+        emptyVerification: _emptyVerification,
         ...withoutTerminalBlocker
       } = base;
       return moveDerived(
@@ -1437,6 +1539,8 @@ function reduceMutation(
       );
     case "complete":
       requireState(current, ["verifying_empty"]);
+      if (data.effectId !== undefined && current.emptyVerification?.empty !== true)
+        throw new Error("Backend emptiness has not been verified.");
       return moveDerived(
         {
           ...base,
@@ -1517,6 +1621,51 @@ function reduceMutation(
           "output_owner_cleaned",
         );
       }
+    case "record_output_reopen":
+      return historyOnly(base, mutation.at, "output_reopened");
+    case "record_reconciliation":
+      const outcome = requiredEnum(
+        data.outcome,
+        new Set<
+          "running" | "exited" | "identity_mismatch" | "outcome_unknown"
+        >([
+          "running",
+          "exited",
+          "identity_mismatch",
+          "outcome_unknown",
+        ]),
+        "reconciliation outcome",
+      );
+      if (
+        outcome !== "exited" &&
+        (data.exitCode !== undefined || data.signal !== undefined)
+      )
+        throw new Error("Non-exit reconciliation contains exit evidence.");
+      if (data.exitCode !== undefined)
+        requiredInteger(
+          data.exitCode,
+          "reconciliation exitCode",
+          -2147483648,
+          2147483647,
+        );
+      if (data.signal !== undefined)
+        text(data.signal, "reconciliation signal");
+      return historyOnly(
+        base,
+        mutation.at,
+        `backend_reconciled_${outcome}`,
+      );
+    case "record_empty_verification":
+      return historyOnly(
+        current.state === "verifying_empty"
+          ? {
+              ...base,
+              emptyVerification: parseEmptyVerification(data.verification),
+            }
+          : base,
+        mutation.at,
+        "backend_empty_verified",
+      );
   }
 }
 
@@ -1524,22 +1673,13 @@ function assertEffectMutationAllowed(
   record: DurableSubprocessRecord,
   kind: DurableProcessMutationKind,
 ): void {
-  const effect = record.pendingEffect;
-  if (!effect) {
-    if (kind === "settle_effect" || kind === "complete_effect")
-      throw new Error("Durable process effect settlement has no matching start.");
-    return;
-  }
-  if (kind === "takeover_lease" || kind === "begin_effect")
+  if (kind === "takeover_lease" && record.pendingEffects.length > 0)
     throw new Error("Process effect outcome is unresolved.");
-  if (kind === "renew_lease") return;
-  if (effect.phase === "started") {
-    if (kind !== "settle_effect" && kind !== "complete_effect")
-      throw new Error("Process effect is still in flight.");
-    return;
-  }
-  if (kind === "settle_effect" || kind === "complete_effect")
-    throw new Error("Completed process effect requires its semantic commit.");
+  if (
+    (kind === "settle_effect" || kind === "complete_effect") &&
+    record.pendingEffects.length === 0
+  )
+    throw new Error("Durable process effect settlement has no matching start.");
 }
 
 function requiredPendingEffect(
@@ -1548,7 +1688,9 @@ function requiredPendingEffect(
   phase: DurablePendingEffect["phase"],
 ): DurablePendingEffect {
   const effectId = safeId(rawEffectId, "effectId");
-  const effect = record.pendingEffect;
+  const effect = record.pendingEffects.find(
+    (candidate) => candidate.effectId === effectId,
+  );
   if (
     !effect ||
     effect.effectId !== effectId ||
@@ -1558,6 +1700,39 @@ function requiredPendingEffect(
   )
     throw new Error("Durable process effect settlement is stale or replayed.");
   return effect;
+}
+
+function consumeEffectForMutation(
+  record: DurableSubprocessRecord,
+  mutation: DurableProcessMutation,
+): DurableSubprocessRecord {
+  const rawEffectId = mutation.data.effectId;
+  if (rawEffectId === undefined) {
+    if (
+      record.pendingEffects.some(
+        (effect) =>
+          effect.phase === "completed" &&
+          EFFECT_CONSUMERS[effect.family] === mutation.kind,
+      )
+    )
+      throw new Error("Completed process effect requires its exact effect ID.");
+    return record;
+  }
+  if (
+    mutation.kind === "begin_effect" ||
+    mutation.kind === "settle_effect" ||
+    mutation.kind === "complete_effect"
+  )
+    return record;
+  const effect = requiredPendingEffect(record, rawEffectId, "completed");
+  if (EFFECT_CONSUMERS[effect.family] !== mutation.kind)
+    throw new Error("Completed process effect has the wrong semantic consumer family.");
+  return {
+    ...record,
+    pendingEffects: record.pendingEffects.filter(
+      ({ effectId }) => effectId !== effect.effectId,
+    ),
+  };
 }
 
 function historyOnly(
@@ -1621,14 +1796,26 @@ function commandData(
         action: command.action,
         outcome: command.outcome,
         ...(command.detail === undefined ? {} : { detail: command.detail }),
+        ...(command.effectId === undefined ? {} : { effectId: command.effectId }),
       };
     case "record_exit":
+      return {
+        observation: command.observation,
+        ...(command.effectId === undefined ? {} : { effectId: command.effectId }),
+      };
     case "resume_blocked_exit":
       return { observation: command.observation };
     case "begin_verify":
-      return { output: command.output };
+      return {
+        output: command.output,
+        ...(command.effectId === undefined ? {} : { effectId: command.effectId }),
+      };
     case "complete":
-      return { cleanup: command.cleanup, result: command.result };
+      return {
+        cleanup: command.cleanup,
+        result: command.result,
+        ...(command.effectId === undefined ? {} : { effectId: command.effectId }),
+      };
     case "fail":
       return {
         state: command.state,
@@ -1641,6 +1828,17 @@ function commandData(
     case "mark_output_prepared":
     case "settle_output_cleanup":
       return {};
+    case "record_output_reopen":
+      return { effectId: command.effectId };
+    case "record_reconciliation":
+      return {
+        effectId: command.effectId,
+        outcome: command.outcome,
+        ...(command.exitCode === undefined ? {} : { exitCode: command.exitCode }),
+        ...(command.signal === undefined ? {} : { signal: command.signal }),
+      };
+    case "record_empty_verification":
+      return { effectId: command.effectId, verification: command.verification };
   }
 }
 
@@ -1651,7 +1849,7 @@ function applyCommand(
   if (command.expectedRevision !== current.revision)
     throw new Error(`Process revision conflict for ${current.invocationId}.`);
   if (command.type === "takeover_lease") {
-    if (current.pendingEffect)
+    if (current.pendingEffects.length > 0)
       throw new Error("Process effect outcome is unresolved.");
     if (Date.parse(current.leaseExpiresAt) > Date.parse(command.at))
       throw new Error("Process lease is still live.");
@@ -1748,11 +1946,12 @@ function assertStateInvariants(record: DurableSubprocessRecord): void {
   )
     throw new Error("Durable output prepare failure is inconsistent.");
   if (
-    record.pendingEffect &&
-    (record.pendingEffect.ownerId !== record.ownerId ||
-      record.pendingEffect.fencingToken !== record.fencingToken ||
-      (record.pendingEffect.phase === "completed" &&
-        record.pendingEffect.resolution !== "commit"))
+    record.pendingEffects.some(
+      (effect) =>
+        effect.ownerId !== record.ownerId ||
+        effect.fencingToken !== record.fencingToken ||
+        (effect.phase === "completed" && effect.resolution !== "commit"),
+    )
   )
     throw new Error("Durable pending effect authority is inconsistent.");
   const needsBinding = [
@@ -1783,6 +1982,11 @@ function assertStateInvariants(record: DurableSubprocessRecord): void {
     throw new Error("Durable process backend binding is inconsistent.");
   if (record.state === "stopping" && !record.stopIntent)
     throw new Error("Durable process record in stopping requires stop intent.");
+  if (
+    record.emptyVerification &&
+    !["verifying_empty", "cleanup_blocked", "cleaned"].includes(record.state)
+  )
+    throw new Error("Durable empty verification is inconsistent.");
   if (
     record.stopIntent &&
     ![
@@ -2096,7 +2300,7 @@ function parsePendingEffect(value: unknown): DurablePendingEffect {
     throw new Error("Pending effect completion evidence is invalid.");
   return {
     effectId: safeId(o.effectId, "effectId"),
-    family: safeId(o.family, "effect family"),
+    family: requiredEnum(o.family, EFFECT_FAMILIES, "effect family"),
     phase,
     resolution: requiredEnum(
       o.resolution,
@@ -2110,6 +2314,25 @@ function parsePendingEffect(value: unknown): DurablePendingEffect {
       ? {}
       : { completedAt: dateText(o.completedAt, "effect completedAt") }),
   };
+}
+function parsePendingEffects(value: unknown): DurablePendingEffect[] {
+  if (!Array.isArray(value)) throw new Error("Pending effect journal is invalid.");
+  const effects = value.map(parsePendingEffect);
+  if (new Set(effects.map(({ effectId }) => effectId)).size !== effects.length)
+    throw new Error("Pending effect journal contains a duplicate effect ID.");
+  return effects;
+}
+function parseEmptyVerification(value: unknown): DurableEmptyVerification {
+  const o = strictRecord(value, "empty verification");
+  if (o.empty === true) {
+    assertKeys(o, new Set(["empty", "proofArtifactId"]), "empty verification");
+    return { empty: true, ...optionalText(o, "proofArtifactId") };
+  }
+  if (o.empty === false) {
+    assertKeys(o, new Set(["empty", "detail"]), "empty verification");
+    return { empty: false, detail: text(o.detail, "detail") };
+  }
+  throw new Error("Empty verification is invalid.");
 }
 function parseOutput(value: unknown): ProcessOutputDisposition[] {
   if (!Array.isArray(value)) throw new Error("Output is invalid.");
@@ -2355,13 +2578,12 @@ function assertDurableProcessValue(record: DurableSubprocessRecord): void {
     unknown
   >;
   delete snapshot.fencingToken;
-  if (snapshot.pendingEffect && typeof snapshot.pendingEffect === "object") {
-    const pendingEffect = {
-      ...(snapshot.pendingEffect as Record<string, unknown>),
-    };
-    delete pendingEffect.fencingToken;
-    snapshot.pendingEffect = pendingEffect;
-  }
+  if (Array.isArray(snapshot.pendingEffects))
+    snapshot.pendingEffects = snapshot.pendingEffects.map((entry) => {
+      const effect = { ...(entry as Record<string, unknown>) };
+      delete effect.fencingToken;
+      return effect;
+    });
   if (Array.isArray(snapshot.mutations)) {
     snapshot.mutations = snapshot.mutations.map((entry) => {
       const mutation = { ...(entry as Record<string, unknown>) };

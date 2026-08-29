@@ -71,7 +71,11 @@ class Outputs implements ProcessOutputFactory {
   failFinalizeFor = new Set<string>();
   failReopenFor = new Set<string>();
   prepareGate?: Promise<void>;
+  reopenGate?: Promise<void>;
+  writeGate?: Promise<void>;
   finalizeGate?: Promise<void>;
+  onReopen?: () => void;
+  onWrite?: () => void;
   onFinalize?: () => void;
   failPrepare = false;
   failCleanupFor = new Set<string>();
@@ -86,6 +90,8 @@ class Outputs implements ProcessOutputFactory {
   async reopen(ownerId: string, fence?: unknown) {
     this.calls.push(`reopen:${ownerId}`);
     this.fences.push(fence);
+    this.onReopen?.();
+    await this.reopenGate;
     if (this.failReopenFor.has(ownerId)) throw new Error("reopen failed");
     return this.session(ownerId);
   }
@@ -98,6 +104,8 @@ class Outputs implements ProcessOutputFactory {
         fence?: unknown,
       ) => {
         this.fences.push(fence);
+        this.onWrite?.();
+        await this.writeGate;
         this.chunks.push(Buffer.from(bytes).toString());
       },
       finalize: async (fence?: unknown) => {
@@ -183,6 +191,8 @@ class Backend implements ProcessBackend {
   signalGate?: Promise<void>;
   releaseGate?: Promise<void>;
   onSignal?: (action: string) => void;
+  onObserve?: () => void;
+  onVerify?: () => void;
   onReconcile?: () => void;
   onRelease?: () => void;
   probe = async (fence?: unknown) => {
@@ -197,6 +207,7 @@ class Backend implements ProcessBackend {
   ) => {
     this.calls.push("observe");
     this.fences.push(fence);
+    this.onObserve?.();
     await output("stdout", Buffer.from("child"));
     await this.observeGate;
     return this.observeValue;
@@ -224,6 +235,7 @@ class Backend implements ProcessBackend {
   verifyEmpty = async (_binding?: unknown, fence?: unknown) => {
     this.calls.push("verify");
     this.fences.push(fence);
+    this.onVerify?.();
     await this.verifyGate;
     return this.verifyValue;
   };
@@ -264,9 +276,34 @@ function deferred() {
 function pendingEffectOf(record: unknown):
   | { family: string; phase: string; fencingToken: number }
   | undefined {
-  return (record as {
+  const value = record as {
     pendingEffect?: { family: string; phase: string; fencingToken: number };
-  }).pendingEffect;
+    pendingEffects?: readonly {
+      family: string;
+      phase: string;
+      fencingToken: number;
+    }[];
+  };
+  return value.pendingEffects?.[0] ?? value.pendingEffect;
+}
+function pendingEffectsOf(record: unknown): readonly {
+  family: string;
+  phase: string;
+  fencingToken: number;
+}[] {
+  const value = record as {
+    pendingEffects?: readonly {
+      family: string;
+      phase: string;
+      fencingToken: number;
+    }[];
+    pendingEffect?: {
+      family: string;
+      phase: string;
+      fencingToken: number;
+    };
+  };
+  return value.pendingEffects ?? (value.pendingEffect ? [value.pendingEffect] : []);
 }
 function fixture(id = "invoke-1") {
   const stateKey = new Uint8Array(32).fill(9);
@@ -944,9 +981,7 @@ test("durable in-flight reconciliation blocks takeover effects after heartbeat a
   const blocked = takeover.readOnlyStore.readByInvocation("invoke-1")!;
   assert.equal(blocked.fencingToken, active.fencingToken);
   assert.equal(blocked.ownerId, active.ownerId);
-  const pendingEffect = (blocked as unknown as {
-    pendingEffect?: { family: string; phase: string; fencingToken: number };
-  }).pendingEffect;
+  const pendingEffect = pendingEffectOf(blocked);
   assert.equal(pendingEffect?.family, "backend_reconcile");
   assert.equal(pendingEffect?.phase, "started");
   assert.equal(pendingEffect?.fencingToken, active.fencingToken);
@@ -1091,13 +1126,13 @@ test("durable in-flight output finalization blocks takeover and duplicate releas
     assert.deepEqual(outputs.calls, []);
   } finally {
     gate.resolve();
+    contender.readOnlyStore.close();
   }
   assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
   assert.equal(f.outputs.calls.filter((call) => call.startsWith("finalize:")).length, 1);
   assert.equal(f.backend.calls.filter((call) => call === "release").length, 0);
   assert.deepEqual(backend.calls, []);
   assert.deepEqual(outputs.calls, []);
-  contender.readOnlyStore.close();
 });
 
 test("durable in-flight backend release blocks takeover and duplicate release", async (t) => {
@@ -1148,12 +1183,236 @@ test("durable in-flight backend release blocks takeover and duplicate release", 
     assert.deepEqual(outputs.calls, []);
   } finally {
     gate.resolve();
+    contender.readOnlyStore.close();
   }
   assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
   assert.equal(f.backend.calls.filter((call) => call === "release").length, 1);
   assert.deepEqual(backend.calls, []);
   assert.deepEqual(outputs.calls, []);
-  contender.readOnlyStore.close();
+});
+
+test("durable recovery output reopen blocks takeover before any contender effect", async (t) => {
+  const f = await durableLaunchBlocker(t, "reopen-fence-loss", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  const gate = deferred();
+  const started = deferred();
+  f.outputs.reopenGate = gate.promise;
+  f.outputs.onReopen = started.resolve;
+  const retry = f.first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  const retryOutcome = retry.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started.promise;
+  const active = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+  f.first.readOnlyStore.close();
+  f.clock.current = new Date(f.clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const backend = new Backend();
+  const outputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path: f.path },
+    f.stateKey,
+    backend,
+    f.clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    const blocked = contender.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.deepEqual(
+      pendingEffectsOf(blocked).map(({ family, phase }) => ({ family, phase })),
+      [{ family: "output_reopen", phase: "started" }],
+    );
+    assert.equal(blocked.ownerId, active.ownerId);
+    assert.deepEqual(backend.calls, []);
+    assert.deepEqual(outputs.calls, []);
+  } finally {
+    gate.resolve();
+    contender.readOnlyStore.close();
+  }
+  assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
+  assert.deepEqual(backend.calls, []);
+  assert.deepEqual(outputs.calls, []);
+});
+
+test("durable recovery observation covers blocked output writes and blocks takeover", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-observe-write-fence-loss-"));
+  const path = join(root, "process.sqlite");
+  const stateKey = new Uint8Array(32).fill(7);
+  const backendA = new Backend();
+  const clock = new Clock();
+  const outputsA = new Outputs();
+  const runtimeA = runtimeFor({ kind: "sqlite", path }, stateKey, backendA, clock, outputsA, {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  t.after(async () => {
+    try {
+      runtimeA.readOnlyStore.close();
+    } catch {}
+    await rm(root, { recursive: true, force: true });
+  });
+  const gate = deferred();
+  const started = deferred();
+  let effectsDuringWrite: readonly { family: string; phase: string }[] = [];
+  backendA.observeGate = gate.promise;
+  outputsA.onWrite = () => {
+    effectsDuringWrite = pendingEffectsOf(
+      runtimeA.readOnlyStore.readByInvocation("invoke-1"),
+    ).map(({ family, phase }) => ({ family, phase }));
+    started.resolve();
+  };
+  const retry = runtimeA.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  const retryOutcome = retry.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started.promise;
+  assert.deepEqual(effectsDuringWrite, [
+    { family: "backend_observe", phase: "started" },
+  ]);
+  runtimeA.readOnlyStore.close();
+  clock.current = new Date(clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const backend = new Backend();
+  const outputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    const blocked = contender.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.deepEqual(
+      pendingEffectsOf(blocked).map(({ family, phase }) => ({ family, phase })),
+      [{ family: "backend_observe", phase: "started" }],
+    );
+    assert.deepEqual(backend.calls, []);
+    assert.deepEqual(outputs.calls, []);
+  } finally {
+    gate.resolve();
+    contender.readOnlyStore.close();
+  }
+  assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
+  assert.deepEqual(backend.calls, []);
+  assert.deepEqual(outputs.calls, []);
+});
+
+test("durable verified-empty inspection blocks takeover and duplicate cleanup effects", async (t) => {
+  const f = await durableLaunchBlocker(t, "verify-empty-fence-loss", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  const gate = deferred();
+  const started = deferred();
+  f.backend.verifyGate = gate.promise;
+  f.backend.onVerify = started.resolve;
+  const retry = f.first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  const retryOutcome = retry.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started.promise;
+  f.first.readOnlyStore.close();
+  f.clock.current = new Date(f.clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const backend = new Backend();
+  const outputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path: f.path },
+    f.stateKey,
+    backend,
+    f.clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    const blocked = contender.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.deepEqual(
+      pendingEffectsOf(blocked).map(({ family, phase }) => ({ family, phase })),
+      [{ family: "backend_verify_empty", phase: "started" }],
+    );
+    assert.deepEqual(backend.calls, []);
+    assert.deepEqual(outputs.calls, []);
+  } finally {
+    gate.resolve();
+    contender.readOnlyStore.close();
+  }
+  assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
+  assert.equal(f.backend.calls.filter((call) => call === "release").length, 0);
+  assert.deepEqual(backend.calls, []);
+  assert.deepEqual(outputs.calls, []);
+});
+
+test("same owner can observe and signal concurrently without losing either journal marker", async () => {
+  const f = fixture();
+  const observeGate = deferred();
+  const observeStarted = deferred();
+  const signalGate = deferred();
+  const signalStarted = deferred();
+  f.backend.observeGate = observeGate.promise;
+  f.backend.onObserve = observeStarted.resolve;
+  f.backend.signalGate = signalGate.promise;
+  f.backend.onSignal = () => signalStarted.resolve();
+  const invocation = f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  await observeStarted.promise;
+  const cancellation = f.runtime.cancel("invoke-1");
+  await signalStarted.promise;
+  try {
+    assert.deepEqual(
+      pendingEffectsOf(f.store.readByInvocation("invoke-1")).map(
+        ({ family, phase }) => ({ family, phase }),
+      ),
+      [
+        { family: "backend_observe", phase: "started" },
+        { family: "backend_signal", phase: "started" },
+      ],
+    );
+  } finally {
+    signalGate.resolve();
+    observeGate.resolve();
+  }
+  const [cancelled, result] = await Promise.all([cancellation, invocation]);
+  assert.equal(cancelled, true);
+  assert.equal(result.outcome, "cancelled");
+  assert.deepEqual(pendingEffectsOf(f.store.readByInvocation("invoke-1")), []);
 });
 
 test("restart closes a launch blocker only after natural exit and verified release", async (t) => {
@@ -1699,7 +1958,7 @@ test("expired unbound launch is atomically orphaned without takeover cleanup or 
   second.readOnlyStore.close();
 });
 
-test("expired bound active recovery retains takeover reconciliation", async (t) => {
+test("expired bound active observation blocks takeover reconciliation until its owner settles", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-bound-recovery-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
   const path = join(root, "state.sqlite");
@@ -1742,16 +2001,16 @@ test("expired bound active recovery retains takeover reconciliation", async (t) 
     secondOutputs,
   );
   assert.deepEqual(await second.runtime.reconcileStartup(), [
-    { invocationId: "invoke-1", state: "cleaned" },
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
   ]);
-  const cleaned = second.readOnlyStore.readByInvocation("invoke-1")!;
-  assert.equal(cleaned.ownerId === running.ownerId, false);
-  assert.equal(cleaned.fencingToken, running.fencingToken + 1);
+  const blocked = second.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(blocked.ownerId, running.ownerId);
+  assert.equal(blocked.fencingToken, running.fencingToken);
   assert.equal(backend.calls.filter((call) => call === "launch").length, 1);
-  assert.equal(backend.calls.filter((call) => call === "reconcile").length, 1);
+  assert.equal(backend.calls.filter((call) => call === "reconcile").length, 0);
 
   observeGate.resolve();
-  await assert.rejects(stale, /owner|fenc|stale|unavailable/i);
+  assert.equal((await stale).outcome, "exited");
   assert.equal(
     second.readOnlyStore.readByInvocation("invoke-1")?.state,
     "cleaned",
@@ -2099,7 +2358,7 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
     ["prepared", "launch_not_proven"],
     ["launching", "orphaned"],
     ["exited", "exited"],
-    ["verifying_empty", "cleaned"],
+    ["verifying_empty", "verifying_empty"],
   ] as const) {
     const f = fixture();
     await seedRecoverable(f, state);
@@ -2111,7 +2370,7 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
     if (state === "launching")
       f.clock.current = new Date(f.clock.current.getTime() + 301_000);
     const startup = await f.runtime.reconcileStartup();
-    if (state === "exited")
+    if (state === "exited" || state === "verifying_empty")
       assert.deepEqual(startup, [
         { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
       ]);
@@ -2136,10 +2395,15 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
       f.backend.reconcileValue = outcome.value;
       f.backend.observeValue = { state: "exited", exitCode: 0 };
       f.backend.signalValues = [{ state: "exited" }];
-      await f.runtime.reconcileStartup();
+      const startup = await f.runtime.reconcileStartup();
+      if (state === "running" || state === "stopping") {
+        assert.deepEqual(startup, [
+          { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+        ]);
+      }
       assert.equal(
         f.store.readByInvocation("invoke-1")?.state,
-        outcome.want,
+        state === "running" || state === "stopping" ? state : outcome.want,
         `${state}/${outcome.want}`,
       );
     }
