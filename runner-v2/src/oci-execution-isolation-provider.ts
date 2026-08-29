@@ -8,6 +8,7 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   writeFile,
 } from "node:fs/promises";
 import {
@@ -52,6 +53,7 @@ export type OciExecutionIsolationErrorCode =
   | "oci_image_unavailable"
   | "oci_attestation_failed"
   | "oci_grant_unrepresentable"
+  | "oci_environment_unrepresentable"
   | "oci_path_escape"
   | "oci_create_failed"
   | "oci_release_failed"
@@ -164,16 +166,15 @@ export function createOciExecutionIsolationProvider(
   if (!isAbsolute(options.stateDirectory) || options.stateDirectory.includes("\0")) {
     throw ociError("oci_configuration_invalid", "OCI state directory must be absolute.");
   }
-  const statePath = join(resolve(options.stateDirectory), `oci-leases-${providerId}.json`);
+  const stateDirectory = resolve(options.stateDirectory);
+  const statePath = join(stateDirectory, `oci-leases-${providerId}.json`);
+  const environmentHandoffRoot = join(stateDirectory, "environment-handoffs");
   const cli = options.cli ?? createNativeOciCli();
   const clock = options.clock ?? (() => new Date());
   let cliPath: string | undefined;
   let cliDigest: string | undefined;
 
-  const runCli = async (
-    args: readonly string[],
-    environment: Readonly<Record<string, string>> = {},
-  ): Promise<OciCliResult> => {
+  const runCli = async (args: readonly string[]): Promise<OciCliResult> => {
     if (!cliPath) throw ociError("oci_attestation_failed", "OCI provider is not attested.");
     if (cliDigest) {
       const currentPath = await attestExecutable(configuredCli);
@@ -185,7 +186,7 @@ export function createOciExecutionIsolationProvider(
     return await cli.run({
       executable: cliPath,
       args: Object.freeze([...args]),
-      environment: Object.freeze({ ...environment }),
+      environment: Object.freeze({}),
       timeoutMs: 30_000,
     });
   };
@@ -253,12 +254,20 @@ export function createOciExecutionIsolationProvider(
       args.push("--network", request.grant.networkApproved && options.allowNetwork === true
         ? "bridge" : "none");
       for (const mount of representation.mounts) args.push("--mount", mount);
-      const environment = request.environment ?? {};
-      for (const name of Object.keys(environment).sort()) args.push("--env", name);
+      const environmentFile = await createPrivateEnvironmentHandoff(
+        environmentHandoffRoot,
+        request.environment ?? {},
+      );
+      if (environmentFile) args.push("--env-file", environmentFile);
       args.push("--workdir", representation.cwd, acquisitionImageId, representation.executable);
       args.push(...representation.arguments);
       assertSafeOciArguments(args);
-      const created = await runCli(args, environment);
+      let created: OciCliResult;
+      try {
+        created = await runCli(args);
+      } finally {
+        if (environmentFile) await removePrivateEnvironmentHandoff(environmentFile, environmentHandoffRoot);
+      }
       if (created.exitCode !== 0) {
         throw ociError("oci_create_failed", `OCI container create failed: ${bounded(created.stderr)}.`);
       }
@@ -902,6 +911,46 @@ function normalize(path: string): string {
 function bounded(value: unknown): string {
   const text = value instanceof Error ? value.message : String(value);
   return text.length <= 512 ? text : `${text.slice(0, 512)}…`;
+}
+
+async function createPrivateEnvironmentHandoff(
+  root: string,
+  environment: Readonly<Record<string, string>>,
+): Promise<string | undefined> {
+  const entries = Object.entries(environment).sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) return undefined;
+  const lines = entries.map(([name, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || /[\0\r\n]/.test(value)) {
+      throw ociError(
+        "oci_environment_unrepresentable",
+        "Prepared child environment cannot be represented by a private OCI handoff.",
+      );
+    }
+    return `${name}=${value}`;
+  });
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const path = join(root, `environment-${randomUUID()}.env`);
+  let handle;
+  try {
+    handle = await open(path, "wx", 0o600);
+    await handle.writeFile(`${lines.join("\n")}\n`, "utf8");
+    await handle.sync();
+    return path;
+  } catch (error) {
+    await rm(path, { force: true }).catch(() => undefined);
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function removePrivateEnvironmentHandoff(path: string, root: string): Promise<void> {
+  await rm(path, { force: true });
+  await rmdir(root).catch((error) => {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      throw error;
+    }
+  });
 }
 
 function ociError(

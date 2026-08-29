@@ -164,6 +164,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
       });
       let selection: ExecutionIsolationSelection | undefined;
       let process: GenericProcessResult | undefined;
+      let runtimeGrantIssued = false;
       try {
         if (options.permissionProfile === "full") {
           selection = await options.isolation.acquire({
@@ -200,6 +201,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
           expiresAt: claims.expiresAt,
           access: claims.access,
         });
+        runtimeGrantIssued = true;
         process = await options.runtime.invoke({
           intent: launchIntent,
           grantId: claims.grantId,
@@ -222,9 +224,13 @@ export function createRuntimeBackedOneShotCommandExecutor(
         };
       } finally {
         try {
-          if (selection) await options.isolation.release(selection);
+          if (runtimeGrantIssued) options.runtimeGrants.revoke(claims.grantId);
         } finally {
-          if (internalGrant) await options.executionGrants.revoke(opaqueGrant, "cleanup");
+          try {
+            if (selection) await options.isolation.release(selection);
+          } finally {
+            if (internalGrant) await options.executionGrants.revoke(opaqueGrant, "cleanup");
+          }
         }
       }
     },

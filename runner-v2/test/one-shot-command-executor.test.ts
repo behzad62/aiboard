@@ -81,7 +81,7 @@ test("shared executor selects isolation before launch and releases after verifie
   };
   const executor = createRuntimeBackedOneShotCommandExecutor({
     runtime,
-    runtimeGrants: { issue: () => order.push("runtime-grant"), revoke: () => true },
+    runtimeGrants: { issue: () => order.push("runtime-grant"), revoke: () => { order.push("runtime-revoke"); return true; } },
     executionGrants: authority,
     isolation: {
       acquire: async (input) => {
@@ -132,10 +132,44 @@ test("shared executor selects isolation before launch and releases after verifie
       },
     });
     assert.equal(result.enforcement, "write_confinement_exact_grant");
-    assert.deepEqual(order, ["isolation", "launch-plan", "runtime-grant", "runtime", "release"]);
+    assert.deepEqual(order, ["isolation", "launch-plan", "runtime-grant", "runtime", "runtime-revoke", "release"]);
   } finally {
     await authority.revoke(grant, "cleanup");
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a pre-consumption runtime failure revokes its runtime grant exactly once before isolation release", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-one-shot-preconsume-"));
+  const authority = createExecutionGrantAuthority();
+  const grant = await authority.issue(grantRequest(workspace, "project", "preconsume"));
+  const order: string[] = [];
+  const executor = createRuntimeBackedOneShotCommandExecutor({
+    runtime: {
+      invoke: async () => { order.push("runtime"); throw new Error("rejected before grant consumption"); },
+      cancel: async () => false, reconcileStartup: async () => [],
+    },
+    runtimeGrants: {
+      issue: () => order.push("issue"),
+      revoke: () => { order.push("revoke"); return true; },
+    },
+    executionGrants: authority,
+    isolation: {
+      acquire: async () => strictSelection("preconsume"),
+      prepareExecution: async (_selection, intent) => intent,
+      release: async () => { order.push("release"); },
+      recoverOwnedLeases: async () => [], activeLeases: () => [],
+      enforcementState: async () => ({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] }),
+    },
+    permissionProfile: "project", ambientEnvironment: {},
+    environments: createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw new Error(); } } }),
+  });
+  try {
+    await assert.rejects(executor.execute(commandRequest(workspace, grant, "preconsume")), /before grant consumption/);
+    assert.deepEqual(order, ["issue", "runtime", "revoke", "release"]);
+  } finally {
+    await authority.revoke(grant, "cleanup").catch(() => undefined);
+    rmSync(workspace, { recursive: true, force: true });
   }
 });
 
@@ -181,6 +215,7 @@ test("runtime outcome uncertainty still releases strict isolation and a release 
   const authority = createExecutionGrantAuthority();
   const grant = await authority.issue(grantRequest(workspace, "project", "unknown"));
   let releases = 0;
+  let runtimeRevokes = 0;
   const selection = strictSelection("placeholder");
   const executor = createRuntimeBackedOneShotCommandExecutor({
     runtime: {
@@ -188,7 +223,7 @@ test("runtime outcome uncertainty still releases strict isolation and a release 
       cancel: async () => false,
       reconcileStartup: async () => [],
     },
-    runtimeGrants: { issue: () => undefined, revoke: () => true },
+    runtimeGrants: { issue: () => undefined, revoke: () => { runtimeRevokes += 1; return true; } },
     executionGrants: authority,
     isolation: {
       acquire: async () => selection,
@@ -211,6 +246,7 @@ test("runtime outcome uncertainty still releases strict isolation and a release 
       (error) => error instanceof ExecutionIsolationError && error.code === "isolation_revocation_failed",
     );
     assert.equal(releases, 1);
+    assert.equal(runtimeRevokes, 1);
   } finally {
     await authority.revoke(grant, "cleanup").catch(() => undefined);
     rmSync(workspace, { recursive: true, force: true });

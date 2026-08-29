@@ -22,7 +22,7 @@ import {
   type FinalVerificationPlan,
 } from "../src/final-verification-runtime.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
-import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+import { createProductionOneShotCommandFixture, createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 
 test("final verification ingests runtime spill output and log volume alone stays green", async () => {
@@ -80,7 +80,149 @@ test("final verification ingests runtime spill output and log volume alone stays
   }
 });
 
-test("runs build and test commands in the pinned workspace and records immutable evidence", async () => {
+test("final verification falls back to bounded tails for missing or corrupt spills", async (t) => {
+  for (const mode of ["missing", "corrupt"] as const) {
+    await t.test(mode, async () => {
+      const fixture = await createFixture(`spill-${mode}`);
+      const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+      const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+      const workspace = new VerificationWorkspaceManager({
+        repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+        targetRevision: fixture.integration.revision,
+      });
+      try {
+        let spill = { hash: "b".repeat(64) };
+        if (mode === "corrupt") {
+          const created = await artifacts.put(Buffer.from("complete spill"), "text/plain", "spill");
+          writeFileSync(created.path, "corrupt bytes");
+          spill = { hash: created.hash };
+        }
+        const execution: OneShotCommandExecutor = { execute: async () => ({
+          process: {
+            logicalProcessId: `final-${mode}`, outcome: "exited", exitCode: 0,
+            finishedAt: new Date().toISOString(),
+            output: [
+              { stream: "stdout", tail: `bounded-${mode}`, totalBytes: 256 * 1024, truncated: true, spillArtifactId: spill.hash, spillBytes: 128 * 1024, lossyBytes: 0 },
+              { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            ],
+            cleanup: { state: "verified_empty", verifiedAt: new Date().toISOString() },
+          },
+          enforcement: "unconfined_explicit_full", disclosure: "unconfined_explicit_full",
+        }) };
+        const runtime = new FinalVerificationRuntime({
+          workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+          integrationRevision: () => fixture.integration.revision, execution,
+        });
+        const commands = { build: [{ label: mode, executable: "fixture", args: [] }] };
+        const run = await runtime.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, commands), commands });
+        assert.equal(run.green, true, run.checks[0]?.issues.join("\n"));
+        const fact = commandFacts(run.checks[0]!)[0];
+        assert.equal(fact.outputLossy, true);
+        assert.equal((await artifacts.get(fact.stdoutArtifactHash)).toString(), `bounded-${mode}`);
+      } finally {
+        evidence.close();
+        await workspace.cleanup().catch(() => undefined);
+        await closeFixture(fixture);
+      }
+    });
+  }
+});
+
+test("final verification preserves stable isolation and runtime failure codes", async (t) => {
+  for (const code of ["isolation_capability_unavailable", "isolation_revocation_failed", "outcome_unknown"] as const) {
+    await t.test(code, async () => {
+      const fixture = await createFixture(`typed-${code}`);
+      const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+      const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+      const workspace = new VerificationWorkspaceManager({
+        repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+        targetRevision: fixture.integration.revision,
+      });
+      try {
+        const runtime = new FinalVerificationRuntime({
+          workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+          integrationRevision: () => fixture.integration.revision,
+          execution: { execute: async () => { throw Object.assign(new Error(code), { code }); } },
+        });
+        const commands = { build: [{ label: code, executable: "fixture", args: [] }] };
+        const run = await runtime.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, commands), commands });
+        assert.equal(run.green, false);
+        const fact = commandFacts(run.checks[0]!)[0];
+        assert.equal(fact.errorCode, code);
+        assert.equal(run.checks[0]?.issues.some((issue) => issue.includes(code)), true);
+      } finally {
+        evidence.close();
+        await workspace.cleanup().catch(() => undefined);
+        await closeFixture(fixture);
+      }
+    });
+  }
+});
+
+test("final-verification production graph scrubs inherited secrets and survives output beyond spill capacity", async (t) => {
+  const fixture = await createFixture("production-output-matrix");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const secretName = "RUNNER_MATRIX_INHERITED_SECRET";
+  const previous = process.env[secretName];
+  process.env[secretName] = "must-not-reach-final-child";
+  const graph = createProductionOneShotCommandFixture(t, { artifacts });
+  try {
+    const runtime = new FinalVerificationRuntime({
+      workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+      integrationRevision: () => fixture.integration.revision, execution: graph.execution,
+    });
+    const commands = { build: [{
+      label: "large", executable: process.execPath, timeoutMs: 25_000,
+      args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker+"|"); process.stdout.write("x".repeat(65*1024*1024)); process.stdout.write("|"+marker);`],
+    }] };
+    const run = await runtime.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, commands), commands });
+    assert.equal(run.green, true, run.checks[0]?.issues.join("\n"));
+    const fact = commandFacts(run.checks[0]!)[0];
+    const output = await artifacts.get(fact.stdoutArtifactHash);
+    assert.equal(output.includes(Buffer.from("must-not-reach-final-child")), false);
+    assert.equal(output.includes(Buffer.from("absent")), true);
+    assert.equal(fact.outputLossy, true);
+  } finally {
+    if (previous === undefined) delete process.env[secretName]; else process.env[secretName] = previous;
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("final-verification production graph stays mechanically green on spill setup failure", async (t) => {
+  const fixture = await createFixture("production-spill-fault");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const graph = createProductionOneShotCommandFixture(t, { artifacts, spillFault: true });
+  try {
+    const runtime = new FinalVerificationRuntime({
+      workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+      integrationRevision: () => fixture.integration.revision, execution: graph.execution,
+    });
+    const commands = { build: [{ label: "spill fault", executable: process.execPath, args: ["-e", "process.stdout.write('z'.repeat(256*1024))"] }] };
+    const run = await runtime.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, commands), commands });
+    assert.equal(run.green, true, run.checks[0]?.issues.join("\n"));
+    const fact = commandFacts(run.checks[0]!)[0];
+    assert.equal(fact.outputLossy, true);
+    assert.match((await artifacts.get(fact.stdoutArtifactHash)).toString(), /runner output lossy/);
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("runs build and test commands in the pinned workspace and records immutable evidence", async (t) => {
   const fixture = await createFixture("success");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
@@ -97,7 +239,7 @@ test("runs build and test commands in the pinned workspace and records immutable
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: () => fixture.integration.revision,
-    execution: createTestOneShotCommandExecutor(),
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
   });
   try {
     const projectBefore = await projectState(fixture.project);
@@ -150,14 +292,8 @@ test("runs build and test commands in the pinned workspace and records immutable
     assert.equal(buildFact.endState.revision, fixture.integration.revision);
     assert.match(buildFact.startedAt, /^\d{4}-\d{2}-\d{2}T/);
     assert.match(buildFact.finishedAt, /^\d{4}-\d{2}-\d{2}T/);
-    assert.equal(
-      (await artifacts.get(buildFact.stdoutArtifactHash)).toString(),
-      "stdout ; & spaces",
-    );
-    assert.equal(
-      (await artifacts.get(buildFact.stderrArtifactHash)).toString(),
-      "stderr ; & spaces",
-    );
+    assert.match((await artifacts.get(buildFact.stdoutArtifactHash)).toString(), /stdout ; & spaces$/);
+    assert.match((await artifacts.get(buildFact.stderrArtifactHash)).toString(), /stderr ; & spaces$/);
     assert.equal(existsSync(join(run.workspacePath, "generated-by-build.txt")), true);
     assert.equal("changeSet" in run, false);
 
@@ -181,7 +317,7 @@ test("runs build and test commands in the pinned workspace and records immutable
   }
 });
 
-test("provisions dependencies in the disposable workspace before project commands", async () => {
+test("provisions dependencies in the disposable workspace before project commands", async (t) => {
   const fixture = await createFixture("dependency-provisioning");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
@@ -197,7 +333,7 @@ test("provisions dependencies in the disposable workspace before project command
     evidenceStore: evidence,
     runId: fixture.runId,
     integrationRevision: () => fixture.integration.revision,
-    execution: createTestOneShotCommandExecutor(),
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
   });
   const build = {
     label: "build requiring installed package",
@@ -239,7 +375,7 @@ test("provisions dependencies in the disposable workspace before project command
   }
 });
 
-test("executes one scheduler-selected category with the durable generation identity", async () => {
+test("executes one scheduler-selected category with the durable generation identity", async (t) => {
   const fixture = await createFixture("single-category");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
@@ -258,7 +394,7 @@ test("executes one scheduler-selected category with the durable generation ident
     generationId: "durable-generation",
     attempt: 1,
     currentIntegrationRevision: () => fixture.integration.revision,
-    execution: createTestOneShotCommandExecutor(),
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
   });
   try {
     const commands = { tests: [{
@@ -284,7 +420,7 @@ test("executes one scheduler-selected category with the durable generation ident
   }
 });
 
-test("nonzero, timeout, and cancellation outcomes are mechanically non-green", async () => {
+test("nonzero, timeout, and cancellation outcomes are mechanically non-green", async (t) => {
   const fixture = await createFixture("failures");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
@@ -301,7 +437,7 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: () => fixture.integration.revision,
-    execution: createTestOneShotCommandExecutor(),
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
   });
   try {
     const failingCommands = { build: [{
@@ -363,7 +499,7 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
   }
 });
 
-test("cancellation terminates descendant processes and leaves no late process output", async () => {
+test("cancellation terminates descendant processes and leaves no late process output", async (t) => {
   const fixture = await createFixture("process-tree");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const workspace = new VerificationWorkspaceManager({
@@ -378,7 +514,7 @@ test("cancellation terminates descendant processes and leaves no late process ou
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: () => fixture.integration.revision,
-    execution: createTestOneShotCommandExecutor(),
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
   });
   const marker = "late-descendant-output.txt";
   const childPid = "descendant.pid";
@@ -420,7 +556,7 @@ test("cancellation terminates descendant processes and leaves no late process ou
   }
 });
 
-test("rejects a workspace that is stale relative to the current integration revision", async () => {
+test("rejects a workspace that is stale relative to the current integration revision", async (t) => {
   const fixture = await createFixture("stale");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const workspace = new VerificationWorkspaceManager({
@@ -437,7 +573,7 @@ test("rejects a workspace that is stale relative to the current integration revi
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: currentRevision,
-    execution: createTestOneShotCommandExecutor(),
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
   });
   try {
     await workspace.create();
@@ -538,6 +674,7 @@ function commandFacts(check: { facts: readonly { kind: string }[] }) {
     timedOut: boolean;
     cancelled: boolean;
     outputLossy: boolean;
+    errorCode?: string;
   }];
 }
 

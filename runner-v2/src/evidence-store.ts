@@ -15,6 +15,7 @@ export interface CommandEvidenceFact {
   cancelled: boolean;
   outputTruncated: boolean;
   outputLossy?: boolean;
+  errorCode?: string;
   cleanup?: ProcessCleanupStatus;
   enforcement?: "write_confinement_exact_grant" | "unconfined_explicit_full";
   disclosure?: "provider_specific_not_universal_boundary" | "unconfined_explicit_full";

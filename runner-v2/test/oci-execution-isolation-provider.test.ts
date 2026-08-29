@@ -116,6 +116,51 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
   }
 });
 
+test("OCI child environment never enters the attested Docker control-plane environment", async () => {
+  const fixture = await ociFixture();
+  const calls: OciCliInvocation[] = [];
+  const cli = fakeCli(calls);
+  try {
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-environment-handoff",
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli,
+    });
+    await provider.attest();
+    const environment = {
+      SAFE_EXPLICIT: "approved-inside-container",
+      DOCKER_HOST: "tcp://attacker.invalid:2376",
+      DOCKER_CONTEXT: "attacker-context",
+      DOCKER_CONFIG: join(fixture.root, "attacker-config"),
+      DOCKER_TLS_VERIFY: "reserved-tls-verify-secret",
+      DOCKER_CERT_PATH: join(fixture.root, "attacker-certificates"),
+    };
+    const lease = await provider.acquire({
+      providerId: "oci-environment-handoff",
+      implementationDigest: "a".repeat(64),
+      intent: fixture.intent,
+      grant: fixture.claims,
+      environment,
+    });
+    const create = calls.find((call) => call.args[0] === "create")!;
+    assert.deepEqual(create.environment, {}, "child variables must not select the Docker daemon");
+    assert.equal(create.args.includes("--env-file"), true);
+    for (const value of Object.values(environment)) {
+      assert.equal(create.args.includes(value), false);
+      assert.equal(JSON.stringify(lease).includes(value), false);
+      assert.equal(readFileSync(join(fixture.state, "oci-leases-oci-environment-handoff.json"), "utf8").includes(value), false);
+    }
+    assert.deepEqual(cli.environmentFiles, [environment]);
+    assert.equal(cli.environmentFilePaths.every((path) => !existsSync(path)), true);
+    await provider.release(lease as never);
+    assert.equal(calls.every((call) => Object.keys(call.environment).length === 0), true);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("OCI network requires both grant and explicit provider policy", async () => {
   for (const [allowNetwork, grantNetwork, expected] of [
     [false, false, "none"],
@@ -593,14 +638,21 @@ test("real Docker launch plan runs the original command only inside the owned co
     const intent = {
       ...fixture.intent,
       executable: "sh",
-      arguments: ["-c", "printf '%s' \"$SAFE_EXPLICIT\""],
+      arguments: ["-c", "printf '%s|%s|%s|%s|%s' \"$SAFE_EXPLICIT\" \"$DOCKER_HOST\" \"$DOCKER_CONTEXT\" \"$DOCKER_CONFIG\" \"$DOCKER_TLS_VERIFY\""],
+    };
+    const childEnvironment = {
+      SAFE_EXPLICIT: "approved-inside-container",
+      DOCKER_HOST: "tcp://must-not-control-cli.invalid:2376",
+      DOCKER_CONTEXT: "must-not-control-cli-context",
+      DOCKER_CONFIG: "/must-not-control-cli-config",
+      DOCKER_TLS_VERIFY: "must-not-control-cli-tls",
     };
     const lease = await provider.acquire({
       providerId: "oci-real-launch-plan",
       implementationDigest: "e".repeat(64),
       intent,
       grant: fixture.claims,
-      environment: { SAFE_EXPLICIT: "approved-inside-container" },
+      environment: childEnvironment,
     });
     containerId = durableContainerId(fixture.state, "oci-real-launch-plan");
     const plan = await provider.prepareExecution!(lease as never, intent);
@@ -610,7 +662,8 @@ test("real Docker launch plan runs the original command only inside the owned co
     assert.equal(readFileSync(join(fixture.state, "oci-leases-oci-real-launch-plan.json"), "utf8").includes("approved-inside-container"), false);
     const result = await execFileResult(plan.executable, [...plan.arguments]);
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "approved-inside-container");
+    assert.equal(result.stdout, Object.values(childEnvironment).join("|"));
+    assert.equal(existsSync(join(fixture.state, "environment-handoffs")), false);
     await provider.release(lease as never);
     containerId = undefined;
   } finally {
@@ -657,6 +710,8 @@ function fakeCli(calls: OciCliInvocation[]) {
   const runner = {
     psOutput: "",
     imageIds: [] as string[],
+    environmentFiles: [] as Record<string, string>[],
+    environmentFilePaths: [] as string[],
     setImage(containerId: string, imageId: string) { imageByContainer.set(containerId, imageId); },
     removeExternally(containerId: string) {
       labelsByContainer.delete(containerId);
@@ -669,6 +724,16 @@ function fakeCli(calls: OciCliInvocation[]) {
         return { exitCode: 0, stdout: (runner.imageIds.shift() ?? "sha256:" + "1".repeat(64)) + "\n", stderr: "" };
       }
       if (command === "create") {
+        const environmentFile = optionValues(invocation.args, "--env-file")[0];
+        if (environmentFile) {
+          runner.environmentFilePaths.push(environmentFile);
+          runner.environmentFiles.push(Object.fromEntries(
+            readFileSync(environmentFile, "utf8").trimEnd().split("\n").filter(Boolean).map((line) => {
+              const separator = line.indexOf("=");
+              return [line.slice(0, separator), line.slice(separator + 1)];
+            }),
+          ));
+        }
         createdCount += 1;
         const containerId = `container-fixture-${createdCount}`;
         labelsByContainer.set(containerId, Object.fromEntries(

@@ -616,6 +616,7 @@ export class FinalVerificationRuntime {
         artifactForFinalOutput(this.artifacts, execution, "stdout", `${check.category} ${command.label} stdout`),
         artifactForFinalOutput(this.artifacts, execution, "stderr", `${check.category} ${command.label} stderr`),
       ]);
+      const executionErrorCode = stableExecutionErrorCode(execution.startError);
       const fact: FinalVerificationCommandFact = {
         kind: "command",
         category: executableCategory,
@@ -631,8 +632,10 @@ export class FinalVerificationRuntime {
         timedOut: execution.timedOut,
         cancelled: execution.cancelled,
         outputTruncated: execution.outputTruncated,
+        ...(executionErrorCode ? { errorCode: executionErrorCode } : {}),
         ...(execution.routed ? {
-          outputLossy: execution.routed.process.output.some((entry) => entry.lossyBytes > 0),
+          outputLossy: execution.routed.process.output.some((entry) => entry.lossyBytes > 0) ||
+            stdoutArtifact.fallbackLossy || stderrArtifact.fallbackLossy,
           cleanup: execution.routed.process.cleanup,
           enforcement: execution.routed.enforcement,
           disclosure: execution.routed.disclosure,
@@ -654,7 +657,7 @@ export class FinalVerificationRuntime {
       }
       if (execution.startError) {
         base.issues.push(
-          `${check.category} command ${command.label} could not start: ${execution.startError.message}.`,
+          `${check.category} command ${command.label} could not start${executionErrorCode ? ` [${executionErrorCode}]` : ""}: ${execution.startError.message}.`,
         );
       }
       if (execution.signal) {
@@ -1550,17 +1553,22 @@ async function artifactForFinalOutput(
   execution: ProcessResult,
   stream: "stdout" | "stderr",
   label: string,
-): Promise<{ hash: string }> {
+): Promise<{ hash: string; fallbackLossy: boolean }> {
   const output = execution.routed ? outputFor(execution.routed.process, stream) : undefined;
   if (output?.spillArtifactId) {
-    await artifacts.get(output.spillArtifactId);
-    return { hash: output.spillArtifactId };
+    try {
+      await artifacts.verify(output.spillArtifactId);
+      return { hash: output.spillArtifactId, fallbackLossy: false };
+    } catch {
+      // The runtime owns spill cleanup; final evidence degrades to its bounded tail.
+    }
   }
-  return await artifacts.put(
+  const artifact = await artifacts.put(
     stream === "stdout" ? execution.stdout : execution.stderr,
     "text/plain",
     label,
   );
+  return { hash: artifact.hash, fallbackLossy: output?.spillArtifactId !== undefined };
 }
 
 function freezeCheck(check: FinalVerificationCheckResult): FinalVerificationCheckResult {
@@ -1851,6 +1859,20 @@ async function delayWithAbort(
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function stableExecutionErrorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && new Set([
+    "isolation_capability_unavailable",
+    "isolation_revocation_failed",
+    "outcome_unknown",
+    "backend_unavailable",
+    "identity_mismatch",
+    "cleanup_blocked",
+    "launch_not_proven",
+    "process_runtime_unavailable",
+  ]).has(code) ? code : undefined;
 }
 
 class ManagedProcessServiceAdapter implements FinalVerificationManagedProcess {

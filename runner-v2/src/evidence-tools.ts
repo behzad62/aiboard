@@ -123,7 +123,8 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           timedOut: execution.process.outcome === "timed_out",
           cancelled: execution.process.outcome === "cancelled",
           outputTruncated: execution.process.output.some((entry) => entry.truncated),
-          outputLossy: execution.process.output.some((entry) => entry.lossyBytes > 0),
+          outputLossy: execution.process.output.some((entry) => entry.lossyBytes > 0) ||
+            stdout.fallbackLossy || stderr.fallbackLossy,
           cleanup: execution.process.cleanup,
           enforcement: execution.enforcement,
           disclosure: execution.disclosure,
@@ -144,12 +145,25 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         return { content: [{ type: "json", value: record }], isError: false };
       } catch (error) {
         return failure(
-          "evidence_command_failed",
+          stableExecutionErrorCode(error) ?? "evidence_command_failed",
           error instanceof Error ? error.message : String(error)
         );
       }
     },
   };
+}
+
+function stableExecutionErrorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && new Set([
+    "isolation_capability_unavailable",
+    "isolation_revocation_failed",
+    "outcome_unknown",
+    "backend_unavailable",
+    "identity_mismatch",
+    "cleanup_blocked",
+    "launch_not_proven",
+  ]).has(code) ? code : undefined;
 }
 
 function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId?: string }> {
@@ -249,12 +263,17 @@ async function artifactForOutput(
   artifacts: ArtifactStore,
   output: ReturnType<typeof outputFor>,
   label: string,
-): Promise<{ hash: string }> {
+): Promise<{ hash: string; fallbackLossy: boolean }> {
   if (output.spillArtifactId) {
-    await artifacts.get(output.spillArtifactId);
-    return { hash: output.spillArtifactId };
+    try {
+      await artifacts.verify(output.spillArtifactId);
+      return { hash: output.spillArtifactId, fallbackLossy: false };
+    } catch {
+      // Runtime cleanup remains authoritative; artifact framing degrades to its bounded tail.
+    }
   }
-  return await artifacts.put(Buffer.from(output.tail), "text/plain", label);
+  const artifact = await artifacts.put(Buffer.from(output.tail), "text/plain", label);
+  return { hash: artifact.hash, fallbackLossy: output.spillArtifactId !== undefined };
 }
 
 function failure(code: string, message: string): ToolExecutionOutput {

@@ -72,6 +72,8 @@ export interface StartManagedProcessInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** Runner backend seam; ordinary managed-process callers retain ambient inheritance. */
+  inheritEnvironment?: boolean;
 }
 
 export interface ManagedProcessSnapshot {
@@ -281,7 +283,9 @@ export class ManagedProcessService {
       command: input.command,
       args: [...(input.args ?? [])],
       cwd: record.cwd,
-      env: mergeManagedEnvironment(process.env, input.env ?? {}),
+      env: input.inheritEnvironment === false
+        ? { ...(input.env ?? {}) }
+        : mergeManagedEnvironment(process.env, input.env ?? {}),
       stopDeadlineMs: this.stopDeadlineMs,
     });
     let supervisorStatus: SupervisorStatus;

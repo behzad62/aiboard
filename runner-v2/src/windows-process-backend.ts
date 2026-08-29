@@ -69,6 +69,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       args: [...request.intent.arguments],
       cwd: ".",
       env: { ...request.environment },
+      inheritEnvironment: false,
     }, {
       runId: request.intent.runId,
       sessionId,

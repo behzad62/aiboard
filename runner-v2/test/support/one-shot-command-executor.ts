@@ -1,80 +1,134 @@
-import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { TestContext } from "node:test";
 
-import type { OneShotCommandExecutor } from "../../src/one-shot-command-executor.js";
+import { ArtifactStore } from "../../src/artifact-store.js";
+import { createChildEnvironmentFactory } from "../../src/child-environment.js";
+import type { PermissionProfile } from "../../src/contracts.js";
+import { createExecutionGrantAuthority } from "../../src/execution-grants.js";
+import { createExecutionIsolationRegistry, createExecutionIsolationSelector } from "../../src/execution-isolation-provider.js";
+import { ManagedProcessService } from "../../src/managed-process.js";
+import {
+  createBoundedProcessOutputFactory,
+  createRuntimeBackedOneShotCommandExecutor,
+  type OneShotCommandExecutor,
+} from "../../src/one-shot-command-executor.js";
+import { createProcessBackendRegistration, createProcessBackendRegistry } from "../../src/process-backend.js";
+import type { ProcessBackend } from "../../src/process-backend.js";
+import { createPosixProcessBackend } from "../../src/posix-process-backend.js";
+import { createSubprocessRuntimeKernel, type ReconciliationOutcome } from "../../src/subprocess-runtime.js";
+import { createWindowsProcessBackend } from "../../src/windows-process-backend.js";
 
-/** Test-only native fixture. Production command families may never use this path. */
-export function createTestOneShotCommandExecutor(): OneShotCommandExecutor {
-  return {
-    execute: async (request) => await new Promise((resolve) => {
-      const child = spawn(request.executable, [...request.arguments], {
-        cwd: request.workingDirectory,
-        env: { ...process.env, ...(request.explicitEnvironment ?? {}) },
-        shell: false,
-        windowsHide: true,
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      let timedOut = false;
-      let cancelled = false;
-      let settled = false;
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      const stop = () => {
-        if (!child.pid) return;
-        if (process.platform === "win32") {
-          const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
-            shell: false,
-            windowsHide: true,
-            stdio: "ignore",
-          });
-          killer.unref();
-        } else {
-          try { process.kill(-child.pid, "SIGKILL"); } catch {}
-        }
-        try { child.kill("SIGKILL"); } catch {}
-      };
-      const abort = () => { cancelled = true; stop(); };
-      request.context.signal?.addEventListener("abort", abort, { once: true });
-      const timer = setTimeout(() => { timedOut = true; stop(); }, request.timeoutMs);
-      timer.unref();
-      const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        request.context.signal?.removeEventListener("abort", abort);
-        const output = [
-          disposition("stdout", Buffer.concat(stdout)),
-          disposition("stderr", Buffer.concat(stderr)),
-        ];
-        resolve({
-          process: {
-            logicalProcessId: `test-${request.context.callId}`,
-            outcome: timedOut ? "timed_out" : cancelled ? "cancelled" : "exited",
-            ...(exitCode === null ? {} : { exitCode }),
-            ...(signal ? { signal } : {}),
-            finishedAt: new Date().toISOString(),
-            output,
-            cleanup: { state: "verified_empty", verifiedAt: new Date().toISOString() },
-          },
-          enforcement: "unconfined_explicit_full",
-          disclosure: "unconfined_explicit_full",
-        });
-      };
-      child.once("error", () => finish(null, null));
-      child.once("close", finish);
-    }),
-  };
+export interface ProductionOneShotCommandFixture {
+  readonly execution: OneShotCommandExecutor;
+  readonly internalExecution: OneShotCommandExecutor;
+  readonly executionGrants: ReturnType<typeof createExecutionGrantAuthority>;
+  readonly artifacts: ArtifactStore;
+  readonly root: string;
+  reconcileStartup(): Promise<ReconciliationOutcome[]>;
+  close(): Promise<void>;
 }
 
-function disposition(stream: "stdout" | "stderr", bytes: Buffer) {
-  return {
-    stream,
-    tail: bytes.toString("utf8"),
-    totalBytes: bytes.byteLength,
-    truncated: false,
-    spillBytes: 0,
-    lossyBytes: 0,
-  } as const;
+export interface ProductionOneShotCommandFixtureOptions {
+  readonly artifacts?: ArtifactStore;
+  readonly spillFault?: boolean;
+  readonly permissionProfile?: PermissionProfile;
+  readonly backend?: ProcessBackend;
+  readonly backendId?: string;
+  readonly leaseDurationMs?: number;
+  readonly leaseHeartbeatMs?: number;
+}
+
+/** Test-scoped instance of the production grant/isolation/runtime/backend/output graph. */
+export function createProductionOneShotCommandFixture(
+  t?: TestContext,
+  options: ProductionOneShotCommandFixtureOptions = {},
+): ProductionOneShotCommandFixture {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-production-one-shot-"));
+  const artifacts = options.artifacts ?? new ArtifactStore(join(root, "artifacts"));
+  const projectBoundary = join(root, "project-boundary");
+  mkdirSync(projectBoundary);
+  const environments = createChildEnvironmentFactory({
+    credentialResolver: { consume: () => { throw new Error("Unexpected credential grant."); } },
+  });
+  const managed = process.platform === "win32"
+    ? new ManagedProcessService({ stateDirectory: join(root, "managed") })
+    : undefined;
+  const backend = options.backend ?? (process.platform === "win32"
+    ? createWindowsProcessBackend({ jobObjects: { service: managed! } })
+    : createPosixProcessBackend({ stateDirectory: join(root, "backend") }));
+  const kernel = createSubprocessRuntimeKernel({
+    registry: createProcessBackendRegistry([createProcessBackendRegistration({
+      stableAdapterId: `test-${process.platform}-production-adapter`,
+      backendId: options.backendId ?? (process.platform === "win32" ? "runner-windows-job-v1" : "runner-posix-process-group-v1"),
+      codeDigest: createHash("sha256").update("test-production-platform-adapter-v1").digest("hex"),
+      configDigest: createHash("sha256").update("test-production-one-shot-v1").digest("hex"),
+      backend,
+    })]),
+    state: { kind: "sqlite", path: join(root, "runtime.sqlite") },
+    stateKey: randomBytes(32),
+    clock: {
+      now: () => new Date(),
+      sleep: async (milliseconds) => await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, milliseconds);
+        timer.unref();
+      }),
+    },
+    environments,
+    outputs: createBoundedProcessOutputFactory({
+      spillRoot: options.spillFault ? projectBoundary : join(root, "spill"),
+      projectRoot: projectBoundary,
+      artifacts,
+    }),
+    ...(options.leaseDurationMs ? { leaseDurationMs: options.leaseDurationMs } : {}),
+    ...(options.leaseHeartbeatMs ? { leaseHeartbeatMs: options.leaseHeartbeatMs } : {}),
+  });
+  const executionGrants = createExecutionGrantAuthority();
+  const execution = createRuntimeBackedOneShotCommandExecutor({
+    runtime: kernel.runtime,
+    runtimeGrants: kernel.grantsController,
+    executionGrants,
+    isolation: createExecutionIsolationSelector(createExecutionIsolationRegistry([])),
+    permissionProfile: options.permissionProfile ?? "full",
+    ambientEnvironment: Object.freeze(Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)),
+    )),
+    environments,
+  });
+  const internalExecution: OneShotCommandExecutor = {
+    execute: async (request) => {
+      const { executionGrant: _ignored, ...context } = request.context;
+      return await execution.execute({ ...request, context: { ...context, runnerInternal: true } });
+    },
+  };
+  let closed = false;
+  const fixture: ProductionOneShotCommandFixture = {
+    execution,
+    internalExecution,
+    executionGrants,
+    artifacts,
+    root,
+    reconcileStartup: async () => await kernel.runtime.reconcileStartup(),
+    async close() {
+      if (closed) return;
+      closed = true;
+      await executionGrants.revokeAll("cleanup");
+      await kernel.runtime.reconcileStartup();
+      kernel.readOnlyStore.close();
+      managed?.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+  t?.after(async () => await fixture.close());
+  return fixture;
+}
+
+/** Existing tests use Runner-internal grants but the full production runtime graph. */
+export function createTestOneShotCommandExecutor(
+  t?: TestContext,
+  options: ProductionOneShotCommandFixtureOptions = {},
+): OneShotCommandExecutor {
+  return createProductionOneShotCommandFixture(t, options).internalExecution;
 }

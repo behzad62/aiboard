@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import { ToolBroker } from "../src/tool-broker.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+import { createProductionOneShotCommandFixture } from "./support/one-shot-command-executor.js";
 
 test("evidence command routes through shared execution and keeps complete spill artifacts", async () => {
   const fixture = evidenceFixture();
@@ -63,12 +65,146 @@ test("evidence command routes through shared execution and keeps complete spill 
   }
 });
 
-test("evidence command records mechanical facts and artifacts without a verdict", async () => {
+test("evidence family production graph scrubs inherited secrets and survives output beyond spill capacity", async (t) => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  const secretName = "RUNNER_MATRIX_INHERITED_SECRET";
+  const previous = process.env[secretName];
+  process.env[secretName] = "must-not-reach-evidence-child";
+  const graph = createProductionOneShotCommandFixture(t, { artifacts });
+  const broker = new ToolBroker({
+    permissionProfile: "full", workspacePath: fixture.workspace,
+    executionGrants: graph.executionGrants, toolTimeoutMs: 30_000,
+  });
+  for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: graph.execution })) broker.register(tool);
+  try {
+    const result = await broker.invoke({
+      type: "tool_call", callId: "evidence-production-large", name: "run_evidence_command",
+      arguments: {
+        label: "large", command: process.execPath, timeoutMs: 25_000,
+        args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker+"|"); process.stdout.write("x".repeat(65*1024*1024)); process.stdout.write("|"+marker);`],
+      },
+    }, { runId: "run_1", sessionId: "worker_session", actor: { role: "worker", id: "worker_1" } });
+    assert.equal(result.isError, false, result.error?.message ?? "evidence command unexpectedly failed");
+    const record = jsonValue(result) as { fact: { stdoutArtifactHash: string; outputLossy: boolean; disclosure: string } };
+    const output = await artifacts.get(record.fact.stdoutArtifactHash);
+    assert.equal(output.includes(Buffer.from("must-not-reach-evidence-child")), false);
+    assert.equal(output.includes(Buffer.from("absent")), true);
+    assert.equal(record.fact.outputLossy, true);
+    assert.equal(record.fact.disclosure, "unconfined_explicit_full");
+  } finally {
+    if (previous === undefined) delete process.env[secretName]; else process.env[secretName] = previous;
+    store.close();
+    fixture.cleanup();
+  }
+});
+
+test("evidence family production graph keeps its mechanical outcome on spill setup failure", async (t) => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  const graph = createProductionOneShotCommandFixture(t, { artifacts, spillFault: true });
+  const broker = new ToolBroker({
+    permissionProfile: "full", workspacePath: fixture.workspace, executionGrants: graph.executionGrants,
+  });
+  for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: graph.execution })) broker.register(tool);
+  try {
+    const result = await broker.invoke({
+      type: "tool_call", callId: "evidence-production-spill-fault", name: "run_evidence_command",
+      arguments: { label: "spill fault", command: process.execPath, args: ["-e", "process.stdout.write('z'.repeat(256*1024))"] },
+    }, { runId: "run_1", sessionId: "worker_session", actor: { role: "worker", id: "worker_1" } });
+    assert.equal(result.isError, false);
+    const record = jsonValue(result) as { fact: { outputLossy: boolean; exitCode: number; stdoutArtifactHash: string } };
+    assert.equal(record.fact.exitCode, 0);
+    assert.equal(record.fact.outputLossy, true);
+    assert.match((await artifacts.get(record.fact.stdoutArtifactHash)).toString(), /runner output lossy/);
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
+test("evidence command falls back to its bounded tail when a spill is missing or corrupt", async (t) => {
+  for (const mode of ["missing", "corrupt"] as const) {
+    await t.test(mode, async () => {
+      const fixture = evidenceFixture();
+      const store = new SqliteEvidenceStore(fixture.database);
+      const artifacts = new ArtifactStore(fixture.artifacts);
+      try {
+        let spill = { hash: "a".repeat(64) };
+        if (mode === "corrupt") {
+          const created = await artifacts.put(Buffer.from("complete spill"), "text/plain", "spill");
+          writeFileSync(created.path, "corrupt bytes");
+          spill = { hash: created.hash };
+        }
+        const execution: OneShotCommandExecutor = {
+          execute: async () => ({
+            process: {
+              logicalProcessId: `evidence-${mode}`,
+              outcome: "exited",
+              exitCode: 0,
+              finishedAt: new Date().toISOString(),
+              output: [
+                { stream: "stdout", tail: `bounded-${mode}`, totalBytes: 256 * 1024, truncated: true, spillArtifactId: spill.hash, spillBytes: 128 * 1024, lossyBytes: 0 },
+                { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+              ],
+              cleanup: { state: "verified_empty", verifiedAt: new Date().toISOString() },
+            },
+            enforcement: "unconfined_explicit_full",
+            disclosure: "unconfined_explicit_full",
+          }),
+        };
+        const registry = new ToolRegistry();
+        for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution })) registry.register(tool);
+        const result = await registry.invoke({
+          type: "tool_call", callId: `spill-${mode}`, name: "run_evidence_command",
+          arguments: { label: mode, command: "fixture", args: [] },
+        }, { ...workerContext(fixture.workspace), executionGrant: {} as never });
+        assert.equal(result.isError, false);
+        const record = jsonValue(result) as { fact: { stdoutArtifactHash: string; outputLossy: boolean; exitCode: number } };
+        assert.equal(record.fact.exitCode, 0);
+        assert.equal(record.fact.outputLossy, true);
+        assert.equal((await artifacts.get(record.fact.stdoutArtifactHash)).toString(), `bounded-${mode}`);
+      } finally {
+        store.close();
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test("evidence command preserves stable isolation and runtime failure codes", async (t) => {
+  for (const code of ["isolation_capability_unavailable", "isolation_revocation_failed", "outcome_unknown"] as const) {
+    await t.test(code, async () => {
+      const fixture = evidenceFixture();
+      const store = new SqliteEvidenceStore(fixture.database);
+      try {
+        const registry = new ToolRegistry();
+        for (const tool of createEvidenceTools({
+          store, artifacts: new ArtifactStore(fixture.artifacts), taskId: "task_a",
+          execution: { execute: async () => { throw Object.assign(new Error(code), { code }); } },
+        })) registry.register(tool);
+        const result = await registry.invoke({
+          type: "tool_call", callId: code, name: "run_evidence_command",
+          arguments: { label: code, command: "fixture", args: [] },
+        }, { ...workerContext(fixture.workspace), executionGrant: {} as never });
+        assert.equal(result.isError, true);
+        assert.equal(result.error?.code, code);
+      } finally {
+        store.close();
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test("evidence command records mechanical facts and artifacts without a verdict", async (t) => {
   const fixture = evidenceFixture();
   let store = new SqliteEvidenceStore(fixture.database);
   const artifacts = new ArtifactStore(fixture.artifacts);
   try {
-    const registry = tools(store, artifacts);
+    const registry = tools(store, artifacts, t);
     const result = await registry.invoke(
       {
         type: "tool_call",
@@ -100,14 +236,11 @@ test("evidence command records mechanical facts and artifacts without a verdict"
     assert.equal(record.fact.exitCode, 3);
     assert.equal((record as { attempt?: number }).attempt, 1);
     assert.equal("verdict" in record, false);
-    assert.equal(
+    assert.match(
       (await artifacts.get(record.fact.stdoutArtifactHash)).toString("utf8"),
-      "APPROVED complete"
+      /APPROVED complete$/,
     );
-    assert.equal(
-      (await artifacts.get(record.fact.stderrArtifactHash)).toString("utf8"),
-      "note"
-    );
+    assert.match((await artifacts.get(record.fact.stderrArtifactHash)).toString("utf8"), /note$/);
     store.close();
 
     store = new SqliteEvidenceStore(fixture.database);
@@ -125,12 +258,12 @@ test("evidence command records mechanical facts and artifacts without a verdict"
   }
 });
 
-test("evidence inspection is factual, read-only, and task scoped", async () => {
+test("evidence inspection is factual, read-only, and task scoped", async (t) => {
   const fixture = evidenceFixture();
   const store = new SqliteEvidenceStore(fixture.database);
   const artifacts = new ArtifactStore(fixture.artifacts);
   try {
-    const workerTools = tools(store, artifacts);
+    const workerTools = tools(store, artifacts, t);
     await workerTools.invoke(
       {
         type: "tool_call",
@@ -170,12 +303,12 @@ test("evidence inspection is factual, read-only, and task scoped", async () => {
   }
 });
 
-test("evidence command cannot escape the task workspace", async () => {
+test("evidence command cannot escape the task workspace", async (t) => {
   const fixture = evidenceFixture();
   const store = new SqliteEvidenceStore(fixture.database);
   const artifacts = new ArtifactStore(fixture.artifacts);
   try {
-    const result = await tools(store, artifacts).invoke(
+    const result = await tools(store, artifacts, t).invoke(
       {
         type: "tool_call",
         callId: "escape",
@@ -216,7 +349,7 @@ test("evidence commands declare arbitrary process execution as an external effec
   }
 });
 
-test("benchmark evidence policy rejects commands outside the exact allowlist", async () => {
+test("benchmark evidence policy rejects commands outside the exact allowlist", async (t) => {
   const fixture = evidenceFixture();
   const store = new SqliteEvidenceStore(fixture.database);
   const artifacts = new ArtifactStore(fixture.artifacts);
@@ -227,7 +360,7 @@ test("benchmark evidence policy rejects commands outside the exact allowlist", a
       artifacts,
       taskId: "task_a",
     allowedCommands: [`${process.execPath} --version`],
-      execution: createTestOneShotCommandExecutor(),
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
     })) registry.register(tool);
     const result = await registry.invoke(
       {
@@ -288,7 +421,7 @@ test("exact evidence lookup resolves records beyond the oldest 1000 and omits mi
   }
 });
 
-function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
+function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore, t: TestContext) {
   const registry = new ToolRegistry();
   for (const tool of createEvidenceTools({
     store,
@@ -296,7 +429,7 @@ function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
       taskId: "task_a",
       maxOutputBytes: 1024 * 1024,
       attempt: 1,
-      execution: createTestOneShotCommandExecutor(),
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
   })) registry.register(tool);
   return registry;
 }
