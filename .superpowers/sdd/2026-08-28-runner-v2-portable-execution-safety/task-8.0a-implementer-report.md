@@ -293,3 +293,49 @@ Each behavior below was added test-first. RED commands were run before the liste
 - Production/tests plus this force-added report: `88f6059d` (`fix(runner): fence recovered cleanup effects`).
 - Report-hash follow-up: committed immediately after the production hash is recorded.
 - No unresolved implementation or validation concern is known. The independent 8.0A re-review exit gate remains required.
+
+## Fix Round 4 — re-review base `e493b5757a46c5388aa02cdcde3caa16b3473bc1`
+
+### Root cause, scope, and correction
+
+- This round addresses the sole open Important finding and its linked durability warning from `task-8.0a-rereview-3.md`. No brief, review, ledger, controller evidence, 8.0B code, production family/runtime/CLI/backend adapter, Git/MCP/LSP/managed/provider routing, construction graph, or child launch code changed.
+- Root cause: the version-2 parser initialized cleanup takeover validation from `cleanupProvenance.originOwnerId` and then compared the first transition only to that same caller-provided value. Changing both fields coherently therefore changed the root of trust and passed every continuity check.
+- Schema version 3 adds a top-level immutable `cleanupCreationAuthority` fact containing the exact cleanup effect ID, owner ID, fence, and creation time. It is written atomically with `begin_cleanup`, is never re-fenced during takeover, is deep-frozen/cloned/digest-sensitive, and is cross-checked against both the immutable cleanup effect facts and the provenance origin before the transition chain is followed.
+- The raw parser now rejects a missing anchor, a null anchor on a cleanup record, anchor/provenance owner mismatch, a coherent provenance-only owner forgery, coherent wrong-origin fencing, discontinuous owner or fence chains, changed effect identity, and absent provenance. A valid two-step fence-1 -> fence-2 -> fence-3 takeover remains accepted and preserves the same `cleanup-1` effect ID.
+- SQLite still HMAC-verifies the complete durable row before parsing. The regression also changes the anchor, provenance origin, and first transition coherently in raw SQLite JSON without changing its integrity tag; reopen/read fails typed `invalid_record` before the forged row can be returned.
+- Active version-2 records remain readable. On the next authenticated reducer mutation, an integrity-protected version-2 cleanup fact is upgraded to version 3 by deriving the immutable creation anchor from the already durable provenance/effect evidence. Historical version-0 terminal records remain readable only in their legacy no-anchor/no-provenance shape; active schema-0 downgrade and unsupported schema-4 behavior remain unchanged.
+- The existing cleaned and blocked expired-cleanup authority regressions now use the real SQLite store. After takeover and settlement, they close/reopen SQLite and construct a fresh `SessionAuthority`: released cleanup refuses recovery without replay, while blocked cleanup returns the durable blocker without replay. Both callbacks execute exactly once before the first close.
+
+### TDD and fault evidence
+
+| Cycle | Exact RED and observed result | Minimum implementation / revert | Exact GREEN result |
+| --- | --- | --- | --- |
+| Independent cleanup-creation anchor and coherent forgery | `npx tsx --test --test-name-pattern="anchors multi-step cleanup takeover provenance and rejects coherent forgery" runner-v2/test/streaming-session-store.test.ts` failed `0/1` with `StreamingSessionStoreError: streaming session record has unknown field cleanupCreationAuthority`. The schema had no independent pre-takeover authority fact. | Added schema version 3, the top-level immutable creation fact, exact parser, state cross-check, reducer creation, and SessionAuthority initial `null` fact. The test covers missing/null anchor, coherent two-field owner forgery, anchor mismatch, coherent wrong origin fence, owner/fence discontinuity, changed effect ID, absent provenance, valid multi-step takeover, and SQLite HMAC tamper refusal. | Same exact command passed `1/1` (`47.4015ms` on the first GREEN; `46.6478ms` after the required mutation revert; fresh focused rerun `47.9522ms`). |
+| Required anchor-cross-check mutation / revert | Temporarily removed only `cleanupCreationAuthority.ownerId !== provenance.originOwnerId` with `apply_patch`. The exact coherent-forgery command failed `0/1` with `AssertionError: Missing expected exception`, proving the reviewer’s two-field forgery passed without the independent-anchor cross-check. | Restored that exact owner cross-check with `apply_patch`; no mutation remains. | Same exact command passed `1/1` (`46.6478ms`). |
+| Version-2 recovery-safe upgrade | `npx tsx --test --test-name-pattern="upgrades integrity-protected version-2 cleanup evidence" runner-v2/test/streaming-session-store.test.ts` failed `0/1` with `StreamingSessionStoreError: streaming session record is missing required field cleanupCreationAuthority` during takeover. | Added one normalization path used by every version-upgrading reducer mutation. For authenticated legacy cleanup it derives the creation fact from the existing immutable effect/provenance origin; no effect ID, ownership chain, access, input, or relaunch state changes. | Same exact command passed `1/1` (`23.5367ms`). |
+| SQLite terminal SessionAuthority recovery coverage | The reviewer identified that both existing regressions used the in-memory store. The two tests were changed before further implementation to use SQLite, close/reopen after settlement, and create a fresh `SessionAuthority`. The shared reducer already had the correct terminal behavior, so these permanent coverage additions were GREEN without a production change. | `cleaned` asserts one `cleanup-1` callback, durable `released`, reopen recovery refusal, and zero reopened callbacks. `blocked` asserts one callback, durable `cleanup_blocked`, reopened blocker return, and zero later callbacks. | `npx tsx --test --test-name-pattern="recovers an expired adopted pending cleanup|durably blocks a re-fenced expired adopted cleanup" runner-v2/test/session-authority.test.ts` passed `2/2` (`49.8326ms`, `35.9987ms` on the first SQLite run; fresh rerun passed `2/2`). |
+
+### Fresh validation
+
+| Command | Result |
+| --- | --- |
+| `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts` | Passed `57` tests, `0` failures. |
+| `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts runner-v2/test/interactive-process-channel.test.ts runner-v2/test/execution-grants.test.ts` | Passed `86` tests, `0` failures. |
+| `npx tsx --test runner-v2/test/execution-grants.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/one-shot-command-executor.test.ts` | Passed `107` tests, `0` failures. |
+| `npm run typecheck:runner-v2` | Passed: `tsc -p runner-v2/tsconfig.json --noEmit`. |
+| `npx eslint runner-v2/src/streaming-session-store.ts runner-v2/src/session-authority.ts runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts` | Passed with no output. |
+| `git diff --check e493b5757a46c5388aa02cdcde3caa16b3473bc1 --` | Passed (exit `0`; only Git line-ending warnings). |
+
+### Cleanup and fix-only self-review
+
+- Every new/strengthened SQLite test uses a task-owned `mkdtemp` root outside the repository and closes stores before `rm(..., { recursive: true, force: true })` in `finally`.
+- Final read-only scan covered `runner-v2-stream-cleanup-provenance-*`, `runner-v2-stream-cleanup-v2-upgrade-*`, `runner-v2-session-expired-cleanup-*`, and `runner-v2-session-expired-cleanup-blocked-*`; output was `No Task 8.0A Fix Round 4 temporary roots remain.`
+- Fix-only diff before the report contained exactly `runner-v2/src/streaming-session-store.ts`, `runner-v2/src/session-authority.ts`, `runner-v2/test/streaming-session-store.test.ts`, and `runner-v2/test/session-authority.test.ts`. The only existing production import remains `interactive-process-channel.ts` importing SessionAuthority; no child family imports the streaming store or new anchor.
+- The same cleanup effect ID is retained across every re-fence and terminal settlement. The record owner/fence, cleanup effect fence, and takeover append remain one reducer result and one SQLite CAS/HMAC row update. Stale/pre-expiry/wrong-owner refusal and lease expiry checks execute before mutation or callback.
+- The anchor adds no opaque grant, token, payload, port, live handle, input, access expansion, or relaunch authority. `cleanup_pending`, `cleanup_blocked`, and `released` remain unavailable to launch/family authorization, and generic expired-owner mutation remains closed.
+
+### Fix Round 4 commits and concerns
+
+- Production and regression tests: `a9550821` (`fix(runner): anchor cleanup takeover authority`).
+- This force-added report evidence is committed separately immediately after this section; the final handoff lists its exact hash.
+- No unresolved implementation or validation concern is known. The prescribed independent re-review remains the only 8.0A exit gate before 8.0B may begin.
