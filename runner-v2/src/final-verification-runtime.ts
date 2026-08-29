@@ -1,5 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
-
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -23,6 +21,11 @@ import type {
   EvidenceStore,
 } from "./evidence-store.js";
 import { runGit } from "./git-command.js";
+import {
+  outputFor,
+  type OneShotCommandExecutor,
+  type OneShotCommandResult,
+} from "./one-shot-command-executor.js";
 import type {
   VerificationWorkspace,
   VerificationWorkspaceManager,
@@ -157,6 +160,7 @@ export interface FinalVerificationRuntimeOptions {
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
   validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
+  execution?: OneShotCommandExecutor;
 }
 
 export interface FinalVerificationRunInput {
@@ -296,6 +300,7 @@ interface ProcessResult {
   cancelled: boolean;
   outputTruncated: boolean;
   startError?: Error;
+  routed?: OneShotCommandResult;
 }
 
 interface RepositoryStateResult {
@@ -328,6 +333,7 @@ export class FinalVerificationRuntime {
   private readonly maximumTimeoutMs: number;
   private readonly maximumDomBytes: number;
   private readonly validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
+  private readonly execution?: OneShotCommandExecutor;
   private runOrdinal = 0;
 
   constructor(options: FinalVerificationRuntimeOptions) {
@@ -380,6 +386,7 @@ export class FinalVerificationRuntime {
       "maximumDomBytes",
     );
     this.validatePortLease = options.validatePortLease;
+    this.execution = options.execution;
     if (this.defaultTimeoutMs > this.maximumTimeoutMs) {
       throw new Error("defaultTimeoutMs cannot exceed maximumTimeoutMs.");
     }
@@ -547,6 +554,7 @@ export class FinalVerificationRuntime {
         input.provisioning,
         input.workspace,
         input.signal,
+        `${input.generationId}:${check.category}:${input.runOrdinal}`,
       );
       if (issue) {
         base.issues.push(issue);
@@ -591,22 +599,23 @@ export class FinalVerificationRuntime {
         command,
         input.workspace.path,
         input.signal,
-        this.maxOutputBytes,
         this.defaultTimeoutMs,
         this.maximumTimeoutMs,
+        this.execution,
+        {
+          runId: this.runId,
+          sessionId: this.taskId,
+          actor: this.actor,
+          taskId: this.taskId,
+          callId: `${input.generationId}:${check.category}:${index}:${input.runOrdinal}`,
+        },
       );
       const finishedAt = this.clock();
       const endState = await repositoryState(input.workspace.path);
-      const stdoutArtifact = await this.artifacts.put(
-        execution.stdout,
-        "text/plain",
-        `${check.category} ${command.label} stdout`,
-      );
-      const stderrArtifact = await this.artifacts.put(
-        execution.stderr,
-        "text/plain",
-        `${check.category} ${command.label} stderr`,
-      );
+      const [stdoutArtifact, stderrArtifact] = await Promise.all([
+        artifactForFinalOutput(this.artifacts, execution, "stdout", `${check.category} ${command.label} stdout`),
+        artifactForFinalOutput(this.artifacts, execution, "stderr", `${check.category} ${command.label} stderr`),
+      ]);
       const fact: FinalVerificationCommandFact = {
         kind: "command",
         category: executableCategory,
@@ -622,6 +631,13 @@ export class FinalVerificationRuntime {
         timedOut: execution.timedOut,
         cancelled: execution.cancelled,
         outputTruncated: execution.outputTruncated,
+        ...(execution.routed ? {
+          outputLossy: execution.routed.process.output.some((entry) => entry.lossyBytes > 0),
+          cleanup: execution.routed.process.cleanup,
+          enforcement: execution.routed.enforcement,
+          disclosure: execution.routed.disclosure,
+          ...(execution.routed.providerId ? { providerId: execution.routed.providerId } : {}),
+        } : {}),
         stdoutArtifactHash: stdoutArtifact.hash,
         stderrArtifactHash: stderrArtifact.hash,
         repositoryRevision: input.workspace.targetRevision,
@@ -649,9 +665,6 @@ export class FinalVerificationRuntime {
       }
       if (execution.cancelled) {
         base.issues.push(`${check.category} command ${command.label} was cancelled.`);
-      }
-      if (execution.outputTruncated) {
-        base.issues.push(`${check.category} command ${command.label} exceeded the output limit.`);
       }
       if (startState.revision !== input.workspace.targetRevision) {
         base.issues.push(
@@ -687,6 +700,7 @@ export class FinalVerificationRuntime {
     provisioning: FinalVerificationDependencyProvisioning,
     workspace: VerificationWorkspace,
     signal?: AbortSignal,
+    invocationKey = "provision",
   ): Promise<string | undefined> {
     const command = provisioning.command;
     validateCommand(command, "build", 0, 600_000);
@@ -695,9 +709,16 @@ export class FinalVerificationRuntime {
       command,
       workspace.path,
       signal,
-      this.maxOutputBytes,
       this.defaultTimeoutMs,
       600_000,
+      this.execution,
+      {
+        runId: this.runId,
+        sessionId: this.taskId,
+        actor: this.actor,
+        taskId: this.taskId,
+        callId: `provision:${workspace.targetRevision}:${invocationKey}`,
+      },
     );
     const endState = await repositoryState(workspace.path);
     if (startState.revision !== workspace.targetRevision || endState.revision !== workspace.targetRevision) {
@@ -706,7 +727,6 @@ export class FinalVerificationRuntime {
     if (execution.startError) return `Dependency provisioning could not start: ${execution.startError.message}.`;
     if (execution.cancelled) return "Dependency provisioning was cancelled.";
     if (execution.timedOut) return "Dependency provisioning timed out.";
-    if (execution.outputTruncated) return "Dependency provisioning exceeded the output limit.";
     if (execution.signal) return `Dependency provisioning ended by ${execution.signal}.`;
     if (execution.exitCode !== 0) {
       return `Dependency provisioning exited with non-zero code ${String(execution.exitCode)}.`;
@@ -1441,9 +1461,16 @@ async function executeCommand(
   command: FinalVerificationCommand,
   cwd: string,
   signal: AbortSignal | undefined,
-  maxOutputBytes: number,
   defaultTimeoutMs: number,
   maximumTimeoutMs: number,
+  execution: OneShotCommandExecutor | undefined,
+  identity: {
+    runId: string;
+    sessionId: string;
+    actor: AgentActor;
+    taskId: string;
+    callId: string;
+  },
 ): Promise<ProcessResult> {
   if (signal?.aborted) {
     return {
@@ -1456,113 +1483,84 @@ async function executeCommand(
       outputTruncated: false,
     };
   }
+  if (!execution) {
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      timedOut: false,
+      cancelled: false,
+      outputTruncated: false,
+      startError: Object.assign(
+        new Error("The shared subprocess runtime is unavailable for final verification."),
+        { code: "process_runtime_unavailable" },
+      ),
+    };
+  }
   const timeoutMs = Math.min(command.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs);
-  return await new Promise<ProcessResult>((resolve) => {
-    const child = spawn(command.executable, [...command.args], {
-      cwd,
-      env: { ...process.env },
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+  try {
+    const routed = await execution.execute({
+      executable: command.executable,
+      arguments: command.args,
+      workingDirectory: cwd,
+      timeoutMs,
+      context: {
+        runId: identity.runId,
+        sessionId: identity.sessionId,
+        actor: identity.actor,
+        taskId: identity.taskId,
+        callId: identity.callId,
+        toolName: "final-verification.command",
+        runnerInternal: true,
+        ...(signal ? { signal } : {}),
+      },
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let outputBytes = 0;
-    let outputTruncated = false;
-    let timedOut = false;
-    let cancelled = false;
-    let settled = false;
-    let stopPromise: Promise<void> | undefined;
-
-    const stop = (): Promise<void> => {
-      if (!stopPromise) stopPromise = terminateProcessTree(child);
-      return stopPromise;
+    const stdout = outputFor(routed.process, "stdout");
+    const stderr = outputFor(routed.process, "stderr");
+    return {
+      exitCode: routed.process.exitCode ?? null,
+      signal: (routed.process.signal ?? null) as NodeJS.Signals | null,
+      stdout: Buffer.from(stdout.tail),
+      stderr: Buffer.from(stderr.tail),
+      timedOut: routed.process.outcome === "timed_out",
+      cancelled: routed.process.outcome === "cancelled",
+      outputTruncated: routed.process.output.some((entry) => entry.truncated),
+      routed,
+      ...(routed.process.outcome === "launch_failed"
+        ? { startError: new Error("Process launch was not proven.") }
+        : {}),
     };
-    const capture = (target: Buffer[], chunk: Buffer) => {
-      if (outputTruncated) return;
-      const remaining = maxOutputBytes - outputBytes;
-      if (remaining <= 0) {
-        outputTruncated = true;
-        void stop();
-        return;
-      }
-      if (chunk.byteLength > remaining) {
-        target.push(chunk.subarray(0, remaining));
-        outputBytes += remaining;
-        outputTruncated = true;
-        void stop();
-        return;
-      }
-      target.push(chunk);
-      outputBytes += chunk.byteLength;
+  } catch (error) {
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      timedOut: false,
+      cancelled: signal?.aborted === true,
+      outputTruncated: false,
+      startError: asError(error),
     };
-    child.stdout?.on("data", (chunk: Buffer) => capture(stdout, chunk));
-    child.stderr?.on("data", (chunk: Buffer) => capture(stderr, chunk));
-
-    const onAbort = () => {
-      if (settled) return;
-      cancelled = true;
-      void stop();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      timedOut = true;
-      void stop();
-    }, timeoutMs);
-    timeout.unref();
-
-    const finish = async (
-      exitCode: number | null,
-      exitedBy: NodeJS.Signals | null,
-      startError?: Error,
-    ) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      if (stopPromise) await stopPromise;
-      resolve({
-        exitCode,
-        signal: exitedBy,
-        stdout: Buffer.concat(stdout),
-        stderr: Buffer.concat(stderr),
-        timedOut,
-        cancelled,
-        outputTruncated,
-        ...(startError ? { startError } : {}),
-      });
-    };
-    child.once("error", (error) => void finish(null, null, error));
-    child.once("close", (exitCode, exitedBy) => void finish(exitCode, exitedBy));
-  });
+  }
 }
 
-async function terminateProcessTree(child: ChildProcess): Promise<void> {
-  if (!child.pid) return;
-  if (process.platform === "win32") {
-    await new Promise<void>((resolve) => {
-      const killer = spawn(
-        "taskkill.exe",
-        ["/pid", String(child.pid), "/t", "/f"],
-        { shell: false, windowsHide: true, stdio: "ignore" },
-      );
-      killer.once("error", () => resolve());
-      killer.once("close", () => resolve());
-    });
-    return;
+async function artifactForFinalOutput(
+  artifacts: ArtifactStore,
+  execution: ProcessResult,
+  stream: "stdout" | "stderr",
+  label: string,
+): Promise<{ hash: string }> {
+  const output = execution.routed ? outputFor(execution.routed.process, stream) : undefined;
+  if (output?.spillArtifactId) {
+    await artifacts.get(output.spillArtifactId);
+    return { hash: output.spillArtifactId };
   }
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    // The process may already have exited before cancellation reached it.
-  }
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // Preserve the original timeout/cancellation fact.
-  }
+  return await artifacts.put(
+    stream === "stdout" ? execution.stdout : execution.stderr,
+    "text/plain",
+    label,
+  );
 }
 
 function freezeCheck(check: FinalVerificationCheckResult): FinalVerificationCheckResult {

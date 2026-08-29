@@ -1,4 +1,5 @@
 import type { AgentActor } from "./agent-contracts.js";
+import type { ProcessCleanupStatus } from "./execution-safety-contracts.js";
 
 export interface CommandEvidenceFact {
   kind: "command";
@@ -13,6 +14,11 @@ export interface CommandEvidenceFact {
   timedOut: boolean;
   cancelled: boolean;
   outputTruncated: boolean;
+  outputLossy?: boolean;
+  cleanup?: ProcessCleanupStatus;
+  enforcement?: "write_confinement_exact_grant" | "unconfined_explicit_full";
+  disclosure?: "provider_specific_not_universal_boundary" | "unconfined_explicit_full";
+  providerId?: string;
   stdoutArtifactHash: string;
   stderrArtifactHash: string;
   repositoryRevision?: string;

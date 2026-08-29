@@ -6,8 +6,62 @@ import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
+import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+
+test("evidence command routes through shared execution and keeps complete spill artifacts", async () => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  const complete = Buffer.from("complete spill output");
+  try {
+    const spill = await artifacts.put(complete, "application/octet-stream", "runtime spill");
+    let calls = 0;
+    const execution: OneShotCommandExecutor = {
+      execute: async () => {
+        calls += 1;
+        return {
+          process: {
+            logicalProcessId: "evidence-process",
+            outcome: "exited",
+            exitCode: 0,
+            finishedAt: "2026-08-29T00:00:01.000Z",
+            output: [
+              { stream: "stdout", tail: "bounded-tail", totalBytes: 70 * 1024 * 1024, truncated: true, spillArtifactId: spill.hash, spillBytes: complete.byteLength, lossyBytes: 6 * 1024 * 1024 },
+              { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            ],
+            cleanup: { state: "verified_empty", verifiedAt: "2026-08-29T00:00:01.000Z" },
+          },
+          enforcement: "unconfined_explicit_full",
+          disclosure: "unconfined_explicit_full",
+        };
+      },
+    };
+    const registry = new ToolRegistry();
+    for (const tool of createEvidenceTools({
+      store,
+      artifacts,
+      taskId: "task_a",
+      execution,
+    })) registry.register(tool);
+    const result = await registry.invoke({
+      type: "tool_call",
+      callId: "spill",
+      name: "run_evidence_command",
+      arguments: { label: "spill", command: "fixture", args: [] },
+    }, { ...workerContext(fixture.workspace), executionGrant: {} as never });
+    assert.equal(calls, 1);
+    assert.equal(result.isError, false);
+    const record = jsonValue(result) as { fact: { stdoutArtifactHash: string; outputLossy: boolean } };
+    assert.deepEqual(await artifacts.get(record.fact.stdoutArtifactHash), complete);
+    assert.equal(record.fact.outputLossy, true);
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
 
 test("evidence command records mechanical facts and artifacts without a verdict", async () => {
   const fixture = evidenceFixture();
@@ -172,7 +226,8 @@ test("benchmark evidence policy rejects commands outside the exact allowlist", a
       store,
       artifacts,
       taskId: "task_a",
-      allowedCommands: [`${process.execPath} --version`],
+    allowedCommands: [`${process.execPath} --version`],
+      execution: createTestOneShotCommandExecutor(),
     })) registry.register(tool);
     const result = await registry.invoke(
       {
@@ -241,6 +296,7 @@ function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore) {
       taskId: "task_a",
       maxOutputBytes: 1024 * 1024,
       attempt: 1,
+      execution: createTestOneShotCommandExecutor(),
   })) registry.register(tool);
   return registry;
 }

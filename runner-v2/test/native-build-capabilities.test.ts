@@ -897,6 +897,7 @@ test("NativeBuildFactory handle close releases owned stores while retaining reco
     handle = undefined;
 
     assert.deepEqual(released, [
+      "subprocess_runtime",
       "budget_ledger",
       "tool_ledger",
       "session_store",

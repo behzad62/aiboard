@@ -6,7 +6,54 @@ import test from "node:test";
 
 import type { ToolResult } from "../src/agent-contracts.js";
 import { createProcessTools } from "../src/process-tools.js";
+import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 import { ToolBroker } from "../src/tool-broker.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+
+test("process.run routes through the injected shared executor and discloses Full enforcement", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-routed-"));
+  const calls: unknown[] = [];
+  const execution: OneShotCommandExecutor = {
+    execute: async (request) => {
+      calls.push(request);
+      return {
+        process: {
+          logicalProcessId: "process-route-1",
+          outcome: "exited",
+          exitCode: 0,
+          finishedAt: "2026-08-29T00:00:01.000Z",
+          output: [
+            { stream: "stdout", tail: "routed", totalBytes: 70 * 1024 * 1024, truncated: true, spillBytes: 64 * 1024 * 1024, lossyBytes: 6 * 1024 * 1024 },
+            { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+          ],
+          cleanup: { state: "verified_empty", verifiedAt: "2026-08-29T00:00:01.000Z" },
+        },
+        enforcement: "unconfined_explicit_full",
+        disclosure: "unconfined_explicit_full",
+      };
+    },
+  };
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace });
+  for (const tool of createProcessTools({ execution })) broker.register(tool);
+  try {
+    const result = await invoke(broker, "routed", { command: "runner-fixture", args: [] });
+    assert.equal(calls.length, 1);
+    assert.equal(result.isError, false, "output volume alone must not fail the command");
+    assert.match(text(result), /routed/);
+    assert.deepEqual(json(result), {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      cleanup: { state: "verified_empty", verifiedAt: "2026-08-29T00:00:01.000Z" },
+      outputLossy: true,
+      enforcement: "unconfined_explicit_full",
+      disclosure: "unconfined_explicit_full",
+    });
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
 
 test("process.run records stdout, stderr, and exit code without semantic verdicts", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-run-"));
@@ -20,11 +67,21 @@ test("process.run records stdout, stderr, and exit code without semantic verdict
       ],
     });
     assert.equal(result.isError, false);
-    assert.deepEqual(json(result), {
+    assert.deepEqual({
+      ...(json(result) as Record<string, unknown>),
+      cleanup: undefined,
+      outputLossy: undefined,
+      enforcement: undefined,
+      disclosure: undefined,
+    }, {
       exitCode: 2,
       signal: null,
       timedOut: false,
       cancelled: false,
+      cleanup: undefined,
+      outputLossy: undefined,
+      enforcement: undefined,
+      disclosure: undefined,
     });
     assert.match(text(result), /looks successful/);
     assert.match(text(result), /warning/);
@@ -52,7 +109,7 @@ test("exec mode does not interpret shell syntax and cwd cannot escape workspace"
       permissionProfile: "project",
       workspacePath: workspace,
     });
-    for (const tool of createProcessTools()) projectBroker.register(tool);
+    for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor() })) projectBroker.register(tool);
     const escaped = await invoke(projectBroker, "escape", {
       command: process.execPath,
       args: ["--version"],
@@ -87,7 +144,7 @@ test("project-autonomous mode cannot run arbitrary executables without approval"
     permissionProfile: "project",
     workspacePath: workspace,
   });
-  for (const tool of createProcessTools()) broker.register(tool);
+  for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor() })) broker.register(tool);
   try {
     const result = await invoke(broker, "approval", {
       command: process.execPath,
@@ -103,6 +160,7 @@ test("benchmark process policy permits only exact allowlisted invocations", asyn
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-benchmark-"));
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace });
   for (const tool of createProcessTools({
+    execution: createTestOneShotCommandExecutor(),
     allowedCommands: [`${process.execPath} --version`, "echo approved"],
   })) broker.register(tool);
   try {
@@ -135,7 +193,7 @@ function brokerWithProcesses(workspace: string): ToolBroker {
     workspacePath: workspace,
     toolTimeoutMs: 5_000,
   });
-  for (const tool of createProcessTools()) broker.register(tool);
+  for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor() })) broker.register(tool);
   return broker;
 }
 

@@ -67,6 +67,8 @@ export interface ExecutionIsolationAcquireRequest {
   readonly implementationDigest: string;
   readonly intent: ExecutionInvocationIntent;
   readonly grant: ConsumedExecutionGrantClaims;
+  /** Ephemeral centrally scrubbed environment; never persisted or projected. */
+  readonly environment?: Readonly<Record<string, string>>;
 }
 
 export interface ExecutionIsolationRecoveryResult {
@@ -96,6 +98,11 @@ export interface ExecutionIsolationProvider {
   release(lease: ExecutionIsolationLease): Promise<void>;
   recoverOwned(): Promise<ExecutionIsolationRecoveryResult>;
   acknowledgeRecovery(transitions: readonly ExecutionIsolationCleanupTransition[]): Promise<void>;
+  /** Runner-only launch bridge. Strict providers return only their owned executor command. */
+  prepareExecution?(
+    lease: ExecutionIsolationLease,
+    intent: ExecutionInvocationIntent,
+  ): Promise<ExecutionInvocationIntent>;
 }
 
 export interface ExecutionIsolationProviderRegistrationInput {
@@ -132,8 +139,13 @@ export interface ExecutionIsolationSelector {
     permissionProfile: PermissionProfile;
     intent: ExecutionInvocationIntent;
     grant: ConsumedExecutionGrantClaims;
+    readonly environment?: Readonly<Record<string, string>>;
   }): Promise<ExecutionIsolationSelection>;
   release(selection: ExecutionIsolationSelection): Promise<void>;
+  prepareExecution(
+    selection: ExecutionIsolationSelection,
+    intent: ExecutionInvocationIntent,
+  ): Promise<ExecutionInvocationIntent>;
   recoverOwnedLeases(): Promise<readonly {
     providerId: string;
     cleaned: number;
@@ -203,6 +215,9 @@ export function createExecutionIsolationProviderRegistration(
     release: source.release.bind(source),
     recoverOwned: source.recoverOwned.bind(source),
     acknowledgeRecovery: source.acknowledgeRecovery.bind(source),
+    ...(source.prepareExecution
+      ? { prepareExecution: source.prepareExecution.bind(source) }
+      : {}),
   });
   const registration = Object.freeze({
     kind: "runner-execution-isolation-provider-registration" as const,
@@ -297,6 +312,7 @@ export function createExecutionIsolationSelector(
       permissionProfile: PermissionProfile;
       intent: ExecutionInvocationIntent;
       grant: ConsumedExecutionGrantClaims;
+      readonly environment?: Readonly<Record<string, string>>;
     }): Promise<ExecutionIsolationSelection> {
       assertRunnerConsumedExecutionGrantClaims(input.grant);
       assertGrantMatches(input.intent, input.grant, input.permissionProfile, clock());
@@ -330,6 +346,7 @@ export function createExecutionIsolationSelector(
               implementationDigest: provider.implementationDigest,
               intent: input.intent,
               grant: input.grant,
+              environment: snapshotExecutionEnvironment(input.environment),
             }),
             provider,
             input.intent,
@@ -386,6 +403,20 @@ export function createExecutionIsolationSelector(
     async release(selection: ExecutionIsolationSelection): Promise<void> {
       if (selection.enforcement === "unconfined_explicit_full") return;
       await cleanupLease(selection, "revoked", "Isolation lease revocation failed.");
+    },
+    async prepareExecution(
+      selection: ExecutionIsolationSelection,
+      intent: ExecutionInvocationIntent,
+    ): Promise<ExecutionInvocationIntent> {
+      if (selection.enforcement === "unconfined_explicit_full") return intent;
+      const owned = active.get(selection.lease.leaseId);
+      if (!owned || owned.selection !== selection || !owned.provider.provider.prepareExecution) {
+        throw new ExecutionIsolationError(
+          "isolation_capability_unavailable",
+          "Selected strict isolation provider cannot produce an owned execution plan.",
+        );
+      }
+      return await owned.provider.provider.prepareExecution(selection.lease, intent);
     },
 
     async recoverOwnedLeases() {
@@ -938,6 +969,23 @@ function reserveGrant(grant: ConsumedExecutionGrantClaims): void {
       { cause: error },
     );
   }
+}
+
+function snapshotExecutionEnvironment(
+  value: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> {
+  if (!value) return Object.freeze({});
+  const output = Object.create(null) as Record<string, string>;
+  for (const [name, entry] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof entry !== "string") {
+      throw new ExecutionIsolationError(
+        "isolation_grant_mismatch",
+        "Prepared child environment is invalid.",
+      );
+    }
+    output[name] = entry;
+  }
+  return Object.freeze(output);
 }
 
 function boundedError(error: unknown): string {

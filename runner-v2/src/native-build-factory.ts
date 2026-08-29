@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { dirname, resolve } from "node:path";
@@ -138,10 +138,24 @@ import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
+import { createChildEnvironmentFactory } from "./child-environment.js";
+import { createExecutionGrantAuthority } from "./execution-grants.js";
+import {
+  createProcessBackendRegistration,
+  createProcessBackendRegistry,
+} from "./process-backend.js";
+import { createPosixProcessBackend } from "./posix-process-backend.js";
+import { createWindowsProcessBackend } from "./windows-process-backend.js";
+import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
+import {
+  createBoundedProcessOutputFactory,
+  createRuntimeBackedOneShotCommandExecutor,
+} from "./one-shot-command-executor.js";
 
 export type NativeBuildRuntimeResourceStage =
   | "capabilities"
   | "execution_isolation"
+  | "subprocess_runtime"
   | "evidence_store"
   | "scheduler_store"
   | "session_store"
@@ -511,6 +525,72 @@ export class NativeBuildFactory {
       });
     }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("managed_process_service");
+    initializationStage = "subprocess_runtime";
+    const childEnvironments = createChildEnvironmentFactory({
+      credentialResolver: {
+        consume: () => {
+          throw new Error("No Runner child-environment credential grant is configured.");
+        },
+      },
+    });
+    const processBackend = process.platform === "win32"
+      ? createWindowsProcessBackend({ jobObjects: { service: managedProcesses } })
+      : createPosixProcessBackend({ stateDirectory: join(runRoot, "process-backend") });
+    const subprocessKernel = createSubprocessRuntimeKernel({
+      registry: createProcessBackendRegistry([
+        createProcessBackendRegistration({
+          stableAdapterId: process.platform === "win32"
+            ? "runner-windows-job-adapter-v1"
+            : "runner-posix-process-group-adapter-v1",
+          backendId: process.platform === "win32"
+            ? "runner-windows-job-v1"
+            : "runner-posix-process-group-v1",
+          codeDigest: createHash("sha256")
+            .update(process.platform === "win32"
+              ? "runner-v2/windows-job-process-backend@1"
+              : "runner-v2/posix-process-backend@1")
+            .digest("hex"),
+          configDigest: createHash("sha256")
+            .update("runner-v2/native-one-shot-process-backend@1")
+            .digest("hex"),
+          backend: processBackend,
+        }),
+      ]),
+      state: { kind: "sqlite", path: join(runRoot, "subprocess-runtime.sqlite") },
+      stateKey: await loadOrCreateProcessStateKey(join(runRoot, "subprocess-runtime.key")),
+      clock: {
+        now: () => new Date(),
+        sleep: async (milliseconds) => await new Promise<void>((resolveSleep) => {
+          const timer = setTimeout(resolveSleep, milliseconds);
+          timer.unref();
+        }),
+      },
+      environments: childEnvironments,
+      outputs: createBoundedProcessOutputFactory({
+        spillRoot: join(runRoot, "subprocess-output"),
+        projectRoot: this.options.projectRoot,
+        artifacts: this.artifacts,
+      }),
+    });
+    await subprocessKernel.runtime.reconcileStartup();
+    const executionGrants = createExecutionGrantAuthority();
+    const commandExecution = createRuntimeBackedOneShotCommandExecutor({
+      runtime: subprocessKernel.runtime,
+      runtimeGrants: subprocessKernel.grantsController,
+      executionGrants,
+      isolation: executionIsolation,
+      permissionProfile: spec.permissionProfile,
+      ambientEnvironment: Object.freeze(Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)),
+      )),
+      environments: childEnvironments,
+    });
+    constructionResources.add("subprocess_runtime", async () => {
+      await executionGrants.revokeAll("cleanup");
+      await subprocessKernel.runtime.reconcileStartup();
+      subprocessKernel.readOnlyStore.close();
+    }, true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("subprocess_runtime");
     initializationStage = "runtime_drivers";
     const workerDriver = new NativeWorkerDriver({
       schedulerStore,
@@ -537,6 +617,8 @@ export class NativeBuildFactory {
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       managedProcesses,
+      execution: commandExecution,
+      executionGrants,
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -716,6 +798,7 @@ export class NativeBuildFactory {
             spec.runId,
             input.targetRevision,
           ),
+          execution: commandExecution,
         });
         const result = await verification.runCategory(
           {
@@ -2499,6 +2582,33 @@ async function loadHistoricalFinalVerificationDiagnostics(input: {
 function boundedErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length <= 512 ? message : `${message.slice(0, 512)}…`;
+}
+
+async function loadOrCreateProcessStateKey(path: string): Promise<Uint8Array> {
+  try {
+    const existing = await readFile(path);
+    if (existing.byteLength !== 32) throw new Error("Runner subprocess state key is invalid.");
+    return new Uint8Array(existing);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const bytes = randomBytes(32);
+  let handle;
+  try {
+    handle = await open(path, "wx", 0o600);
+    await handle.writeFile(bytes);
+    await handle.sync();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      const existing = await readFile(path);
+      if (existing.byteLength !== 32) throw new Error("Runner subprocess state key is invalid.");
+      return new Uint8Array(existing);
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+  return new Uint8Array(bytes);
 }
 
 function assertIsolationRecoveryClear(

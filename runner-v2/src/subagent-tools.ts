@@ -34,6 +34,8 @@ import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
 
 interface SpawnSubagentInput {
   assignment: string;
@@ -72,6 +74,8 @@ export interface SubagentToolsOptions {
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
   language?: LanguageIntelligenceProvider;
+  execution?: OneShotCommandExecutor;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 export function createSubagentTools(
@@ -163,6 +167,7 @@ function spawnSubagentTool(
         ...(options.permissions
           ? { approve: (request) => options.permissions!.requestTool(request) }
           : {}),
+        ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
       });
       const repository = new RepositoryIntelligence();
       const language = options.language ?? new TypeScriptIntelligence(repository);
@@ -184,6 +189,7 @@ function spawnSubagentTool(
       for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
       for (const tool of createSessionTools(options.sessions)) broker.register(tool);
       if (!readOnly) for (const tool of createProcessTools({
+        ...(options.execution ? { execution: options.execution } : {}),
         ...(options.allowedCommands
           ? { allowedCommands: options.allowedCommands }
           : {}),
@@ -202,6 +208,7 @@ function spawnSubagentTool(
           artifacts: options.artifacts,
           ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
           taskId: options.taskId,
+          ...(options.execution ? { execution: options.execution } : {}),
           ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
           clock,
           ...(options.allowedCommands

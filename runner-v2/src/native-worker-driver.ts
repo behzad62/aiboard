@@ -50,6 +50,8 @@ import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
 import { resolveWorkerSessionId } from "./worker-identity.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import type {
   RunnerProviderRetryRuntime,
 } from "./provider-call-retry.js";
@@ -86,6 +88,8 @@ export interface NativeWorkerDriverOptions {
   providerRetryRuntime?: RunnerProviderRetryRuntime;
   capabilityRegistry?: CapabilityRegistry;
   language?: LanguageIntelligenceProvider;
+  execution?: OneShotCommandExecutor;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -277,6 +281,10 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
         ...(this.options.managedProcesses
           ? { managedProcesses: this.options.managedProcesses }
+          : {}),
+        ...(this.options.execution ? { execution: this.options.execution } : {}),
+        ...(this.options.executionGrants
+          ? { executionGrants: this.options.executionGrants }
           : {}),
         ...(this.options.capabilityRegistry
           ? { capabilityRegistry: this.options.capabilityRegistry }

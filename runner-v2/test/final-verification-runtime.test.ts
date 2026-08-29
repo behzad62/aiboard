@@ -22,6 +22,63 @@ import {
   type FinalVerificationPlan,
 } from "../src/final-verification-runtime.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
+
+test("final verification ingests runtime spill output and log volume alone stays green", async () => {
+  const fixture = await createFixture("spill-output");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "spill-evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const complete = Buffer.from("complete-final-verification-spill");
+  const spill = await artifacts.put(complete, "application/octet-stream", "spill");
+  const execution: OneShotCommandExecutor = {
+    execute: async () => ({
+      process: {
+        logicalProcessId: "final-spill",
+        outcome: "exited",
+        exitCode: 0,
+        finishedAt: new Date().toISOString(),
+        output: [
+          { stream: "stdout", tail: "bounded-tail", totalBytes: 70 * 1024 * 1024, truncated: true, spillArtifactId: spill.hash, spillBytes: complete.byteLength, lossyBytes: 6 * 1024 * 1024 },
+          { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+        ],
+        cleanup: { state: "verified_empty", verifiedAt: new Date().toISOString() },
+      },
+      enforcement: "unconfined_explicit_full",
+      disclosure: "unconfined_explicit_full",
+    }),
+  };
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    execution,
+  });
+  try {
+    const commands = { build: [{ label: "large logs", executable: "fixture", args: [] }] };
+    const run = await runtime.run({
+      plan: buildOnlyPlan(),
+      executionProfile: commandProfile(fixture.integration.revision, commands),
+      commands,
+    });
+    assert.equal(run.green, true, run.checks[0]?.issues.join("\n"));
+    const fact = commandFacts(run.checks[0]!)[0];
+    assert.equal(fact.outputLossy, true);
+    assert.deepEqual(await artifacts.get(fact.stdoutArtifactHash), complete);
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
 
 test("runs build and test commands in the pinned workspace and records immutable evidence", async () => {
   const fixture = await createFixture("success");
@@ -40,6 +97,7 @@ test("runs build and test commands in the pinned workspace and records immutable
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: () => fixture.integration.revision,
+    execution: createTestOneShotCommandExecutor(),
   });
   try {
     const projectBefore = await projectState(fixture.project);
@@ -139,6 +197,7 @@ test("provisions dependencies in the disposable workspace before project command
     evidenceStore: evidence,
     runId: fixture.runId,
     integrationRevision: () => fixture.integration.revision,
+    execution: createTestOneShotCommandExecutor(),
   });
   const build = {
     label: "build requiring installed package",
@@ -199,6 +258,7 @@ test("executes one scheduler-selected category with the durable generation ident
     generationId: "durable-generation",
     attempt: 1,
     currentIntegrationRevision: () => fixture.integration.revision,
+    execution: createTestOneShotCommandExecutor(),
   });
   try {
     const commands = { tests: [{
@@ -241,6 +301,7 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: () => fixture.integration.revision,
+    execution: createTestOneShotCommandExecutor(),
   });
   try {
     const failingCommands = { build: [{
@@ -317,6 +378,7 @@ test("cancellation terminates descendant processes and leaves no late process ou
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: () => fixture.integration.revision,
+    execution: createTestOneShotCommandExecutor(),
   });
   const marker = "late-descendant-output.txt";
   const childPid = "descendant.pid";
@@ -375,6 +437,7 @@ test("rejects a workspace that is stale relative to the current integration revi
     runId: fixture.runId,
     taskId: "final-verification",
     integrationRevision: currentRevision,
+    execution: createTestOneShotCommandExecutor(),
   });
   try {
     await workspace.create();
@@ -474,6 +537,7 @@ function commandFacts(check: { facts: readonly { kind: string }[] }) {
     exitCode: number | null;
     timedOut: boolean;
     cancelled: boolean;
+    outputLossy: boolean;
   }];
 }
 

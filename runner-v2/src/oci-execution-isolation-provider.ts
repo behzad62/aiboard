@@ -170,7 +170,10 @@ export function createOciExecutionIsolationProvider(
   let cliPath: string | undefined;
   let cliDigest: string | undefined;
 
-  const runCli = async (args: readonly string[]): Promise<OciCliResult> => {
+  const runCli = async (
+    args: readonly string[],
+    environment: Readonly<Record<string, string>> = {},
+  ): Promise<OciCliResult> => {
     if (!cliPath) throw ociError("oci_attestation_failed", "OCI provider is not attested.");
     if (cliDigest) {
       const currentPath = await attestExecutable(configuredCli);
@@ -182,7 +185,7 @@ export function createOciExecutionIsolationProvider(
     return await cli.run({
       executable: cliPath,
       args: Object.freeze([...args]),
-      environment: Object.freeze({}),
+      environment: Object.freeze({ ...environment }),
       timeoutMs: 30_000,
     });
   };
@@ -250,10 +253,12 @@ export function createOciExecutionIsolationProvider(
       args.push("--network", request.grant.networkApproved && options.allowNetwork === true
         ? "bridge" : "none");
       for (const mount of representation.mounts) args.push("--mount", mount);
+      const environment = request.environment ?? {};
+      for (const name of Object.keys(environment).sort()) args.push("--env", name);
       args.push("--workdir", representation.cwd, acquisitionImageId, representation.executable);
       args.push(...representation.arguments);
       assertSafeOciArguments(args);
-      const created = await runCli(args);
+      const created = await runCli(args, environment);
       if (created.exitCode !== 0) {
         throw ociError("oci_create_failed", `OCI container create failed: ${bounded(created.stderr)}.`);
       }
@@ -304,6 +309,45 @@ export function createOciExecutionIsolationProvider(
         const removed = await runCli(["rm", "--force", owned.containerId]);
         if (removed.exitCode !== 0) throw ociError("oci_release_failed", `OCI container release failed: ${bounded(removed.stderr)}.`);
         await writeLeaseState(statePath, leases.filter((entry) => entry !== owned));
+      });
+    },
+
+    async prepareExecution(
+      lease: ExecutionIsolationLease,
+      intent: ExecutionIsolationAcquireRequest["intent"],
+    ) {
+      if (!cliPath || !cliDigest) {
+        throw ociError("oci_attestation_failed", "OCI provider must be attested before execution.");
+      }
+      const currentPath = await attestExecutable(configuredCli);
+      const currentDigest = createHash("sha256").update(await readFile(currentPath)).digest("hex");
+      if (normalize(currentPath) !== normalize(cliPath) || currentDigest !== cliDigest) {
+        throw ociError("oci_attestation_failed", "Configured OCI CLI identity changed before execution.");
+      }
+      const currentImage = await attestImage(runCli, image);
+      const leases = await readLeaseState(statePath);
+      const owned = leases.find((entry) => entry.lease.leaseId === lease.leaseId);
+      if (
+        !owned ||
+        owned.cleanupStage !== "active" ||
+        owned.lease.providerId !== providerId ||
+        owned.lease.invocationId !== intent.invocationId ||
+        owned.lease.invocationId !== lease.invocationId ||
+        owned.lease.grantId !== lease.grantId ||
+        owned.lease.providerIdentity !== lease.providerIdentity ||
+        owned.lease.immutableImageId !== lease.immutableImageId ||
+        currentImage !== owned.lease.immutableImageId
+      ) {
+        throw ociError("oci_attestation_failed", "OCI execution lease identity is no longer exact.");
+      }
+      const identity = await inspectOwnedContainer(runCli, owned.containerId);
+      if (!matchesOwnedScope(identity, providerId, owned)) {
+        throw ociError("oci_attestation_failed", "OCI container identity changed before execution.");
+      }
+      return deepFreeze({
+        ...intent,
+        executable: cliPath,
+        arguments: ["start", "--attach", owned.containerId],
       });
     },
 

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
 import type {
@@ -8,6 +7,10 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
+import {
+  outputFor,
+  type OneShotCommandExecutor,
+} from "./one-shot-command-executor.js";
 
 interface ProcessInput {
   command?: string;
@@ -20,6 +23,8 @@ interface ProcessInput {
 }
 
 export interface ProcessToolsOptions {
+  execution?: OneShotCommandExecutor;
+  /** Retained for API compatibility; shared runtime output policy owns the effective bound. */
   maxOutputBytes?: number;
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
@@ -29,7 +34,6 @@ export interface ProcessToolsOptions {
 export function createProcessTools(
   options: ProcessToolsOptions = {}
 ): NativeTool<unknown>[] {
-  const maxOutputBytes = options.maxOutputBytes ?? 8 * 1024 * 1024;
   const defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
   const maximumTimeoutMs = options.maximumTimeoutMs ?? 30 * 60_000;
   const tool: NativeTool<ProcessInput> = {
@@ -63,7 +67,7 @@ export function createProcessTools(
       await executeProcess(
         input,
         context,
-        maxOutputBytes,
+        options.execution,
         defaultTimeoutMs,
         maximumTimeoutMs,
         options.allowedCommands
@@ -114,13 +118,19 @@ function validateInput(input: unknown): ValidationResult<ProcessInput> {
 async function executeProcess(
   input: ProcessInput,
   context: ToolExecutionContext,
-  maxOutputBytes: number,
+  execution: OneShotCommandExecutor | undefined,
   defaultTimeoutMs: number,
   maximumTimeoutMs: number,
   allowedCommands: readonly string[] | undefined
 ): Promise<ToolExecutionOutput> {
   if (!context.workspacePath) {
     return processError("workspace_required", "Process tool requires a workspace.");
+  }
+  if (!execution || !context.executionGrant || !context.callId) {
+    return processError(
+      "process_runtime_unavailable",
+      "The shared subprocess runtime is unavailable for this command.",
+    );
   }
   if (!isBenchmarkCommandAllowed(input, allowedCommands)) {
     return processError(
@@ -131,90 +141,66 @@ async function executeProcess(
   const invocation = commandInvocation(input);
   const cwd = resolve(context.workspacePath, input.cwd ?? ".");
   const timeoutMs = Math.min(input.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs);
-  return await new Promise((resolveResult) => {
-    const child = spawn(invocation.command, invocation.args, {
-      cwd,
-      env: { ...process.env, ...(input.env ?? {}) },
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+  try {
+    const result = await execution.execute({
+      executable: invocation.command,
+      arguments: invocation.args,
+      workingDirectory: cwd,
+      ...(input.env ? { explicitEnvironment: input.env } : {}),
+      timeoutMs,
+      context: {
+        runId: context.runId,
+        sessionId: context.sessionId,
+        actor: context.actor,
+        callId: context.callId,
+        toolName: "process.run",
+        executionGrant: context.executionGrant,
+        ...(context.signal ? { signal: context.signal } : {}),
+      },
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let outputBytes = 0;
-    let outputExceeded = false;
-    let timedOut = false;
-    let cancelled = false;
-    let settled = false;
-
-    const capture = (target: Buffer[], chunk: Buffer) => {
-      if (outputExceeded) return;
-      outputBytes += chunk.byteLength;
-      if (outputBytes > maxOutputBytes) {
-        outputExceeded = true;
-        child.kill("SIGTERM");
-        return;
-      }
-      target.push(chunk);
+    const stdout = outputFor(result.process, "stdout");
+    const stderr = outputFor(result.process, "stderr");
+    const timedOut = result.process.outcome === "timed_out";
+    const cancelled = result.process.outcome === "cancelled";
+    const metadata = {
+      exitCode: result.process.exitCode ?? null,
+      signal: result.process.signal ?? null,
+      timedOut,
+      cancelled,
+      cleanup: result.process.cleanup,
+      outputLossy: result.process.output.some((entry) => entry.lossyBytes > 0),
+      enforcement: result.enforcement,
+      disclosure: result.disclosure,
+      ...(result.providerId ? { providerId: result.providerId } : {}),
     };
-    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk));
-    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk));
-
-    const cancel = () => {
-      cancelled = true;
-      child.kill("SIGTERM");
-    };
-    context.signal?.addEventListener("abort", cancel, { once: true });
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, timeoutMs);
-    timeout.unref();
-
-    const finish = (
-      exitCode: number | null,
-      signal: NodeJS.Signals | null,
-      startError?: Error
-    ) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      context.signal?.removeEventListener("abort", cancel);
-      const standardOutput = Buffer.concat(stdout).toString("utf8");
-      const standardError = Buffer.concat(stderr).toString("utf8");
-      const metadata = {
-        exitCode,
-        signal,
-        timedOut,
-        cancelled,
-      };
-      if (startError) {
-        resolveResult(withEvidence(metadata, standardOutput, standardError, true, {
-          code: "process_start_failed",
-          message: startError.message,
-        }));
-      } else if (outputExceeded) {
-        resolveResult(withEvidence(metadata, standardOutput, standardError, true, {
-          code: "process_output_limit",
-          message: `Process output exceeded ${maxOutputBytes} bytes.`,
-        }));
-      } else if (timedOut) {
-        resolveResult(withEvidence(metadata, standardOutput, standardError, true, {
-          code: "process_timeout",
-          message: `Process exceeded ${timeoutMs} ms.`,
-        }));
-      } else if (cancelled) {
-        resolveResult(withEvidence(metadata, standardOutput, standardError, true, {
-          code: "process_cancelled",
-          message: "Process was cancelled.",
-        }));
-      } else {
-        resolveResult(withEvidence(metadata, standardOutput, standardError, false));
-      }
-    };
-    child.once("error", (error) => finish(null, null, error));
-    child.once("close", (exitCode, signal) => finish(exitCode, signal));
-  });
+    if (result.process.outcome === "launch_failed") {
+      return withEvidence(metadata, stdout.tail, stderr.tail, true, {
+        code: "process_start_failed",
+        message: "Process launch was not proven.",
+      });
+    }
+    if (timedOut) return withEvidence(metadata, stdout.tail, stderr.tail, true, {
+      code: "process_timeout",
+      message: `Process exceeded ${timeoutMs} ms.`,
+    });
+    if (cancelled) return withEvidence(metadata, stdout.tail, stderr.tail, true, {
+      code: "process_cancelled",
+      message: "Process was cancelled.",
+    });
+    if (result.process.outcome === "cleanup_failed") return withEvidence(
+      metadata,
+      stdout.tail,
+      stderr.tail,
+      true,
+      { code: "process_cleanup_failed", message: "Process cleanup could not be verified." },
+    );
+    return withEvidence(metadata, stdout.tail, stderr.tail, false);
+  } catch (error) {
+    const value = error as { code?: unknown; message?: unknown };
+    const code = typeof value.code === "string" ? value.code : "process_runtime_failed";
+    const message = typeof value.message === "string" ? value.message : String(error);
+    return processError(code, message);
+  }
 }
 
 function commandInvocation(input: ProcessInput): {

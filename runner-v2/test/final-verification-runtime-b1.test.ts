@@ -21,6 +21,7 @@ import {
 } from "../src/final-verification-runtime.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 test("runtime smoke waits for health, records endpoint/output facts, and releases its port", async () => {
   const fixture = await createFixture("smoke success");
@@ -34,6 +35,7 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
   });
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(),
     workspaceManager: workspace,
     artifacts,
     evidenceStore: evidence,
@@ -98,6 +100,7 @@ test("runtime smoke timeout is non-green and cleans up the owned process", async
   });
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(),
     workspaceManager: workspace,
     artifacts,
     evidenceStore: evidence,
@@ -141,6 +144,7 @@ test("runtime smoke marks an unhealthy process exit non-green and still stops it
   });
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(),
     workspaceManager: workspace,
     artifacts,
     evidenceStore: evidence,
@@ -187,6 +191,7 @@ test("runtime smoke cancellation stops the process tree and releases the port", 
   });
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(),
     workspaceManager: workspace,
     artifacts,
     evidenceStore: evidence,

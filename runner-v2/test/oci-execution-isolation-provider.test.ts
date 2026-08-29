@@ -97,6 +97,17 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
     assert.equal(create.args.includes("/runner/workspace/scripts/build.mjs"), true);
     assert.equal(create.args.includes("/runner/grants/0/input.txt"), true);
 
+    const launch = await provider.prepareExecution!(lease as never, fixture.intent);
+    assert.equal(launch.executable, fixture.cli);
+    assert.equal(launch.invocationId, fixture.intent.invocationId);
+    assert.deepEqual(launch.arguments.slice(0, 2), ["start", "--attach"]);
+    assert.match(launch.arguments[2]!, /^container-fixture-/);
+    assert.equal(
+      calls.filter((call) => call.args[0] === "image" && call.args[1] === "inspect").length >= 3,
+      true,
+      "launch planning re-attests the configured CLI/image identity",
+    );
+
     await provider.release(lease as never);
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("--force")), true);
     assert.deepEqual(await provider.recoverOwned(), { cleaned: 0, blockers: [], transitions: [] });
@@ -564,6 +575,48 @@ test("real Docker fixture force-cleans a labelled live child after a forced asse
     await fixture.close();
   }
   assert.equal((await execFileResult(docker, ["inspect", containerId!])).code, 1);
+});
+
+test("real Docker launch plan runs the original command only inside the owned container with scrubbed environment", async (t) => {
+  const docker = availableDockerFixture();
+  if (!docker) return t.skip("Docker unavailable; no installation attempted.");
+  const fixture = await ociFixture();
+  let containerId: string | undefined;
+  try {
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-real-launch-plan",
+      cliPath: docker,
+      image: "alpine:latest",
+      stateDirectory: fixture.state,
+    });
+    await provider.attest();
+    const intent = {
+      ...fixture.intent,
+      executable: "sh",
+      arguments: ["-c", "printf '%s' \"$SAFE_EXPLICIT\""],
+    };
+    const lease = await provider.acquire({
+      providerId: "oci-real-launch-plan",
+      implementationDigest: "e".repeat(64),
+      intent,
+      grant: fixture.claims,
+      environment: { SAFE_EXPLICIT: "approved-inside-container" },
+    });
+    containerId = durableContainerId(fixture.state, "oci-real-launch-plan");
+    const plan = await provider.prepareExecution!(lease as never, intent);
+    assert.equal(plan.executable, docker);
+    assert.deepEqual(plan.arguments, ["start", "--attach", containerId]);
+    assert.equal(JSON.stringify(plan).includes("approved-inside-container"), false);
+    assert.equal(readFileSync(join(fixture.state, "oci-leases-oci-real-launch-plan.json"), "utf8").includes("approved-inside-container"), false);
+    const result = await execFileResult(plan.executable, [...plan.arguments]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "approved-inside-container");
+    await provider.release(lease as never);
+    containerId = undefined;
+  } finally {
+    if (containerId) await execFileResult(docker, ["rm", "--force", containerId]);
+    await fixture.close();
+  }
 });
 
 test("real Docker recovery blocks an exact image mismatch without removing the container", async (t) => {

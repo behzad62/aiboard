@@ -45,6 +45,8 @@ import { createManagedProcessTools } from "./managed-process-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import { registerExtensionCapabilities } from "./extension-runtime.js";
 import type {
   ToolInvocationLedger,
@@ -97,6 +99,8 @@ export interface RunWorkerTaskOptions {
   protectedPaths?: readonly string[];
   providerRetry?: RunAgentLoopOptions["providerRetry"];
   signal?: AbortSignal;
+  execution?: OneShotCommandExecutor;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 export interface WorkerTaskResult {
@@ -152,6 +156,7 @@ export async function runWorkerTask(
     ...(options.permissions
       ? { approve: (request) => options.permissions!.requestTool(request) }
       : {}),
+    ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
   });
   const repository = new RepositoryIntelligence();
   const language = options.language ?? new TypeScriptIntelligence(repository);
@@ -173,6 +178,7 @@ export async function runWorkerTask(
   for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
   for (const tool of createSessionTools(options.sessions)) broker.register(tool);
   for (const tool of createProcessTools({
+    ...(options.execution ? { execution: options.execution } : {}),
     ...(options.allowedCommands
       ? { allowedCommands: options.allowedCommands }
       : {}),
@@ -209,6 +215,7 @@ export async function runWorkerTask(
       store: options.evidenceStore,
       artifacts: options.artifacts,
       taskId: options.taskId,
+      ...(options.execution ? { execution: options.execution } : {}),
       clock,
       ...(attempt !== undefined ? { attempt } : {}),
       ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
@@ -265,6 +272,8 @@ export async function runWorkerTask(
       : {}),
     ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+    ...(options.execution ? { execution: options.execution } : {}),
+    ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
     language,
   })) broker.register(tool);
 
