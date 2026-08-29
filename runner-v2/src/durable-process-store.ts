@@ -1459,7 +1459,12 @@ function reduceMutation(
       );
     }
     case "finish_escalation": {
-      requireState(current, ["stopping", "cleanup_blocked"]);
+      if (current.state === "exited") {
+        if (data.effectId === undefined)
+          throw new Error(
+            "Exited escalation completion requires its exact signal effect.",
+          );
+      } else requireState(current, ["stopping", "cleanup_blocked"]);
       const action = requiredEnum(
         data.action,
         new Set<ProcessEscalationAction>([

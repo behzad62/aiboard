@@ -183,6 +183,10 @@ interface InternalRuntimeOptions {
 class RunnerSubprocessRuntime implements SubprocessRuntime {
   private readonly writer: DurableProcessRuntimeWriter;
   private readonly termination = new Map<string, Promise<void>>();
+  private readonly activeJournalEffects = new Map<
+    string,
+    Map<string, DurableProcessEffectFamily>
+  >();
   private readonly fences = new Map<string, number>();
   private readonly createId: (invocationId: string) => string;
   private readonly grace: readonly [number, number];
@@ -294,7 +298,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       ].includes(record.state)
     )
       return false;
-    const owned = this.takeRecoveryOwnership(record, true);
+    const owned = this.takeRecoveryOwnership(record, "join_active_observation");
     if (!owned) return false;
     record = owned;
     if (!record.stopIntent)
@@ -606,16 +610,15 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     const observePromise = this.journaledEffect(
       record.invocationId,
       "backend_observe",
-      async (fence) =>
-        parseProcessObservation(
-          await selected.backend.observe(
-            binding,
-            (stream, bytes) => output.write(stream, bytes, fence),
-            fence,
-          ),
+      (fence) =>
+        selected.backend.observe(
+          binding,
+          (stream, bytes) => output.write(stream, bytes, fence),
+          fence,
         ),
     );
     let observedJournal: Awaited<typeof observePromise>;
+    let observation: ReturnType<typeof parseProcessObservation>;
     try {
       if (record.stopIntent) {
         await this.escalate(record);
@@ -637,6 +640,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           observedJournal = await observePromise;
         } else observedJournal = race.value;
       }
+      observation = parseProcessObservation(observedJournal.result);
     } catch (error) {
       const current = this.current(record.invocationId);
       if (
@@ -660,7 +664,6 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         { cause: error },
       );
     }
-    const observation = observedJournal.result;
     record = this.current(record.invocationId);
     record = this.mutate({
       type: "record_exit",
@@ -712,12 +715,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       const verified = await this.journaledEffect(
         record.invocationId,
         "backend_verify_empty",
-        async (fence) =>
-          parseProcessEmptyVerification(
-            await selected.backend.verifyEmpty(binding, fence),
-          ),
+        (fence) => selected.backend.verifyEmpty(binding, fence),
       );
-      const verification = verified.result;
+      const verification = parseProcessEmptyVerification(verified.result);
       record = this.current(record.invocationId);
       this.mutate({
         type: "record_empty_verification",
@@ -757,9 +757,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         const finalized = await this.journaledEffect(
           record.invocationId,
           "output_finalize",
-          async (fence) => outputDisposition(await output.finalize(fence)),
+          (fence) => output.finalize(fence),
         );
-        disposition = finalized.result;
+        disposition = outputDisposition(finalized.result);
         finalizeEffectId = finalized.effectId;
       } catch {
         const failed = this.applyFailure(
@@ -837,12 +837,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         const verified = await this.journaledEffect(
           record.invocationId,
           "backend_verify_empty",
-          async (fence) =>
-            parseProcessEmptyVerification(
-              await backend.backend.verifyEmpty(binding, fence),
-            ),
+          (fence) => backend.backend.verifyEmpty(binding, fence),
         );
-        verification = verified.result;
+        verification = parseProcessEmptyVerification(verified.result);
         record = this.current(record.invocationId);
         record = this.mutate({
           type: "record_empty_verification",
@@ -890,11 +887,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       const released = await this.journaledEffect(
         record.invocationId,
         "backend_release",
-        async (fence) =>
-          parseProcessReleaseResult(
-            await fresh.backend.release(binding, fence),
-          ),
+        (fence) => fresh.backend.release(binding, fence),
       );
+      parseProcessReleaseResult(released.result);
       releaseEffectId = released.effectId;
     } catch {
       const failed = this.applyFailure(
@@ -990,30 +985,27 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       let outcome: "running" | "exited" | "failed" = "failed";
       let detail: string | undefined;
       let signalEffectId: string | undefined;
+      let selected: SelectedProcessBackend | undefined;
       try {
-        const selected = await this.fencedEffect(record.invocationId, (fence) =>
+        selected = await this.fencedEffect(record.invocationId, (fence) =>
           reattestProcessBackend(
             this.options.registry,
             record.backendBinding!,
             fence,
           ),
         );
+      } catch (error) {
+        detail = error instanceof Error ? error.message : "Signal failed";
+      }
+      if (selected) {
         const signalled = await this.journaledEffect(
           record.invocationId,
           "backend_signal",
-          async (fence) =>
-            parseProcessSignalResult(
-              await selected.backend.signal(
-                record.backendBinding!,
-                action,
-                fence,
-              ),
-            ),
+          (fence) =>
+            selected.backend.signal(record.backendBinding!, action, fence),
         );
-        outcome = signalled.result.state;
+        outcome = parseProcessSignalResult(signalled.result).state;
         signalEffectId = signalled.effectId;
-      } catch (error) {
-        detail = error instanceof Error ? error.message : "Signal failed";
       }
       record = this.current(record.invocationId);
       record = this.mutate({
@@ -1058,11 +1050,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     const journal = await this.journaledEffect(
       invocationId,
       "backend_reconcile",
-      async (fence) =>
-        parseProcessReconciliation(
-          await selected.backend.reconcile(binding, fence),
-        ),
+      (fence) => selected.backend.reconcile(binding, fence),
     );
+    const reconciliation = parseProcessReconciliation(journal.result);
     const record = this.current(invocationId);
     this.mutate({
       type: "record_reconciliation",
@@ -1070,16 +1060,16 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       expectedRevision: record.revision,
       at: this.now(),
       effectId: journal.effectId,
-      outcome: journal.result.state,
-      ...(journal.result.state === "exited" &&
-      journal.result.exitCode !== undefined
-        ? { exitCode: journal.result.exitCode }
+      outcome: reconciliation.state,
+      ...(reconciliation.state === "exited" &&
+      reconciliation.exitCode !== undefined
+        ? { exitCode: reconciliation.exitCode }
         : {}),
-      ...(journal.result.state === "exited" && journal.result.signal
-        ? { signal: journal.result.signal }
+      ...(reconciliation.state === "exited" && reconciliation.signal
+        ? { signal: reconciliation.signal }
         : {}),
     });
-    return journal.result;
+    return reconciliation;
   }
 
   private async reconcileRecord(
@@ -1242,14 +1232,14 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         const observed = await this.journaledEffect(
           record.invocationId,
           "backend_observe",
-          async (fence) =>
-            parseProcessObservation(await selected.backend.observe(
+          (fence) =>
+            selected.backend.observe(
               activeBinding,
               (stream, bytes) => output.write(stream, bytes, fence),
               fence,
-            )),
+            ),
         );
-        observation = observed.result;
+        observation = parseProcessObservation(observed.result);
         observationEffectId = observed.effectId;
       } catch (error) {
         throw new SubprocessRuntimeError(
@@ -1409,17 +1399,18 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
   }
   private takeRecoveryOwnership(
     snapshot: DurableSubprocessRecord,
-    allowActiveSameOwner = false,
+    activeEffectMode?: "join_active_observation",
   ): DurableSubprocessRecord | undefined {
     let record = this.current(snapshot.invocationId);
     const leaseIsLive =
       Date.parse(record.leaseExpiresAt) > this.options.clock.now().getTime();
     if (
       record.pendingEffects.length > 0 &&
-      (!allowActiveSameOwner ||
-        !leaseIsLive ||
-        record.ownerId !== this.ownerId ||
-        this.fences.get(record.invocationId) !== record.fencingToken)
+      !this.canJoinActiveObservationForSignal(
+        record,
+        leaseIsLive,
+        activeEffectMode,
+      )
     )
       return undefined;
     if (leaseIsLive && record.ownerId !== this.ownerId) return undefined;
@@ -1445,6 +1436,32 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     this.fences.set(record.invocationId, record.fencingToken);
     return record;
+  }
+  private canJoinActiveObservationForSignal(
+    record: DurableSubprocessRecord,
+    leaseIsLive: boolean,
+    mode?: "join_active_observation",
+  ): boolean {
+    if (
+      mode !== "join_active_observation" ||
+      !leaseIsLive ||
+      record.state !== "running" ||
+      record.stopIntent !== undefined ||
+      record.ownerId !== this.ownerId ||
+      this.fences.get(record.invocationId) !== record.fencingToken ||
+      record.pendingEffects.length !== 1
+    )
+      return false;
+    const effect = record.pendingEffects[0]!;
+    return (
+      effect.family === "backend_observe" &&
+      effect.phase === "started" &&
+      effect.ownerId === record.ownerId &&
+      effect.fencingToken === record.fencingToken &&
+      this.activeJournalEffects
+        .get(record.invocationId)
+        ?.get(effect.effectId) === "backend_observe"
+    );
   }
   private requestStopLatest(
     invocationId: string,
@@ -1674,26 +1691,45 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       family,
       resolution: "commit",
     });
+    const active =
+      this.activeJournalEffects.get(invocationId) ??
+      new Map<string, DurableProcessEffectFamily>();
+    active.set(effectId, family);
+    this.activeJournalEffects.set(invocationId, active);
     const heartbeat = this.startHeartbeat(invocationId, fence);
     let result: T | undefined;
     let failure: unknown;
+    let rejected = false;
     try {
       result = await effect(fence);
     } catch (error) {
+      rejected = true;
       failure = error;
+    } finally {
+      active.delete(effectId);
+      if (active.size === 0) this.activeJournalEffects.delete(invocationId);
     }
-    await heartbeat.stop();
+    const heartbeatFailure = await heartbeat.stop();
+    let fenceFailure: unknown;
+    try {
+      this.assertFence(invocationId, fence);
+    } catch (error) {
+      fenceFailure = error;
+    }
+    if (heartbeatFailure != null || fenceFailure !== undefined) {
+      this.fences.delete(invocationId);
+      throw heartbeatFailure ?? fenceFailure;
+    }
+    if (rejected) throw failure;
     const latest = this.current(invocationId);
     this.mutate({
-      type: failure === undefined ? "complete_effect" : "settle_effect",
+      type: "complete_effect",
       invocationId,
       expectedRevision: latest.revision,
       at: this.now(),
       effectId,
       leaseExpiresAt: this.leaseExpiry(),
     });
-    this.assertFence(invocationId, fence);
-    if (failure !== undefined) throw failure;
     return { result: result as T, effectId };
   }
   private startHeartbeat(

@@ -74,6 +74,7 @@ class Outputs implements ProcessOutputFactory {
   reopenGate?: Promise<void>;
   writeGate?: Promise<void>;
   finalizeGate?: Promise<void>;
+  finalizeValue?: unknown;
   onReopen?: () => void;
   onWrite?: () => void;
   onFinalize?: () => void;
@@ -115,6 +116,7 @@ class Outputs implements ProcessOutputFactory {
         await this.finalizeGate;
         if (this.failFinalizeFor.has(ownerId))
           throw new Error("finalize failed");
+        if (this.finalizeValue !== undefined) return this.finalizeValue as never;
         return {
           streams: [
             {
@@ -1377,7 +1379,7 @@ test("durable verified-empty inspection blocks takeover and duplicate cleanup ef
   assert.deepEqual(outputs.calls, []);
 });
 
-test("same owner can observe and signal concurrently without losing either journal marker", async () => {
+test("same owner consumes signal before observe without losing either journal marker", async () => {
   const f = fixture();
   const observeGate = deferred();
   const observeStarted = deferred();
@@ -1395,6 +1397,7 @@ test("same owner can observe and signal concurrently without losing either journ
   await observeStarted.promise;
   const cancellation = f.runtime.cancel("invoke-1");
   await signalStarted.promise;
+  const duplicateCancellation = f.runtime.cancel("invoke-1");
   try {
     assert.deepEqual(
       pendingEffectsOf(f.store.readByInvocation("invoke-1")).map(
@@ -1405,14 +1408,460 @@ test("same owner can observe and signal concurrently without losing either journ
         { family: "backend_signal", phase: "started" },
       ],
     );
+    assert.equal(
+      f.backend.calls.filter((call) => call.startsWith("signal:")).length,
+      1,
+    );
   } finally {
     signalGate.resolve();
+    await cancellation;
     observeGate.resolve();
   }
-  const [cancelled, result] = await Promise.all([cancellation, invocation]);
+  const [cancelled, duplicateCancelled, result] = await Promise.all([
+    cancellation,
+    duplicateCancellation,
+    invocation,
+  ]);
   assert.equal(cancelled, true);
+  assert.equal(duplicateCancelled, false);
   assert.equal(result.outcome, "cancelled");
   assert.deepEqual(pendingEffectsOf(f.store.readByInvocation("invoke-1")), []);
+});
+
+test("same owner consumes observe before signal without stranding the exact signal marker", async () => {
+  const f = fixture();
+  const observeGate = deferred();
+  const observeStarted = deferred();
+  const signalGate = deferred();
+  const signalStarted = deferred();
+  const finalizeGate = deferred();
+  const finalizeStarted = deferred();
+  f.backend.observeGate = observeGate.promise;
+  f.backend.onObserve = observeStarted.resolve;
+  f.backend.signalGate = signalGate.promise;
+  f.backend.onSignal = () => signalStarted.resolve();
+  f.outputs.finalizeGate = finalizeGate.promise;
+  f.outputs.onFinalize = finalizeStarted.resolve;
+  const invocation = f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  await observeStarted.promise;
+  const cancellation = f.runtime.cancel("invoke-1");
+  await signalStarted.promise;
+  observeGate.resolve();
+  await finalizeStarted.promise;
+  try {
+    const exited = f.store.readByInvocation("invoke-1")!;
+    assert.equal(exited.state, "exited");
+    assert.deepEqual(
+      pendingEffectsOf(exited).map(({ family, phase }) => ({ family, phase })),
+      [
+        { family: "backend_signal", phase: "started" },
+        { family: "output_finalize", phase: "started" },
+      ],
+    );
+    signalGate.resolve();
+    assert.equal(await cancellation, true);
+    assert.deepEqual(
+      pendingEffectsOf(f.store.readByInvocation("invoke-1")).map(
+        ({ family, phase }) => ({ family, phase }),
+      ),
+      [{ family: "output_finalize", phase: "started" }],
+    );
+  } finally {
+    signalGate.resolve();
+    finalizeGate.resolve();
+  }
+  const result = await invocation;
+  assert.equal(result.outcome, "cancelled");
+  assert.deepEqual(pendingEffectsOf(f.store.readByInvocation("invoke-1")), []);
+});
+
+test("cancel denies every live same-owner family except one active observation", async (t) => {
+  await t.test("output_reopen", async (t) => {
+    const f = await durableLaunchBlocker(t, "cancel-deny-reopen");
+    const gate = deferred();
+    const started = deferred();
+    f.outputs.reopenGate = gate.promise;
+    f.outputs.onReopen = started.resolve;
+    const retry = f.first.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+    });
+    await started.promise;
+    const cancellation = f.first.runtime.cancel("invoke-1");
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.deepEqual(
+        pendingEffectsOf(f.first.readOnlyStore.readByInvocation("invoke-1")).map(
+          ({ family, phase }) => ({ family, phase }),
+        ),
+        [{ family: "output_reopen", phase: "started" }],
+      );
+      assert.equal(
+        f.outputs.calls.filter((call) => call.startsWith("reopen:")).length,
+        1,
+      );
+    } finally {
+      gate.resolve();
+    }
+    const [, cancelled] = await Promise.allSettled([retry, cancellation]);
+    assert.deepEqual(cancelled, { status: "fulfilled", value: false });
+  });
+
+  await t.test("backend_reconcile", async (t) => {
+    const f = await durableLaunchBlocker(t, "cancel-deny-reconcile");
+    const gate = deferred();
+    const started = deferred();
+    f.backend.reconcileGate = gate.promise;
+    f.backend.onReconcile = started.resolve;
+    const retry = f.first.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+    });
+    await started.promise;
+    const cancellation = f.first.runtime.cancel("invoke-1");
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.deepEqual(
+        pendingEffectsOf(f.first.readOnlyStore.readByInvocation("invoke-1")).map(
+          ({ family, phase }) => ({ family, phase }),
+        ),
+        [{ family: "backend_reconcile", phase: "started" }],
+      );
+      assert.equal(
+        f.backend.calls.filter((call) => call === "reconcile").length,
+        2,
+      );
+    } finally {
+      gate.resolve();
+    }
+    const [, cancelled] = await Promise.allSettled([retry, cancellation]);
+    assert.deepEqual(cancelled, { status: "fulfilled", value: false });
+  });
+
+  await t.test("backend_verify_empty", async () => {
+    const f = fixture();
+    const gate = deferred();
+    const started = deferred();
+    const signalGate = deferred();
+    f.backend.launchError = Object.assign(new Error("owned child remains"), {
+      code: "native_process_launch_cleanup_blocked",
+      launchResult: f.backend.launchValue,
+    });
+    f.backend.reconcileValue = { state: "running" };
+    f.backend.verifyGate = gate.promise;
+    f.backend.onVerify = started.resolve;
+    f.backend.signalGate = signalGate.promise;
+    const invocation = f.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+    });
+    await started.promise;
+    const cancellation = f.runtime.cancel("invoke-1");
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(
+        f.backend.calls.filter((call) => call.startsWith("signal:")).length,
+        0,
+      );
+    } finally {
+      signalGate.resolve();
+      gate.resolve();
+    }
+    const [, cancelled] = await Promise.allSettled([invocation, cancellation]);
+    assert.deepEqual(cancelled, { status: "fulfilled", value: false });
+  });
+});
+
+test("cancel table rejects active finalize verify and release effects", async (t) => {
+  for (const family of [
+    "output_finalize",
+    "backend_verify_empty",
+    "backend_release",
+  ] as const) {
+    await t.test(family, async () => {
+      const f = fixture();
+      const gate = deferred();
+      const started = deferred();
+      if (family === "output_finalize") {
+        f.outputs.finalizeGate = gate.promise;
+        f.outputs.onFinalize = started.resolve;
+      } else if (family === "backend_verify_empty") {
+        f.backend.verifyGate = gate.promise;
+        f.backend.onVerify = started.resolve;
+      } else {
+        f.backend.releaseGate = gate.promise;
+        f.backend.onRelease = started.resolve;
+      }
+      const invocation = f.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+      });
+      await started.promise;
+      try {
+        assert.equal(await f.runtime.cancel("invoke-1"), false);
+        assert.deepEqual(
+          pendingEffectsOf(f.store.readByInvocation("invoke-1")).map(
+            ({ family: activeFamily, phase }) => ({
+              family: activeFamily,
+              phase,
+            }),
+          ),
+          [{ family, phase: "started" }],
+        );
+        assert.equal(
+          f.backend.calls.filter((call) => call.startsWith("signal:")).length,
+          0,
+        );
+      } finally {
+        gate.resolve();
+      }
+      await invocation;
+    });
+  }
+});
+
+test("malformed successful journaled calls remain completed and cannot repeat on retry cancel or restart", async (t) => {
+  const cases = [
+    {
+      name: "backend_observe",
+      configure: (backend: Backend, _outputs: Outputs) => {
+        backend.observeValue = { state: "not-an-observation" };
+      },
+      calls: (backend: Backend, _outputs: Outputs) =>
+        backend.calls.filter((call) => call === "observe").length,
+    },
+    {
+      name: "output_finalize",
+      configure: (_backend: Backend, outputs: Outputs) => {
+        outputs.finalizeValue = { streams: "not-output" };
+      },
+      calls: (_backend: Backend, outputs: Outputs) =>
+        outputs.calls.filter((call) => call.startsWith("finalize:")).length,
+    },
+    {
+      name: "backend_verify_empty",
+      configure: (backend: Backend, _outputs: Outputs) => {
+        backend.verifyValue = { empty: "not-boolean" };
+      },
+      calls: (backend: Backend, _outputs: Outputs) =>
+        backend.calls.filter((call) => call === "verify").length,
+    },
+    {
+      name: "backend_release",
+      configure: (backend: Backend, _outputs: Outputs) => {
+        backend.releaseValue = { released: "not-boolean" };
+      },
+      calls: (backend: Backend, _outputs: Outputs) =>
+        backend.calls.filter((call) => call === "release").length,
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (t) => {
+      const root = await mkdtemp(
+        join(tmpdir(), `runner-v2-malformed-${scenario.name}-`),
+      );
+      const path = join(root, "process.sqlite");
+      const stateKey = new Uint8Array(32).fill(11);
+      const backend = new Backend();
+      const outputs = new Outputs();
+      const clock = new Clock();
+      const first = runtimeFor(
+        { kind: "sqlite", path },
+        stateKey,
+        backend,
+        clock,
+        outputs,
+      );
+      t.after(async () => {
+        try {
+          first.readOnlyStore.close();
+        } catch {}
+        await rm(root, { recursive: true, force: true });
+      });
+      scenario.configure(backend, outputs);
+      await first.runtime
+        .invoke({
+          intent: intent(),
+          grantId: "grant-invoke-1",
+          ambientEnvironment: {},
+        })
+        .catch(() => undefined);
+      const blocked = first.readOnlyStore.readByInvocation("invoke-1")!;
+      assert.deepEqual(
+        pendingEffectsOf(blocked).map(({ family, phase }) => ({ family, phase })),
+        [{ family: scenario.name, phase: "completed" }],
+      );
+      const callCount = scenario.calls(backend, outputs);
+      assert.equal(callCount, 1);
+      assert.equal(await first.runtime.cancel("invoke-1"), false);
+      first.grantsController.issue(grantValue());
+      await first.runtime
+        .invoke({
+          intent: intent(),
+          grantId: "grant-invoke-1",
+          ambientEnvironment: {},
+        })
+        .catch(() => undefined);
+      assert.equal(scenario.calls(backend, outputs), callCount);
+      first.readOnlyStore.close();
+
+      const restartedBackend = new Backend();
+      const restartedOutputs = new Outputs();
+      const restarted = runtimeFor(
+        { kind: "sqlite", path },
+        stateKey,
+        restartedBackend,
+        clock,
+        restartedOutputs,
+      );
+      try {
+        assert.deepEqual(await restarted.runtime.reconcileStartup(), [
+          { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+        ]);
+        assert.equal(scenario.calls(restartedBackend, restartedOutputs), 0);
+      } finally {
+        restarted.readOnlyStore.close();
+      }
+    });
+  }
+});
+
+test("raw journaled rejection remains started and blocks retry cancel and startup recovery", async () => {
+  const f = fixture();
+  f.outputs.failFinalizeFor.add("output-proc-invoke-1");
+  const result = await f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.equal(result.outcome, "cleanup_failed");
+  assert.deepEqual(
+    pendingEffectsOf(f.store.readByInvocation("invoke-1")).map(
+      ({ family, phase }) => ({ family, phase }),
+    ),
+    [{ family: "output_finalize", phase: "started" }],
+  );
+  const finalizeCount = f.outputs.calls.filter((call) =>
+    call.startsWith("finalize:"),
+  ).length;
+  assert.equal(finalizeCount, 1);
+  assert.equal(await f.runtime.cancel("invoke-1"), false);
+  f.grants.issue(grantValue());
+  assert.equal(
+    (
+      await f.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+      })
+    ).outcome,
+    "cleanup_failed",
+  );
+  assert.deepEqual(await f.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+  ]);
+  assert.equal(
+    f.outputs.calls.filter((call) => call.startsWith("finalize:")).length,
+    finalizeCount,
+  );
+});
+
+test("transient heartbeat failure leaves a started marker after raw success and blocks contenders", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-transient-heartbeat-"));
+  const path = join(root, "process.sqlite");
+  const stateKey = new Uint8Array(32).fill(12);
+  const backend = new Backend();
+  const outputs = new Outputs();
+  const clock = new Clock();
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  const database = new DatabaseSync(path);
+  t.after(async () => {
+    try {
+      database.close();
+    } catch {}
+    try {
+      first.readOnlyStore.close();
+    } catch {}
+    await rm(root, { recursive: true, force: true });
+  });
+  const finalizeGate = deferred();
+  const finalizeStarted = deferred();
+  outputs.finalizeGate = finalizeGate.promise;
+  outputs.onFinalize = finalizeStarted.resolve;
+  const invocation = first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  await finalizeStarted.promise;
+  const row = database
+    .prepare(
+      "SELECT record_json, integrity FROM durable_processes WHERE invocation_id=?",
+    )
+    .get("invoke-1") as { record_json: string; integrity: string };
+  database
+    .prepare(
+      "UPDATE durable_processes SET record_json=? WHERE invocation_id=?",
+    )
+    .run("{}", "invoke-1");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  database
+    .prepare(
+      "UPDATE durable_processes SET record_json=?, integrity=? WHERE invocation_id=?",
+    )
+    .run(row.record_json, row.integrity, "invoke-1");
+  assert.equal(first.readOnlyStore.readByInvocation("invoke-1")?.state, "exited");
+  finalizeGate.resolve();
+  await assert.rejects(invocation, /authority|heartbeat|store|unavailable/i);
+  const blocked = first.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.deepEqual(
+    pendingEffectsOf(blocked).map(({ family, phase }) => ({ family, phase })),
+    [{ family: "output_finalize", phase: "started" }],
+  );
+  const revision = blocked.revision;
+  clock.current = new Date(clock.current.getTime() + 50);
+  const contenderBackend = new Backend();
+  const contenderOutputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    contenderBackend,
+    clock,
+    contenderOutputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    assert.equal(
+      contender.readOnlyStore.readByInvocation("invoke-1")?.revision,
+      revision,
+    );
+    assert.deepEqual(contenderBackend.calls, []);
+    assert.deepEqual(contenderOutputs.calls, []);
+  } finally {
+    contender.readOnlyStore.close();
+  }
 });
 
 test("restart closes a launch blocker only after natural exit and verified release", async (t) => {
@@ -2126,39 +2575,50 @@ test("fresh attestation mismatch blocks cancellation authority before signal", a
 
 test("restart preserves durable timeout precedence after observation loss", async () => {
   const f = fixture();
-  f.backend.observeValue = new Proxy({}, {});
-  await assert.rejects(
-    f.runtime.invoke({
-      intent: intent(),
-      grantId: "grant-invoke-1",
-      ambientEnvironment: {},
-      deadline: new Date("2026-01-01T00:00:01.000Z"),
-    }),
-  );
+  let rejectObservation!: (error: Error) => void;
+  f.backend.observeGate = new Promise<void>((_resolve, reject) => {
+    rejectObservation = reject;
+  });
+  const signalStarted = deferred();
+  f.backend.onSignal = () => signalStarted.resolve();
+  const invocation = f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+    deadline: new Date("2026-01-01T00:00:01.000Z"),
+  });
+  await signalStarted.promise;
+  rejectObservation(new Error("observation transport lost"));
+  await assert.rejects(invocation);
   assert.equal(
     f.store.readByInvocation("invoke-1")?.stopIntent?.reason,
     "timed_out",
   );
   f.backend.observeValue = { state: "exited", exitCode: 0 };
-  await f.runtime.reconcileStartup();
-  assert.equal(
-    f.store.readByInvocation("invoke-1")?.result?.outcome,
-    "timed_out",
-  );
+  assert.deepEqual(await f.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+  ]);
+  assert.equal(f.store.readByInvocation("invoke-1")?.result, undefined);
 });
 
-test("backend-unavailable with durable stop re-enters stopping and escalates when backend returns", async () => {
+test("backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns", async () => {
   const f = fixture();
-  f.backend.observeValue = new Proxy({}, {});
+  let rejectObservation!: (error: Error) => void;
+  f.backend.observeGate = new Promise<void>((_resolve, reject) => {
+    rejectObservation = reject;
+  });
   f.backend.signalValues = [{ state: "exited" }];
-  await assert.rejects(
-    f.runtime.invoke({
-      intent: intent(),
-      grantId: "grant-invoke-1",
-      ambientEnvironment: {},
-      deadline: new Date("2026-01-01T00:00:01.000Z"),
-    }),
-  );
+  const signalStarted = deferred();
+  f.backend.onSignal = () => signalStarted.resolve();
+  const invocation = f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+    deadline: new Date("2026-01-01T00:00:01.000Z"),
+  });
+  await signalStarted.promise;
+  rejectObservation(new Error("observation transport lost"));
+  await assert.rejects(invocation);
   assert.equal(
     f.store.readByInvocation("invoke-1")?.state,
     "backend_unavailable",
@@ -2167,12 +2627,11 @@ test("backend-unavailable with durable stop re-enters stopping and escalates whe
   f.backend.reconcileValue = { state: "running" };
   f.backend.observeValue = { state: "exited", exitCode: 0 };
   f.backend.signalValues = [{ state: "exited" }];
-  await f.runtime.reconcileStartup();
-  assert.equal(f.store.readByInvocation("invoke-1")?.state, "cleaned");
-  assert.equal(
-    f.store.readByInvocation("invoke-1")?.result?.outcome,
-    "timed_out",
-  );
+  assert.deepEqual(await f.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+  ]);
+  assert.equal(await f.runtime.cancel("invoke-1"), false);
+  assert.deepEqual(f.backend.calls, []);
 });
 
 test("grant controller authority is scoped to exactly one kernel", async () => {
@@ -2250,10 +2709,10 @@ test("output ownership is prepared before launch and finalized before verified c
   ]);
 });
 
-test("restart reopens output, preserves stop precedence, and isolates one record failure from later recovery", async () => {
+test("restart preserves each completed malformed observation without reopening output", async () => {
   const first = fixture("first");
   const secondIntent = intent("second");
-  // Build two recoverable rows through real runtime/store commands by crashing observation.
+  // Build two rows with completed-but-uncommitted observation markers.
   first.backend.observeValue = new Proxy({}, {});
   first.grants.issue(grantValue("second"));
   await assert.rejects(
@@ -2270,17 +2729,18 @@ test("restart reopens output, preserves stop precedence, and isolates one record
       ambientEnvironment: {},
     }),
   );
-  const firstRecord = first.store.readByInvocation("first")!;
-  first.outputs.failReopenFor.add(firstRecord.outputOwnerId);
   first.backend.observeValue = { state: "exited", exitCode: 0 };
   const outcomes = await first.runtime.reconcileStartup();
   assert.equal(outcomes.length, 2);
-  assert.equal(outcomes[0]?.state, "outcome_unknown");
-  assert.equal(first.store.readByInvocation("second")?.state, "cleaned");
-  assert.ok(
-    first.outputs.calls.includes(
-      `reopen:${first.store.readByInvocation("second")?.outputOwnerId}`,
-    ),
+  assert.deepEqual(outcomes, [
+    { invocationId: "first", state: "effect_outcome_unresolved" },
+    { invocationId: "second", state: "effect_outcome_unresolved" },
+  ]);
+  assert.equal(first.store.readByInvocation("first")?.state, "backend_unavailable");
+  assert.equal(first.store.readByInvocation("second")?.state, "backend_unavailable");
+  assert.equal(
+    first.outputs.calls.filter((call) => call.startsWith("reopen:")).length,
+    0,
   );
 });
 
@@ -2396,14 +2856,12 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
       f.backend.observeValue = { state: "exited", exitCode: 0 };
       f.backend.signalValues = [{ state: "exited" }];
       const startup = await f.runtime.reconcileStartup();
-      if (state === "running" || state === "stopping") {
-        assert.deepEqual(startup, [
-          { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
-        ]);
-      }
+      assert.deepEqual(startup, [
+        { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+      ]);
       assert.equal(
         f.store.readByInvocation("invoke-1")?.state,
-        state === "running" || state === "stopping" ? state : outcome.want,
+        state,
         `${state}/${outcome.want}`,
       );
     }
