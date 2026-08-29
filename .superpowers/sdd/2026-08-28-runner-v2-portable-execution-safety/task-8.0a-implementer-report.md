@@ -241,6 +241,6 @@ Each behavior below was added test-first. RED commands were run before the liste
 
 ### Fix Round 2 commits and concerns
 
-- Production/tests plus this force-added report: pending commit.
-- Report-hash follow-up: pending commit.
+- Production/tests plus this force-added report: `17d7844e` (`fix(runner): recover expired pending cleanup`).
+- Report-hash follow-up: committed immediately after recording this production hash.
 - No unresolved implementation or validation concern is known. The packet still requires the prescribed independent re-review before the overall 8.0A reviewer exit gate can be claimed.
