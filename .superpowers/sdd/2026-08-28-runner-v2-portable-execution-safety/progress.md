@@ -117,6 +117,10 @@ overlap is expected.
   `cleanup_pending` ownership lease strands the exact cleanup effect because
   owner acknowledgement and takeover are both refused; commits
   `0f5b36a8`..`89fa9656`). Packet 8.0B remains locked.
+- Task 8.0A: fix round 2/5 (0 fully addressed, 1 open — successful recovered
+  cleanup can settle, but recovered failure cannot persist `cleanup_blocked`,
+  and accepting an arbitrary older effect fence lacks durable takeover
+  provenance; commits `17d7844e`..`3431499f`). Packet 8.0B remains locked.
 
 ## Breaker rulings
 
