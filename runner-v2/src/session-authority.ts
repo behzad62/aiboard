@@ -7,6 +7,7 @@ import type {
 import { assertCurrentConsumedExecutionGrantClaims } from "./execution-grants.js";
 import {
   STREAMING_SESSION_RECORD_VERSION,
+  getStreamingSessionKernelWriter,
   getStreamingSessionStoreWriter,
   type StreamingSessionAccess,
   type StreamingSessionBackendBinding,
@@ -28,6 +29,35 @@ export type SessionAuthorityErrorCode =
   | "binding_mismatch"
   | "second_grant_for_call"
   | "session_collision";
+
+const RUNNER_STAGED_LAUNCH_AUTHORIZATION: unique symbol = Symbol("runner-staged-launch-authorization");
+export interface StagedLaunchAuthorization { readonly [RUNNER_STAGED_LAUNCH_AUTHORIZATION]: true }
+export interface StageLaunchRequest {
+  readonly sessionId: string;
+  readonly launchId: string;
+  readonly grant: OpaqueExecutionGrant;
+  readonly binding: ExecutionGrantBinding;
+}
+export interface FinalizeLaunchRequest {
+  readonly staged: StagedLaunchAuthorization;
+  readonly launchId: string;
+  readonly sessionId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly expectedRevision: number;
+  readonly lease: StreamingSessionLease;
+  readonly backendBinding: StreamingSessionBackendBinding;
+  readonly handshakeDigest: string;
+  readonly envelope: StreamingSessionEnvelope;
+}
+interface StagedLaunchRecord {
+  readonly sessionId: string;
+  readonly launchId: string;
+  readonly callKey: string;
+  readonly claims: ConsumedExecutionGrantClaims;
+  used: boolean;
+}
+const STAGED_LAUNCHES = new WeakMap<object, StagedLaunchRecord>();
 
 export class SessionAuthorityError extends Error {
   constructor(readonly code: SessionAuthorityErrorCode, message: string) {
@@ -169,6 +199,12 @@ interface AuthorizationRecord {
 const AUTHORIZATIONS = new WeakMap<object, AuthorizationRecord>();
 
 export interface SessionAuthority {
+  stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization;
+  validateStagedLaunch(
+    staged: StagedLaunchAuthorization,
+    expected: Readonly<{ sessionId: string; launchId: string }>,
+  ): ConsumedExecutionGrantClaims;
+  finalizeLaunch(input: FinalizeLaunchRequest): Readonly<{ record: Readonly<StreamingSessionRecord> }>;
   beginTransfer(input: SessionAuthorityTransferRequest): Readonly<{
     record: Readonly<StreamingSessionRecord>;
   }>;
@@ -197,11 +233,79 @@ export interface SessionAuthority {
 
 export function createSessionAuthority(options: SessionAuthorityOptions): SessionAuthority {
   const writer = getStreamingSessionStoreWriter(options.sessions);
+  const kernelWriter = getStreamingSessionKernelWriter(options.sessions);
   const clock = options.clock ?? (() => new Date());
   const retainedClaims = new Map<string, ConsumedExecutionGrantClaims>();
   const launchAuthorizationUsed = new Set<string>();
   const grantIdsByCall = new Map<string, string>();
   return Object.freeze({
+    stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization {
+      const sessionId = requiredText(input.sessionId, "sessionId");
+      const launchId = requiredText(input.launchId, "launchId");
+      if (options.sessions.store.readBySession(sessionId)) {
+        throw new SessionAuthorityError("session_collision", "Streaming session id is already reserved.");
+      }
+      const callKey = executionGrantCallKey(input.binding);
+      if (grantIdsByCall.has(callKey)) {
+        throw new SessionAuthorityError("launch_call_consumed", "The launching ToolBroker call is already staged.");
+      }
+      const claims = options.grants.consume(input.grant, input.binding);
+      assertCurrentConsumedExecutionGrantClaims(claims);
+      grantIdsByCall.set(callKey, claims.grantId);
+      const authorization = Object.freeze({ [RUNNER_STAGED_LAUNCH_AUTHORIZATION]: true }) as StagedLaunchAuthorization;
+      STAGED_LAUNCHES.set(authorization as object, { sessionId, launchId, callKey, claims, used: false });
+      return authorization;
+    },
+    validateStagedLaunch(stagedAuthorization: StagedLaunchAuthorization, expected: Readonly<{ sessionId: string; launchId: string }>) {
+      const staged = STAGED_LAUNCHES.get(stagedAuthorization as object);
+      if (!staged || staged.used) throw new SessionAuthorityError("launch_call_consumed", "Staged launch authorization is unavailable or consumed.");
+      if (staged.sessionId !== expected.sessionId || staged.launchId !== expected.launchId) throw new SessionAuthorityError("binding_mismatch", "Staged launch identity does not match.");
+      return assertCurrentConsumedExecutionGrantClaims(staged.claims);
+    },
+    finalizeLaunch(input: FinalizeLaunchRequest) {
+      const staged = STAGED_LAUNCHES.get(input.staged as object);
+      if (!staged || staged.used) throw new SessionAuthorityError("launch_call_consumed", "Staged launch authorization is unavailable or consumed.");
+      const sessionId = requiredText(input.sessionId, "sessionId");
+      const launchId = requiredText(input.launchId, "launchId");
+      if (staged.sessionId !== sessionId || staged.launchId !== launchId) throw new SessionAuthorityError("binding_mismatch", "Staged launch identity does not match finalization.");
+      assertCurrentConsumedExecutionGrantClaims(staged.claims);
+      assertSessionEnvelopeSubset(input.envelope, staged.claims);
+      assertLeaseAccessSubset(input.lease, staged.claims);
+      assertEnvelopeWithinLease(input.envelope, input.lease);
+      if (!/^[a-f0-9]{64}$/i.test(input.handshakeDigest)) throw new SessionAuthorityError("binding_mismatch", "Handshake attestation digest is invalid.");
+      const host = options.sessions.store.readHostLaunch(launchId);
+      if (!host || host.sessionId !== sessionId || host.runId !== staged.claims.runId || host.agentSessionId !== staged.claims.sessionId || host.callId !== staged.claims.callId || host.leaseBinding?.leaseId !== input.lease.leaseId || host.backendBinding?.opaqueIdentity !== input.backendBinding.opaqueIdentity || host.handshakeDigest !== input.handshakeDigest.toLowerCase()) {
+        throw new SessionAuthorityError("binding_mismatch", "Final launch bindings do not match the staged host record.");
+      }
+      const at = clock().toISOString();
+      const ownerId = `session-authority:${staged.claims.runId}:${staged.claims.grantId}`;
+      const record = {
+        recordKind: "runner.streaming-session",
+        schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+        revision: 1,
+        sessionId,
+        ownerId,
+        fencingToken: 1,
+        leaseExpiresAt: new Date(clock().getTime() + 60_000).toISOString(),
+        runId: staged.claims.runId,
+        agentSessionId: staged.claims.sessionId,
+        actor: { role: staged.claims.actor.role, id: staged.claims.actor.id },
+        toolName: staged.claims.toolName,
+        callId: staged.claims.callId,
+        envelope: structuredClone(input.envelope),
+        lease: structuredClone(input.lease),
+        backendBinding: structuredClone(input.backendBinding),
+        cleanupCreationAuthority: null,
+        cleanupOwner: "session_authority",
+        state: "active",
+        history: [{ state: "pending_transfer", at }, { state: "active", at }],
+        effects: [{ effectId: `transfer:${staged.claims.grantId}`, kind: "transfer", status: "acknowledged", owner: "tool_broker", fencingToken: 1, createdAt: at, acknowledgedAt: at }],
+      };
+      const adopted = kernelWriter.commitAdoption({ launchId, ownerId: input.ownerId, fencingToken: input.fencingToken, expectedRevision: input.expectedRevision, at, sessionRecord: record });
+      staged.used = true;
+      retainedClaims.set(sessionId, staged.claims);
+      return Object.freeze({ record: adopted.session });
+    },
     beginTransfer(input: SessionAuthorityTransferRequest) {
       const sessionId = requiredText(input.sessionId, "sessionId");
       const existing = options.sessions.store.readBySession(sessionId);

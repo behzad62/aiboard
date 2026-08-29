@@ -193,6 +193,8 @@ const STREAMING_SESSION_STATES = new Set([
 export interface StreamingSessionStore {
   readBySession(sessionId: string): Readonly<StreamingSessionRecord> | undefined;
   listSessionIds(): readonly string[];
+  readHostLaunch(launchId: string): Readonly<HostLaunchRecord> | undefined;
+  listHostLaunchIds(): readonly string[];
   close(): void;
 }
 
@@ -208,6 +210,57 @@ export interface StreamingSessionStoreKernel {
 export interface StreamingSessionStoreOptions {
   readonly maxRecords?: number;
   readonly maxEffectsPerRecord?: number;
+  readonly maxHostLaunchRecords?: number;
+}
+
+export const HOST_LAUNCH_RECORD_KIND = "runner.host-launch" as const;
+export const HOST_LAUNCH_RECORD_VERSION = 1 as const;
+export type HostLaunchState = "prepared" | "isolated" | "launching" | "bound" |
+  "handshake_verified" | "handed_off" | "cleanup_pending" | "cleanup_blocked" | "released";
+export interface HostLaunchEffect {
+  readonly effectId: string;
+  readonly kind: "isolate" | "launch" | "handoff" | "cleanup";
+  readonly status: "pending" | "acknowledged" | "blocked";
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly createdAt: string;
+  readonly acknowledgedAt?: string;
+  readonly blockedAt?: string;
+}
+export interface HostLaunchRecord {
+  readonly recordKind: typeof HOST_LAUNCH_RECORD_KIND;
+  readonly schemaVersion: typeof HOST_LAUNCH_RECORD_VERSION;
+  readonly revision: number;
+  readonly launchId: string;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly agentSessionId: string;
+  readonly actor: Readonly<{ role: "architect" | "worker" | "system" | "user"; id: string }>;
+  readonly toolName: string;
+  readonly callId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly state: HostLaunchState;
+  readonly cleanupOwner: "host_control" | "none";
+  readonly leaseBinding?: Readonly<{ leaseId: string; providerId: string; providerIdentity: string }>;
+  readonly backendBinding?: StreamingSessionBackendBinding;
+  readonly handshakeDigest?: string;
+  readonly history: readonly Readonly<{ state: HostLaunchState; at: string }>[];
+  readonly effects: readonly HostLaunchEffect[];
+}
+
+export interface StreamingSessionKernelWriter extends StreamingSessionStoreWriter {
+  prepareLaunch(record: unknown): Readonly<{ record: Readonly<HostLaunchRecord>; won: boolean }>;
+  transitionLaunch(command: unknown): Readonly<HostLaunchRecord>;
+  commitAdoption(input: StreamingSessionAdoptionInput): Readonly<{ launch: Readonly<HostLaunchRecord>; session: Readonly<StreamingSessionRecord> }>;
+}
+export interface StreamingSessionAdoptionInput {
+  readonly launchId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly expectedRevision: number;
+  readonly at: string;
+  readonly sessionRecord: unknown;
 }
 
 export interface SqliteStreamingSessionStoreOptions extends StreamingSessionStoreOptions {
@@ -215,12 +268,14 @@ export interface SqliteStreamingSessionStoreOptions extends StreamingSessionStor
 }
 
 const STORE_WRITER = Symbol("streaming-session-store-writer");
+const KERNEL_WRITER = Symbol("streaming-session-kernel-writer");
 
 export function createInMemoryStreamingSessionStore(
   options: StreamingSessionStoreOptions = {},
 ): StreamingSessionStoreKernel {
   const maxRecords = options.maxRecords ?? 256;
   const maxEffectsPerRecord = options.maxEffectsPerRecord ?? 32;
+  const maxHostLaunchRecords = positiveCapacity(options.maxHostLaunchRecords ?? 256, "maxHostLaunchRecords");
   if (!Number.isSafeInteger(maxRecords) || maxRecords < 1) {
     throw new StreamingSessionStoreError("invalid_record", "Streaming session maxRecords must be a positive integer.");
   }
@@ -228,6 +283,7 @@ export function createInMemoryStreamingSessionStore(
     throw new StreamingSessionStoreError("invalid_record", "Streaming session maxEffectsPerRecord must be a positive integer.");
   }
   const records = new Map<string, Readonly<StreamingSessionRecord>>();
+  const hostLaunches = new Map<string, Readonly<HostLaunchRecord>>();
   const writer: StreamingSessionStoreWriter = Object.freeze({
     claim(record: unknown) {
       const parsed = parseStreamingSessionRecord(record);
@@ -275,10 +331,20 @@ export function createInMemoryStreamingSessionStore(
     listSessionIds() {
       return Object.freeze([...records.keys()].sort());
     },
+    readHostLaunch(launchId: string) {
+      const record = hostLaunches.get(launchId);
+      return record ? cloneHostLaunchRecord(record) : undefined;
+    },
+    listHostLaunchIds() {
+      return Object.freeze([...hostLaunches.keys()].sort());
+    },
     close() {},
   });
   const kernel = { store } as StreamingSessionStoreKernel;
   Object.defineProperty(kernel, STORE_WRITER, { value: writer });
+  Object.defineProperty(kernel, KERNEL_WRITER, {
+    value: createHostLaunchWriter(writer, records, hostLaunches, maxHostLaunchRecords),
+  });
   return Object.freeze(kernel);
 }
 
@@ -292,6 +358,7 @@ export function openSqliteStreamingSessionStore(
   }
   const maxRecords = options.maxRecords ?? 256;
   const maxEffectsPerRecord = options.maxEffectsPerRecord ?? 32;
+  const maxHostLaunchRecords = positiveCapacity(options.maxHostLaunchRecords ?? 256, "maxHostLaunchRecords");
   if (!Number.isSafeInteger(maxRecords) || maxRecords < 1) {
     throw new StreamingSessionStoreError("invalid_record", "Streaming session maxRecords must be a positive integer.");
   }
@@ -305,6 +372,10 @@ export function openSqliteStreamingSessionStore(
     database.exec(
       "CREATE TABLE IF NOT EXISTS streaming_sessions (" +
       "session_id TEXT PRIMARY KEY, record_json TEXT NOT NULL, integrity TEXT NOT NULL, revision INTEGER NOT NULL)",
+    );
+    database.exec(
+      "CREATE TABLE IF NOT EXISTS streaming_host_launches (" +
+      "launch_id TEXT PRIMARY KEY, record_json TEXT NOT NULL, integrity TEXT NOT NULL, revision INTEGER NOT NULL)",
     );
     const columns = database.prepare("PRAGMA table_info(streaming_sessions)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "revision")) {
@@ -388,12 +459,23 @@ export function openSqliteStreamingSessionStore(
           .map((row) => row.session_id),
       );
     },
+    readHostLaunch(launchId: string) {
+      return readSqliteHostLaunch(database, integrityKey, launchId);
+    },
+    listHostLaunchIds() {
+      return Object.freeze((database.prepare(
+        "SELECT launch_id FROM streaming_host_launches ORDER BY launch_id",
+      ).all() as Array<{ launch_id: string }>).map((row) => row.launch_id));
+    },
     close() {
       database.close();
     },
   });
   const kernel = { store } as StreamingSessionStoreKernel;
   Object.defineProperty(kernel, STORE_WRITER, { value: writer });
+  Object.defineProperty(kernel, KERNEL_WRITER, {
+    value: createSqliteHostLaunchWriter(database, integrityKey, writer, maxHostLaunchRecords, maxRecords, readOnly),
+  });
   return Object.freeze(kernel);
 }
 
@@ -405,6 +487,16 @@ export function getStreamingSessionStoreWriter(
     throw new StreamingSessionStoreError("invalid_record", "Streaming session store writer is unavailable.");
   }
   return writer as StreamingSessionStoreWriter;
+}
+
+export function getStreamingSessionKernelWriter(
+  kernel: StreamingSessionStoreKernel,
+): StreamingSessionKernelWriter {
+  const writer = Object.getOwnPropertyDescriptor(kernel, KERNEL_WRITER)?.value;
+  if (!writer || typeof writer.prepareLaunch !== "function" || typeof writer.transitionLaunch !== "function") {
+    throw new StreamingSessionStoreError("invalid_record", "Atomic streaming-session kernel writer is unavailable.");
+  }
+  return writer as StreamingSessionKernelWriter;
 }
 
 export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingSessionRecord> {
@@ -1340,6 +1432,318 @@ function requiredText(value: unknown, name: string): string {
   }
   return value;
 }
+
+const HOST_LAUNCH_REQUIRED_KEYS = new Set([
+  "recordKind", "schemaVersion", "revision", "launchId", "sessionId", "runId", "agentSessionId",
+  "actor", "toolName", "callId", "ownerId", "fencingToken", "state", "cleanupOwner", "history", "effects",
+]);
+const HOST_LAUNCH_ALLOWED_KEYS = new Set([
+  ...HOST_LAUNCH_REQUIRED_KEYS, "leaseBinding", "backendBinding", "handshakeDigest",
+]);
+
+export function parseHostLaunchRecord(value: unknown): Readonly<HostLaunchRecord> {
+  if (!isObjectRecord(value)) throw new StreamingSessionStoreError("invalid_record", "Host launch record must be an object.");
+  assertNoForbiddenDurableValues(value);
+  assertExactKeys(value, HOST_LAUNCH_ALLOWED_KEYS, "host launch record");
+  assertRequiredKeys(value, HOST_LAUNCH_REQUIRED_KEYS, "host launch record");
+  if (value.recordKind !== HOST_LAUNCH_RECORD_KIND || value.schemaVersion !== HOST_LAUNCH_RECORD_VERSION) {
+    throw new StreamingSessionStoreError(
+      value.state === "released" ? "unsupported_version" : "unsupported_active_version",
+      "Host launch record version is unsupported.",
+    );
+  }
+  const revision = requiredNonNegativeInteger(value.revision, "host launch revision");
+  const fencingToken = requiredPositiveInteger(value.fencingToken, "host launch fence");
+  for (const key of ["launchId", "sessionId", "runId", "agentSessionId", "toolName", "callId", "ownerId"] as const) {
+    requiredText(value[key], key);
+  }
+  parseActor(value.actor);
+  if (!isHostLaunchState(value.state)) throw new StreamingSessionStoreError("invalid_state", "Host launch state is invalid.");
+  if (value.cleanupOwner !== (value.state === "handed_off" || value.state === "released" ? "none" : "host_control")) {
+    throw new StreamingSessionStoreError("invalid_state", "Host launch cleanup owner is invalid for state.");
+  }
+  if (!Array.isArray(value.history) || value.history.length < 1 || value.history.length > 64) {
+    throw new StreamingSessionStoreError("invalid_record", "Host launch history is invalid.");
+  }
+  const history = value.history.map((entry) => {
+    assertExactKeys(entry, new Set(["state", "at"]), "host launch history entry");
+    const item = entry as Record<string, unknown>;
+    if (!isHostLaunchState(item.state)) throw new StreamingSessionStoreError("invalid_state", "Host launch history state is invalid.");
+    return Object.freeze({ state: item.state, at: requiredTimestamp(item.at, "history at") });
+  });
+  if (history.at(-1)?.state !== value.state || history.length !== revision + 1) {
+    throw new StreamingSessionStoreError("invalid_state", "Host launch history does not match revision/state.");
+  }
+  if (!Array.isArray(value.effects) || value.effects.length < 1 || value.effects.length > 32) {
+    throw new StreamingSessionStoreError("invalid_effect", "Host launch effects are invalid.");
+  }
+  const effects = value.effects.map(parseHostLaunchEffect);
+  const leaseBinding = value.leaseBinding === undefined ? undefined : parseHostLeaseBinding(value.leaseBinding);
+  const backendBinding = value.backendBinding === undefined ? undefined : parseBackendBindingValue(value.backendBinding);
+  const handshakeDigest = value.handshakeDigest === undefined ? undefined : requiredDigest(value.handshakeDigest, "handshakeDigest");
+  if ((value.state === "isolated" || value.state === "launching" || value.state === "bound" || value.state === "handshake_verified" || value.state === "handed_off") && !leaseBinding) {
+    throw new StreamingSessionStoreError("invalid_state", "Host launch lease binding is required.");
+  }
+  if ((value.state === "bound" || value.state === "handshake_verified" || value.state === "handed_off") && !backendBinding) {
+    throw new StreamingSessionStoreError("invalid_state", "Host launch backend binding is required.");
+  }
+  if ((value.state === "handshake_verified" || value.state === "handed_off") && !handshakeDigest) {
+    throw new StreamingSessionStoreError("invalid_state", "Host launch handshake digest is required.");
+  }
+  return deepFreeze(structuredClone({ ...value, revision, fencingToken, history, effects, ...(leaseBinding ? { leaseBinding } : {}), ...(backendBinding ? { backendBinding } : {}), ...(handshakeDigest ? { handshakeDigest } : {}) })) as unknown as Readonly<HostLaunchRecord>;
+}
+
+function createHostLaunchWriter(
+  sessionWriter: StreamingSessionStoreWriter,
+  sessions: Map<string, Readonly<StreamingSessionRecord>>,
+  records: Map<string, Readonly<HostLaunchRecord>>,
+  capacity: number,
+): StreamingSessionKernelWriter {
+  return Object.freeze({
+    ...sessionWriter,
+    prepareLaunch(record: unknown) {
+      const parsed = parseHostLaunchRecord(record);
+      const existing = records.get(parsed.launchId);
+      if (existing) {
+        if (canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Host launch identity conflicts.");
+        return Object.freeze({ record: cloneHostLaunchRecord(existing), won: false });
+      }
+      if (records.size >= capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Host launch capacity is full.");
+      records.set(parsed.launchId, parsed);
+      return Object.freeze({ record: cloneHostLaunchRecord(parsed), won: true });
+    },
+    transitionLaunch(command: unknown) {
+      const input = commandRecord(command, "host launch command");
+      const launchId = requiredText(input.launchId, "launchId");
+      const current = records.get(launchId);
+      if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+      const next = applyHostLaunchCommand(current, input);
+      if (next !== current) records.set(launchId, next);
+      return cloneHostLaunchRecord(next);
+    },
+    commitAdoption(input: StreamingSessionAdoptionInput) {
+      const launch = requiredAdoptionLaunch(records.get(input.launchId), input);
+      const session = parseStreamingSessionRecord(input.sessionRecord);
+      assertAdoptionPair(launch, session);
+      const existing = sessions.get(session.sessionId);
+      if (existing) {
+        if (canonicalJson(existing) !== canonicalJson(session)) throw new StreamingSessionStoreError("identity_conflict", "Session collision retained host ownership.");
+        const handed = records.get(launch.launchId)!;
+        if (handed.state !== "handed_off") throw new StreamingSessionStoreError("invalid_state", "Adoption pair is impossible.");
+        return Object.freeze({ launch: cloneHostLaunchRecord(handed), session: cloneRecord(existing) });
+      }
+      const handed = handoffHostLaunch(launch, input.at);
+      sessions.set(session.sessionId, session);
+      records.set(launch.launchId, handed);
+      return Object.freeze({ launch: cloneHostLaunchRecord(handed), session: cloneRecord(session) });
+    },
+  });
+}
+
+function createSqliteHostLaunchWriter(
+  database: DatabaseSync,
+  integrityKey: Uint8Array,
+  sessionWriter: StreamingSessionStoreWriter,
+  capacity: number,
+  sessionCapacity: number,
+  readOnly: boolean,
+): StreamingSessionKernelWriter {
+  return Object.freeze({
+    ...sessionWriter,
+    prepareLaunch(record: unknown) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      const parsed = parseHostLaunchRecord(record);
+      const json = JSON.stringify(parsed);
+      const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
+      const result = database.prepare("INSERT OR IGNORE INTO streaming_host_launches (launch_id, record_json, integrity, revision) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM streaming_host_launches) < ?")
+        .run(parsed.launchId, json, integrity, parsed.revision, capacity) as { changes?: number };
+      if (result.changes === 1) return Object.freeze({ record: cloneHostLaunchRecord(parsed), won: true });
+      const existing = readSqliteHostLaunch(database, integrityKey, parsed.launchId);
+      if (existing) {
+        if (canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Host launch identity conflicts.");
+        return Object.freeze({ record: cloneHostLaunchRecord(existing), won: false });
+      }
+      throw new StreamingSessionStoreError("capacity_exceeded", "Host launch capacity is full.");
+    },
+    transitionLaunch(command: unknown) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      const input = commandRecord(command, "host launch command");
+      const launchId = requiredText(input.launchId, "launchId");
+      const current = readSqliteHostLaunch(database, integrityKey, launchId);
+      if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+      const next = applyHostLaunchCommand(current, input);
+      if (next === current) return cloneHostLaunchRecord(current);
+      const json = JSON.stringify(next);
+      const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
+      const result = database.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ?, revision = ? WHERE launch_id = ? AND revision = ?")
+        .run(json, integrity, next.revision, launchId, current.revision) as { changes?: number };
+      if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Host launch revision is stale.");
+      return cloneHostLaunchRecord(next);
+    },
+    commitAdoption(input: StreamingSessionAdoptionInput) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const launch = requiredAdoptionLaunch(readSqliteHostLaunch(database, integrityKey, input.launchId), input);
+        const session = parseStreamingSessionRecord(input.sessionRecord);
+        assertAdoptionPair(launch, session);
+        const sessionJson = JSON.stringify(session);
+        const sessionIntegrity = createHmac("sha256", integrityKey).update(sessionJson).digest("hex");
+        const inserted = database.prepare("INSERT OR IGNORE INTO streaming_sessions (session_id, record_json, integrity, revision) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM streaming_sessions) < ?")
+          .run(session.sessionId, sessionJson, sessionIntegrity, session.revision, sessionCapacity) as { changes?: number };
+        if (inserted.changes !== 1) {
+          const row = database.prepare("SELECT record_json FROM streaming_sessions WHERE session_id = ?").get(session.sessionId) as { record_json: string } | undefined;
+          if (!row || canonicalJson(parseStreamingSessionRecord(JSON.parse(row.record_json))) !== canonicalJson(session)) throw new StreamingSessionStoreError("identity_conflict", "Session collision retained host ownership.");
+        }
+        const handed = handoffHostLaunch(launch, input.at);
+        const launchJson = JSON.stringify(handed);
+        const launchIntegrity = createHmac("sha256", integrityKey).update(launchJson).digest("hex");
+        const updated = database.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ?, revision = ? WHERE launch_id = ? AND revision = ?")
+          .run(launchJson, launchIntegrity, handed.revision, launch.launchId, launch.revision) as { changes?: number };
+        if (updated.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Host launch adoption revision is stale.");
+        database.exec("COMMIT");
+        return Object.freeze({ launch: cloneHostLaunchRecord(handed), session: cloneRecord(session) });
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+    },
+  });
+}
+
+function readSqliteHostLaunch(database: DatabaseSync, integrityKey: Uint8Array, launchId: string): Readonly<HostLaunchRecord> | undefined {
+  const row = database.prepare("SELECT record_json, integrity, revision FROM streaming_host_launches WHERE launch_id = ?")
+    .get(launchId) as { record_json: string; integrity: string; revision: number } | undefined;
+  if (!row) return undefined;
+  const actual = createHmac("sha256", integrityKey).update(row.record_json).digest();
+  const expected = Buffer.from(row.integrity, "hex");
+  if (actual.byteLength !== expected.byteLength || !timingSafeEqual(actual, expected)) throw new StreamingSessionStoreError("invalid_record", "Host launch integrity failed.");
+  const parsed = parseHostLaunchRecord(JSON.parse(row.record_json));
+  if (parsed.revision !== row.revision) throw new StreamingSessionStoreError("invalid_record", "Host launch revision is corrupt.");
+  return parsed;
+}
+
+function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>): Readonly<HostLaunchRecord> {
+  const ownerId = requiredText(input.ownerId, "ownerId");
+  const fence = requiredPositiveInteger(input.fencingToken, "fencingToken");
+  const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
+  if (ownerId !== current.ownerId || fence !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Host launch owner/fence is stale.");
+  const at = requiredTimestamp(input.at, "at");
+  let state: HostLaunchState;
+  const additions: {
+    leaseBinding?: HostLaunchRecord["leaseBinding"];
+    backendBinding?: StreamingSessionBackendBinding;
+    handshakeDigest?: string;
+  } = {};
+  const effects = current.effects.map((effect) => ({ ...effect }));
+  if (input.type === "bind_isolation") {
+    state = "isolated";
+    additions.leaseBinding = Object.freeze({ leaseId: requiredText(input.leaseId, "leaseId"), providerId: requiredText(input.providerId, "providerId"), providerIdentity: requiredDigest(input.providerIdentity, "providerIdentity") });
+    acknowledgeHostEffect(effects, `isolate:${current.launchId}`, at);
+    ensureTransition(current.state, "prepared", input, current, additions);
+  } else if (input.type === "begin_launch") {
+    state = "launching";
+    ensureTransition(current.state, "isolated", input, current, additions);
+    effects.push({ effectId: `launch:${current.launchId}`, kind: "launch", status: "pending", ownerId, fencingToken: fence, createdAt: at });
+  } else if (input.type === "bind_backend") {
+    state = "bound";
+    additions.backendBinding = parseBackendBindingValue(input.backendBinding);
+    ensureTransition(current.state, "launching", input, current, additions);
+    acknowledgeHostEffect(effects, `launch:${current.launchId}`, at);
+  } else if (input.type === "verify_handshake") {
+    state = "handshake_verified";
+    additions.handshakeDigest = requiredDigest(input.handshakeDigest, "handshakeDigest");
+    ensureTransition(current.state, "bound", input, current, additions);
+    effects.push({ effectId: `handoff:${current.launchId}`, kind: "handoff", status: "pending", ownerId, fencingToken: fence, createdAt: at });
+  } else {
+    throw new StreamingSessionStoreError("invalid_effect", "Host launch transition is unsupported.");
+  }
+  if (expectedRevision !== current.revision) {
+    const candidate = { ...current, ...additions, state };
+    if (current.state === state && identitySubsetMatches(current, candidate)) return current;
+    throw new StreamingSessionStoreError("revision_conflict", "Host launch revision is stale.");
+  }
+  return parseHostLaunchRecord({ ...current, ...additions, revision: current.revision + 1, state, history: [...current.history, { state, at }], effects });
+}
+
+function requiredAdoptionLaunch(
+  launch: Readonly<HostLaunchRecord> | undefined,
+  input: { launchId: string; ownerId: string; fencingToken: number; expectedRevision: number },
+): Readonly<HostLaunchRecord> {
+  if (!launch) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+  if (launch.ownerId !== input.ownerId || launch.fencingToken !== input.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Host launch owner/fence is stale.");
+  if (launch.revision !== input.expectedRevision) throw new StreamingSessionStoreError("revision_conflict", "Host launch adoption revision is stale.");
+  if (launch.state !== "handshake_verified") throw new StreamingSessionStoreError("invalid_state", "Host launch is not handshake verified.");
+  return launch;
+}
+
+function assertAdoptionPair(launch: Readonly<HostLaunchRecord>, session: Readonly<StreamingSessionRecord>): void {
+  if (session.state !== "active" || session.cleanupOwner !== "session_authority" || session.sessionId !== launch.sessionId || session.runId !== launch.runId || session.agentSessionId !== launch.agentSessionId || session.toolName !== launch.toolName || session.callId !== launch.callId || session.backendBinding.opaqueIdentity !== launch.backendBinding?.opaqueIdentity || session.lease.leaseId !== launch.leaseBinding?.leaseId) {
+    throw new StreamingSessionStoreError("identity_conflict", "Host/session adoption identities do not match.");
+  }
+}
+
+function handoffHostLaunch(launch: Readonly<HostLaunchRecord>, atInput: unknown): Readonly<HostLaunchRecord> {
+  const at = requiredTimestamp(atInput, "adoption at");
+  const effects = launch.effects.map((effect) => effect.effectId === `handoff:${launch.launchId}`
+    ? { ...effect, status: "acknowledged" as const, acknowledgedAt: at }
+    : effect);
+  return parseHostLaunchRecord({ ...launch, revision: launch.revision + 1, ownerId: "none", cleanupOwner: "none", state: "handed_off", history: [...launch.history, { state: "handed_off", at }], effects });
+}
+
+function ensureTransition(actual: HostLaunchState, expected: HostLaunchState, input: Record<string, unknown>, current: HostLaunchRecord, additions: Partial<HostLaunchRecord>): void {
+  if (actual === expected) return;
+  const target = input.type === "bind_isolation" ? "isolated" : input.type === "begin_launch" ? "launching" : input.type === "bind_backend" ? "bound" : "handshake_verified";
+  if (actual === target && identitySubsetMatches(current, { ...current, ...additions })) return;
+  throw new StreamingSessionStoreError("invalid_state", `Host launch cannot transition from ${actual}.`);
+}
+
+function acknowledgeHostEffect(effects: HostLaunchEffect[], effectId: string, at: string): void {
+  const index = effects.findIndex((effect) => effect.effectId === effectId);
+  if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect is missing.");
+  const effect = effects[index]!;
+  effects[index] = { ...effect, status: "acknowledged", acknowledgedAt: at };
+}
+
+function parseHostLaunchEffect(value: unknown): HostLaunchEffect {
+  assertExactKeys(value, new Set(["effectId", "kind", "status", "ownerId", "fencingToken", "createdAt", "acknowledgedAt", "blockedAt"]), "host launch effect");
+  const entry = value as Record<string, unknown>;
+  for (const key of ["effectId", "ownerId"] as const) requiredText(entry[key], key);
+  if (!["isolate", "launch", "handoff", "cleanup"].includes(entry.kind as string) || !["pending", "acknowledged", "blocked"].includes(entry.status as string)) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect is invalid.");
+  const parsed = { ...entry, fencingToken: requiredPositiveInteger(entry.fencingToken, "effect fence"), createdAt: requiredTimestamp(entry.createdAt, "effect createdAt") } as unknown as HostLaunchEffect;
+  if (entry.acknowledgedAt !== undefined) requiredTimestamp(entry.acknowledgedAt, "acknowledgedAt");
+  if (entry.blockedAt !== undefined) requiredTimestamp(entry.blockedAt, "blockedAt");
+  return Object.freeze(parsed);
+}
+
+function parseHostLeaseBinding(value: unknown): HostLaunchRecord["leaseBinding"] {
+  assertExactKeys(value, new Set(["leaseId", "providerId", "providerIdentity"]), "host lease binding");
+  const item = value as Record<string, unknown>;
+  return Object.freeze({ leaseId: requiredText(item.leaseId, "leaseId"), providerId: requiredText(item.providerId, "providerId"), providerIdentity: requiredDigest(item.providerIdentity, "providerIdentity") });
+}
+
+function parseBackendBindingValue(value: unknown): StreamingSessionBackendBinding {
+  // Reuse the approved streaming-session parser rather than introducing a looser binding shape.
+  const probe = parseStreamingSessionRecord({
+    recordKind: STREAMING_SESSION_RECORD_KIND, schemaVersion: STREAMING_SESSION_RECORD_VERSION, revision: 0,
+    sessionId: "binding-probe", ownerId: "binding-probe", fencingToken: 1, leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+    runId: "binding-probe", agentSessionId: "binding-probe", actor: { role: "system", id: "binding-probe" },
+    toolName: "binding-probe", callId: "binding-probe", envelope: { access: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false },
+    lease: { leaseId: "binding-probe", providerId: "binding-probe", invocationId: "binding-probe", providerIdentity: "a".repeat(64), acquiredAt: "2026-01-01T00:00:00.000Z", access: [] },
+    backendBinding: value, cleanupCreationAuthority: null, cleanupOwner: "tool_broker", state: "pending_transfer",
+    history: [{ state: "pending_transfer", at: "2026-01-01T00:00:00.000Z" }], effects: [{ effectId: "transfer:binding-probe", kind: "transfer", status: "pending", owner: "tool_broker", fencingToken: 1, createdAt: "2026-01-01T00:00:00.000Z" }],
+  });
+  return probe.backendBinding;
+}
+
+function cloneHostLaunchRecord(record: Readonly<HostLaunchRecord>): Readonly<HostLaunchRecord> { return deepFreeze(structuredClone(record)); }
+function identitySubsetMatches(left: unknown, right: unknown): boolean { return canonicalJson(left) === canonicalJson(right); }
+function isHostLaunchState(value: unknown): value is HostLaunchState { return ["prepared", "isolated", "launching", "bound", "handshake_verified", "handed_off", "cleanup_pending", "cleanup_blocked", "released"].includes(value as string); }
+function requiredPositiveInteger(value: unknown, name: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new StreamingSessionStoreError("invalid_record", `${name} is invalid.`); return value as number; }
+function requiredNonNegativeInteger(value: unknown, name: string): number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new StreamingSessionStoreError("invalid_record", `${name} is invalid.`); return value as number; }
+function requiredTimestamp(value: unknown, name: string): string { const text = requiredText(value, name); if (!Number.isFinite(Date.parse(text))) throw new StreamingSessionStoreError("invalid_record", `${name} is invalid.`); return text; }
+function requiredDigest(value: unknown, name: string): string { const text = requiredText(value, name); if (!/^[a-f0-9]{64}$/i.test(text)) throw new StreamingSessionStoreError("invalid_record", `${name} is invalid.`); return text.toLowerCase(); }
+function positiveCapacity(value: number, name: string): number { if (!Number.isSafeInteger(value) || value < 1) throw new StreamingSessionStoreError("invalid_record", `${name} must be a positive integer.`); return value; }
 
 function commandRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

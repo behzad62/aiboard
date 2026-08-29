@@ -7,6 +7,29 @@ import type {
 } from "./session-authority.js";
 
 export const INTERACTIVE_PROCESS_CHANNEL_VERSION = 1 as const;
+export const BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION = 2 as const;
+
+/** Additive v2 capability. V1 remains valid for terminal/non-streaming callers. */
+export interface BackpressuredOutputMetadata {
+  readonly stream: "stdout" | "stderr";
+  readonly sequence: number;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly byteLength: number;
+  readonly digest: string;
+}
+export type BackpressuredOutputAcknowledgement = BackpressuredOutputMetadata;
+export interface BackpressuredInteractiveProcessChannelProvider {
+  readonly version: typeof BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION;
+  readonly replayCapacityChunks: number;
+  readonly replayCapacityBytes: number;
+  acquire(binding: ProcessBackendBinding): Promise<InteractiveProcessChannel & Readonly<{
+    subscribeBackpressuredOutput(
+      sink: (metadata: BackpressuredOutputMetadata, ownedBytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>,
+    ): () => void;
+  }>>;
+  reattach?(binding: ProcessBackendBinding): Promise<InteractiveProcessReattachResult>;
+}
 
 /** Closed set of family-facing actions that must carry a current authority token. */
 export type InteractiveFamilyAction =
