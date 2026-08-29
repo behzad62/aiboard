@@ -536,6 +536,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         stopPromise.then((stop) => ({ kind: "stop" as const, stop })),
       ]);
     } catch (error) {
+      const blocked = recoverableLaunchBlocker(error);
+      if (blocked)
+        return await this.persistLaunchCleanupBlocker(record, output, selected, blocked);
       await this.failBeforeLaunch(
         record,
         output,
@@ -552,6 +555,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       try {
         rawLaunch = await launchPromise;
       } catch (error) {
+        const blocked = recoverableLaunchBlocker(error);
+        if (blocked)
+          return await this.persistLaunchCleanupBlocker(record, output, selected, blocked);
         await this.failBeforeLaunch(
           record,
           output,
@@ -673,6 +679,59 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       },
     });
     return await this.finish(record, output, selected);
+  }
+
+  private async persistLaunchCleanupBlocker(
+    record: DurableSubprocessRecord,
+    _output: ProcessOutputSession,
+    selected: SelectedProcessBackend,
+    blocked: { readonly launch: ReturnType<typeof parseProcessLaunchResult>; readonly detail: string },
+  ): Promise<GenericProcessResult> {
+    const binding: DurableBackendBinding = {
+      registryId: selected.registryId,
+      backendId: selected.attestation.backendId,
+      implementationGeneration: selected.implementationGeneration,
+      implementationDigest: selected.implementationDigest,
+      attestationVersion: selected.attestation.attestationVersion,
+      attestationDigest: selected.attestationDigest,
+      ...blocked.launch,
+    };
+    record = this.current(record.invocationId);
+    record = this.mutate({
+      type: "bind_launch",
+      invocationId: record.invocationId,
+      expectedRevision: record.revision,
+      at: this.now(),
+      binding,
+    });
+    let detail = blocked.detail;
+    try {
+      const reconciliation = parseProcessReconciliation(
+        await this.fencedEffect(record.invocationId, (fence) =>
+          selected.backend.reconcile(binding, fence),
+        ),
+      );
+      const verification = parseProcessEmptyVerification(
+        await this.fencedEffect(record.invocationId, (fence) =>
+          selected.backend.verifyEmpty(binding, fence),
+        ),
+      );
+      detail = verification.empty
+        ? `${detail} Backend reconciliation reported ${reconciliation.state}; retained binding requires explicit recovery.`
+        : verification.detail === detail
+          ? detail
+          : `${detail} Backend verification: ${verification.detail}`;
+    } catch (error) {
+      detail = `${detail} Blocker reconciliation failed: ${error instanceof Error ? error.message : "unknown error"}`;
+    }
+    const at = this.now();
+    const failed = this.applyFailure(record, "cleanup_blocked", detail, {
+      state: "failed",
+      failedAt: at,
+      code: "launch_cleanup_blocked",
+      detail,
+    });
+    return resultFromFailure(failed);
   }
 
   private async finish(
@@ -1795,6 +1854,25 @@ function requiredBinding(
       "Durable backend identity is missing.",
     );
   return record.backendBinding;
+}
+function recoverableLaunchBlocker(error: unknown): {
+  readonly launch: ReturnType<typeof parseProcessLaunchResult>;
+  readonly detail: string;
+} | undefined {
+  if (typeof error !== "object" || error === null || nodeTypes.isProxy(error)) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(error);
+  const code = descriptors.code;
+  const launchResult = descriptors.launchResult;
+  const message = descriptors.message;
+  if (
+    !code || !("value" in code) || code.value !== "native_process_launch_cleanup_blocked" ||
+    !launchResult || !("value" in launchResult)
+  ) return undefined;
+  const launch = parseProcessLaunchResult(launchResult.value);
+  const detail = message && "value" in message && typeof message.value === "string" && message.value.trim()
+    ? message.value
+    : "Native process launch cleanup is blocked.";
+  return { launch, detail };
 }
 function strictRecord(value: unknown, label: string): Record<string, unknown> {
   if (

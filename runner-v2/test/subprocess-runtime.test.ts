@@ -174,6 +174,7 @@ class Backend implements ProcessBackend {
   releaseValue: unknown = { released: true };
   signalValues: unknown[] = [{ state: "exited" }];
   launchGate?: Promise<void>;
+  launchError?: unknown;
   observeGate?: Promise<void>;
   verifyGate?: Promise<void>;
   onSignal?: (action: string) => void;
@@ -200,6 +201,7 @@ class Backend implements ProcessBackend {
     this.fences.push(request.fence);
     this.onLaunch?.(request);
     await this.launchGate;
+    if (this.launchError) throw this.launchError;
     return this.launchValue;
   };
   signal = async (
@@ -564,6 +566,44 @@ test("failed prelaunch output cleanup remains recoverable until owner cleanup su
     f.store.readByInvocation("invoke-1")?.state,
     "launch_not_proven",
   );
+});
+
+test("recoverable launch cleanup blocker binds identity and persists without prelaunch cleanup or relaunch", async () => {
+  const f = fixture();
+  const blockerDetail = "owned descendant remains; evidence retained at C:\\runner-state\\owned-1";
+  f.backend.launchError = Object.assign(new Error(blockerDetail), {
+    code: "native_process_launch_cleanup_blocked",
+    evidenceDirectory: "C:\\runner-state\\owned-1",
+    launchResult: f.backend.launchValue,
+  });
+  f.backend.reconcileValue = { state: "running" };
+  f.backend.verifyValue = { empty: false, detail: "owned descendant remains" };
+
+  const result = await f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+
+  const record = f.store.readByInvocation("invoke-1");
+  assert.ok(record);
+  assert.equal(result.outcome, "cleanup_failed");
+  assert.equal(record.state, "cleanup_blocked");
+  assert.equal(record.backendBinding?.opaqueIdentity, "opaque-1");
+  assert.equal(record.cleanup.state, "failed");
+  assert.equal(record.cleanup.detail, `${blockerDetail} Backend verification: owned descendant remains`);
+  assert.deepEqual(f.backend.calls.filter((call) => ["reconcile", "verify"].includes(call)), ["reconcile", "verify"]);
+  assert.equal(f.backend.calls.includes("observe"), false);
+  assert.equal(f.backend.calls.includes("release"), false);
+  assert.equal(f.outputs.calls.some((call) => call.startsWith("cleanup:")), false);
+
+  const retry = await f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.equal(retry.outcome, "cleanup_failed");
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
 });
 
 test("Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked", async () => {

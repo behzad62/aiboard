@@ -645,6 +645,7 @@ const LEGAL_HISTORY: Readonly<
     "identity_mismatch",
     "backend_unavailable",
     "outcome_unknown",
+    "cleanup_blocked",
   ],
   stopping: [
     "stopping",

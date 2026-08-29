@@ -58,7 +58,7 @@ test("POSIX contracts fail closed on enumeration errors and failed quiescence", 
   const signals: Array<[number, NodeJS.Signals]> = [];
   let members: readonly number[] | undefined;
   const operations: NativeProcessOperations = {
-    processBirth: () => "supervisor-birth",
+    inspectProcessBirth: () => ({ state: "present", fingerprint: "supervisor-birth" }),
     listPosixGroup: () => members,
     signal: (pid, signal) => { signals.push([pid, signal]); },
   };
@@ -100,7 +100,7 @@ test("POSIX validates birth identity before any group signal", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-identity-"));
   const signals: number[] = [];
   const operations: NativeProcessOperations = {
-    processBirth: () => "recycled-birth",
+    inspectProcessBirth: () => ({ state: "present", fingerprint: "recycled-birth" }),
     listPosixGroup: () => [9001],
     signal: (pid) => { signals.push(pid); },
   };
@@ -119,7 +119,7 @@ test("POSIX launch rollback kills the owned group and requires a stable empty di
   let signalled = false;
   let postSignalChecks = 0;
   const operations: NativeProcessOperations = {
-    processBirth: () => "supervisor-birth",
+    inspectProcessBirth: () => ({ state: "present", fingerprint: "supervisor-birth" }),
     listPosixGroup: () => {
       if (!signalled) return [9001, 9002];
       postSignalChecks += 1;
@@ -152,6 +152,44 @@ test("POSIX launch rollback kills the owned group and requires a stable empty di
     });
     assert.deepEqual(signals, [[-9001, "SIGKILL"]]);
     assert.ok(postSignalChecks >= 10, `expected stable empty polling, observed ${postSignalChecks} checks`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("POSIX launch rollback signals an identity-proven owned group after its supervisor exits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-dead-supervisor-"));
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  let signalled = false;
+  const operations: NativeProcessOperations = {
+    inspectProcessBirth: () => ({ state: "absent" }),
+    listPosixGroup: () => signalled ? [] : [9002],
+    signal: (pid, signal) => {
+      signals.push([pid, signal]);
+      signalled = true;
+    },
+  };
+  const backend = createPosixProcessBackend({ stateDirectory: root, pollIntervalMs: 10, operations });
+  const rollback = backend as unknown as {
+    cleanupFailedLaunch(identity: {
+      version: 1;
+      backendId: string;
+      nonce: string;
+      directory: string;
+      supervisorPid: number;
+      supervisorBirth: string;
+    }): Promise<void>;
+  };
+  try {
+    await rollback.cleanupFailedLaunch({
+      version: 1,
+      backendId: "runner-posix-process-group-v1",
+      nonce: "rollback-nonce",
+      directory: root,
+      supervisorPid: 9001,
+      supervisorBirth: "supervisor-birth",
+    });
+    assert.deepEqual(signals, [[-9001, "SIGKILL"]]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

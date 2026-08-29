@@ -22,9 +22,30 @@ export interface NativeOwnedProcessBackendOptions {
   readonly operations?: NativeProcessOperations;
 }
 export interface NativeProcessOperations {
-  processBirth(pid: number, platform: "posix" | "windows"): string | undefined;
+  inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
   listPosixGroup(groupId: number): readonly number[] | undefined;
   signal(pid: number, signal: NodeJS.Signals): void;
+}
+export type ProcessBirthInspection =
+  | { readonly state: "present"; readonly fingerprint: string }
+  | { readonly state: "absent" }
+  | { readonly state: "unknown" };
+export class NativeProcessLaunchBlockedError extends AggregateError {
+  readonly code = "native_process_launch_cleanup_blocked";
+  constructor(
+    errors: Iterable<unknown>,
+    readonly evidenceDirectory: string,
+    readonly launchResult: {
+      readonly opaqueIdentity: string;
+      readonly birthFingerprint: { readonly observedAt: string; readonly discriminator: string };
+      readonly rootPid: number;
+      readonly startedAt: string;
+    },
+    message: string,
+  ) {
+    super(errors, message);
+    this.name = "NativeProcessLaunchBlockedError";
+  }
 }
 
 interface Identity {
@@ -39,10 +60,11 @@ interface SupervisorState {
   readonly protocol: "aiboard-portable-process/v1";
   readonly nonce: string;
   readonly supervisorPid: number;
-  readonly childPid: number;
+  readonly launchEffect?: "not_started" | "prepared" | "started" | "unknown";
+  readonly rootProcess?: { readonly pid: number; readonly birth: string } | null;
   readonly revision: number;
   readonly handledControl: number;
-  readonly status: "running" | "stopped" | "outcome_unknown";
+  readonly status: "preparing" | "running" | "stopped" | "outcome_unknown";
   readonly exitCode: number | null;
   readonly signal: string | null;
   readonly knownProcesses: readonly { readonly pid: number; readonly birth: string }[];
@@ -113,15 +135,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const state = await this.waitForState(directory, nonce, child.pid, 5_000);
       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
-      return {
-        opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
-        birthFingerprint: {
-          observedAt: startedAt,
-          discriminator: createHash("sha256").update(`${nonce}\0${supervisorBirth}`).digest("hex"),
-        },
-        rootPid: child.pid,
-        startedAt,
-      };
+      return launchResult(identity, startedAt);
     } catch (error) {
       if (!identity) {
         const failedState = readState(directory);
@@ -143,6 +157,14 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       try {
         await this.cleanupFailedLaunch(identity);
       } catch (cleanupError) {
+        if (cleanupError instanceof NativeProcessLaunchBlockedError) {
+          throw new NativeProcessLaunchBlockedError(
+            [error, ...cleanupError.errors],
+            cleanupError.evidenceDirectory,
+            cleanupError.launchResult,
+            cleanupError.message,
+          );
+        }
         throw new AggregateError(
           [error, cleanupError],
           `Portable process launch failed and owned cleanup could not be verified; evidence retained at ${directory}.`,
@@ -175,6 +197,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const identity = this.identity(binding);
     const validation = this.validate(identity);
     if (validation === "mismatch") throw new Error("Owned process identity mismatch.");
+    if (validation === "unknown") throw new Error("Owned process identity inspection is unavailable.");
     if (validation === "exited") return this.signalState(await this.emptiness(identity));
     if (this.options.platform === "posix") {
       const signal = action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM";
@@ -193,8 +216,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async verifyEmpty(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
-    if (this.validate(identity) === "mismatch")
+    const validation = this.validate(identity);
+    if (validation === "mismatch")
       return { empty: false, detail: "Owned process identity changed before quiescence verification." };
+    if (validation === "unknown")
+      return { empty: false, detail: "Owned process identity inspection is unavailable." };
     const emptiness = await this.emptiness(identity);
     if (emptiness === "empty") return { empty: true, proofArtifactId: `native-empty:${identity.nonce}` };
     return {
@@ -214,6 +240,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     const validation = this.validate(identity);
     if (validation === "mismatch") return { state: "identity_mismatch" };
+    if (validation === "unknown") return { state: "outcome_unknown" };
     const state = readState(identity.directory);
     if (!state) return { state: "outcome_unknown" };
     if (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid)
@@ -253,10 +280,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       throw new OwnedProcessIdentityMismatchError("Owned process birth fingerprint is invalid.");
     return value;
   }
-  private validate(identity: Identity): "live" | "exited" | "mismatch" {
-    const current = this.operations.processBirth(identity.supervisorPid, this.options.platform);
-    if (!current) return "exited";
-    return current === identity.supervisorBirth ? "live" : "mismatch";
+  private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
+    const inspection = this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
+    if (inspection.state === "unknown") return "unknown";
+    if (inspection.state === "absent") return "exited";
+    return inspection.fingerprint === identity.supervisorBirth ? "live" : "mismatch";
   }
   private async emptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
     if (this.options.platform === "posix") {
@@ -265,12 +293,21 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     const state = readState(identity.directory);
     if (!state || !Array.isArray(state.knownProcesses)) return "outcome_unknown";
+    if (state.status === "outcome_unknown" || state.launchEffect === "unknown") return "outcome_unknown";
+    if (state.launchEffect === "not_started")
+      return state.knownProcesses.length === 0 ? "empty" : "outcome_unknown";
+    if (
+      state.launchEffect !== "started" ||
+      !validKnownProcess(state.rootProcess) ||
+      !state.knownProcesses.some((process) => process.pid === state.rootProcess!.pid && process.birth === state.rootProcess!.birth)
+    ) return "outcome_unknown";
     let live = false;
     for (const process of state.knownProcesses) {
       if (!Number.isSafeInteger(process.pid) || !process.birth) return "outcome_unknown";
-      const current = this.operations.processBirth(process.pid, "windows");
-      if (!current) continue;
-      if (current !== process.birth) return "identity_mismatch";
+      const inspection = this.operations.inspectProcessBirth(process.pid, "windows");
+      if (inspection.state === "unknown") return "outcome_unknown";
+      if (inspection.state === "absent") continue;
+      if (inspection.fingerprint !== process.birth) return "identity_mismatch";
       live = true;
     }
     return live ? "nonempty" : "empty";
@@ -283,6 +320,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private async cleanupFailedLaunch(identity: Identity): Promise<void> {
     const validation = this.validate(identity);
     if (validation === "mismatch") throw new Error("Launch cleanup refused a recycled supervisor identity.");
+    if (validation === "unknown") throw launchBlocker(identity, "Launch cleanup could not inspect the supervisor identity.");
     if (validation === "live") {
       if (this.options.platform === "posix") {
         const members = this.operations.listPosixGroup(identity.supervisorPid);
@@ -292,11 +330,21 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         await delay(Math.max(250, this.pollIntervalMs * 2));
         const before = await this.emptiness(identity);
         if (before === "identity_mismatch") throw new Error("Launch cleanup refused a recycled Windows descendant.");
-        if (before === "outcome_unknown") throw new Error("Launch cleanup could not validate Windows descendants.");
+        if (before === "outcome_unknown")
+          throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows descendant inspection is unknown.");
         const state = readState(identity.directory);
         const sequence = (state?.handledControl ?? 0) + 1;
         writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action: "force_terminate" }), { mode: 0o600 });
       }
+    } else if (this.options.platform === "posix") {
+      const members = this.operations.listPosixGroup(identity.supervisorPid);
+      if (members === undefined) throw new Error("Launch cleanup could not enumerate the owned POSIX group after its supervisor exited.");
+      if (members.length > 0) this.operations.signal(-identity.supervisorPid, "SIGKILL");
+    } else {
+      const remaining = await this.emptiness(identity);
+      if (remaining === "identity_mismatch") throw new Error("Launch cleanup refused a recycled Windows descendant.");
+      if (remaining === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows ownership inspection is unknown after the supervisor exited.");
+      if (remaining === "nonempty") throw launchBlocker(identity, "Launch cleanup preserved blocker evidence because the Windows supervisor exited with an owned descendant.");
     }
     const deadline = Date.now() + 3_000;
     const requiredStableMs = this.options.platform === "windows" ? 500 : 100;
@@ -304,13 +352,19 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     while (Date.now() < deadline) {
       const emptiness = await this.emptiness(identity);
       if (emptiness === "identity_mismatch") throw new Error("Launch cleanup observed a recycled owned identity.");
-      if (emptiness === "outcome_unknown") throw new Error("Launch cleanup lost ownership verification.");
+      if (emptiness === "outcome_unknown") {
+        if (this.options.platform === "windows")
+          throw launchBlocker(identity, "Launch cleanup preserved evidence after losing Windows ownership verification.");
+        throw new Error("Launch cleanup lost ownership verification.");
+      }
       if (emptiness === "empty") {
         emptySince ??= Date.now();
         if (Date.now() - emptySince >= requiredStableMs) return;
       } else emptySince = undefined;
       await delay(this.pollIntervalMs);
     }
+    if (this.options.platform === "windows")
+      throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows emptiness was not proven before its deadline.");
     throw new Error("Launch cleanup did not produce verified emptiness before its deadline.");
   }
   private async flushOutput(identity: Identity, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>): Promise<void> {
@@ -328,7 +382,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const state = readState(directory);
-      if (state && state.nonce === nonce && state.supervisorPid === pid) return state;
+      if (state && state.nonce === nonce && state.supervisorPid === pid && state.status !== "preparing") return state;
       if (!pidAlive(pid)) throw new Error("Portable process supervisor exited before proving launch.");
       await delay(this.pollIntervalMs);
     }
@@ -337,9 +391,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private async waitForBirth(pid: number, timeoutMs: number): Promise<string | undefined> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const birth = this.operations.processBirth(pid, this.options.platform);
-      if (birth) return birth;
-      if (!pidAlive(pid)) return undefined;
+      const inspection = this.operations.inspectProcessBirth(pid, this.options.platform);
+      if (inspection.state === "present") return inspection.fingerprint;
+      if (inspection.state === "absent") return undefined;
       await delay(this.pollIntervalMs);
     }
     return undefined;
@@ -349,20 +403,36 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 function readState(directory: string): SupervisorState | undefined {
   try { return JSON.parse(readFileSync(join(directory, "state.json"), "utf8")) as SupervisorState; } catch { return undefined; }
 }
-function osProcessBirth(pid: number, platform: "posix" | "windows"): string | undefined {
+function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection {
   try {
     if (platform === "windows") {
-      return execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$p=Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" -ErrorAction SilentlyContinue;if($p){$p.CreationDate.ToUniversalTime().ToString('o')}`], { encoding: "utf8", windowsHide: true }).trim() || undefined;
+      const result = execFileSync("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$ErrorActionPreference='Stop';$p=Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\";if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.CreationDate.ToUniversalTime().ToString('o')}`,
+      ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+      if (result === "ABSENT") return { state: "absent" };
+      if (result.startsWith("PRESENT:") && result.length > "PRESENT:".length)
+        return { state: "present", fingerprint: result.slice("PRESENT:".length) };
+      return { state: "unknown" };
     }
-    try {
+    if (process.platform === "linux") {
+      try {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       const close = stat.lastIndexOf(")");
       const fields = stat.slice(close + 2).split(" ");
-      return fields[19] ? `proc-start:${fields[19]}` : undefined;
-    } catch {
-      return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim() || undefined;
+        return fields[19]
+          ? { state: "present", fingerprint: `proc-start:${fields[19]}` }
+          : { state: "unknown" };
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "ENOENT" ? { state: "absent" } : { state: "unknown" };
+      }
     }
-  } catch { return undefined; }
+    const result = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim();
+    return result ? { state: "present", fingerprint: result } : { state: "absent" };
+  } catch { return { state: "unknown" }; }
 }
 function osPosixGroupMembers(groupId: number): number[] | undefined {
   try {
@@ -379,7 +449,35 @@ function pidAlive(pid: number): boolean {
 }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 const DEFAULT_OPERATIONS: NativeProcessOperations = {
-  processBirth: osProcessBirth,
+  inspectProcessBirth: osProcessBirth,
   listPosixGroup: osPosixGroupMembers,
   signal: (pid, signal) => process.kill(pid, signal),
 };
+function validKnownProcess(value: unknown): value is { readonly pid: number; readonly birth: string } {
+  return !!value && typeof value === "object" &&
+    Number.isSafeInteger((value as { pid?: unknown }).pid) &&
+    typeof (value as { birth?: unknown }).birth === "string" &&
+    (value as { birth: string }).birth.length > 0;
+}
+function launchResult(identity: Identity, startedAt: string) {
+  return {
+    opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
+    birthFingerprint: {
+      observedAt: startedAt,
+      discriminator: createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex"),
+    },
+    rootPid: identity.supervisorPid,
+    startedAt,
+  };
+}
+function launchBlocker(identity: Identity, message: string): NativeProcessLaunchBlockedError {
+  const state = readState(identity.directory);
+  const startedAt = state?.updatedAt ?? new Date().toISOString();
+  const detail = `${message} Evidence retained at ${identity.directory}.`;
+  return new NativeProcessLaunchBlockedError(
+    [new Error(detail)],
+    identity.directory,
+    launchResult(identity, startedAt),
+    detail,
+  );
+}
