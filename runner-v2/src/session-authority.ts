@@ -57,7 +57,7 @@ interface StagedLaunchRecord {
   readonly claims: ConsumedExecutionGrantClaims;
   used: boolean;
 }
-const STAGED_LAUNCHES = new WeakMap<object, StagedLaunchRecord>();
+const KERNEL_STAGE_RESERVATIONS = new WeakMap<object, { sessionIds: Set<string>; launchIds: Set<string> }>();
 
 export class SessionAuthorityError extends Error {
   constructor(readonly code: SessionAuthorityErrorCode, message: string) {
@@ -238,6 +238,11 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
   const retainedClaims = new Map<string, ConsumedExecutionGrantClaims>();
   const launchAuthorizationUsed = new Set<string>();
   const grantIdsByCall = new Map<string, string>();
+  const stagedLaunches = new WeakMap<object, StagedLaunchRecord>();
+  let reservations = KERNEL_STAGE_RESERVATIONS.get(options.sessions);
+  if (!reservations) { reservations = { sessionIds: new Set<string>(), launchIds: new Set<string>() }; KERNEL_STAGE_RESERVATIONS.set(options.sessions, reservations); }
+  const reservedSessionIds = reservations.sessionIds;
+  const reservedLaunchIds = reservations.launchIds;
   const consumeLaunchGrant = (grant: OpaqueExecutionGrant, binding: ExecutionGrantBinding): ConsumedExecutionGrantClaims => {
     const callKey = executionGrantCallKey(binding);
     if (grantIdsByCall.has(callKey)) throw new SessionAuthorityError("second_grant_for_call", "A ToolBroker call cannot mint, stage, or reuse a second session grant.");
@@ -245,33 +250,37 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
     grantIdsByCall.set(callKey, claims.grantId);
     return claims;
   };
+  const stageLaunchInternal = (input: StageLaunchRequest, repeatedCallCode: "launch_call_consumed" | "second_grant_for_call" = "launch_call_consumed"): StagedLaunchAuthorization => {
+    const sessionId = requiredText(input.sessionId, "sessionId");
+    const launchId = requiredText(input.launchId, "launchId");
+    if (options.sessions.store.readBySession(sessionId) || reservedSessionIds.has(sessionId)) throw new SessionAuthorityError("session_collision", "Streaming session id is already reserved.");
+    if (reservedLaunchIds.has(launchId) || options.sessions.store.readHostLaunch(launchId)) throw new SessionAuthorityError("session_collision", "Streaming launch id is already reserved.");
+    const callKey = executionGrantCallKey(input.binding);
+    let claims: ConsumedExecutionGrantClaims;
+    try { claims = consumeLaunchGrant(input.grant, input.binding); }
+    catch (error) {
+      if (error instanceof SessionAuthorityError && error.code === "second_grant_for_call") throw new SessionAuthorityError(repeatedCallCode, "The launching ToolBroker call is already staged.");
+      throw error;
+    }
+    assertCurrentConsumedExecutionGrantClaims(claims);
+    const authorization = Object.freeze({ [RUNNER_STAGED_LAUNCH_AUTHORIZATION]: true }) as StagedLaunchAuthorization;
+    stagedLaunches.set(authorization as object, { sessionId, launchId, callKey, claims, used: false });
+    reservedSessionIds.add(sessionId);
+    reservedLaunchIds.add(launchId);
+    return authorization;
+  };
   return Object.freeze({
     stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization {
-      const sessionId = requiredText(input.sessionId, "sessionId");
-      const launchId = requiredText(input.launchId, "launchId");
-      if (options.sessions.store.readBySession(sessionId)) {
-        throw new SessionAuthorityError("session_collision", "Streaming session id is already reserved.");
-      }
-      const callKey = executionGrantCallKey(input.binding);
-      let claims: ConsumedExecutionGrantClaims;
-      try { claims = consumeLaunchGrant(input.grant, input.binding); }
-      catch (error) {
-        if (error instanceof SessionAuthorityError && error.code === "second_grant_for_call") throw new SessionAuthorityError("launch_call_consumed", "The launching ToolBroker call is already staged.");
-        throw error;
-      }
-      assertCurrentConsumedExecutionGrantClaims(claims);
-      const authorization = Object.freeze({ [RUNNER_STAGED_LAUNCH_AUTHORIZATION]: true }) as StagedLaunchAuthorization;
-      STAGED_LAUNCHES.set(authorization as object, { sessionId, launchId, callKey, claims, used: false });
-      return authorization;
+      return stageLaunchInternal(input);
     },
     validateStagedLaunch(stagedAuthorization: StagedLaunchAuthorization, expected: Readonly<{ sessionId: string; launchId: string }>) {
-      const staged = STAGED_LAUNCHES.get(stagedAuthorization as object);
+      const staged = stagedLaunches.get(stagedAuthorization as object);
       if (!staged || staged.used) throw new SessionAuthorityError("launch_call_consumed", "Staged launch authorization is unavailable or consumed.");
       if (staged.sessionId !== expected.sessionId || staged.launchId !== expected.launchId) throw new SessionAuthorityError("binding_mismatch", "Staged launch identity does not match.");
       return assertCurrentConsumedExecutionGrantClaims(staged.claims);
     },
     finalizeLaunch(input: FinalizeLaunchRequest) {
-      const staged = STAGED_LAUNCHES.get(input.staged as object);
+      const staged = stagedLaunches.get(input.staged as object);
       if (!staged || staged.used) throw new SessionAuthorityError("launch_call_consumed", "Staged launch authorization is unavailable or consumed.");
       const sessionId = requiredText(input.sessionId, "sessionId");
       const launchId = requiredText(input.launchId, "launchId");
@@ -282,7 +291,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       assertEnvelopeWithinLease(input.envelope, input.lease);
       if (!/^[a-f0-9]{64}$/i.test(input.handshakeDigest)) throw new SessionAuthorityError("binding_mismatch", "Handshake attestation digest is invalid.");
       const host = options.sessions.store.readHostLaunch(launchId);
-      if (!host || host.sessionId !== sessionId || host.runId !== staged.claims.runId || host.agentSessionId !== staged.claims.sessionId || host.callId !== staged.claims.callId || host.leaseBinding?.leaseId !== input.lease.leaseId || host.backendBinding?.opaqueIdentity !== input.backendBinding.opaqueIdentity || host.handshakeDigest !== input.handshakeDigest.toLowerCase()) {
+      if (!host || host.sessionId !== sessionId || host.runId !== staged.claims.runId || host.agentSessionId !== staged.claims.sessionId || host.callId !== staged.claims.callId || host.toolName !== staged.claims.toolName || canonicalJson(host.actor) !== canonicalJson(staged.claims.actor) || canonicalJson(host.leaseBinding) !== canonicalJson(input.lease) || canonicalJson(host.backendBinding) !== canonicalJson(input.backendBinding) || host.handshakeDigest !== input.handshakeDigest.toLowerCase()) {
         throw new SessionAuthorityError("binding_mismatch", "Final launch bindings do not match the staged host record.");
       }
       const at = clock().toISOString();
@@ -326,7 +335,10 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         }
         return Object.freeze({ record: existing });
       }
-      const claims = consumeLaunchGrant(input.grant, input.binding);
+      const compatibilityLaunchId = `compat:${sessionId}:${input.binding.callId}`;
+      const stagedAuthorization = stageLaunchInternal({ sessionId, launchId: compatibilityLaunchId, grant: input.grant, binding: input.binding }, "second_grant_for_call");
+      const staged = stagedLaunches.get(stagedAuthorization as object)!;
+      const claims = assertCurrentConsumedExecutionGrantClaims(staged.claims);
       assertSessionEnvelopeSubset(input.envelope, claims);
       assertLeaseAccessSubset(input.lease, claims);
       assertEnvelopeWithinLease(input.envelope, input.lease);
@@ -361,6 +373,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         }],
       };
       const claimed = writer.claim(record);
+      staged.used = true;
       if (claimed.won) {
         retainedClaims.set(record.sessionId, claims);
       }

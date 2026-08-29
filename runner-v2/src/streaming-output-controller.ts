@@ -1,96 +1,161 @@
 import { createHash } from "node:crypto";
+
+import type { BoundedProtocolQueue } from "./bounded-protocol-queue.js";
+import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "./session-authority.js";
 import { getStreamingSessionKernelWriter, type StreamingSessionStoreKernel } from "./streaming-session-store.js";
 
 export const BACKPRESSURED_PROCESS_OUTPUT_VERSION = 2 as const;
 export type StreamingOutputStream = "stdout" | "stderr";
 export interface StreamingOutputMetadata { readonly stream: StreamingOutputStream; readonly sequence: number; readonly startOffset: number; readonly endOffset: number; readonly byteLength: number; readonly digest: string }
-export interface StreamingOutputChunk { readonly metadata: StreamingOutputMetadata; readonly bytes: Uint8Array; readonly acknowledge: (metadata: StreamingOutputMetadata) => Promise<void> }
 export type StreamingOutputErrorCode = "invalid_chunk" | "sequence_mismatch" | "offset_mismatch" | "digest_mismatch" | "authorization_required" | "capacity_exceeded" | "outcome_unknown";
-export class StreamingOutputError extends Error { constructor(readonly code: StreamingOutputErrorCode, message: string) { super(message); this.name = "StreamingOutputError"; } }
+export class StreamingOutputError extends Error { constructor(readonly code: StreamingOutputErrorCode, message: string, options?: ErrorOptions) { super(message, options); this.name = "StreamingOutputError"; } }
 
+interface PendingProtocolChunk {
+  readonly metadata: StreamingOutputMetadata;
+  readonly acknowledgement: Promise<StreamingOutputMetadata>;
+  resolve(acknowledgement: StreamingOutputMetadata): void;
+  reject(error: unknown): void;
+}
+
+/** Intake is private and may run before adoption. Family delivery is a separate authorized pull. */
 export function createStreamingOutputController(options: {
   readonly maxAcceptedChunks: number;
-  readonly kernel?: StreamingSessionStoreKernel;
-  readonly sessionId?: string;
-  readonly ownerId?: string;
-  readonly fencingToken?: number;
-  readonly authorize: (stream: StreamingOutputStream) => boolean;
+  readonly kernel: StreamingSessionStoreKernel;
+  readonly sessionId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly queue: BoundedProtocolQueue;
+  readonly protocolStreams: readonly StreamingOutputStream[];
+  readonly writeEvidence: (stream: StreamingOutputStream, bytes: Uint8Array) => Promise<Readonly<{ evidenceLossy: boolean; reason?: string }>>;
+  readonly assertAuthorization: (authorization: SessionOperationAuthorization, expected: OperationAuthorizationAssertion) => void;
   readonly deliver: (stream: StreamingOutputStream, bytes: Uint8Array) => Promise<void>;
 }) {
-  if (!Number.isSafeInteger(options.maxAcceptedChunks) || options.maxAcceptedChunks < 1) throw new StreamingOutputError("invalid_chunk", "Output capacity must be positive.");
-  const checkpoints = new Map<StreamingOutputStream, { sequence: number; endOffset: number; digest?: string }>();
-  const durable = options.kernel ? getStreamingSessionKernelWriter(options.kernel) : undefined;
-  if (durable && (!options.sessionId || !options.ownerId || !Number.isSafeInteger(options.fencingToken) || options.fencingToken! < 1)) throw new StreamingOutputError("invalid_chunk", "Durable output controller identity is invalid.");
+  if (!Number.isSafeInteger(options.maxAcceptedChunks) || options.maxAcceptedChunks < 1 || !options.sessionId || !options.ownerId || !Number.isSafeInteger(options.fencingToken) || options.fencingToken < 1) throw new StreamingOutputError("invalid_chunk", "Durable output controller configuration is invalid.");
+  const configuredCheckpoint = options.kernel.store.readOutputCheckpoint(options.sessionId);
+  if (!configuredCheckpoint || configuredCheckpoint.capacity !== options.maxAcceptedChunks || configuredCheckpoint.ownerId !== options.ownerId || configuredCheckpoint.fencingToken !== options.fencingToken) throw new StreamingOutputError("capacity_exceeded", "Output controller capacity and ownership must exactly match the durable provider window.");
+  const durable = getStreamingSessionKernelWriter(options.kernel);
+  const pending: PendingProtocolChunk[] = [];
+  let held: Buffer | undefined;
   let outcome: "active" | "outcome_unknown" = "active";
+  let evidenceLossy = false;
+
+  const markUnknown = (metadata: StreamingOutputMetadata, cause?: unknown): never => {
+    let persistenceFailure: unknown;
+    try {
+      const current = options.kernel.store.readOutputCheckpoint(options.sessionId);
+      if (current?.outcome === "active") durable.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata });
+    } catch (error) { persistenceFailure = error; }
+    outcome = "outcome_unknown";
+    const error = persistenceFailure ? new AggregateError([cause, persistenceFailure].filter((entry) => entry !== undefined), "Output outcome could not be durably settled by this owner.") : cause instanceof StreamingOutputError ? cause : new StreamingOutputError("outcome_unknown", "Output delivery outcome is unknown.", { cause });
+    for (const item of pending.splice(0)) item.reject(error);
+    held?.fill(0); held = undefined;
+    options.queue.cancel("Output delivery outcome is unknown.");
+    throw error;
+  };
+
+  const accept = async (metadataInput: StreamingOutputMetadata, input: Uint8Array): Promise<StreamingOutputMetadata> => {
+    if (outcome !== "active") throw new StreamingOutputError("outcome_unknown", "Output delivery outcome is unknown.");
+    const owned = Buffer.from(input);
+    try {
+    const metadata = parseMetadata(metadataInput, owned);
+    const record = options.kernel.store.readOutputCheckpoint(options.sessionId);
+    if (!record || record.outcome !== "active") { owned.fill(0); throw new StreamingOutputError("outcome_unknown", "Durable output checkpoint is unavailable."); }
+    const stream = record.streams.find((entry) => entry.stream === metadata.stream);
+    if (!stream) { owned.fill(0); throw new StreamingOutputError("invalid_chunk", "Output stream is not configured."); }
+    if (stream.lastConsumed && metadata.sequence <= stream.lastConsumed.sequence) {
+      const exact = stream.consumed.some((entry) => sameMetadata(entry, metadata));
+      owned.fill(0);
+      if (!exact) throw new StreamingOutputError("digest_mismatch", "Consumed replay is outside or mismatches the authenticated window.");
+      return metadata;
+    }
+    const alreadyAccepted = stream.accepted.some((entry) => sameMetadata(entry, metadata));
+    const liveReplay = alreadyAccepted ? pending.find((entry) => sameMetadata(entry.metadata, metadata)) : undefined;
+    if (liveReplay) return await liveReplay.acknowledgement;
+    if (alreadyAccepted && stream.consumingIntent) { owned.fill(0); return markUnknown(metadata); }
+    if (!alreadyAccepted) {
+      const prior = stream.accepted.at(-1) ?? stream.lastConsumed;
+      if (metadata.sequence !== (prior?.sequence ?? 0) + 1) { owned.fill(0); throw new StreamingOutputError("sequence_mismatch", "Output sequence is not continuous."); }
+      if (metadata.startOffset !== (prior?.endOffset ?? 0)) { owned.fill(0); throw new StreamingOutputError("offset_mismatch", "Output offset is not continuous."); }
+      if (options.protocolStreams.includes(metadata.stream)) durable.applyOutputCheckpoint({ type: "accept", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: record.revision, metadata });
+    }
+    if (!options.protocolStreams.includes(metadata.stream)) {
+      const evidence = await options.writeEvidence(metadata.stream, owned);
+      evidenceLossy ||= evidence.evidenceLossy;
+      const current = options.kernel.store.readOutputCheckpoint(options.sessionId)!;
+      durable.applyOutputCheckpoint({ type: "commit_evidence_consumed", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata });
+      owned.fill(0);
+      return metadata;
+    }
+    let resolveDelivery!: (acknowledgement: StreamingOutputMetadata) => void; let rejectDelivery!: (error: unknown) => void;
+    const delivery = new Promise<StreamingOutputMetadata>((resolve, reject) => { resolveDelivery = resolve; rejectDelivery = reject; });
+    // Queue admission may reject before accept reaches its await of delivery.
+    // Mark the internal promise observed; the original rejection still propagates
+    // through accept and every duplicate acknowledgement waiter.
+    void delivery.catch(() => undefined);
+    const item = { metadata, acknowledgement: delivery, resolve: resolveDelivery, reject: rejectDelivery }; pending.push(item);
+    try {
+      await options.queue.push(owned);
+      const evidence = await options.writeEvidence(metadata.stream, owned); evidenceLossy ||= evidence.evidenceLossy;
+      owned.fill(0);
+      return await delivery;
+    } catch (error) {
+      owned.fill(0); const index = pending.indexOf(item); if (index >= 0) pending.splice(index, 1);
+      try { return markUnknown(metadata, error); } catch (failure) { rejectDelivery(failure); throw failure; }
+    }
+    } catch (error) {
+      const current = options.kernel.store.readOutputCheckpoint(options.sessionId);
+      if (current?.outcome === "active") return markUnknown(fallbackMetadata(current.streams[0]!.stream), error);
+      throw error;
+    } finally { owned.fill(0); }
+  };
+
   return Object.freeze({
-    async accept(chunk: StreamingOutputChunk) {
+    accept,
+    async deliverNext(authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion): Promise<boolean> {
       if (outcome !== "active") throw new StreamingOutputError("outcome_unknown", "Output delivery outcome is unknown.");
-      const owned = Buffer.from(chunk.bytes);
-      const metadata = parseMetadata(chunk.metadata, owned);
-      const durableRecord = options.kernel?.store.readOutputCheckpoint(options.sessionId!);
-      const durableStream = durableRecord?.streams.find((stream) => stream.stream === metadata.stream);
-      if (durableStream?.lastConsumed && metadata.sequence <= durableStream.lastConsumed.sequence) {
-        if (JSON.stringify(metadata) !== JSON.stringify(durableStream.lastConsumed)) { owned.fill(0); throw new StreamingOutputError("digest_mismatch", "Consumed output replay metadata mismatches."); }
-        try { await chunk.acknowledge(metadata); } finally { owned.fill(0); }
-        return;
+      const item = pending[0]; if (!item) return false;
+      const expected = Object.freeze({ ...assertion, sessionId: options.sessionId, operation: "family_delivery" as const });
+      try { options.assertAuthorization(authorization, expected); }
+      catch (error) { throw new StreamingOutputError("authorization_required", "Current exact family-delivery authorization is required.", { cause: error }); }
+      let current = options.kernel.store.readOutputCheckpoint(options.sessionId);
+      if (!current || current.outcome !== "active") return markUnknown(item.metadata);
+      durable.applyOutputCheckpoint({ type: "begin_consume", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata: item.metadata });
+      try { options.assertAuthorization(authorization, expected); }
+      catch (error) {
+        current = options.kernel.store.readOutputCheckpoint(options.sessionId)!;
+        durable.applyOutputCheckpoint({ type: "cancel_consume", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata: item.metadata });
+        throw new StreamingOutputError("authorization_required", "Family-delivery authorization became stale before effect.", { cause: error });
       }
-      const checkpoint = checkpoints.get(metadata.stream) ?? (durableStream?.lastConsumed
-        ? { sequence: durableStream.lastConsumed.sequence, endOffset: durableStream.lastConsumed.endOffset, digest: durableStream.lastConsumed.digest }
-        : { sequence: 0, endOffset: 0 });
-      if (metadata.sequence !== checkpoint.sequence + 1) throw new StreamingOutputError("sequence_mismatch", "Output sequence is not continuous.");
-      if (metadata.startOffset !== checkpoint.endOffset) throw new StreamingOutputError("offset_mismatch", "Output offset is not continuous.");
-      let revision = options.kernel?.store.readOutputCheckpoint(options.sessionId!)?.revision;
-      if (durable) {
-        if (revision === undefined) throw new StreamingOutputError("invalid_chunk", "Durable output checkpoint is missing.");
-        durable.applyOutputCheckpoint({ type: "accept", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: revision++, metadata });
-        durable.applyOutputCheckpoint({ type: "begin_consume", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: revision++, metadata });
-      }
-      if (!options.authorize(metadata.stream)) {
-        outcome = "outcome_unknown";
-        if (durable) durable.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: revision, metadata });
-        owned.fill(0); throw new StreamingOutputError("authorization_required", "Current exact output authorization is required.");
+      try { held ??= await options.queue.read(); } catch (error) { return markUnknown(item.metadata, error); }
+      if (!held) return markUnknown(item.metadata);
+      try { options.assertAuthorization(authorization, expected); }
+      catch (error) {
+        current = options.kernel.store.readOutputCheckpoint(options.sessionId)!;
+        durable.applyOutputCheckpoint({ type: "cancel_consume", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata: item.metadata });
+        throw new StreamingOutputError("authorization_required", "Family-delivery authorization became stale before effect.", { cause: error });
       }
       try {
-        await options.deliver(metadata.stream, owned);
-        if (durable) durable.applyOutputCheckpoint({ type: "commit_consumed", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: revision, metadata });
-        checkpoints.set(metadata.stream, { sequence: metadata.sequence, endOffset: metadata.endOffset, digest: metadata.digest });
-        await chunk.acknowledge(metadata);
-      } catch (error) {
-        outcome = "outcome_unknown";
-        const current = options.kernel?.store.readOutputCheckpoint(options.sessionId!);
-        if (durable && current?.outcome === "active") durable.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata });
-        throw error;
-      } finally { owned.fill(0); }
-    },
-    async acceptEvidenceOnly(chunk: StreamingOutputChunk) {
-      if (!durable || !options.kernel || !options.sessionId) throw new StreamingOutputError("invalid_chunk", "Evidence-only output requires a durable checkpoint.");
-      const owned = Buffer.from(chunk.bytes); const metadata = parseMetadata(chunk.metadata, owned);
-      try {
-        const record = options.kernel.store.readOutputCheckpoint(options.sessionId);
-        if (!record || record.outcome !== "active") throw new StreamingOutputError("outcome_unknown", "Evidence-only checkpoint is unavailable.");
-        durable.applyOutputCheckpoint({ type: "accept", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: record.revision, metadata });
-        durable.applyOutputCheckpoint({ type: "commit_evidence_consumed", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: record.revision + 1, metadata });
-        await chunk.acknowledge(metadata);
-      } catch (error) {
-        const current = options.kernel.store.readOutputCheckpoint(options.sessionId);
-        if (current?.outcome === "active") durable.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata });
-        throw error;
-      } finally { owned.fill(0); }
+        await options.deliver(item.metadata.stream, held);
+        current = options.kernel.store.readOutputCheckpoint(options.sessionId)!;
+        durable.applyOutputCheckpoint({ type: "commit_consumed", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: current.revision, metadata: item.metadata });
+        pending.shift(); item.resolve(item.metadata);
+        held.fill(0); held = undefined;
+        return true;
+      } catch (error) { return markUnknown(item.metadata, error); }
     },
     attestRetainedWindow(retained: readonly StreamingOutputMetadata[]) {
-      if (!durable || !options.kernel || !options.sessionId) return true;
       const record = options.kernel.store.readOutputCheckpoint(options.sessionId);
-      if (!record) throw new StreamingOutputError("outcome_unknown", "Durable output checkpoint is missing.");
-      const expected = record.streams.flatMap((stream) => stream.accepted);
-      const exact = !record.streams.some((stream) => stream.consumingIntent) && expected.length === retained.length && expected.every((entry, index) => JSON.stringify(entry) === JSON.stringify(retained[index]));
-      if (!exact) {
-        if (record.outcome === "active") durable.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: options.sessionId, ownerId: options.ownerId, fencingToken: options.fencingToken, expectedRevision: record.revision, metadata: retained[0] ?? { stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: "0".repeat(64) } });
-        outcome = "outcome_unknown";
-        throw new StreamingOutputError("outcome_unknown", "Provider cannot attest every retained accepted output chunk.");
-      }
+      if (!record || record.outcome !== "active") throw new StreamingOutputError("outcome_unknown", "Durable output checkpoint is unavailable.");
+      const expected = sortMetadata(record.streams.flatMap((stream) => stream.accepted)); const actual = sortMetadata(retained);
+      if (record.streams.some((stream) => stream.consumingIntent) || expected.length !== actual.length || expected.some((entry, index) => !sameMetadata(entry, actual[index]))) return markUnknown(actual[0] ?? expected[0] ?? fallbackMetadata());
       return true;
     },
-    snapshot() { return Object.freeze({ outcome, streams: Object.freeze([...checkpoints.entries()].map(([stream, value]) => Object.freeze({ stream, ...value }))) }); },
+    snapshot() { return Object.freeze({ outcome, pending: pending.length, evidenceLossy, heldBytes: held?.byteLength ?? 0 }); },
+    cancel(reason = "Output controller cancelled.") {
+      const error = new StreamingOutputError("outcome_unknown", reason);
+      for (const item of pending.splice(0)) item.reject(error);
+      held?.fill(0); held = undefined; options.queue.cancel(reason); outcome = "outcome_unknown";
+    },
   });
 }
 
@@ -100,3 +165,7 @@ function parseMetadata(input: StreamingOutputMetadata, bytes: Buffer): Streaming
   if (!/^[a-f0-9]{64}$/i.test(input.digest) || digest !== input.digest.toLowerCase()) throw new StreamingOutputError("digest_mismatch", "Output digest does not match bytes.");
   return Object.freeze({ ...input, digest });
 }
+
+function sameMetadata(left: unknown, right: unknown): boolean { return JSON.stringify(left) === JSON.stringify(right); }
+function sortMetadata(values: readonly StreamingOutputMetadata[]): StreamingOutputMetadata[] { return [...values].sort((left, right) => left.stream.localeCompare(right.stream) || left.sequence - right.sequence); }
+function fallbackMetadata(stream: StreamingOutputStream = "stdout"): StreamingOutputMetadata { return Object.freeze({ stream, sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: "0".repeat(64) }); }

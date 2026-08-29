@@ -88,7 +88,7 @@
   RED; ignoring the host fence made the fencing test RED. Each exact check was
   GREEN after revert.
 
-## Current validation
+## Historical pre-review validation (superseded below)
 
 - New B1 focused tests: 34/34 green in the final validation rerun.
 - Exact 8.0A plus staged-kernel affected tests: 99/99 green.
@@ -114,10 +114,152 @@
   `sessions.sqlite`, removed non-recursively, and re-inspected. Final matching
   B1 temp-root residue count is zero.
 
-## Self-review concerns for independent review
+## Historical pre-review self-assessment (superseded by review round 1)
 
-- No known mandatory implementation gap remains from the four controller-returned
-  items. Independent review is still required and this report does not claim
-  approval or unlock B2.
+- The earlier self-assessment missed the Critical and Important findings in
+  `task-8.0b1-review-1.md`; it is not completion or approval evidence.
 - B1 remains deliberately fake-provider-only. Native/POSIX/Windows/Job/OCI
   behavior remains owned by B2/B3 and was not inferred from these tests.
+
+## Governed fix round 1 — response to independent review
+
+Base: `b947aaeb`. The controller's review is preserved verbatim and committed
+alongside this report. B2 remains locked pending independent re-review.
+
+### Finding-to-change and evidence map
+
+| Finding | Scoped correction | Focused proof |
+| --- | --- | --- |
+| Critical family bypass | Private intake never invokes family delivery. `deliverNext`/facade `deliverOutput` require the exact opaque SessionOperationAuthorization and assertion, validated through SessionAuthority before intent and immediately before effect. Missing/stale authorization retains bounded bytes and cancels a pre-effect intent rather than fabricating ambiguity. | `private pre-authorized output`, `durable accepted precedes`, `output authorization invalidated`; existing 8.0A current-call/run/session/actor/expiry/revocation/takeover guards remain green. |
+| Important 1 output | Commit accepted before queue insertion; terminal unknown; bounded exact consumed history; same-runtime accepted duplicate coalescing; actual additive `subscribeBackpressuredOutput` acknowledgement contract; aggregate accepted capacity. Evidence-only acceptance/consumption is atomic after spool acceptance/loss. | Continuity/digest/offset/stream/zero-length matrix, aggregate capacity, duplicate accepted/consumed, persistent unauthorized output, SQLite eight-boundary crash matrix. |
+| Important 2 staging | Issuer-local staged WeakMap; kernel-scoped session/launch reservations; beginTransfer uses the same stage/consume path; complete canonical lease/backend/actor/tool identity checked before atomic adoption. | Cross-issuer/same-session/compatibility reservation; exact binding mutation matrix; consumed grant/alias/revoked/expired checks; 8.0A first-call/fresh-call compatibility. |
+| Important 3 host journal | Strict initial/transition history, normative unique effects, state/evidence timing and provenance, full lease binding, expired-owner refusal, in-memory adoption capacity, impossible host/session pair refusal. Repeated cleanup-pending history needs an exact takeover provenance entry. | Impossible history/effects, expired owner, capacity, consecutive pending takeovers, SQLite read-only/tamper/reopen and all six atomic adoption fault seams. |
+| Important 4 recovery | Count/time/cancel-bound provider awaits; host rows before sessions; expired host takeover; exact backend/version/capacity/retained-window verification; retained private attachment, restarted private subscription and terminal observer; typed missing proof, no relaunch/wait. | Hung host bounded at 20 ms, exact retained-byte replay, missing retained-byte unknown, deterministic unknown unbound launch. |
+| Important 5 cleanup/evidence | Injected spool write/finalize/cleanup lifecycle; truthful spool loss retained; close errors propagated; pre-adoption checkpoint deletion fenced; async frame failures settle session cleanup; authorized stop and private attachment ownership. Adopted cleanup creates a durable intent, verifies exact host cleanup and releases the exact lease before terminal settlement. | Real bounded spool tail overflow, tee write loss, active cancellation all five provider boundaries, stop/finalize/detach, oversized async output, unverified host cleanup blocked, stale checkpoint buffer wipe. |
+| Important 6 evidence | Added direct regressions, real-failure TDD, reverted mutation guards, all-table durable scan, bounded persistent output, crash-boundary matrix and final affected gates below. | Exact RED/GREEN ledger and validation commands below. |
+
+### Exact RED/GREEN ledger
+
+All commands run from the shared worktree. Each mutation below was reverted
+before the listed GREEN result. No mutation is present in the final diff.
+Test pattern commands have the common prefix `npx tsx --test`.
+
+1. Initial direct reviewer reproductions: staged/checkpoint focused run was
+   14 pass / 3 fail (cross-issuer reservation, impossible host state, terminal
+   checkpoint). The Critical runtime output regression separately failed with
+   unauthorized deliveries `1 !== 0`. After repair, all are in the green gate.
+2. `--test-name-pattern "issuer-scoped|expired host owner|session capacity is full"
+   runner-v2/test/staged-launch-kernel.test.ts`: disabling reservation, expiry,
+   and memory-capacity guards produced 0/3 RED (missing expected exception);
+   restoring produced 3/3 GREEN.
+3. `--test-name-pattern "active-phase cancellation|authorized stop|privately restarts"
+   runner-v2/test/streaming-process-session-runtime.test.ts`: disabling failed
+   pre-adoption checkpoint removal, spool finalization and reattach subscription
+   produced 0/3 RED (checkpoint remains, finalize/evidence count zero); revert
+   produced 3/3 GREEN.
+4. `--test-name-pattern "aggregate across|invalidated by durable"
+   runner-v2/test/streaming-output-checkpoint.test.ts
+   runner-v2/test/streaming-process-session-runtime.test.ts`: disabled aggregate
+   guards and runtime authorization assertion produced 0/2 RED; restored 2/2.
+5. `--test-name-pattern "time bounded"
+   runner-v2/test/streaming-process-session-runtime.test.ts`: disabled timeout
+   produced a 1,000 ms test timeout; restored timer produced 1/1 GREEN.
+6. `--test-name-pattern "continuity, digest|duplicate accepted"
+   runner-v2/test/streaming-output-v2.test.ts`: disabling terminalization and
+   duplicate coalescing produced 0/2 RED (active vs unknown, pending 2 vs 1);
+   restoring produced 2/2 GREEN.
+7. `--test-name-pattern "impossible history|finalizeLaunch atomically"
+   runner-v2/test/staged-launch-kernel.test.ts`: disabled lifecycle assertion
+   and weakened lease/backend comparison produced 0/2 RED; reverted 2/2 GREEN.
+8. `--test-name-pattern "real bounded spool"
+   runner-v2/test/streaming-output-v2.test.ts`: real spool loss initially yielded
+   false vs true; inspect finalized loss flags fix produced 1/1 GREEN.
+9. `--test-name-pattern "oversized asynchronous"
+   runner-v2/test/streaming-process-session-runtime.test.ts`: initial run failed
+   from an unhandled internal delivery rejection after the test. Observing the
+   internal promise while preserving rejection propagation produced 1/1 GREEN.
+10. `--test-name-pattern "evidence-only stream"
+    runner-v2/test/streaming-output-v2.test.ts`: spool hook observed accepted
+    count 1 instead of 0; moving the atomic evidence checkpoint after spool
+    acceptance/loss produced 1/1 GREEN.
+11. `--test-name-pattern "authorized stop"
+    runner-v2/test/streaming-process-session-runtime.test.ts`: exact lease
+    release count was 0 vs 1. Durable adopted cleanup intent, fenced host
+    reconcile, lease release, then settlement produced GREEN. The paired
+    oversized-output check was also GREEN (2/2).
+12. `--test-name-pattern "unverified adopted"
+    runner-v2/test/streaming-process-session-runtime.test.ts`: forcing cleaned
+    replay produced released vs cleanup_blocked RED; reverted 1/1 GREEN.
+13. `--test-name-pattern "active cancellation at every"
+    runner-v2/test/streaming-process-session-runtime.test.ts`: isolation-phase
+    abort lost its late-returned lease (release 0 vs 1). Capturing acquisition
+    results inside the effect and waiting its cleanup barrier repaired it.
+    This and the five-phase live revoker matrix were GREEN 2/2.
+14. `--test-name-pattern "stale checkpoint failure"
+    runner-v2/test/streaming-output-v2.test.ts`: stale durable settlement left
+    pending count 1 vs 0. Local wipe now runs even when the old owner cannot
+    mutate the replacement checkpoint; GREEN 1/1, replacement owner unchanged.
+15. `--test-name-pattern "persistent unauthorized"
+    runner-v2/test/streaming-output-v2.test.ts`: full protocol capacity made
+    stderr fail with aggregate capacity exceeded. Atomic post-spool evidence
+    acceptance/consumption repaired it; persistent/evidence/aggregate checks
+    GREEN 3/3. Four protocol chunks remain bounded at 16 bytes while eight
+    evidence chunks drain and no family effect occurs.
+16. `--test-name-pattern "durable SQL tables"
+    runner-v2/test/staged-launch-kernel.test.ts`: injected scan sentinel made
+    the scan RED; removed sentinel produced GREEN 1/1. The initial fixture
+    double-close failure was separately corrected and its exact owned temp
+    SQLite file/root removed after inspection.
+17. `--test-name-pattern "expired pending cleanup supports"
+    runner-v2/test/staged-launch-kernel.test.ts`: consecutive takeover failed
+    with impossible history; exact takeover-backed pending history repaired it.
+    Pending-takeover/blocked-cleanup/impossible-history checks GREEN 3/3.
+18. `--test-name-pattern "SQLite crash matrix"
+    runner-v2/test/streaming-output-checkpoint.test.ts`: removing consuming-
+    intent ambiguity refusal produced missing expected exception RED. Reverted
+    GREEN 1/1 across before/after accepted, queue, intent, delivery, consumed,
+    and acknowledgement crash snapshots. Each snapshot is reopened from SQLite;
+    accepted data replays once, ambiguous intent refuses, consumed data suppresses.
+
+### Final affected validation
+
+Commands (all zero skips/cancellations/failures):
+
+- `npx tsx --test runner-v2/test/staged-launch-kernel.test.ts runner-v2/test/streaming-output-checkpoint.test.ts runner-v2/test/streaming-output-v2.test.ts runner-v2/test/streaming-process-session-runtime.test.ts`
+  — 52/52 GREEN after the last crash-matrix addition.
+- `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts runner-v2/test/interactive-process-channel.test.ts runner-v2/test/execution-grants.test.ts`
+  — 89/89 GREEN.
+- `npx tsx --test runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/tool-broker.test.ts runner-v2/test/bounded-output-spool.test.ts`
+  — 173/173 GREEN: Task 7 127 plus Task 3 spool 46. Includes spill open/write/
+  close/artifact failures, bounded tails, cleanup and owned-file identity tests.
+- `npm run typecheck:runner-v2` — GREEN.
+- Targeted ESLint on the five changed source files and four changed test files
+  — GREEN. `git diff --check 6ade2e52` — GREEN (LF/CRLF notices only).
+
+### Scope, residue and recovery audit
+
+- Reviewed the entire source diff and the focused tests. No production adapter,
+  CLI/control server/factory, family, Node policy, or Task 7 source changed.
+  A static scan of changed source seams found no spawn/execFile/execSync,
+  process.kill/taskkill, shell setting, ambient process.env, or exact Node pin.
+- Only existing streaming-kernel tables are used; the SQL scan inspects all
+  streaming tables and recursively forbidden capability/payload categories.
+- Runtime recovery never calls terminal wait or launch. Timeout/abort listeners
+  and timers are removed on settlement. Queue cancellation clears owned buffers
+  and waiters; subscribed channels are detached/unsubscribed on cleanup. Tests
+  finish without dangling async-activity warnings after the oversize repair.
+- Final inspected matching temp roots for host journal, adoption, output
+  checkpoints/crash snapshots, durable scan and real tee spool: zero.
+  No B1 real process, port, container, endpoint or supervisor was created.
+- One exact `runner-v2-durable-scan-jkSODe` temp root from the deliberately failing
+  fixture held only `sessions.sqlite`; both were inspected and removed with
+  explicit nonrecursive paths. This is disposable test data, not user data.
+- Recovery/cleanup failure retains durable blocked/unknown ownership instead of
+  claiming a clean release. No active source mutation or test injection remains.
+
+### Handoff limits
+
+This is a fake-provider implementation and review-fix evidence, not independent
+approval or a production portability claim. All real adapters/family wiring
+remain excluded. The controller must independently re-review this fix before
+unlocking B2; neither this report nor a green command substitutes for that gate.

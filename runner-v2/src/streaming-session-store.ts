@@ -249,7 +249,7 @@ export interface HostLaunchRecord {
   readonly ownerExpiresAt: string;
   readonly state: HostLaunchState;
   readonly cleanupOwner: "host_control" | "none";
-  readonly leaseBinding?: Readonly<{ leaseId: string; providerId: string; providerIdentity: string }>;
+  readonly leaseBinding?: StreamingSessionLease;
   readonly backendBinding?: StreamingSessionBackendBinding;
   readonly handshakeDigest?: string;
   readonly history: readonly Readonly<{ state: HostLaunchState; at: string }>[];
@@ -262,6 +262,7 @@ export interface StreamingSessionKernelWriter extends StreamingSessionStoreWrite
   commitAdoption(input: StreamingSessionAdoptionInput): Readonly<{ launch: Readonly<HostLaunchRecord>; session: Readonly<StreamingSessionRecord> }>;
   claimOutputCheckpoint(record: unknown): Readonly<{ record: Readonly<OutputCheckpointRecord>; won: boolean }>;
   applyOutputCheckpoint(command: unknown): Readonly<OutputCheckpointRecord>;
+  deleteOutputCheckpoint(command: unknown): void;
 }
 export interface StreamingSessionAdoptionInput {
   readonly launchId: string;
@@ -280,6 +281,8 @@ export interface OutputChunkMetadata {
 export interface OutputStreamCheckpoint {
   readonly stream: "stdout" | "stderr";
   readonly lastConsumed: OutputChunkMetadata | null;
+  /** Bounded exact replay authentication window, oldest to newest. */
+  readonly consumed: readonly OutputChunkMetadata[];
   readonly accepted: readonly OutputChunkMetadata[];
   readonly consumingIntent: OutputChunkMetadata | null;
 }
@@ -365,6 +368,7 @@ export function createInMemoryStreamingSessionStore(
     },
     readHostLaunch(launchId: string) {
       const record = hostLaunches.get(launchId);
+      if (record?.state === "handed_off") assertHostSessionIdentity(record, records.get(record.sessionId));
       return record ? cloneHostLaunchRecord(record) : undefined;
     },
     listHostLaunchIds() {
@@ -379,7 +383,7 @@ export function createInMemoryStreamingSessionStore(
   const kernel = { store } as StreamingSessionStoreKernel;
   Object.defineProperty(kernel, STORE_WRITER, { value: writer });
   Object.defineProperty(kernel, KERNEL_WRITER, {
-    value: createHostLaunchWriter(writer, records, hostLaunches, outputCheckpoints, maxHostLaunchRecords, maxOutputCheckpointRecords),
+    value: createHostLaunchWriter(writer, records, hostLaunches, outputCheckpoints, maxHostLaunchRecords, maxRecords, maxOutputCheckpointRecords),
   });
   return Object.freeze(kernel);
 }
@@ -501,7 +505,9 @@ export function openSqliteStreamingSessionStore(
       );
     },
     readHostLaunch(launchId: string) {
-      return readSqliteHostLaunch(database, integrityKey, launchId);
+      const record = readSqliteHostLaunch(database, integrityKey, launchId);
+      if (record?.state === "handed_off") assertHostSessionIdentity(record, read(record.sessionId));
+      return record;
     },
     listHostLaunchIds() {
       return Object.freeze((database.prepare(
@@ -1535,7 +1541,59 @@ export function parseHostLaunchRecord(value: unknown): Readonly<HostLaunchRecord
   if ((value.state === "handshake_verified" || value.state === "handed_off") && !handshakeDigest) {
     throw new StreamingSessionStoreError("invalid_state", "Host launch handshake digest is required.");
   }
-  return deepFreeze(structuredClone({ ...value, revision, fencingToken, ownerExpiresAt, history, effects, ...(leaseBinding ? { leaseBinding } : {}), ...(backendBinding ? { backendBinding } : {}), ...(handshakeDigest ? { handshakeDigest } : {}) })) as unknown as Readonly<HostLaunchRecord>;
+  const parsed = deepFreeze(structuredClone({ ...value, revision, fencingToken, ownerExpiresAt, history, effects, ...(leaseBinding ? { leaseBinding } : {}), ...(backendBinding ? { backendBinding } : {}), ...(handshakeDigest ? { handshakeDigest } : {}) })) as unknown as Readonly<HostLaunchRecord>;
+  assertHostLaunchLifecycle(parsed);
+  return parsed;
+}
+
+function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
+  const allowed = new Map<HostLaunchState, readonly HostLaunchState[]>([
+    ["prepared", ["isolated", "cleanup_pending"]], ["isolated", ["launching", "cleanup_pending"]],
+    ["launching", ["bound", "cleanup_pending"]], ["bound", ["handshake_verified", "cleanup_pending"]],
+    ["handshake_verified", ["handed_off", "cleanup_pending"]], ["cleanup_pending", ["cleanup_blocked", "released"]],
+    ["cleanup_blocked", ["cleanup_pending"]], ["handed_off", []], ["released", []],
+  ]);
+  if (record.history[0]?.state !== "prepared") throw new StreamingSessionStoreError("invalid_state", "Host launch history must begin prepared.");
+  const pendingTakeovers = [...(record.effects.find((effect) => effect.kind === "cleanup")?.takeovers ?? [])];
+  for (let index = 1; index < record.history.length; index++) {
+    const prior = record.history[index - 1]!; const entry = record.history[index]!;
+    const takeoverIndex = prior.state === "cleanup_pending" && entry.state === "cleanup_pending" ? pendingTakeovers.findIndex((takeover) => takeover.at === entry.at) : -1;
+    if ((takeoverIndex < 0 && !(allowed.get(prior.state) ?? []).includes(entry.state)) || Date.parse(entry.at) < Date.parse(prior.at)) throw new StreamingSessionStoreError("invalid_state", "Host launch history transition is impossible.");
+    if (takeoverIndex >= 0) pendingTakeovers.splice(takeoverIndex, 1);
+  }
+  const byId = new Map<string, HostLaunchEffect>();
+  for (const effect of record.effects) {
+    if (byId.has(effect.effectId)) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect ids must be unique.");
+    byId.set(effect.effectId, effect);
+    const expectedId = `${effect.kind}:${record.launchId}`;
+    if (effect.effectId !== expectedId) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect id is not normative.");
+    if (effect.status === "pending" && (effect.acknowledgedAt || effect.blockedAt || effect.blocker)) throw new StreamingSessionStoreError("invalid_effect", "Pending host effect carries terminal evidence.");
+    if (effect.status === "acknowledged" && (!effect.acknowledgedAt || effect.blockedAt || effect.blocker)) throw new StreamingSessionStoreError("invalid_effect", "Acknowledged host effect evidence is invalid.");
+    if (effect.status === "blocked" && (effect.kind !== "cleanup" || !effect.blockedAt || !effect.blocker || effect.acknowledgedAt)) throw new StreamingSessionStoreError("invalid_effect", "Blocked host effect evidence is invalid.");
+  }
+  const visited = new Set(record.history.map((entry) => entry.state));
+  const isolate = byId.get(`isolate:${record.launchId}`);
+  if (!isolate || isolate.kind !== "isolate") throw new StreamingSessionStoreError("invalid_effect", "Normative isolation effect is missing.");
+  if (isolate.fencingToken > record.fencingToken) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect fence exceeds current ownership.");
+  if (isolate.status !== (visited.has("isolated") ? "acknowledged" : "pending") || isolate.createdAt !== record.history[0]!.at || (visited.has("isolated") && isolate.acknowledgedAt !== record.history.find((entry) => entry.state === "isolated")!.at)) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect state or timing does not match history.");
+  const launch = byId.get(`launch:${record.launchId}`);
+  if (visited.has("launching") !== Boolean(launch) || (launch && launch.kind !== "launch")) throw new StreamingSessionStoreError("invalid_effect", "Normative launch effect does not match history.");
+  if (launch && (launch.status !== (visited.has("bound") ? "acknowledged" : "pending") || launch.createdAt !== record.history.find((entry) => entry.state === "launching")!.at || (visited.has("bound") && launch.acknowledgedAt !== record.history.find((entry) => entry.state === "bound")!.at))) throw new StreamingSessionStoreError("invalid_effect", "Launch effect state or timing does not match history.");
+  if (launch && (launch.ownerId !== isolate.ownerId || launch.fencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Launch effect provenance differs from isolation ownership.");
+  const handoff = byId.get(`handoff:${record.launchId}`);
+  if (visited.has("handshake_verified") !== Boolean(handoff) || (handoff && handoff.kind !== "handoff")) throw new StreamingSessionStoreError("invalid_effect", "Normative handoff effect does not match history.");
+  if (handoff && (handoff.status !== (visited.has("handed_off") ? "acknowledged" : "pending") || handoff.createdAt !== record.history.find((entry) => entry.state === "handshake_verified")!.at || (visited.has("handed_off") && handoff.acknowledgedAt !== record.history.find((entry) => entry.state === "handed_off")!.at))) throw new StreamingSessionStoreError("invalid_effect", "Handoff effect state or timing does not match history.");
+  if (handoff && (handoff.ownerId !== isolate.ownerId || handoff.fencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Handoff effect provenance differs from launch ownership.");
+  const cleanup = byId.get(`cleanup:${record.launchId}`);
+  const cleanupVisited = visited.has("cleanup_pending") || visited.has("cleanup_blocked") || visited.has("released");
+  if (cleanupVisited !== Boolean(cleanup) || (cleanup && cleanup.kind !== "cleanup")) throw new StreamingSessionStoreError("invalid_effect", "Normative cleanup effect does not match history.");
+  if (cleanup && record.state === "cleanup_pending" && cleanup.status !== "pending") throw new StreamingSessionStoreError("invalid_effect", "Cleanup pending state/effect mismatch.");
+  if (cleanup && record.state === "cleanup_blocked" && cleanup.status !== "blocked") throw new StreamingSessionStoreError("invalid_effect", "Cleanup blocked state/effect mismatch.");
+  if (cleanup && record.state === "released" && cleanup.status !== "acknowledged") throw new StreamingSessionStoreError("invalid_effect", "Released cleanup state/effect mismatch.");
+  if (cleanup && (cleanup.originOwnerId !== isolate.ownerId || cleanup.originFencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup effect origin differs from launch ownership.");
+  if (!cleanup && record.state !== "handed_off" && (record.ownerId !== isolate.ownerId || record.fencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Host ownership differs from normative effect provenance.");
+  if (visited.has("isolated") !== Boolean(record.leaseBinding) || visited.has("bound") !== Boolean(record.backendBinding) || visited.has("handshake_verified") !== Boolean(record.handshakeDigest)) throw new StreamingSessionStoreError("invalid_state", "Host attested bindings do not match lifecycle history.");
+  if ((record.state === "handed_off" || record.state === "released") !== (record.ownerId === "none")) throw new StreamingSessionStoreError("invalid_state", "Host launch terminal ownership is invalid.");
 }
 
 export function parseOutputCheckpointRecord(value: unknown): Readonly<OutputCheckpointRecord> {
@@ -1553,20 +1611,28 @@ export function parseOutputCheckpointRecord(value: unknown): Readonly<OutputChec
   if (!Array.isArray(value.streams) || value.streams.length < 1 || value.streams.length > 2) throw new StreamingSessionStoreError("invalid_record", "Output checkpoint streams are invalid.");
   const seen = new Set<string>();
   const streams = value.streams.map((raw) => {
-    const streamKeys = new Set(["stream", "lastConsumed", "accepted", "consumingIntent"]);
+    const streamKeys = new Set(["stream", "lastConsumed", "consumed", "accepted", "consumingIntent"]);
     assertExactKeys(raw, streamKeys, "output stream checkpoint"); assertRequiredKeys(raw as Record<string, unknown>, streamKeys, "output stream checkpoint");
     const item = raw as Record<string, unknown>;
     if ((item.stream !== "stdout" && item.stream !== "stderr") || seen.has(item.stream)) throw new StreamingSessionStoreError("invalid_record", "Output checkpoint stream is invalid or duplicated.");
     seen.add(item.stream);
     const lastConsumed = item.lastConsumed === null ? null : parseOutputMetadata(item.lastConsumed, item.stream);
+    if (!Array.isArray(item.consumed) || item.consumed.length > capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Consumed replay metadata window exceeds capacity.");
+    const consumed = item.consumed.map((entry) => parseOutputMetadata(entry, item.stream));
+    for (let consumedIndex = 1; consumedIndex < consumed.length; consumedIndex++) {
+      const prior = consumed[consumedIndex - 1]!; const entry = consumed[consumedIndex]!;
+      if (entry.sequence !== prior.sequence + 1 || entry.startOffset !== prior.endOffset) throw new StreamingSessionStoreError("invalid_effect", "Consumed replay metadata is not continuous.");
+    }
+    if ((lastConsumed === null) !== (consumed.length === 0) || (lastConsumed && canonicalJson(lastConsumed) !== canonicalJson(consumed.at(-1)))) throw new StreamingSessionStoreError("invalid_effect", "Last consumed metadata does not match the replay window.");
     if (!Array.isArray(item.accepted) || item.accepted.length > capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Accepted output metadata window exceeds capacity.");
     const accepted = item.accepted.map((entry) => parseOutputMetadata(entry, item.stream));
     let sequence = lastConsumed?.sequence ?? 0; let offset = lastConsumed?.endOffset ?? 0;
     for (const entry of accepted) { if (entry.sequence !== sequence + 1 || entry.startOffset !== offset) throw new StreamingSessionStoreError("invalid_effect", "Accepted output metadata is not continuous."); sequence = entry.sequence; offset = entry.endOffset; }
     const consumingIntent = item.consumingIntent === null ? null : parseOutputMetadata(item.consumingIntent, item.stream);
     if (consumingIntent && canonicalJson(consumingIntent) !== canonicalJson(accepted[0])) throw new StreamingSessionStoreError("invalid_effect", "Consuming intent must name the first accepted chunk.");
-    return Object.freeze({ stream: item.stream, lastConsumed, accepted: Object.freeze(accepted), consumingIntent });
+    return Object.freeze({ stream: item.stream, lastConsumed, consumed: Object.freeze(consumed), accepted: Object.freeze(accepted), consumingIntent });
   });
+  if (streams.reduce((total, stream) => total + stream.accepted.length, 0) > capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Aggregate accepted output metadata exceeds provider capacity.");
   return deepFreeze({ recordKind: OUTPUT_CHECKPOINT_RECORD_KIND, schemaVersion: OUTPUT_CHECKPOINT_RECORD_VERSION, revision, sessionId, ownerId, fencingToken, capacity, outcome: value.outcome, streams } as OutputCheckpointRecord);
 }
 
@@ -1582,20 +1648,26 @@ function parseOutputMetadata(value: unknown, expectedStream?: unknown): OutputCh
 }
 
 function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>, input: Record<string, unknown>): Readonly<OutputCheckpointRecord> {
+  assertNoForbiddenDurableValues(input);
+  assertExactKeys(input, new Set(["type", "sessionId", "ownerId", "fencingToken", "expectedRevision", "metadata", "at"]), "output checkpoint command");
   if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
   const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
+  if (current.outcome !== "active") {
+    if (input.type === "mark_outcome_unknown" && expectedRevision === current.revision) return current;
+    throw new StreamingSessionStoreError("invalid_state", "Output checkpoint is terminal outcome_unknown.");
+  }
   const metadata = parseOutputMetadata(input.metadata);
   const index = current.streams.findIndex((stream) => stream.stream === metadata.stream);
   if (index < 0) throw new StreamingSessionStoreError("invalid_record", "Output stream is not configured.");
   const stream = current.streams[index]!;
   if (input.type === "accept" && stream.lastConsumed && metadata.sequence <= stream.lastConsumed.sequence) {
-    if (canonicalJson(metadata) === canonicalJson(stream.lastConsumed)) return current;
+    if (stream.consumed.some((entry) => canonicalJson(entry) === canonicalJson(metadata))) return current;
     throw new StreamingSessionStoreError("invalid_effect", "Consumed output replay metadata mismatches.");
   }
   if (expectedRevision !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
   let nextStream: OutputStreamCheckpoint;
   if (input.type === "accept") {
-    if (stream.accepted.length >= current.capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Accepted output metadata window is full.");
+    if (current.streams.reduce((total, item) => total + item.accepted.length, 0) >= current.capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Aggregate accepted output metadata window is full.");
     const prior = stream.accepted.at(-1) ?? stream.lastConsumed;
     if (metadata.sequence !== (prior?.sequence ?? 0) + 1 || metadata.startOffset !== (prior?.endOffset ?? 0)) throw new StreamingSessionStoreError("invalid_effect", "Output metadata is not continuous.");
     nextStream = { ...stream, accepted: [...stream.accepted, metadata] };
@@ -1604,10 +1676,16 @@ function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>,
     nextStream = { ...stream, consumingIntent: metadata };
   } else if (input.type === "commit_consumed") {
     if (canonicalJson(stream.consumingIntent) !== canonicalJson(metadata) || canonicalJson(stream.accepted[0]) !== canonicalJson(metadata)) throw new StreamingSessionStoreError("invalid_effect", "Output consumed commit is invalid.");
-    nextStream = { ...stream, lastConsumed: metadata, accepted: stream.accepted.slice(1), consumingIntent: null };
+    nextStream = { ...stream, lastConsumed: metadata, consumed: [...stream.consumed, metadata].slice(-current.capacity), accepted: stream.accepted.slice(1), consumingIntent: null };
+  } else if (input.type === "cancel_consume") {
+    if (canonicalJson(stream.consumingIntent) !== canonicalJson(metadata) || canonicalJson(stream.accepted[0]) !== canonicalJson(metadata)) throw new StreamingSessionStoreError("invalid_effect", "Output consuming intent cancellation is invalid.");
+    nextStream = { ...stream, consumingIntent: null };
   } else if (input.type === "commit_evidence_consumed") {
-    if (stream.consumingIntent || canonicalJson(stream.accepted[0]) !== canonicalJson(metadata)) throw new StreamingSessionStoreError("invalid_effect", "Evidence-only consumed commit is invalid.");
-    nextStream = { ...stream, lastConsumed: metadata, accepted: stream.accepted.slice(1), consumingIntent: null };
+    const accepted = stream.accepted.length > 0;
+    if (stream.consumingIntent || (accepted ? canonicalJson(stream.accepted[0]) !== canonicalJson(metadata) : metadata.sequence !== (stream.lastConsumed?.sequence ?? 0) + 1 || metadata.startOffset !== (stream.lastConsumed?.endOffset ?? 0))) throw new StreamingSessionStoreError("invalid_effect", "Evidence-only consumed commit is invalid.");
+    // Evidence acceptance and consumption are one atomic metadata update after
+    // spool acceptance/loss, so stderr never occupies a retained protocol slot.
+    nextStream = { ...stream, lastConsumed: metadata, consumed: [...stream.consumed, metadata].slice(-current.capacity), accepted: stream.accepted.slice(1), consumingIntent: null };
   } else if (input.type === "mark_outcome_unknown") {
     return parseOutputCheckpointRecord({ ...current, revision: current.revision + 1, outcome: "outcome_unknown" });
   } else throw new StreamingSessionStoreError("invalid_effect", "Output checkpoint command is unsupported.");
@@ -1631,12 +1709,14 @@ function createHostLaunchWriter(
   records: Map<string, Readonly<HostLaunchRecord>>,
   outputCheckpoints: Map<string, Readonly<OutputCheckpointRecord>>,
   capacity: number,
+  sessionCapacity: number,
   outputCapacity: number,
 ): StreamingSessionKernelWriter {
   return Object.freeze({
     ...sessionWriter,
     prepareLaunch(record: unknown) {
       const parsed = parseHostLaunchRecord(record);
+      if (parsed.state !== "prepared" || parsed.revision !== 0) throw new StreamingSessionStoreError("invalid_state", "New host launches must begin prepared.");
       const existing = records.get(parsed.launchId);
       if (existing) {
         if (canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Host launch identity conflicts.");
@@ -1673,6 +1753,7 @@ function createHostLaunchWriter(
         if (handed.state !== "handed_off") throw new StreamingSessionStoreError("invalid_state", "Adoption pair is impossible.");
         return Object.freeze({ launch: cloneHostLaunchRecord(handed), session: cloneRecord(existing) });
       }
+      if (sessions.size >= sessionCapacity) throw new StreamingSessionStoreError("capacity_exceeded", "Streaming session capacity is full; host ownership was retained.");
       const handed = handoffHostLaunch(launch, input.at);
       sessions.set(session.sessionId, session);
       records.set(launch.launchId, handed);
@@ -1698,6 +1779,13 @@ function createHostLaunchWriter(
       if (next !== current) outputCheckpoints.set(sessionId, next);
       return cloneOutputCheckpoint(next);
     },
+    deleteOutputCheckpoint(command: unknown) {
+      const input = commandRecord(command, "output checkpoint delete"); const sessionId = requiredText(input.sessionId, "sessionId");
+      const current = outputCheckpoints.get(sessionId); if (!current) return;
+      if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
+      if (requiredNonNegativeInteger(input.expectedRevision, "expectedRevision") !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+      outputCheckpoints.delete(sessionId);
+    },
   });
 }
 
@@ -1716,6 +1804,7 @@ function createSqliteHostLaunchWriter(
     prepareLaunch(record: unknown) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
       const parsed = parseHostLaunchRecord(record);
+      if (parsed.state !== "prepared" || parsed.revision !== 0) throw new StreamingSessionStoreError("invalid_state", "New host launches must begin prepared.");
       const json = JSON.stringify(parsed);
       const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
       const result = database.prepare("INSERT OR IGNORE INTO streaming_host_launches (launch_id, record_json, integrity, revision) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM streaming_host_launches) < ?")
@@ -1813,6 +1902,15 @@ function createSqliteHostLaunchWriter(
       if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
       return cloneOutputCheckpoint(next);
     },
+    deleteOutputCheckpoint(command: unknown) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      const input = commandRecord(command, "output checkpoint delete"); const sessionId = requiredText(input.sessionId, "sessionId");
+      const current = readSqliteOutputCheckpoint(database, integrityKey, sessionId); if (!current) return;
+      if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
+      const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
+      const result = database.prepare("DELETE FROM streaming_output_checkpoints WHERE session_id = ? AND revision = ?").run(sessionId, expectedRevision) as { changes?: number };
+      if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+    },
   });
 }
 
@@ -1829,11 +1927,15 @@ function readSqliteHostLaunch(database: DatabaseSync, integrityKey: Uint8Array, 
 }
 
 function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>): Readonly<HostLaunchRecord> {
+  assertNoForbiddenDurableValues(input);
+  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], begin_launch: [], bind_backend: ["backendBinding"], verify_handshake: ["handshakeDigest"], begin_cleanup: [], settle_cleanup_blocked: ["blocker"], settle_cleanup_cleaned: [], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
+  assertExactKeys(input, new Set(["type", "launchId", "ownerId", "fencingToken", "expectedRevision", "at", ...(extraKeys[String(input.type)] ?? [])]), "host launch command");
   const ownerId = requiredText(input.ownerId, "ownerId");
   const fence = requiredPositiveInteger(input.fencingToken, "fencingToken");
   const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
   if (ownerId !== current.ownerId || fence !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Host launch owner/fence is stale.");
   const at = requiredTimestamp(input.at, "at");
+  if (input.type !== "takeover_cleanup" && Date.parse(at) >= Date.parse(current.ownerExpiresAt)) throw new StreamingSessionStoreError("lease_expired", "Host launch owner lease is expired.");
   let state: HostLaunchState;
   const additions: {
     leaseBinding?: HostLaunchRecord["leaseBinding"];
@@ -1847,7 +1949,7 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
   const effects = current.effects.map((effect) => ({ ...effect }));
   if (input.type === "bind_isolation") {
     state = "isolated";
-    additions.leaseBinding = Object.freeze({ leaseId: requiredText(input.leaseId, "leaseId"), providerId: requiredText(input.providerId, "providerId"), providerIdentity: requiredDigest(input.providerIdentity, "providerIdentity") });
+    additions.leaseBinding = parseHostLeaseBinding(input.lease);
     acknowledgeHostEffect(effects, `isolate:${current.launchId}`, at);
     ensureTransition(current.state, "prepared", input, current, additions);
   } else if (input.type === "begin_launch") {
@@ -1885,16 +1987,19 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Exact cleanup effect is missing.");
     effects[index] = { ...effects[index]!, status: "acknowledged", acknowledgedAt: at };
   } else if (input.type === "takeover_cleanup") {
-    if (current.state !== "cleanup_blocked" && current.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_state", "Host cleanup cannot be taken over.");
+    if (current.state === "handed_off" || current.state === "released") throw new StreamingSessionStoreError("invalid_state", "Inert host ownership cannot be taken over.");
     if (Date.parse(at) < Date.parse(current.ownerExpiresAt)) throw new StreamingSessionStoreError("lease_not_expired", "Host cleanup owner has not expired.");
     const newFence = requiredPositiveInteger(input.newFencingToken, "newFencingToken");
     if (newFence !== fence + 1) throw new StreamingSessionStoreError("stale_fence", "Host cleanup takeover fence is not consecutive.");
     const newOwnerId = requiredText(input.newOwnerId, "newOwnerId");
     state = "cleanup_pending"; additions.ownerId = newOwnerId; additions.fencingToken = newFence; additions.ownerExpiresAt = requiredTimestamp(input.ownerExpiresAt, "ownerExpiresAt");
     if (Date.parse(additions.ownerExpiresAt) <= Date.parse(at)) throw new StreamingSessionStoreError("lease_expired", "New host cleanup ownership lease is expired.");
-    const index = effects.findIndex((effect) => effect.kind === "cleanup"); if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Cleanup effect is missing.");
-    const effect = effects[index]!;
-    effects[index] = { ...effect, status: "pending", ownerId: newOwnerId, fencingToken: newFence, blocker: undefined, blockedAt: undefined, takeovers: [...(effect.takeovers ?? []), { fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }] };
+    const index = effects.findIndex((effect) => effect.kind === "cleanup");
+    if (index < 0) effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId: newOwnerId, fencingToken: newFence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [{ fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }] });
+    else {
+      const effect = effects[index]!;
+      effects[index] = { ...effect, status: "pending", ownerId: newOwnerId, fencingToken: newFence, blocker: undefined, blockedAt: undefined, takeovers: [...(effect.takeovers ?? []), { fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }] };
+    }
   } else {
     throw new StreamingSessionStoreError("invalid_effect", "Host launch transition is unsupported.");
   }
@@ -1918,9 +2023,14 @@ function requiredAdoptionLaunch(
 }
 
 function assertAdoptionPair(launch: Readonly<HostLaunchRecord>, session: Readonly<StreamingSessionRecord>): void {
-  if (session.state !== "active" || session.cleanupOwner !== "session_authority" || session.sessionId !== launch.sessionId || session.runId !== launch.runId || session.agentSessionId !== launch.agentSessionId || session.toolName !== launch.toolName || session.callId !== launch.callId || session.backendBinding.opaqueIdentity !== launch.backendBinding?.opaqueIdentity || session.lease.leaseId !== launch.leaseBinding?.leaseId) {
+  assertHostSessionIdentity(launch, session);
+  if (session.state !== "active" || session.cleanupOwner !== "session_authority") {
     throw new StreamingSessionStoreError("identity_conflict", "Host/session adoption identities do not match.");
   }
+}
+
+function assertHostSessionIdentity(launch: Readonly<HostLaunchRecord>, session: Readonly<StreamingSessionRecord> | undefined): void {
+  if (!session || session.sessionId !== launch.sessionId || session.runId !== launch.runId || session.agentSessionId !== launch.agentSessionId || canonicalJson(session.actor) !== canonicalJson(launch.actor) || session.toolName !== launch.toolName || session.callId !== launch.callId || canonicalJson(session.backendBinding) !== canonicalJson(launch.backendBinding) || canonicalJson(session.lease) !== canonicalJson(launch.leaseBinding)) throw new StreamingSessionStoreError("identity_conflict", "Host/session adoption pair is missing or corrupt.");
 }
 
 function handoffHostLaunch(launch: Readonly<HostLaunchRecord>, atInput: unknown): Readonly<HostLaunchRecord> {
@@ -1972,9 +2082,8 @@ function parseHostLaunchEffect(value: unknown): HostLaunchEffect {
 }
 
 function parseHostLeaseBinding(value: unknown): HostLaunchRecord["leaseBinding"] {
-  assertExactKeys(value, new Set(["leaseId", "providerId", "providerIdentity"]), "host lease binding");
-  const item = value as Record<string, unknown>;
-  return Object.freeze({ leaseId: requiredText(item.leaseId, "leaseId"), providerId: requiredText(item.providerId, "providerId"), providerIdentity: requiredDigest(item.providerIdentity, "providerIdentity") });
+  parseLease(value);
+  return deepFreeze(structuredClone(value)) as StreamingSessionLease;
 }
 
 function parseBackendBindingValue(value: unknown): StreamingSessionBackendBinding {

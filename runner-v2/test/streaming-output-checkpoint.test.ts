@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { BoundedProtocolQueue } from "../src/bounded-protocol-queue.js";
+import { createStreamingOutputController } from "../src/streaming-output-controller.js";
+import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "../src/session-authority.js";
 
 import {
   StreamingSessionStoreError,
@@ -22,7 +26,7 @@ test("checkpoint parser rejects payloads and bounds accepted metadata", () => {
   assert.equal(parseOutputCheckpointRecord(record).schemaVersion, 1);
   assert.throws(() => parseOutputCheckpointRecord({ ...record, payload: "secret" }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "forbidden_durable_value");
-  assert.throws(() => parseOutputCheckpointRecord({ ...record, streams: [{ stream: "stdout", accepted: [metadata, { ...metadata, sequence: 2, startOffset: 5, endOffset: 10 }], lastConsumed: null, consumingIntent: null }] }),
+  assert.throws(() => parseOutputCheckpointRecord({ ...record, streams: [{ stream: "stdout", accepted: [metadata, { ...metadata, sequence: 2, startOffset: 5, endOffset: 10 }], lastConsumed: null, consumed: [], consumingIntent: null }] }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "capacity_exceeded");
 });
 
@@ -41,6 +45,26 @@ test("checkpoint commits accepted then one intent then consumed and exact replay
   assert.equal(record.streams[0]!.consumingIntent, null);
   const replay = writer.applyOutputCheckpoint({ type: "accept", sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 3, metadata, at: now });
   assert.equal(replay.revision, 3);
+});
+
+test("output checkpoint is terminal fail-closed after outcome_unknown", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionKernelWriter(kernel);
+  writer.claimOutputCheckpoint(checkpointRecord());
+  writer.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 0, metadata, at: now });
+  assert.throws(
+    () => writer.applyOutputCheckpoint({ type: "accept", sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 1, metadata, at: now }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+  );
+});
+
+test("accepted output capacity is aggregate across stdout and stderr", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.claimOutputCheckpoint({ ...checkpointRecord(), streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }, { stream: "stderr", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] });
+  writer.applyOutputCheckpoint({ type: "accept", sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 0, metadata, at: now });
+  const stderr = { ...metadata, stream: "stderr" as const };
+  assert.throws(() => writer.applyOutputCheckpoint({ type: "accept", sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 1, metadata: stderr, at: now }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "capacity_exceeded");
 });
 
 test("checkpoint record capacity refuses eviction of existing metadata", () => {
@@ -74,6 +98,37 @@ test("SQLite checkpoint HMAC survives reopen and tampering fails closed without 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("SQLite crash matrix preserves accepted intent consumed and acknowledgement boundaries", async () => {
+  for (const boundary of ["before_accept", "after_accept", "after_queue", "after_intent", "before_delivery", "after_delivery", "after_consumed", "after_ack"] as const) {
+    const root = await mkdtemp(join(tmpdir(), "runner-v2-output-crash-")); const path = join(root, "sessions.sqlite"); const key = Buffer.alloc(32, 2);
+    let kernel = openSqliteStreamingSessionStore(path, key); let closed = false;
+    try {
+      const bytes = Buffer.from("chunk"); const exact = { ...metadata, digest: createHash("sha256").update(bytes).digest("hex") }; let writer = getStreamingSessionKernelWriter(kernel);
+      let record = writer.claimOutputCheckpoint(checkpointRecord()).record;
+      const command = (type: string) => record = writer.applyOutputCheckpoint({ type, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: record.revision, metadata: exact });
+      if (boundary !== "before_accept") command("accept");
+      if (["after_intent", "before_delivery", "after_delivery", "after_consumed", "after_ack"].includes(boundary)) command("begin_consume");
+      if (["after_consumed", "after_ack"].includes(boundary)) command("commit_consumed");
+      kernel.store.close(); closed = true; kernel = openSqliteStreamingSessionStore(path, key); closed = false; writer = getStreamingSessionKernelWriter(kernel);
+      assert.deepEqual(kernel.store.readOutputCheckpoint("stream-1"), record, boundary);
+      const queue = new BoundedProtocolQueue({ maxBytes: 5, maxChunks: 1, maxFrameBytes: 5 }); let deliveries = 0;
+      const controller = createStreamingOutputController({ kernel, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, maxAcceptedChunks: 1, queue, protocolStreams: ["stdout"], writeEvidence: async () => ({ evidenceLossy: false }), assertAuthorization: () => undefined, deliver: async () => { deliveries++; } });
+      if (["after_intent", "before_delivery", "after_delivery"].includes(boundary)) {
+        assert.throws(() => controller.attestRetainedWindow([exact]), /unknown/); assert.equal(kernel.store.readOutputCheckpoint("stream-1")!.outcome, "outcome_unknown");
+      } else {
+        controller.attestRetainedWindow(record.streams[0]!.accepted);
+        if (["after_consumed", "after_ack"].includes(boundary)) { assert.deepEqual(await controller.accept(exact, bytes), exact); assert.equal(deliveries, 0); }
+        else if (boundary !== "before_accept") {
+          const acknowledgement = controller.accept(exact, bytes); await new Promise((resolve) => setImmediate(resolve));
+          await controller.deliverNext({} as SessionOperationAuthorization, { sessionId: "stream-1", operation: "family_delivery" } as OperationAuthorizationAssertion);
+          assert.deepEqual(await acknowledgement, exact); assert.equal(deliveries, 1);
+        }
+      }
+      controller.cancel(); assert.equal(queue.snapshot().byteCount, 0);
+    } finally { if (!closed) kernel.store.close(); await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 function checkpointRecord() {
-  return { recordKind: "runner.output-checkpoint" as const, schemaVersion: 1 as const, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 1, outcome: "active" as const, streams: [{ stream: "stdout" as const, lastConsumed: null, accepted: [], consumingIntent: null }] };
+  return { recordKind: "runner.output-checkpoint" as const, schemaVersion: 1 as const, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 1, outcome: "active" as const, streams: [{ stream: "stdout" as const, lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] };
 }

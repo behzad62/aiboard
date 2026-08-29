@@ -66,25 +66,82 @@ test("host launch parser rejects forbidden recursive durable values", () => {
   );
 });
 
+test("staged launch capabilities are issuer-scoped and reserve session ids", async () => {
+  const grants = createExecutionGrantAuthority({ clock: () => new Date(now) });
+  const base = { runId: "run-1", sessionId: "agent-1", actor: { role: "worker" as const, id: "worker-1" }, toolName: "process.start", permissionProfile: "full" as const };
+  const firstBinding = { ...base, callId: "call-reserve-1" };
+  const secondBinding = { ...base, callId: "call-reserve-2" };
+  const first = await grants.issue({ ...firstBinding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: false, networkApproved: false });
+  const second = await grants.issue({ ...secondBinding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: false, networkApproved: false });
+  const issuing = createSessionAuthority({ grants, sessions: createInMemoryStreamingSessionStore(), clock: () => new Date(now) });
+  const foreign = createSessionAuthority({ grants, sessions: createInMemoryStreamingSessionStore(), clock: () => new Date(now) });
+  const staged = issuing.stageLaunch({ sessionId: "stream-reserved", launchId: "launch-reserved-1", grant: first, binding: firstBinding });
+  assert.throws(
+    () => foreign.validateStagedLaunch(staged, { sessionId: "stream-reserved", launchId: "launch-reserved-1" }),
+    (error) => error instanceof SessionAuthorityError && error.code === "launch_call_consumed",
+  );
+  assert.throws(
+    () => issuing.stageLaunch({ sessionId: "stream-reserved", launchId: "launch-reserved-2", grant: second, binding: secondBinding }),
+    (error) => error instanceof SessionAuthorityError && error.code === "session_collision",
+  );
+  assert.throws(
+    () => issuing.beginTransfer({ sessionId: "stream-reserved", grant: second, binding: secondBinding, lease: leaseBinding(), backendBinding: backendBinding(), envelope: { access: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false } }),
+    (error) => error instanceof SessionAuthorityError && error.code === "session_collision",
+  );
+});
+
+test("host launch parser rejects impossible history, effects, and binding state", () => {
+  const impossible = {
+    ...hostRecord(), revision: 1, state: "cleanup_pending" as const,
+    history: [{ state: "bound" as const, at: now }, { state: "cleanup_pending" as const, at: now }],
+    effects: [{ effectId: "wrong-isolate", kind: "isolate" as const, status: "pending" as const, ownerId: "host:run-1", fencingToken: 99, createdAt: now },
+      { effectId: "cleanup:launch-1", kind: "cleanup" as const, status: "pending" as const, ownerId: "host:run-1", fencingToken: 1, originOwnerId: "host:run-1", originFencingToken: 1, createdAt: now, takeovers: [] }],
+  };
+  assert.throws(
+    () => parseHostLaunchRecord(impossible),
+    (error) => error instanceof StreamingSessionStoreError && ["invalid_state", "invalid_effect"].includes(error.code),
+  );
+});
+
 test("host launch effects are fenced, monotonic, idempotent, and capacity bounded", () => {
   const kernel = createInMemoryStreamingSessionStore({ maxHostLaunchRecords: 1 });
   const writer = getStreamingSessionKernelWriter(kernel);
   assert.equal(writer.prepareLaunch(hostRecord()).won, true);
   const isolated = writer.transitionLaunch({
     type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1,
-    expectedRevision: 0, leaseId: "lease-1", providerId: "fake", providerIdentity: "a".repeat(64), at: now,
+    expectedRevision: 0, lease: leaseBinding(), at: now,
   });
   assert.equal(isolated.state, "isolated");
   assert.deepEqual(writer.transitionLaunch({
     type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1,
-    expectedRevision: 0, leaseId: "lease-1", providerId: "fake", providerIdentity: "a".repeat(64), at: now,
+    expectedRevision: 0, lease: leaseBinding(), at: now,
   }), isolated);
   assert.throws(() => writer.transitionLaunch({
     type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 2,
     expectedRevision: 1, at: now,
   }), (error) => error instanceof StreamingSessionStoreError && error.code === "stale_fence");
-  assert.throws(() => writer.prepareLaunch({ ...hostRecord(), launchId: "launch-2" }),
+  assert.throws(() => writer.prepareLaunch({ ...hostRecord(), launchId: "launch-2", effects: [{ ...hostRecord().effects[0], effectId: "isolate:launch-2" }] }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "capacity_exceeded");
+});
+
+test("an expired host owner cannot advance a normal lifecycle effect", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.prepareLaunch(hostRecord());
+  assert.throws(() => writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: "2026-08-30T00:02:00.000Z" }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "lease_expired");
+  assert.equal(kernel.store.readHostLaunch("launch-1")?.state, "prepared");
+});
+
+test("in-memory atomic adoption retains host ownership when session capacity is full", () => {
+  const kernel = createInMemoryStreamingSessionStore({ maxRecords: 1 }); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.claim(activeSessionRecord("existing-session")); writer.prepareLaunch(hostRecord());
+  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
+  writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
+  writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
+  const host = writer.transitionLaunch({ type: "verify_handshake", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, handshakeDigest: "b".repeat(64), at: now });
+  assert.throws(() => writer.commitAdoption({ launchId: "launch-1", ownerId: host.ownerId, fencingToken: host.fencingToken, expectedRevision: host.revision, at: now, sessionRecord: activeSessionRecord("stream-1") }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "capacity_exceeded");
+  assert.equal(kernel.store.readHostLaunch("launch-1")?.state, "handshake_verified"); assert.equal(kernel.store.readBySession("stream-1"), undefined);
 });
 
 test("finalizeLaunch atomically hands host ownership to one active session and consumes its alias once", async () => {
@@ -96,7 +153,7 @@ test("finalizeLaunch atomically hands host ownership to one active session and c
   const staged = authority.stageLaunch({ sessionId: "stream-1", launchId: "launch-1", grant, binding });
   const writer = getStreamingSessionKernelWriter(kernel);
   writer.prepareLaunch(hostRecord());
-  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, leaseId: "lease-1", providerId: "fake", providerIdentity: "a".repeat(64), at: now });
+  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
   writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
   writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
   const verified = writer.transitionLaunch({ type: "verify_handshake", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, handshakeDigest: "b".repeat(64), at: now });
@@ -104,7 +161,13 @@ test("finalizeLaunch atomically hands host ownership to one active session and c
   for (const mismatch of [
     { ...finalize, launchId: "wrong-launch" },
     { ...finalize, lease: { ...finalize.lease, leaseId: "wrong-lease" } },
+    { ...finalize, lease: { ...finalize.lease, invocationId: "wrong-invocation" } },
+    { ...finalize, lease: { ...finalize.lease, acquiredAt: "2026-08-30T00:00:01.000Z" } },
     { ...finalize, backendBinding: { ...finalize.backendBinding, opaqueIdentity: "wrong-backend" } },
+    { ...finalize, backendBinding: { ...finalize.backendBinding, implementationGeneration: "wrong-generation" } },
+    { ...finalize, backendBinding: { ...finalize.backendBinding, attestationDigest: "e".repeat(64) } },
+    { ...finalize, backendBinding: { ...finalize.backendBinding, rootPid: 43 } },
+    { ...finalize, backendBinding: { ...finalize.backendBinding, birthFingerprint: { ...finalize.backendBinding.birthFingerprint, discriminator: "wrong-birth" } } },
     { ...finalize, handshakeDigest: "e".repeat(64) },
   ]) assert.throws(() => authority.finalizeLaunch(mismatch), (error) => error instanceof SessionAuthorityError && error.code === "binding_mismatch");
   const result = authority.finalizeLaunch(finalize);
@@ -131,7 +194,7 @@ test("host cleanup is fenced through pending, blocked, expired-owner takeover, a
 test("impossible adoption pair leaves host ownership unchanged", () => {
   const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
   writer.prepareLaunch(hostRecord());
-  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, leaseId: "lease-1", providerId: "fake", providerIdentity: "a".repeat(64), at: now });
+  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
   writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
   writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
   const host = writer.transitionLaunch({ type: "verify_handshake", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, handshakeDigest: "b".repeat(64), at: now });
@@ -140,24 +203,38 @@ test("impossible adoption pair leaves host ownership unchanged", () => {
   assert.equal(kernel.store.readBySession("wrong-session"), undefined);
 });
 
+test("expired pending cleanup supports consecutive fenced takeovers without lifecycle revival", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.prepareLaunch(hostRecord());
+  let record = writer.transitionLaunch({ type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, at: now });
+  for (let fence = 2; fence <= 3; fence++) {
+    record = writer.transitionLaunch({ type: "takeover_cleanup", launchId: "launch-1", ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, newOwnerId: `recovery:${fence}`, newFencingToken: fence, ownerExpiresAt: `2026-08-30T00:0${fence + 1}:00.000Z`, at: `2026-08-30T00:0${fence}:00.000Z` });
+    assert.equal(record.state, "cleanup_pending"); assert.equal(record.fencingToken, fence);
+  }
+  assert.equal(record.effects.find((effect) => effect.kind === "cleanup")!.takeovers!.length, 2);
+});
+
 test("SQLite host journal reopens with HMAC integrity and tamper fails closed", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-host-launch-")); const path = join(root, "sessions.sqlite"); const key = Buffer.alloc(32, 4);
   try {
     let kernel = openSqliteStreamingSessionStore(path, key); getStreamingSessionKernelWriter(kernel).prepareLaunch(hostRecord()); kernel.store.close();
     kernel = openSqliteStreamingSessionStore(path, key); assert.equal(kernel.store.readHostLaunch("launch-1")?.state, "prepared"); kernel.store.close();
+    kernel = openSqliteStreamingSessionStore(path, key, { readOnly: true });
+    assert.throws(() => getStreamingSessionKernelWriter(kernel).prepareLaunch({ ...hostRecord(), launchId: "launch-readonly", sessionId: "stream-readonly", effects: [{ ...hostRecord().effects[0], effectId: "isolate:launch-readonly" }] }), /read-only/i);
+    assert.throws(() => getStreamingSessionKernelWriter(kernel).transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now }), /read-only/i); kernel.store.close();
     const db = new DatabaseSync(path); db.prepare("UPDATE streaming_host_launches SET integrity = ? WHERE launch_id = ?").run("00", "launch-1"); db.close();
     kernel = openSqliteStreamingSessionStore(path, key); assert.throws(() => kernel.store.readHostLaunch("launch-1"), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record"); kernel.store.close();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("SQLite adoption faults expose only wholly pre- or post-adoption state", async () => {
-  for (const point of ["after_session_insert", "after_commit"] as const) {
+  for (const point of ["before_session_insert", "after_session_insert", "before_launch_handoff_update", "after_launch_handoff_update", "before_commit", "after_commit"] as const) {
     const root = await mkdtemp(join(tmpdir(), `runner-v2-adoption-${point}-`)); const path = join(root, "sessions.sqlite"); const key = Buffer.alloc(32, 9);
     let kernel: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
     try {
       let fired = false;
       kernel = openSqliteStreamingSessionStore(path, key, { adoptionFault: (actual) => { if (!fired && actual === point) { fired = true; throw new Error(`fault:${point}`); } } }); const writer = getStreamingSessionKernelWriter(kernel);
-      writer.prepareLaunch(hostRecord()); writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, leaseId: "lease-1", providerId: "fake", providerIdentity: "a".repeat(64), at: now }); writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now }); writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now }); const host = writer.transitionLaunch({ type: "verify_handshake", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, handshakeDigest: "b".repeat(64), at: now });
+      writer.prepareLaunch(hostRecord()); writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now }); writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now }); writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now }); const host = writer.transitionLaunch({ type: "verify_handshake", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, handshakeDigest: "b".repeat(64), at: now });
       const adoption = { launchId: "launch-1", ownerId: host.ownerId, fencingToken: 1, expectedRevision: host.revision, at: now, sessionRecord: activeSessionRecord("stream-1") };
       assert.throws(() => writer.commitAdoption(adoption), new RegExp(`fault:${point}`));
       assert.equal(kernel.store.readBySession("stream-1") !== undefined, point === "after_commit"); assert.equal(kernel.store.readHostLaunch("launch-1")?.state, point === "after_commit" ? "handed_off" : "handshake_verified");
@@ -172,7 +249,7 @@ test("SQLite reopen after every host boundary retains one exact owner and state"
   try {
     kernel = openSqliteStreamingSessionStore(path, key); getStreamingSessionKernelWriter(kernel).prepareLaunch(hostRecord()); kernel.store.close();
     const commands = [
-      { type: "bind_isolation", expectedRevision: 0, leaseId: "lease-1", providerId: "fake", providerIdentity: "a".repeat(64) },
+      { type: "bind_isolation", expectedRevision: 0, lease: leaseBinding() },
       { type: "begin_launch", expectedRevision: 1 },
       { type: "bind_backend", expectedRevision: 2, backendBinding: backendBinding() },
       { type: "verify_handshake", expectedRevision: 3, handshakeDigest: "b".repeat(64) },
@@ -182,6 +259,27 @@ test("SQLite reopen after every host boundary retains one exact owner and state"
       kernel = openSqliteStreamingSessionStore(path, key); const record = kernel.store.readHostLaunch("launch-1")!; assert.equal(record.ownerId, "host:run-1"); assert.equal(record.fencingToken, 1); kernel.store.close();
     }
   } finally { try { kernel?.store.close(); } catch {} await rm(root, { recursive: true, force: true }); }
+});
+
+test("durable SQL tables contain metadata only and reject every payload capability category", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-durable-scan-")); const path = join(root, "sessions.sqlite");
+  const kernel = openSqliteStreamingSessionStore(path, Buffer.alloc(32, 3));
+  let closed = false;
+  try {
+    const writer = getStreamingSessionKernelWriter(kernel);
+    writer.prepareLaunch(hostRecord()); writer.claim(activeSessionRecord("scan-session"));
+    writer.claimOutputCheckpoint({ recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: "scan-session", ownerId: "session-owner", fencingToken: 1, capacity: 4, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] });
+    for (const key of ["grant", "authorization", "command", "argv", "env", "secret", "credentials", "payload", "endpoint", "port", "channel", "writer", "handle", "capability"]) {
+      assert.throws(() => writer.prepareLaunch({ ...hostRecord(), [key]: "B1_PRIVATE_SENTINEL" }), StreamingSessionStoreError);
+    }
+    kernel.store.close(); closed = true; const db = new DatabaseSync(path, { readOnly: true });
+    try {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'streaming_%'").all() as Array<{ name: string }>;
+      assert.ok(tables.length >= 3);
+      const serialized = JSON.stringify(tables.flatMap(({ name }) => { assert.match(name, /^streaming_[a-z_]+$/); return db.prepare(`SELECT * FROM ${name}`).all(); }));
+      assert.doesNotMatch(serialized, /B1_PRIVATE_SENTINEL|"(?:argv|command|env|secret|payload|endpoint|port|channel|writer|handle|capability)"/);
+    } finally { db.close(); }
+  } finally { if (!closed) kernel.store.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 function hostRecord() {
@@ -200,6 +298,10 @@ function hostRecord() {
 
 function backendBinding() {
   return { registryId: "registry-1", backendId: "fake", implementationGeneration: "g1", implementationDigest: "c".repeat(64), attestationVersion: 1, attestationDigest: "d".repeat(64), opaqueIdentity: "opaque-1", birthFingerprint: { observedAt: now, discriminator: "birth-1" }, rootPid: 42, startedAt: now };
+}
+
+function leaseBinding() {
+  return { leaseId: "lease-1", providerId: "fake", invocationId: "invoke-1", providerIdentity: "a".repeat(64), acquiredAt: now, access: [] };
 }
 
 function activeSessionRecord(sessionId: string) {
