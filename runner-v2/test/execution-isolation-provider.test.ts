@@ -86,6 +86,8 @@ test("durable enforcement projection rejects invalid lifecycle, paths, aliases, 
       state([{ ...strict, access: [{ canonicalPath: "relative", mode: "write" }] }]),
       state([{ ...strict, access: [{ canonicalPath: root, mode: "read" }, { canonicalPath: root, mode: "write" }] }]),
       state([], [{ occurredAt: strict.occurredAt, providerId: "provider", cleanedCount: 1, blockerCount: 0, blockers: [] }]),
+      state([{ ...strict, status: "cleaned" }], [{ occurredAt: strict.occurredAt, providerId: "provider", cleanedCount: 1,
+        blockerCount: 0, blockers: [], operationId: "0".repeat(64), leaseIds: ["lease"] }]),
     ]) {
       await writeFile(path, JSON.stringify(value));
       await assert.rejects(readExecutionEnforcementState(path), (error) =>
@@ -108,6 +110,20 @@ test("durable enforcement projection preserves concurrent writes across OS proce
     const state = await readExecutionEnforcementState(statePath);
     assert.equal(state.records.length, 40);
     assert.deepEqual(new Set(state.records.map((record) => record.runId)), new Set(["run-left", "run-right"]));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("durable enforcement projection rolls beyond record capacity without invalid retained state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-enforcement-rolling-"));
+  const statePath = join(root, "state.json");
+  const barrier = join(root, "start");
+  try {
+    const child = execFileAsync(process.execPath, [tsxCli, enforcementWriter, statePath, join(root, "writer"), barrier, "rolling", "1005"]);
+    await writeFile(barrier, "go");
+    await child;
+    const state = await readExecutionEnforcementState(statePath);
+    assert.equal(state.records.length, 1_000);
+    assert.equal(state.records.every((record) => record.status === "unconfined_explicit_full"), true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -227,6 +243,31 @@ test("concurrent release, duplicate release, and authority revoke share one term
       }
     } finally { await fixture.close(); }
   }
+});
+
+test("provider-cleaned projection failure retains retry ownership without repeating cleanup", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const provider = fakeProvider("fixture-projection-retry");
+    const statePath = join(fixture.root, "projection-retry.json");
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({ stableProviderId: "fixture-projection-retry", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+    ]), { ...fixture.selectorOptions, statePath });
+    const selection = await selector.acquire({ permissionProfile: "project", intent: fixture.intent, grant: fixture.claims });
+    const valid = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
+    await writeFile(statePath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+    await assert.rejects(selector.release(selection), (error) =>
+      error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked");
+    await assert.rejects(selector.release(selection), (error) =>
+      error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked");
+    assert.equal(provider.releases, 1);
+    assert.equal(selector.activeLeases()[0]?.state, "released");
+    await writeFile(statePath, valid);
+    const retry = await Promise.allSettled([selector.release(selection), fixture.authority.revoke(fixture.grant, "completed")]);
+    assert.equal(retry.every((outcome) => outcome.status === "fulfilled"), true);
+    assert.equal(provider.releases, 1);
+    assert.deepEqual(selector.activeLeases(), []);
+  } finally { await fixture.close(); }
 });
 
 test("strict profiles fail typed before acquire for unavailable, partial, broken, expired, or false claims", async () => {
@@ -359,13 +400,13 @@ test("restart projection correlates multiple exact cleaned and blocked lease tra
       stableProviderId: "fixture-partial-recovery", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider,
     })]);
     const left = createExecutionIsolationSelector(registry, { ...first.selectorOptions, statePath });
-    const right = createExecutionIsolationSelector(registry, { ...second.selectorOptions, statePath });
     const [one, two] = await Promise.all([
       left.acquire({ permissionProfile: "project", intent: first.intent, grant: first.claims }),
-      right.acquire({ permissionProfile: "project", intent: { ...second.intent, invocationId: "invocation-2" }, grant: second.claims }),
+      left.acquire({ permissionProfile: "project", intent: { ...second.intent, invocationId: "invocation-2" }, grant: second.claims }),
     ]);
     assert.equal(one.enforcement, "write_confinement_exact_grant");
     assert.equal(two.enforcement, "write_confinement_exact_grant");
+    if (two.enforcement !== "write_confinement_exact_grant") throw new Error("fixture bypassed strict recovery");
     await left.recoverOwnedLeases();
     const reopened = await createExecutionIsolationSelector(createExecutionIsolationRegistry([]), { statePath }).enforcementState();
     const active = reopened.records.filter((record) => record.status === "active");
@@ -379,6 +420,11 @@ test("restart projection correlates multiple exact cleaned and blocked lease tra
     });
     assert.match(reopened.recoverySummaries?.at(-1)?.operationId ?? "", /^[a-f0-9]{64}$/);
     assert.deepEqual(new Set(reopened.recoverySummaries?.at(-1)?.leaseIds), new Set(terminal.map((record) => record.leaseId!)));
+    assert.deepEqual(left.activeLeases().map((lease) => lease.leaseId), [two.lease.leaseId]);
+    await first.authority.revoke(first.grant, "completed");
+    assert.equal(provider.releases, 0, "cleaned recovery must dispose its grant listener");
+    await second.authority.revoke(second.grant, "completed");
+    assert.equal(provider.releases, 1, "blocked recovery must retain its owned listener");
   } finally { await first.close(); await second.close(); }
 });
 
@@ -391,6 +437,9 @@ test("dishonest recovery counts, duplicates, identities, and contradictory trans
     };
     for (const result of [
       { cleaned: 1, blockers: [], transitions: [] },
+      { cleaned: 0, blockers: [], transitions: [{ ...exact, status: "blocked" as const, blocker: "hidden" }] },
+      { cleaned: 0, blockers: ["extra"], transitions: [] },
+      { cleaned: 0, blockers: ["wrong"], transitions: [{ ...exact, status: "blocked" as const, blocker: "actual" }] },
       { cleaned: 2, blockers: [], transitions: [exact, exact] },
       { cleaned: 1, blockers: [], transitions: [{ ...exact, providerId: "other" }] },
       { cleaned: 1, blockers: ["contradiction"], transitions: [exact, { ...exact, status: "blocked" as const, blocker: "contradiction" }] },

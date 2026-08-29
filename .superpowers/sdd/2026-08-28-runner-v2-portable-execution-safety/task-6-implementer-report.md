@@ -255,3 +255,41 @@ Read and reproduced `task-6-review-3.md` before editing. Both Important areas we
 - Final Docker label listing and `runner-oci-*`/`runner-enforcement-*` TEMP queries returned empty. No live fixture process or lock residue remained.
 
 Residual boundary remains Task 7 process-family routing only. No database migration, external install/pull, or Windows-only product semantic was added.
+
+## Governed Fix Round 4/5 — review 4
+
+Verified every `task-6-review-4.md` probe against HEAD before repair; all four findings reproduced and were valid.
+
+### Terminal evidence retry ownership
+
+- Per-selection terminal state now distinguishes active provider ownership, provider cleanup in flight, provider-cleaned/projection-pending, and terminal. Concurrent release/revoke callers share the same promise. Provider success is remembered before projection; projection failure leaves the released lease owned and listener attached. Repeated attempts retry evidence only, never provider cleanup. After evidence persists, active state and listener clear atomically from the selector's perspective.
+- Reviewer probe test: corrupt projection after acquire, release returns typed `isolation_recovery_blocked`, repeat returns the same class with provider releases still 1 and visible state `released`; restore projection and race retry with issuer revoke, both settle, releases remains 1, active becomes 0.
+- Recovery removes only active leases explicitly named by validated cleaned descriptors and disposes those listeners only after recovery projection succeeds. Blocked/unmatched leases remain owned/listened. The partial two-lease fixture proves cleaned issuer revoke does not call provider, while blocked issuer revoke still does.
+- Mutation RED: inserted active deletion before terminal projection. `npx tsx --test --test-name-pattern="provider-cleaned projection" runner-v2/test/execution-isolation-provider.test.ts` failed 0/1 with `isolation_lease_invalid` on evidence retry. Reverted; GREEN 1/1.
+
+### Recovery honesty and projection integrity
+
+- Blocked transitions now correlate one-to-one with the exact public blocker reasons; hidden, missing, extra, or mismatched blockers fail typed, persist nothing, and retain active ownership. Cleaned count equals exact cleaned descriptors, all lease IDs are unique, identities match, and no unmatched lease is deleted.
+- Strict prelaunch selection blockers use the separate closed `selection_blocked` shape. Provider `blocked` records require provider/digest/grant/lease identity and correlate image/access/provider/grant identity to their active record when retained. Full cannot carry strict/provider fields.
+- Recovery operation digests are recomputed from canonical provider, timestamp, sorted exact lease IDs, and cleaned/blocker counts. Arbitrary 64-hex digests reject. Summaries resolve all exact terminal lease IDs.
+- Retention removes complete oldest recovery groups (summary plus referenced terminals) or independent records; the complete candidate is reparsed before atomic write. A 1,005-append fixture reopens as a valid deterministic 1,000-record state. Existing two-process atomic writers remain green.
+- Natural reviewer RED covered hidden blocked transitions with empty blockers and arbitrary digest acceptance. Expanded dishonest/semantic tables are GREEN.
+
+### OCI capacity and output schema
+
+- Under the durable portable lock, acquire validates existing state and refuses at 1,000 before image or create CLI action. Candidate writes enforce at most 1,000 leases and 1 MiB before atomic replace. A post-create candidate failure force-removes the exact newly created owned container and preserves original bytes.
+- `acquiredAt` and optional `expiresAt` must be finite canonical ISO timestamps; a past canonical expiry remains readable for recovery, malformed expiry fails before CLI and does not rewrite state.
+- Boundary fixture: 999 -> one create -> readable 1,000; 1,000 -> zero CLI delta and byte-identical state; near-1MiB valid 999 -> one create -> byte-bound AggregateError containing the exact blocker -> one exact rm/no orphan/original unchanged; malformed expiry -> zero CLI/unchanged.
+- Mutation RED: changed capacity guard from `>=` to `>`. Exact capacity test failed 0/1 because the 1,000 state launched and reached post-create failure instead of pre-create refusal. Reverted; GREEN 1/1.
+
+### Literal validation evidence
+
+- Focused Task 6: `npx tsx --test --test-reporter=dot runner-v2/test/execution-grants.test.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts runner-v2/test/tool-broker.test.ts runner-v2/test/runner-capabilities-config.test.ts runner-v2/test/runner-capability-contract.test.ts runner-v2/test/native-build-capabilities.test.ts` — exit 0, 86/86 pass.
+- OCI detailed/real Docker: `npx tsx --test runner-v2/test/oci-execution-isolation-provider.test.ts` — 12/12 pass, 0 fail, 0 skip; all three real-Docker fixtures pass.
+- Broad CLI/native: `npx tsx --test --test-reporter=dot runner-v2/test/cli-capabilities-config.test.ts runner-v2/test/native-build-capabilities.test.ts runner-v2/test/native-build-initialization.test.ts` — 51/51 pass.
+- Inherited Task 1–5: `npx tsx --test --test-reporter=dot runner-v2/test/execution-safety-contracts.test.ts runner-v2/test/child-environment.test.ts runner-v2/test/bounded-output-spool.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/posix-process-backend.test.ts runner-v2/test/windows-process-backend.test.ts runner-v2/test/managed-process.test.ts` — 192/192 pass.
+- `npm run typecheck:runner-v2` and targeted ESLint over all Round 4 source/tests/fixture — exit 0.
+- `git diff --check` — exit 0, autocrlf notices only. Static scan found no exact Node pin, install command, ambient environment forwarding, Task 7 route, or platform-specific product semantic.
+- Final Runner-owned Docker label listing and `runner-oci-*`/`runner-enforcement-*` TEMP/lock queries returned empty; no fixture process remained.
+
+Residual risk remains only canonical Task 7 process-family routing. No Task 7 implementation or universal-boundary claim was introduced.

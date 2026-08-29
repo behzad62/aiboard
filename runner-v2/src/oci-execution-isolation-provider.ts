@@ -224,7 +224,10 @@ export function createOciExecutionIsolationProvider(
         throw ociError("oci_grant_unrepresentable", "OCI request does not match its exact grant.");
       }
       const representation = await representGrant(request);
-      await withStateLock(statePath, async () => { await readLeaseState(statePath); });
+      await withStateLock(statePath, async () => {
+        const existing = await readLeaseState(statePath);
+        if (existing.length >= MAX_DURABLE_LEASES) throw ociError("oci_create_failed", "OCI durable lease capacity is exhausted.");
+      });
       const acquisitionImageId = await attestImage(runCli, image);
       const leaseId = `oci-lease-${randomUUID()}`;
       const containerName = `aiboard-${createHash("sha256")
@@ -338,14 +341,16 @@ export function createOciExecutionIsolationProvider(
         listedDurableLeases.add(owned);
         const identity = await inspectOwnedContainer(runCli, containerId);
         if (!matchesOwnedScope(identity, providerId, owned)) {
-          blockers.push(`Labelled container ${containerId} failed owned identity validation.`);
-          transitions.push(cleanupTransition(owned, "blocked", "Owned container identity validation failed."));
+          const blocker = `Labelled container ${containerId} failed owned identity validation.`;
+          blockers.push(blocker);
+          transitions.push(cleanupTransition(owned, "blocked", blocker));
           continue;
         }
         const removed = await runCli(["rm", "--force", containerId]);
         if (removed.exitCode !== 0) {
-          blockers.push(`Owned container ${containerId} cleanup failed: ${bounded(removed.stderr)}.`);
-          transitions.push(cleanupTransition(owned, "blocked", `Owned container cleanup failed: ${bounded(removed.stderr)}.`));
+          const blocker = `Owned container ${containerId} cleanup failed: ${bounded(removed.stderr)}.`;
+          blockers.push(blocker);
+          transitions.push(cleanupTransition(owned, "blocked", blocker));
           continue;
         }
         remaining.delete(owned);
@@ -361,10 +366,9 @@ export function createOciExecutionIsolationProvider(
           transitions.push(cleanupTransition(owned, "cleaned"));
           continue;
         }
-        blockers.push(
-          `Durable container ${owned.containerId} was omitted from the owned listing and its absence could not be verified: ${absence.detail}.`,
-        );
-        transitions.push(cleanupTransition(owned, "blocked", `Owned container absence could not be verified: ${absence.detail}.`));
+        const blocker = `Durable container ${owned.containerId} was omitted from the owned listing and its absence could not be verified: ${absence.detail}.`;
+        blockers.push(blocker);
+        transitions.push(cleanupTransition(owned, "blocked", blocker));
       }
       await writeLeaseState(statePath, [...remaining]);
       return { cleaned, blockers, transitions };
@@ -623,10 +627,18 @@ async function readLeaseState(path: string): Promise<DurableOciLease[]> {
       text = buffer.subarray(0, bytesRead).toString("utf8");
     } finally { await handle.close(); }
     const parsed = JSON.parse(text) as unknown;
-    if (!Array.isArray(parsed) || parsed.length > MAX_DURABLE_LEASES) throw new Error();
-    const leaseIds = new Set<string>();
-    const containerIds = new Set<string>();
-    return parsed.map((value) => {
+    return parseLeaseState(parsed, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw ociError("oci_recovery_blocked", "OCI durable lease state is unreadable.", error);
+  }
+}
+
+function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
+  if (!Array.isArray(value) || value.length > MAX_DURABLE_LEASES) throw new Error();
+  const leaseIds = new Set<string>();
+  const containerIds = new Set<string>();
+  return value.map((value) => {
       const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId"]);
       const lease = exactLeaseObject(row.lease, ["leaseId", "providerId", "invocationId", "grantId", "grantedAccess", "acquiredAt", "expiresAt", "state", "providerIdentity", "immutableImageId"]);
       const textField = (input: unknown, pattern?: RegExp) => {
@@ -641,7 +653,7 @@ async function readLeaseState(path: string): Promise<DurableOciLease[]> {
           !Array.isArray(lease.grantedAccess) || lease.grantedAccess.length > MAX_DURABLE_ACCESS ||
           typeof lease.providerIdentity !== "string" || !/^[a-f0-9]{64}$/.test(lease.providerIdentity) ||
           typeof lease.immutableImageId !== "string" || !/^sha256:[a-f0-9]{64}$/.test(lease.immutableImageId) ||
-          !Number.isFinite(Date.parse(String(lease.acquiredAt)))) throw new Error();
+          !canonicalTimestamp(lease.acquiredAt) || (lease.expiresAt !== undefined && !canonicalTimestamp(lease.expiresAt))) throw new Error();
       const accessSeen = new Map<string, string>();
       const access = lease.grantedAccess.map((entry) => {
         const item = exactLeaseObject(entry, ["canonicalPath", "mode"]);
@@ -665,11 +677,7 @@ async function readLeaseState(path: string): Promise<DurableOciLease[]> {
         },
         containerId, containerName, runId,
       };
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw ociError("oci_recovery_blocked", "OCI durable lease state is unreadable.", error);
-  }
+  });
 }
 
 function exactLeaseObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -686,13 +694,21 @@ function pathProviderId(path: string): string {
 }
 
 async function writeLeaseState(path: string, leases: readonly DurableOciLease[]): Promise<void> {
+  if (leases.length > MAX_DURABLE_LEASES) throw ociError("oci_recovery_blocked", "OCI durable lease capacity is exceeded.");
+  const serialized = JSON.stringify(leases);
+  if (Buffer.byteLength(serialized) > MAX_LEASE_STATE_BYTES) throw ociError("oci_recovery_blocked", "OCI durable lease state exceeds its byte bound.");
+  parseLeaseState(JSON.parse(serialized), path);
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, JSON.stringify(leases), { flag: "wx", mode: 0o600 });
+    await writeFile(temporary, serialized, { flag: "wx", mode: 0o600 });
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });
   }
+}
+
+function canonicalTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 512 && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
 export function createNativeOciCli(options: {

@@ -6,7 +6,7 @@ import {
   createExecutionIsolationSelector,
 } from "../../src/execution-isolation-provider.js";
 
-const [statePath, workspace, barrier, writer] = process.argv.slice(2);
+const [statePath, workspace, barrier, writer, countText] = process.argv.slice(2);
 if (!statePath || !workspace || !barrier || !writer) throw new Error("missing fixture argument");
 await mkdir(workspace, { recursive: true });
 while (true) {
@@ -15,7 +15,9 @@ while (true) {
 }
 const authority = createExecutionGrantAuthority();
 const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([]), { statePath });
-for (let index = 0; index < 20; index += 1) {
+const count = countText === undefined ? 20 : Number(countText);
+if (!Number.isSafeInteger(count) || count < 1 || count > 2_000) throw new Error("invalid fixture count");
+for (let index = 0; index < count; index += 1) {
   const binding = {
     runId: `run-${writer}`, sessionId: `session-${writer}`,
     actor: { role: "worker" as const, id: `worker-${writer}` },

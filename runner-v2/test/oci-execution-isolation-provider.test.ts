@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
@@ -345,6 +346,66 @@ test("OCI durable lease ingestion rejects forged or oversized state before any C
     }), /durable lease state is unreadable/i);
     assert.equal(calls.length, before, "invalid durable state must trigger no inspect, rm, image, or create CLI action");
   } finally { await first.close(); await second.close(); }
+});
+
+test("OCI durable lease capacity refuses before create and bounds post-create persistence", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const providerId = "oci-capacity";
+    const provider = createOciExecutionIsolationProvider({ providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli: fakeCli(calls) });
+    await provider.attest();
+    const statePath = join(fixture.state, `oci-leases-${providerId}.json`);
+    const row = (index: number, padding = "") => {
+      const leaseId = `lease-${index}`; const runId = `run-${index}-${padding}`; const invocationId = `inv-${index}`;
+      return {
+        lease: { leaseId, providerId, invocationId, grantId: `grant-${index}`, grantedAccess: fixture.claims.access,
+          acquiredAt: "2026-08-28T10:00:00.000Z", state: "active", providerIdentity: "a".repeat(64), immutableImageId: `sha256:${"1".repeat(64)}` },
+        containerId: `container-${index}`, containerName: `aiboard-${createHash("sha256").update(`${providerId}\0${runId}\0${invocationId}\0${leaseId}`).digest("hex").slice(0, 32)}`, runId,
+      };
+    };
+    const rows = Array.from({ length: 999 }, (_, index) => row(index));
+    await writeFile(statePath, JSON.stringify(rows));
+    const request = { providerId, implementationDigest: "a".repeat(64), intent: fixture.intent, grant: fixture.claims };
+    await provider.acquire(request);
+    assert.equal((JSON.parse(readFileSync(statePath, "utf8")) as unknown[]).length, 1_000);
+    const atCapacity = readFileSync(statePath, "utf8");
+    const beforeCapacity = calls.length;
+    await assert.rejects(provider.acquire(request), /capacity is exhausted/i);
+    assert.equal(calls.length, beforeCapacity);
+    assert.equal(readFileSync(statePath, "utf8"), atCapacity);
+
+    let padded = rows;
+    let selectedWidth = 0;
+    for (let width = 1; width <= 512; width += 1) {
+      const candidate = Array.from({ length: 999 }, (_, index) => row(index, "x".repeat(width)));
+      const bytes = Buffer.byteLength(JSON.stringify(candidate));
+      if (bytes < 1024 * 1024) { padded = candidate; selectedWidth = width; }
+      else break;
+    }
+    const appendedBytes = () => Buffer.byteLength(JSON.stringify([...padded, row(2_000)]));
+    if (appendedBytes() <= 1024 * 1024) {
+      const extra = 1024 * 1024 - appendedBytes() + 1;
+      padded[0] = row(0, "x".repeat(selectedWidth + extra));
+    }
+    const paddedText = JSON.stringify(padded);
+    assert.ok(Buffer.byteLength(paddedText) < 1024 * 1024);
+    assert.ok(Buffer.byteLength(JSON.stringify([...padded, row(2_000)])) > 1024 * 1024);
+    await writeFile(statePath, paddedText);
+    const creates = calls.filter((call) => call.args[0] === "create").length;
+    await assert.rejects(provider.acquire(request), (error) => error instanceof AggregateError &&
+      error.errors.some((item) => item instanceof Error && /byte bound/i.test(item.message)));
+    assert.equal(calls.filter((call) => call.args[0] === "create").length, creates + 1);
+    assert.equal(calls.filter((call) => call.args[0] === "rm").length >= 1, true);
+    assert.equal(readFileSync(statePath, "utf8"), paddedText);
+
+    const malformed = JSON.stringify([{ ...row(0), lease: { ...row(0).lease, expiresAt: "not-a-time" } }]);
+    await writeFile(statePath, malformed);
+    const beforeExpiry = calls.length;
+    await assert.rejects(provider.recoverOwned(), /durable lease state is unreadable/i);
+    assert.equal(calls.length, beforeExpiry);
+    assert.equal(readFileSync(statePath, "utf8"), malformed);
+  } finally { await fixture.close(); }
 });
 
 test("real Docker fixture denies outside writes, symlink escalation, network, and cleans a live child", async (t) => {
