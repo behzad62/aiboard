@@ -45,7 +45,8 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
 /** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
 export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
-  private readonly controls = new Map<string, Promise<void>>();
+  private readonly controls = new Map<string, JobControlLane>();
+  private readonly releasedProcesses = new Set<string>();
   constructor(private readonly service: WindowsJobProcessService) {}
   async probe(): Promise<unknown> {
     if (!(await this.service.probeJobObjectAvailability()))
@@ -135,25 +136,52 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   }
   async release(binding: ProcessBackendBinding): Promise<unknown> {
     const processId = jobIdentity(binding).processId;
-    await this.controls.get(processId);
-    this.controls.delete(processId);
-    this.offsets.delete(processId);
+    const lane = this.controls.get(processId);
+    if (!lane) {
+      this.rememberReleased(processId);
+      this.offsets.delete(processId);
+      return { released: true };
+    }
+    if (!lane.release) {
+      lane.releaseRequested = true;
+      const release = lane.tail.catch(() => undefined).then(() => {
+        this.offsets.delete(processId);
+        this.rememberReleased(processId);
+        if (this.controls.get(processId) === lane) this.controls.delete(processId);
+      });
+      lane.release = release;
+    }
+    await lane.release;
     return { released: true };
   }
 
   private async control<T>(processId: string, action: () => Promise<T>): Promise<T> {
-    const previous = this.controls.get(processId) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => { release = resolve; });
-    const queued = previous.catch(() => undefined).then(() => current);
-    this.controls.set(processId, queued);
-    await previous.catch(() => undefined);
-    try { return await action(); }
-    finally {
-      release();
-      if (this.controls.get(processId) === queued) this.controls.delete(processId);
+    if (this.releasedProcesses.has(processId)) throw new Error("Windows Job control was requested after release.");
+    let lane = this.controls.get(processId);
+    if (!lane) {
+      lane = { tail: Promise.resolve(), releaseRequested: false };
+      this.controls.set(processId, lane);
+    }
+    if (lane.releaseRequested) throw new Error("Windows Job control was requested while release is pending.");
+    const result = lane.tail.catch(() => undefined).then(action);
+    lane.tail = result.then(() => undefined, () => undefined);
+    return await result;
+  }
+
+  private rememberReleased(processId: string): void {
+    this.releasedProcesses.add(processId);
+    while (this.releasedProcesses.size > 4_096) {
+      const oldest = this.releasedProcesses.values().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.releasedProcesses.delete(oldest);
     }
   }
+}
+
+interface JobControlLane {
+  tail: Promise<void>;
+  releaseRequested: boolean;
+  release?: Promise<void>;
 }
 
 interface JobIdentity { processId: string; runId: string; sessionId: string; startedAt: string }

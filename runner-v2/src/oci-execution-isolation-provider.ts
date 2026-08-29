@@ -102,6 +102,16 @@ export interface OciExecutionIsolationProviderOptions {
   readonly clock?: () => Date;
   /** Injectable private-file cleanup seam for deterministic fault testing. */
   readonly removeEnvironmentHandoff?: (path: string, root: string) => Promise<void>;
+  /** Injectable private-file write seam for deterministic fault testing. */
+  readonly writeEnvironmentHandoff?: (prepared: PreparedEnvironmentHandoff) => Promise<void>;
+  /** Test/fault barrier around the two durable create boundaries. */
+  readonly acquireBarrier?: (stage: "after_create_journal" | "after_environment_handoff") => Promise<void>;
+}
+
+export interface PreparedEnvironmentHandoff {
+  readonly path: string;
+  readonly root: string;
+  readonly contents: string;
 }
 
 interface DurableOciLease {
@@ -177,6 +187,7 @@ export function createOciExecutionIsolationProvider(
   const environmentHandoffRoot = join(stateDirectory, "environment-handoffs");
   const cli = options.cli ?? createNativeOciCli();
   const removeEnvironmentHandoff = options.removeEnvironmentHandoff ?? removePrivateEnvironmentHandoff;
+  const writeEnvironmentHandoff = options.writeEnvironmentHandoff ?? writePrivateEnvironmentHandoff;
   const clock = options.clock ?? (() => new Date());
   let cliPath: string | undefined;
   let cliDigest: string | undefined;
@@ -311,10 +322,11 @@ export function createOciExecutionIsolationProvider(
       args.push("--network", request.grant.networkApproved && options.allowNetwork === true
         ? "bridge" : "none");
       for (const mount of representation.mounts) args.push("--mount", mount);
-      const environmentFile = await createPrivateEnvironmentHandoff(
+      const environmentHandoff = preparePrivateEnvironmentHandoff(
         environmentHandoffRoot,
         request.environment ?? {},
       );
+      const environmentFile = environmentHandoff?.path;
       if (environmentFile) args.push("--env-file", environmentFile);
       args.push("--workdir", representation.cwd, acquisitionImageId, representation.executable);
       args.push(...representation.arguments);
@@ -342,11 +354,15 @@ export function createOciExecutionIsolationProvider(
           await writeLeaseState(statePath, leases);
         });
       } catch (error) {
-        if (environmentFile) await removeEnvironmentHandoff(environmentFile, environmentHandoffRoot).catch(() => undefined);
         throw ociError("oci_recovery_blocked", "Could not durably journal OCI create intent before launch.", error);
       }
       let containerId: string;
       try {
+        await options.acquireBarrier?.("after_create_journal");
+        if (environmentHandoff) {
+          await writeEnvironmentHandoff(environmentHandoff);
+          await options.acquireBarrier?.("after_environment_handoff");
+        }
         const created = await runCli(args);
         if (created.exitCode !== 0) {
           throw ociError("oci_create_failed", `OCI container create failed: ${bounded(created.stderr)}.`);
@@ -354,6 +370,11 @@ export function createOciExecutionIsolationProvider(
         containerId = created.stdout.trim();
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(containerId)) {
           throw ociError("oci_create_failed", "OCI create returned an invalid container identity.");
+        }
+        const returnedIdentity = await inspectOwnedContainer(runCli, containerId);
+        if (!matchesOwnedScope(returnedIdentity, providerId, creating) ||
+            returnedIdentity?.containerName !== containerName) {
+          throw ociError("oci_create_failed", "OCI create returned a container that failed exact identity re-attestation.");
         }
         await withStateLock(statePath, async () => {
           const leases = await readLeaseState(statePath);
@@ -697,6 +718,7 @@ async function representGrant(request: ExecutionIsolationAcquireRequest): Promis
 interface InspectedOwnedContainer {
   readonly labels: Record<string, unknown>;
   readonly imageId: string;
+  readonly containerName: string;
 }
 
 async function inspectOwnedContainer(
@@ -709,9 +731,12 @@ async function inspectOwnedContainer(
     const labels = JSON.parse(inspected.stdout) as unknown;
     if (!labels || typeof labels !== "object" || Array.isArray(labels)) return undefined;
     const image = await runCli(["inspect", "--format", "{{.Image}}", containerId]);
+    const name = await runCli(["inspect", "--format", "{{.Name}}", containerId]);
     const imageId = image.stdout.trim();
-    return image.exitCode === 0 && /^sha256:[a-f0-9]{64}$/.test(imageId)
-      ? { labels: labels as Record<string, unknown>, imageId } : undefined;
+    const containerName = name.stdout.trim().replace(/^\//, "");
+    return image.exitCode === 0 && name.exitCode === 0 && containerName.length > 0 &&
+      /^sha256:[a-f0-9]{64}$/.test(imageId)
+      ? { labels: labels as Record<string, unknown>, imageId, containerName } : undefined;
   } catch {
     return undefined;
   }
@@ -745,6 +770,7 @@ async function discoverExactNamedContainer(
     return { state: "blocked", detail: `Exact OCI identity inspection threw: ${bounded(error)}.` };
   }
   return matchesOwnedScope(identity, providerId, owned)
+      && identity?.containerName === containerName
     ? { state: "found", containerId }
     : { state: "blocked", detail: `Exact named container ${containerName} failed owned identity validation.` };
 }
@@ -1096,10 +1122,10 @@ function bounded(value: unknown): string {
   return text.length <= 512 ? text : `${text.slice(0, 512)}…`;
 }
 
-async function createPrivateEnvironmentHandoff(
+function preparePrivateEnvironmentHandoff(
   root: string,
   environment: Readonly<Record<string, string>>,
-): Promise<string | undefined> {
+): PreparedEnvironmentHandoff | undefined {
   const entries = Object.entries(environment).sort(([left], [right]) => left.localeCompare(right));
   if (entries.length === 0) return undefined;
   const lines = entries.map(([name, value]) => {
@@ -1111,16 +1137,21 @@ async function createPrivateEnvironmentHandoff(
     }
     return `${name}=${value}`;
   });
-  await mkdir(root, { recursive: true, mode: 0o700 });
   const path = join(root, `environment-${randomUUID()}.env`);
+  return { path, root, contents: `${lines.join("\n")}\n` };
+}
+
+async function writePrivateEnvironmentHandoff(
+  prepared: PreparedEnvironmentHandoff,
+): Promise<void> {
+  await mkdir(prepared.root, { recursive: true, mode: 0o700 });
   let handle;
   try {
-    handle = await open(path, "wx", 0o600);
-    await handle.writeFile(`${lines.join("\n")}\n`, "utf8");
+    handle = await open(prepared.path, "wx", 0o600);
+    await handle.writeFile(prepared.contents, "utf8");
     await handle.sync();
-    return path;
   } catch (error) {
-    await rm(path, { force: true }).catch(() => undefined);
+    await rm(prepared.path, { force: true }).catch(() => undefined);
     throw error;
   } finally {
     await handle?.close();

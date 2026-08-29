@@ -226,6 +226,27 @@ test("Windows launch rollback persists a recoverable blocker when live-superviso
   }
 });
 
+test("Windows launch rollback retries transient identity uncertainty before proving empty", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-transient-launch-"));
+  let inspections = 0;
+  const operations: NativeProcessOperations = {
+    inspectProcessBirth: () => ++inspections <= 2 ? { state: "unknown" } : { state: "absent" },
+    listPosixGroup: () => undefined,
+    signal: () => assert.fail("transient launch cleanup must not signal an unverified identity"),
+  };
+  const backend = createWindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 5, operations });
+  const evidence = join(root, "identity");
+  mkdirSync(evidence);
+  writePortableState(evidence, { launchEffect: "not_started", rootProcess: null, knownProcesses: [] });
+  const rollback = backend as unknown as { cleanupFailedLaunch(identity: ReturnType<typeof portableIdentity>): Promise<void> };
+  try {
+    await rollback.cleanupFailedLaunch(portableIdentity(evidence, "supervisor-birth"));
+    assert.ok(inspections >= 3);
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
 test("Windows launch rollback preserves an immediate blocker when the supervisor exited with an owned descendant", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-dead-supervisor-"));
   const operations: NativeProcessOperations = {
@@ -272,11 +293,31 @@ test("Windows portable launch failure verifies owned cleanup instead of killing 
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-launch-cleanup-"));
   const backend = createWindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 20 });
   try {
-    await assert.rejects(backend.launch({
-      ...request([]),
-      intent: { ...request([]).intent, executable: join(root, "missing-executable.exe") },
-    }), /launch|process|supervisor|cleanup|ENOENT/i);
-    assert.deepEqual(readdirSync(root), []);
+    const failures = await Promise.all(Array.from({ length: 4 }, async (_, index) => {
+      try {
+        await backend.launch({
+          ...request([]),
+          intent: {
+            ...request([]).intent,
+            invocationId: `missing-executable-${index}`,
+            executable: join(root, `missing-executable-${index}.exe`),
+          },
+        });
+        assert.fail("missing executable unexpectedly launched");
+      } catch (error) {
+        assert.match(error instanceof Error ? error.message : String(error), /launch|process|supervisor|cleanup|ENOENT/i);
+        return error;
+      }
+    }));
+    assert.equal(failures.length, 4);
+    const residue = readdirSync(root);
+    assert.deepEqual(residue, [], JSON.stringify({
+      failures: failures.map((error) => error instanceof Error ? error.message : String(error)),
+      residue: residue.map((entry) => ({
+        entry,
+        state: existsSync(join(root, entry, "state.json")) ? readFileSync(join(root, entry, "state.json"), "utf8") : "missing",
+      })),
+    }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -509,6 +550,61 @@ test("Windows Job serializes ownership observation with cancellation control", a
   assert.deepEqual(parseProcessReconciliation(await observation), { state: "exited", exitCode: 143, signal: "SIGTERM" });
 });
 
+test("Windows Job release atomically closes its control lane against late operations", async () => {
+  let releaseObservation!: () => void;
+  const barrier = new Promise<void>((resolve) => { releaseObservation = resolve; });
+  let reconciliationActive = false;
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    readOutputSince: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+    reconcileOwnership: async () => {
+      reconciliationActive = true;
+      await barrier;
+      reconciliationActive = false;
+      return stoppedJobSnapshot("job-release-lane");
+    },
+    signal: async () => stoppedJobSnapshot("job-release-lane"),
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const binding = jobBinding("job-release-lane");
+  const observation = backend.observe(binding, async () => undefined, fence);
+  while (!reconciliationActive) await new Promise((resolve) => setImmediate(resolve));
+
+  const firstRelease = backend.release(binding);
+  const concurrentRelease = backend.release(binding);
+  await assert.rejects(backend.verifyEmpty(binding), /release is pending/i);
+  await assert.rejects(backend.signal(binding, "terminate"), /release is pending/i);
+  releaseObservation();
+  await observation;
+  assert.deepEqual(await Promise.all([firstRelease, concurrentRelease]), [{ released: true }, { released: true }]);
+  await assert.rejects(backend.reconcile(binding).then((result) => {
+    if ((result as { state?: string }).state === "outcome_unknown") throw new Error("control requested after release");
+    return result;
+  }), /after release/i);
+});
+
+test("Windows Job control lane advances after an operation error and still releases", async () => {
+  let fail = true;
+  let signalCalls = 0;
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    readOutputSince: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+    reconcileOwnership: async () => {
+      if (fail) { fail = false; throw new Error("injected ownership failure"); }
+      return stoppedJobSnapshot("job-release-error");
+    },
+    signal: async () => { signalCalls += 1; return stoppedJobSnapshot("job-release-error"); },
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const binding = jobBinding("job-release-error");
+  await assert.rejects(backend.observe(binding, async () => undefined, fence), /injected ownership failure/);
+  assert.equal(parseProcessSignalResult(await backend.signal(binding, "terminate")).state, "exited");
+  assert.equal(signalCalls, 1);
+  assert.deepEqual(await backend.release(binding), { released: true });
+});
+
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
 function request(args: string[]) {
   return {
@@ -628,5 +724,20 @@ function jobBinding(processId: string) {
       startedAt,
     }),
     backendId: "runner-windows-job-v1",
+  };
+}
+
+function stoppedJobSnapshot(processId: string) {
+  return {
+    processId,
+    pid: 9001,
+    status: "stopped" as const,
+    exitCode: 0,
+    signal: null,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    stdout: "",
+    stderr: "",
+    ownershipReleased: true,
   };
 }

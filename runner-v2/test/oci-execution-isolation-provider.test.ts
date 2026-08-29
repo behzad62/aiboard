@@ -295,6 +295,148 @@ test("OCI pre-effect create journal recovers every pre-identity failure without 
   }
 });
 
+test("OCI create journal owns absent and present handoffs across crash barriers", async (t) => {
+  for (const stage of ["after_create_journal", "after_environment_handoff"] as const) {
+    await t.test(stage, async () => {
+      const fixture = await ociFixture();
+      const calls: OciCliInvocation[] = [];
+      const cli = fakeCli(calls);
+      let entered!: () => void;
+      let resume!: () => void;
+      const enteredBarrier = new Promise<void>((resolve) => { entered = resolve; });
+      const resumeBarrier = new Promise<void>((resolve) => { resume = resolve; });
+      const providerId = `oci-crash-barrier-${stage}`;
+      const statePath = join(fixture.state, `oci-leases-${providerId}.json`);
+      let acquisition: Promise<unknown> | undefined;
+      try {
+        const provider = createOciExecutionIsolationProvider({
+          providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
+          acquireBarrier: async (current) => {
+            if (current !== stage) return;
+            entered();
+            await resumeBarrier;
+            throw new Error(`injected crash at ${stage}`);
+          },
+        });
+        await provider.attest();
+        acquisition = provider.acquire({
+          providerId, implementationDigest: "a".repeat(64), intent: fixture.intent, grant: fixture.claims,
+          environment: { APPROVED_SECRET: "crash-private-value" },
+        });
+        await enteredBarrier;
+        const durable = JSON.parse(readFileSync(statePath, "utf8")) as Array<{ createStage: string; environmentHandoffPath: string }>;
+        assert.equal(durable[0]?.createStage, "creating");
+        assert.equal(readFileSync(statePath, "utf8").includes("crash-private-value"), false);
+        assert.equal(existsSync(durable[0]!.environmentHandoffPath), stage === "after_environment_handoff");
+        assert.equal(calls.some((call) => call.args[0] === "create"), false);
+
+        const restarted = createOciExecutionIsolationProvider({
+          providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
+        });
+        await restarted.attest();
+        const recovered = await restarted.recoverOwned();
+        assert.deepEqual(recovered.blockers, []);
+        assert.equal(recovered.transitions?.length, 1);
+        await restarted.acknowledgeRecovery!(recovered.transitions ?? []);
+        assert.equal(readFileSync(statePath, "utf8"), "[]");
+        assert.equal(existsSync(join(fixture.state, "environment-handoffs")), false);
+        resume();
+        await assert.rejects(acquisition);
+      } finally {
+        resume();
+        await acquisition?.catch(() => undefined);
+        await fixture.close();
+      }
+    });
+  }
+});
+
+test("OCI file-write plus cleanup failure retains its pre-effect journal for restart", async () => {
+  const fixture = await ociFixture();
+  const calls: OciCliInvocation[] = [];
+  const cli = fakeCli(calls);
+  const providerId = "oci-write-cleanup-fault";
+  const statePath = join(fixture.state, `oci-leases-${providerId}.json`);
+  try {
+    const provider = createOciExecutionIsolationProvider({
+      providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
+      writeEnvironmentHandoff: async (prepared) => {
+        await mkdir(prepared.root, { recursive: true });
+        await writeFile(prepared.path, prepared.contents, { mode: 0o600 });
+        throw new Error("injected environment handoff write failure");
+      },
+      removeEnvironmentHandoff: async () => { throw new Error("injected environment handoff cleanup failure"); },
+    });
+    await provider.attest();
+    await assert.rejects(provider.acquire({
+      providerId, implementationDigest: "a".repeat(64), intent: fixture.intent, grant: fixture.claims,
+      environment: { APPROVED_SECRET: "write-private-value" },
+    }), (error: unknown) => (error as { code?: string }).code === "oci_recovery_blocked");
+    const durable = JSON.parse(readFileSync(statePath, "utf8")) as Array<{ createStage: string; environmentHandoffPath: string }>;
+    assert.equal(durable[0]?.createStage, "creating");
+    assert.equal(existsSync(durable[0]!.environmentHandoffPath), true);
+    assert.equal(readFileSync(statePath, "utf8").includes("write-private-value"), false);
+    assert.equal(calls.some((call) => call.args[0] === "create"), false);
+
+    const restarted = createOciExecutionIsolationProvider({
+      providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
+    });
+    await restarted.attest();
+    const recovered = await restarted.recoverOwned();
+    assert.deepEqual(recovered.blockers, []);
+    await restarted.acknowledgeRecovery!(recovered.transitions ?? []);
+    assert.equal(readFileSync(statePath, "utf8"), "[]");
+    assert.equal(existsSync(join(fixture.state, "environment-handoffs")), false);
+  } finally { await fixture.close(); }
+});
+
+test("OCI re-attests returned create identity before durable binding", async (t) => {
+  for (const mode of ["returned_id_mismatch", "inspect_failure"] as const) {
+    await t.test(mode, async () => {
+      const fixture = await ociFixture();
+      const calls: OciCliInvocation[] = [];
+      const base = fakeCli(calls);
+      let failInspection = mode === "inspect_failure";
+      const cli: OciCli = { ...base, run: async (invocation) => {
+        const result = await base.run(invocation);
+        if (invocation.args[0] === "create" && mode === "returned_id_mismatch") {
+          return { ...result, stdout: "unowned-returned-id\n" };
+        }
+        if (failInspection && invocation.args[0] === "inspect" && invocation.args.includes("{{json .Config.Labels}}")) {
+          return { exitCode: 1, stdout: "", stderr: "injected inspect failure" };
+        }
+        return result;
+      } };
+      const providerId = `oci-returned-identity-${mode}`;
+      const statePath = join(fixture.state, `oci-leases-${providerId}.json`);
+      try {
+        const provider = createOciExecutionIsolationProvider({
+          providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
+        });
+        await provider.attest();
+        await assert.rejects(provider.acquire({
+          providerId, implementationDigest: "a".repeat(64), intent: fixture.intent, grant: fixture.claims,
+        }));
+        const state = readFileSync(statePath, "utf8");
+        assert.equal(state.includes("unowned-returned-id"), false);
+        assert.equal(state.includes("container-fixture-1") && mode === "inspect_failure", false,
+          "failed returned-ID inspection must not durably bind that identity");
+        failInspection = false;
+        const restarted = createOciExecutionIsolationProvider({
+          providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
+        });
+        await restarted.attest();
+        base.psOutput = "container-fixture-1\n";
+        const recovered = await restarted.recoverOwned();
+        assert.deepEqual(recovered.blockers, []);
+        await restarted.acknowledgeRecovery!(recovered.transitions ?? []);
+        assert.equal(readFileSync(statePath, "utf8"), "[]");
+        assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.at(-1) === "container-fixture-1"), true);
+      } finally { await fixture.close(); }
+    });
+  }
+});
+
 test("OCI network requires both grant and explicit provider policy", async () => {
   for (const [allowNetwork, grantNetwork, expected] of [
     [false, false, "none"],
@@ -899,6 +1041,12 @@ function fakeCli(calls: OciCliInvocation[]) {
         if (invocation.args.includes("{{.Image}}")) {
           const image = imageByContainer.get(invocation.args.at(-1)!);
           return image ? { exitCode: 0, stdout: `${image}\n`, stderr: "" }
+            : { exitCode: 1, stdout: "", stderr: "not found" };
+        }
+        if (invocation.args.includes("{{.Name}}")) {
+          const id = invocation.args.at(-1)!;
+          const name = [...idByName].find(([, value]) => value === id)?.[0];
+          return name ? { exitCode: 0, stdout: `/${name}\n`, stderr: "" }
             : { exitCode: 1, stdout: "", stderr: "not found" };
         }
         const labels = labelsByContainer.get(invocation.args.at(-1)!);

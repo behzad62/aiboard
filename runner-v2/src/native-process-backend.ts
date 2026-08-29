@@ -146,7 +146,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           failedState.knownProcesses.length === 0 &&
           !pidAlive(child.pid)
         ) {
-          rmSync(directory, { recursive: true, force: true });
+          rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
           throw error;
         }
         throw new AggregateError(
@@ -170,7 +170,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           `Portable process launch failed and owned cleanup could not be verified; evidence retained at ${directory}.`,
         );
       }
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
       throw error;
     }
   }
@@ -318,9 +318,22 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     return { state: emptiness === "empty" ? "exited" : "running" };
   }
   private async cleanupFailedLaunch(identity: Identity): Promise<void> {
-    const validation = this.validate(identity);
+    const deadline = Date.now() + 3_000;
+    let validation = this.validate(identity);
+    while (validation === "unknown" && Date.now() < deadline) {
+      await delay(this.pollIntervalMs);
+      validation = this.validate(identity);
+    }
     if (validation === "mismatch") throw new Error("Launch cleanup refused a recycled supervisor identity.");
     if (validation === "unknown") throw launchBlocker(identity, "Launch cleanup could not inspect the supervisor identity.");
+    if (this.options.platform === "windows" && validation === "exited" && this.hasTerminalStoppedProof(identity)) {
+      const proof = readState(identity.directory)!;
+      await delay(Math.max(100, this.pollIntervalMs * 2));
+      const stable = readState(identity.directory);
+      if (stable?.nonce === proof.nonce && stable.supervisorPid === proof.supervisorPid &&
+          stable.revision === proof.revision && stable.status === "stopped") return;
+      throw launchBlocker(identity, "Launch cleanup lost its stable terminal Windows supervisor proof.");
+    }
     if (validation === "live") {
       if (this.options.platform === "posix") {
         const members = this.operations.listPosixGroup(identity.supervisorPid);
@@ -328,7 +341,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         this.operations.signal(-identity.supervisorPid, "SIGKILL");
       } else {
         await delay(Math.max(250, this.pollIntervalMs * 2));
-        const before = await this.emptiness(identity);
+        let before = await this.emptiness(identity);
+        while (before === "outcome_unknown" && Date.now() < deadline) {
+          await delay(this.pollIntervalMs);
+          before = await this.emptiness(identity);
+        }
         if (before === "identity_mismatch") throw new Error("Launch cleanup refused a recycled Windows descendant.");
         if (before === "outcome_unknown")
           throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows descendant inspection is unknown.");
@@ -341,20 +358,26 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       if (members === undefined) throw new Error("Launch cleanup could not enumerate the owned POSIX group after its supervisor exited.");
       if (members.length > 0) this.operations.signal(-identity.supervisorPid, "SIGKILL");
     } else {
-      const remaining = await this.emptiness(identity);
+      let remaining = await this.emptiness(identity);
+      while (remaining === "outcome_unknown" && Date.now() < deadline) {
+        await delay(this.pollIntervalMs);
+        remaining = await this.emptiness(identity);
+      }
       if (remaining === "identity_mismatch") throw new Error("Launch cleanup refused a recycled Windows descendant.");
       if (remaining === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows ownership inspection is unknown after the supervisor exited.");
       if (remaining === "nonempty") throw launchBlocker(identity, "Launch cleanup preserved blocker evidence because the Windows supervisor exited with an owned descendant.");
     }
-    const deadline = Date.now() + 3_000;
     const requiredStableMs = this.options.platform === "windows" ? 500 : 100;
     let emptySince: number | undefined;
     while (Date.now() < deadline) {
       const emptiness = await this.emptiness(identity);
       if (emptiness === "identity_mismatch") throw new Error("Launch cleanup observed a recycled owned identity.");
       if (emptiness === "outcome_unknown") {
-        if (this.options.platform === "windows")
-          throw launchBlocker(identity, "Launch cleanup preserved evidence after losing Windows ownership verification.");
+        if (this.options.platform === "windows") {
+          emptySince = undefined;
+          await delay(this.pollIntervalMs);
+          continue;
+        }
         throw new Error("Launch cleanup lost ownership verification.");
       }
       if (emptiness === "empty") {
@@ -366,6 +389,18 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (this.options.platform === "windows")
       throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows emptiness was not proven before its deadline.");
     throw new Error("Launch cleanup did not produce verified emptiness before its deadline.");
+  }
+  private hasTerminalStoppedProof(identity: Identity): boolean {
+    const state = readState(identity.directory);
+    if (state?.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid ||
+        state.status !== "stopped" || !Array.isArray(state.knownProcesses) ||
+        !state.knownProcesses.every(validKnownProcess)) return false;
+    if (state.launchEffect === "not_started") {
+      return state.rootProcess === null && state.knownProcesses.length === 0;
+    }
+    return state.launchEffect === "started" && validKnownProcess(state.rootProcess) &&
+      state.knownProcesses.some((process) => process.pid === state.rootProcess!.pid &&
+        process.birth === state.rootProcess!.birth);
   }
   private async flushOutput(identity: Identity, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>): Promise<void> {
     const offsets = this.outputOffsets.get(identity.nonce) ?? { stdout: 0, stderr: 0 };

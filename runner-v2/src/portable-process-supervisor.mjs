@@ -253,7 +253,21 @@ function publish(status, error = null) {
   };
   const temporary = `${statePath}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(state));
-  renameSync(temporary, statePath);
+  replaceState(temporary, statePath);
+}
+
+function replaceState(temporary, destination) {
+  const deadline = Date.now() + 1_000;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      renameSync(temporary, destination);
+      return;
+    } catch (error) {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || Date.now() >= deadline) throw error;
+      Atomics.wait(waiter, 0, 0, 10);
+    }
+  }
 }
 
 function fail(message, status = "outcome_unknown") {
