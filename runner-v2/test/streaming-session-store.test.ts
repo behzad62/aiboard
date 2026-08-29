@@ -692,9 +692,9 @@ test("requires ownership-lease expiry for takeover and refuses expired-owner dur
     () => writer.apply({
       type: "takeover", sessionId: "stream-1", expectedRevision: cleaning.revision,
       ownerId: "owner-recovered", fencingToken: 2, newOwnerId: "owner-third", newFencingToken: 3,
-      leaseExpiresAt: "2026-08-29T00:03:00.000Z", at: "2026-08-29T00:02:00.000Z",
+      leaseExpiresAt: "2026-08-29T00:03:00.000Z", at: "2026-08-29T00:01:30.000Z",
     }),
-    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+    (error) => error instanceof StreamingSessionStoreError && error.code === "lease_not_expired",
   );
 });
 

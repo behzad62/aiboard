@@ -10,7 +10,11 @@ import {
   assertSessionEnvelopeSubset,
   createSessionAuthority,
 } from "../src/session-authority.js";
-import { createInMemoryStreamingSessionStore } from "../src/streaming-session-store.js";
+import {
+  StreamingSessionStoreError,
+  createInMemoryStreamingSessionStore,
+  getStreamingSessionStoreWriter,
+} from "../src/streaming-session-store.js";
 
 test("consumes one launch grant exactly once and persists only immutable session claims", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-authority-"));
@@ -894,6 +898,151 @@ test("uses SessionAuthority-only fenced cleanup after transfer acknowledgement",
     assert.equal(recovered.record.state, "released");
     assert.equal(recovered.record.cleanupOwner, "none");
     assert.equal(recovered.record.effects.every((effect) => effect.status === "acknowledged"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("recovers an expired adopted pending cleanup only after a new fenced owner takes over", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-session-expired-cleanup-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  let now = new Date("2026-08-29T00:00:00.000Z");
+  try {
+    const grants = createExecutionGrantAuthority({ clock: () => now, ttlMs: 120_000 });
+    const binding = {
+      runId: "run-1", sessionId: "agent-session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await grants.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    const store = createInMemoryStreamingSessionStore();
+    const sessions = createSessionAuthority({ grants, sessions: store, clock: () => now });
+    const begun = sessions.beginTransfer({
+      sessionId: "stream-1", grant, binding,
+      lease: {
+        leaseId: "lease-1", providerId: "fake-provider", invocationId: "invoke-1",
+        providerIdentity: "a".repeat(64), acquiredAt: now.toISOString(),
+        access: [{ canonicalPath: workspace, mode: "write" }],
+      },
+      backendBinding: backendBinding(),
+      envelope: {
+        access: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      },
+    });
+    const active = sessions.acknowledgeTransfer({
+      sessionId: "stream-1", ownerId: begun.record.ownerId, fencingToken: begun.record.fencingToken,
+      expectedRevision: begun.record.revision, effectId: begun.record.effects[0]!.effectId,
+    }).record;
+    const writer = getStreamingSessionStoreWriter(store);
+    const cleaning = writer.apply({
+      type: "begin_cleanup", sessionId: "stream-1", ownerId: active.ownerId, fencingToken: active.fencingToken,
+      expectedRevision: active.revision, effectId: "cleanup-1", at: "2026-08-29T00:00:01.000Z",
+    });
+    assert.throws(
+      () => sessions.takeover({
+        sessionId: "stream-1", ownerId: cleaning.ownerId, fencingToken: cleaning.fencingToken,
+        expectedRevision: cleaning.revision, newOwnerId: "session-authority:recovered", newFencingToken: 2,
+        leaseExpiresAt: "2026-08-29T00:02:00.000Z",
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "lease_not_expired",
+    );
+    assert.throws(
+      () => writer.apply({
+        type: "acknowledge_cleanup", sessionId: "stream-1", ownerId: "wrong-owner", fencingToken: cleaning.fencingToken,
+        expectedRevision: cleaning.revision, effectId: "cleanup-1", at: "2026-08-29T00:00:30.000Z",
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "stale_fence",
+    );
+
+    now = new Date("2026-08-29T00:01:00.000Z");
+    assert.throws(
+      () => sessions.takeover({
+        sessionId: "stream-1", ownerId: "wrong-owner", fencingToken: cleaning.fencingToken,
+        expectedRevision: cleaning.revision, newOwnerId: "session-authority:recovered", newFencingToken: 2,
+        leaseExpiresAt: "2026-08-29T00:02:00.000Z",
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "stale_fence",
+    );
+    assert.throws(
+      () => sessions.recordDisposition({
+        sessionId: "stream-1", ownerId: cleaning.ownerId, fencingToken: cleaning.fencingToken,
+        expectedRevision: cleaning.revision, disposition: "outcome_unknown",
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "lease_expired",
+    );
+    let expiredReplayCalls = 0;
+    assert.throws(
+      () => sessions.recoverAdopted({
+        sessionId: "stream-1", ownerId: cleaning.ownerId, fencingToken: cleaning.fencingToken,
+        replay: () => { expiredReplayCalls += 1; return "cleaned"; },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "authorization_stale",
+    );
+    assert.equal(expiredReplayCalls, 0);
+
+    const takenOver = sessions.takeover({
+      sessionId: "stream-1", ownerId: cleaning.ownerId, fencingToken: cleaning.fencingToken,
+      expectedRevision: cleaning.revision, newOwnerId: "session-authority:recovered", newFencingToken: 2,
+      leaseExpiresAt: "2026-08-29T00:02:00.000Z",
+    }).record;
+    assert.equal(takenOver.state, "cleanup_pending");
+    assert.equal(takenOver.effects.find((effect) => effect.kind === "cleanup")?.fencingToken, 1);
+    assert.throws(
+      () => sessions.authorizeLaunchOperation({
+        sessionId: "stream-1", operation: "close_input",
+        requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false,
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "session_unavailable",
+    );
+    assert.throws(
+      () => sessions.authorizeLaunchOperation({
+        sessionId: "stream-1", operation: "request",
+        requestAccess: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "session_unavailable",
+    );
+
+    let staleReplayCalls = 0;
+    assert.throws(
+      () => sessions.recoverAdopted({
+        sessionId: "stream-1", ownerId: cleaning.ownerId, fencingToken: cleaning.fencingToken,
+        replay: () => { staleReplayCalls += 1; return "cleaned"; },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "authorization_stale",
+    );
+    assert.equal(staleReplayCalls, 0);
+
+    const replayed: Array<{ effectId: string; fencingToken: number }> = [];
+    const recovered = sessions.recoverAdopted({
+      sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
+      replay: (effect) => {
+        replayed.push({ effectId: effect.effectId, fencingToken: effect.fencingToken });
+        return "cleaned";
+      },
+    });
+    assert.deepEqual(replayed, [{ effectId: "cleanup-1", fencingToken: 1 }]);
+    assert.equal(recovered.record.state, "released");
+    assert.equal(recovered.record.cleanupOwner, "none");
+    assert.throws(
+      () => sessions.authorizeLaunchOperation({
+        sessionId: "stream-1", operation: "request",
+        requestAccess: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "session_unavailable",
+    );
+    assert.throws(
+      () => sessions.recoverAdopted({
+        sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
+        replay: () => { throw new Error("released cleanup must not replay"); },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

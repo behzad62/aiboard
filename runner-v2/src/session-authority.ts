@@ -481,6 +481,10 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       if (record.cleanupOwner !== "session_authority") {
         throw new SessionAuthorityError("recovery_refused", "Adopted recovery requires SessionAuthority cleanup ownership.");
       }
+      if (record.ownerId !== input.ownerId || record.fencingToken !== input.fencingToken) {
+        throw new SessionAuthorityError("authorization_stale", "Adopted recovery has a stale owner fence.");
+      }
+      assertCurrentSessionLease(record, clock);
       if (record.state === "cleanup_blocked") return Object.freeze({ record });
       let cleanup = pendingEffect(record, "cleanup");
       if (!cleanup) {

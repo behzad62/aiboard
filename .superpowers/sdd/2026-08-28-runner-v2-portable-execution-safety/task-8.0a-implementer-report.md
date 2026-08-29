@@ -194,3 +194,53 @@ Each behavior below was added test-first. RED commands were run before the liste
 - Production/tests plus this force-added report: `0f5b36a8` (`fix(runner): harden streaming session authority contracts`).
 - This small report-hash follow-up is committed separately after recording the production hash; the final handoff lists both hashes.
 - No unresolved implementation or validation concern remains. The packet still requires its prescribed independent review before the overall 8.0A reviewer exit gate may be claimed.
+
+## Fix Round 2 — re-review base `b6baf5b457597739e4aa17257292265f2ecde62d`
+
+### Scope and files changed
+
+- This round addresses the sole remaining Important finding in `task-8.0a-rereview-1.md`: an expired adopted `cleanup_pending` effect could not be taken over or settled after host loss.
+- Production changes are limited to `runner-v2/src/streaming-session-store.ts` and `runner-v2/src/session-authority.ts`.
+- Focused test changes are limited to `runner-v2/test/session-authority.test.ts` and the existing lease-expectation adjustment in `runner-v2/test/streaming-session-store.test.ts`.
+- No brief, review, progress-ledger, or controller-evidence file was edited. In particular, `task-8.0a-controller-evidence.md` was not recreated or modified. No 8.0B work, production family migration, Git/MCP/LSP/managed/provider routing, CLI, construction graph, or child launch code is in this diff.
+
+### Finding audit — expired adopted pending cleanup recovery
+
+- **Regression:** `recovers an expired adopted pending cleanup only after a new fenced owner takes over` creates a real opaque grant, adopted exact session, and a durable SessionAuthority-owned `cleanup-1` effect at fence `1`. It then models the pre-crash owner lease expiring and the startup owner taking fence `2`.
+- **Protection before recovery:** before expiry the existing owner cannot take over (`lease_not_expired`); a wrong owner cannot acknowledge `cleanup-1` (`stale_fence`); at expiry a wrong owner cannot take over (`stale_fence`); the expired old owner cannot record another disposition (`lease_expired`) or invoke its recovery callback (`authorization_stale`, zero replay calls).
+- **Minimum durable transition:** only an adopted `cleanup_pending` record with `cleanupOwner === "session_authority"` may now take a post-expiry `takeover`. The state remains `cleanup_pending`, the new owner/fence/lease replace only the durable ownership lease, and the existing `cleanup-1` effect remains its original fence `1`.
+- **Parser/state closure:** a pending or released cleanup effect may have a fence at or below the current owner fence only to retain that exact already-created effect across a valid recovery takeover; its cleanup owner must still exactly match. `cleanup_blocked` remains exact-current-fence and is not takeover-eligible. SQLite durability still HMAC-verifies stored record bytes before parser acceptance.
+- **Recovery authorization:** `recoverAdopted()` now checks the supplied owner/fence and current lease before calling the external replay callback. The new fence `2` can replay the existing `cleanup-1`/fence-`1` effect once, then acknowledge it to `released`; the pre-crash owner cannot replay it. A second recovery is refused, and neither the pending nor released state can issue launch/input/access authorization.
+- **Compatibility assertion:** the older store test had asserted that an expiry-time pending-cleanup takeover was categorically `invalid_state`, which is the defect. It now preserves the intended pre-expiry refusal (`lease_not_expired`); the new SessionAuthority regression covers the only newly allowed post-expiry path.
+
+### TDD / fault evidence
+
+| Cycle | Exact command and observed result | Revert / minimum implementation | GREEN result |
+| --- | --- | --- | --- |
+| Natural RED for recovery hole | `npx tsx --test --test-name-pattern="recovers an expired adopted pending cleanup" runner-v2/test/session-authority.test.ts` — failed with `StreamingSessionStoreError: Only an adopted session without pending cleanup can be taken over.` The post-expiry recovery owner therefore could not settle the existing pending cleanup. | Added `cleanup_pending` to the existing adopted SessionAuthority takeover set after the durable lease-expiry check; kept it unavailable to provider-lease and blocked cleanup states. Preserved historic exact cleanup evidence through the existing effect instead of minting/replacing an effect. Added stale owner/fence plus lease validation before `recoverAdopted()` can call `replay`. | Same exact command — passed `1/1` after the minimal implementation, and again after adding the input/wrong-owner assertions. |
+| Mutation RED/revert proving cleanup-pending eligibility is required | Temporarily removed `"cleanup_pending"` from the takeover-state set with `apply_patch`, then ran `npx tsx --test --test-name-pattern="recovers an expired adopted pending cleanup" runner-v2/test/session-authority.test.ts`. It failed `0/1`: the pre-expiry assertion received `StreamingSessionStoreError: Only an adopted streaming session can be taken over` instead of the required `lease_not_expired`, proving the cleanup state was being rejected before lease protection/recovery could apply. | Restored the sole `"cleanup_pending"` entry with `apply_patch`; no mutation was retained beyond the reviewed production change. | Same exact command — passed `1/1` (`9.8818ms`). |
+| Existing expectation adaptation | After the production change, `npx tsx --test runner-v2/test/streaming-session-store.test.ts` reported one expected compatibility failure: `Missing expected exception` for the old assertion that a post-expiry pending-cleanup takeover must be `invalid_state`. | Replaced only that obsolete expectation with a pre-expiry pending-cleanup takeover at `00:01:30` expecting `lease_not_expired`; the new regression owns the required post-expiry recovery case. | Same store file — passed `34/34` before final full matrix. |
+
+### Fresh focused and affected validation
+
+| Command | Result |
+| --- | --- |
+| `npx tsx --test --test-name-pattern="recovers an expired adopted pending cleanup" runner-v2/test/session-authority.test.ts` | Passed `1/1` after restoring the mutation. |
+| `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts runner-v2/test/interactive-process-channel.test.ts runner-v2/test/execution-grants.test.ts` | Passed `83` tests, `0` failures. |
+| `npx tsx --test runner-v2/test/execution-grants.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/one-shot-command-executor.test.ts` | Passed `107` tests, `0` failures. |
+| `npm run typecheck:runner-v2` | Passed: `tsc -p runner-v2/tsconfig.json --noEmit`. |
+| `npx eslint runner-v2/src/streaming-session-store.ts runner-v2/src/session-authority.ts runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts` | Passed with no output. |
+| `git diff --check b6baf5b457597739e4aa17257292265f2ecde62d --` | Passed (exit `0`; only Git line-ending warnings). |
+
+### Fake-state cleanup, self-review, and handoff
+
+- The new test creates `runner-v2-session-expired-cleanup-*` outside the repository with `mkdtemp` and removes it in `finally` using `rm(..., { recursive: true, force: true })`.
+- Final read-only cleanup scan: `$taskTempRoot = [System.IO.Path]::GetTempPath(); $leftovers = @(Get-ChildItem -LiteralPath $taskTempRoot -Directory -Filter 'runner-v2-session-expired-cleanup-*' -ErrorAction SilentlyContinue); if ($leftovers.Count -gt 0) { $leftovers | Select-Object -ExpandProperty FullName; exit 1 }; Write-Output 'No runner-v2-session-expired-cleanup temporary roots remain.'` — output: `No runner-v2-session-expired-cleanup temporary roots remain.`
+- Self-review: only a new post-expiry fenced SessionAuthority cleanup-recovery path is introduced. It cannot create input/access/relaunch authority because `authorizeLaunchOperation()` remains active-state-only; it cannot reopen generic expired-owner mutation; it cannot replay from the stale owner because validation occurs before the callback; it cannot transfer `cleanup_blocked`; and it preserves the sole truthful `session_authority` cleanup owner/effect until exact acknowledgement.
+- Final diff and commit evidence are recorded immediately below after the final staged check and force-add of this ignored report.
+
+### Fix Round 2 commits and concerns
+
+- Production/tests plus this force-added report: pending commit.
+- Report-hash follow-up: pending commit.
+- No unresolved implementation or validation concern is known. The packet still requires the prescribed independent re-review before the overall 8.0A reviewer exit gate can be claimed.

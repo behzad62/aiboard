@@ -711,6 +711,13 @@ function assertStateCombination(
       throw new StreamingSessionStoreError("invalid_state", "Streaming session cleanup effect ownership evidence is invalid.");
     }
   };
+  const requiresCleanupEffectFenceAtOrBeforeCurrent = () => {
+    // A recovery takeover advances the durable owner fence while retaining the
+    // exact older pending cleanup effect that must be settled exactly once.
+    if (!cleanup || cleanup.owner !== record.cleanupOwner || cleanup.fencingToken > (record.fencingToken as number)) {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session cleanup effect fence is invalid.");
+    }
+  };
   const requiresNoCleanup = () => {
     if (cleanup) throw new StreamingSessionStoreError("invalid_state", "Streaming session state has premature cleanup evidence.");
   };
@@ -748,7 +755,7 @@ function assertStateCombination(
       requiresAcknowledgedTransfer();
       requiresTransferOwner();
       requiresTransferFenceAtOrBeforeCurrent();
-      requiresExactCurrentCleanupEffect();
+      requiresCleanupEffectFenceAtOrBeforeCurrent();
       return;
     case "cleanup_blocked":
       if ((record.cleanupOwner !== "provider_lease" && record.cleanupOwner !== "session_authority") ||
@@ -768,7 +775,7 @@ function assertStateCombination(
       requiresTransferOwner();
       requiresTransferFenceAtOrBeforeCurrent();
       if (cleanup.owner !== cleanupOwnerBeforeRelease(record) ||
-          cleanup.fencingToken !== record.fencingToken) {
+          cleanup.fencingToken > (record.fencingToken as number)) {
         throw new StreamingSessionStoreError("invalid_state", "Released streaming session cleanup evidence is invalid.");
       }
       return;
@@ -875,8 +882,9 @@ function applyStreamingSessionCommand(
       "input_unavailable",
       "backend_unavailable",
       "outcome_unknown",
+      "cleanup_pending",
     ].includes(current.state)) {
-      throw new StreamingSessionStoreError("invalid_state", "Only an adopted session without pending cleanup can be taken over.");
+      throw new StreamingSessionStoreError("invalid_state", "Only an adopted streaming session can be taken over.");
     }
     if (atTimestamp < ownershipLeaseExpiresAt) {
       throw new StreamingSessionStoreError("lease_not_expired", "Streaming session ownership lease has not expired.");
