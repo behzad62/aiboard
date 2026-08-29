@@ -19,11 +19,12 @@ import { createProductionOneShotCommandFixture } from "./support/one-shot-comman
 
 type Family = "process" | "evidence" | "final-verification";
 const FAMILIES: readonly Family[] = ["process", "evidence", "final-verification"];
-interface FamilyResult { outcome?: string; errorCode?: string; cleanupState?: string }
+interface FamilyResult { outcome?: string; errorCode?: string; errorMessage?: string; cleanupState?: string }
 interface FamilyAdapter {
   workspace: string;
   graph: ReturnType<typeof createProductionOneShotCommandFixture>;
   run(input: { args: string[]; timeoutMs: number; signal?: AbortSignal }): Promise<FamilyResult>;
+  launched(): boolean;
   close(): Promise<void>;
 }
 
@@ -47,10 +48,10 @@ for (const family of FAMILIES) {
     const controller = new AbortController();
     try {
       const running = adapter.run({ args: hangingTree(marker), timeoutMs: 10_000, signal: controller.signal });
-      await waitFor(() => existsSync(marker), 5_000);
+      await waitFor(() => existsSync(marker) && adapter.launched(), 8_000);
       controller.abort();
       const result = await running;
-      assert.equal(result.outcome, "cancelled");
+      assert.equal(result.outcome, "cancelled", JSON.stringify(result));
       assert.equal(result.cleanupState, "verified_empty");
       assert.equal(await processExited(Number(readFileSync(marker, "utf8"))), true);
     } finally { controller.abort(); await adapter.close(); }
@@ -81,19 +82,58 @@ for (const family of FAMILIES) {
   });
 }
 
+test("process public family queues cancellation after workload start but before durable bind", async (t) => {
+  const barrier = launchBindingBarrier();
+  const adapter = await createFamilyAdapter(t, "process", { backendDecorator: barrier.decorate });
+  const marker = join(adapter.workspace, "prebind-cancel-grandchild.pid");
+  const controller = new AbortController();
+  try {
+    const running = adapter.run({ args: hangingTree(marker), timeoutMs: 10_000, signal: controller.signal });
+    await waitFor(() => existsSync(marker), 8_000);
+    assert.equal(adapter.launched(), false, "controlled launch result is not durably bound yet");
+    controller.abort();
+    barrier.release();
+    const result = await running;
+    assert.equal(result.outcome, "cancelled", JSON.stringify(result));
+    assert.equal(result.cleanupState, "verified_empty", JSON.stringify(result));
+    assert.equal(await processExited(Number(readFileSync(marker, "utf8"))), true);
+  } finally { controller.abort(); barrier.release(); await adapter.close(); }
+});
+
+test("process public family queues timeout after workload start but before durable bind", async (t) => {
+  const barrier = launchBindingBarrier();
+  const adapter = await createFamilyAdapter(t, "process", { backendDecorator: barrier.decorate });
+  const marker = join(adapter.workspace, "prebind-timeout-grandchild.pid");
+  try {
+    const running = adapter.run({ args: hangingTree(marker), timeoutMs: 300 });
+    await waitFor(() => existsSync(marker), 8_000);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(adapter.launched(), false, "controlled launch result is not durably bound yet");
+    barrier.release();
+    const result = await running;
+    assert.equal(result.outcome, "timed_out", JSON.stringify(result));
+    assert.equal(result.cleanupState, "verified_empty", JSON.stringify(result));
+    assert.equal(await processExited(Number(readFileSync(marker, "utf8"))), true);
+  } finally { barrier.release(); await adapter.close(); }
+});
+
 async function createFamilyAdapter(t: TestContext, family: Family,
   options: Parameters<typeof createProductionOneShotCommandFixture>[1] = {}): Promise<FamilyAdapter> {
   const root = mkdtempSync(join(tmpdir(), `aiboard-${family}-${randomUUID()}-`));
   const workspace = family === "final-verification" ? join(root, "project") : join(root, "workspace");
   mkdirSync(workspace);
   const artifacts = new ArtifactStore(join(root, "artifacts"));
-  const graph = createProductionOneShotCommandFixture(undefined, { ...options, artifacts });
+  const graph = createProductionOneShotCommandFixture(undefined, {
+    managedProcessStartDeadlineMs: 20_000,
+    ...options,
+    artifacts,
+  });
   const identity = randomUUID();
   let closed = false;
-  const finish = (run: FamilyAdapter["run"], visibleWorkspace = workspace,
+  const finish = (run: FamilyAdapter["run"], launched: () => boolean, visibleWorkspace = workspace,
     closeExtra?: () => void | Promise<void>): FamilyAdapter => {
     const adapter: FamilyAdapter = {
-      workspace: visibleWorkspace, graph, run,
+      workspace: visibleWorkspace, graph, run, launched,
       async close() {
         if (closed) return;
         closed = true;
@@ -107,22 +147,24 @@ async function createFamilyAdapter(t: TestContext, family: Family,
   };
 
   if (family === "process") {
+    const runId = `run-${identity}`; const sessionId = `session-${identity}`; const callId = `process-${identity}`;
     const broker = brokerFor(workspace, graph, options.permissionProfile);
     for (const tool of createProcessTools({ execution: graph.execution })) broker.register(tool);
     return finish(async ({ args, timeoutMs, signal }) => mapProcess(await broker.invoke({
-      type: "tool_call", callId: `process-${identity}`, name: "process.run",
+      type: "tool_call", callId, name: "process.run",
       arguments: { command: process.execPath, args, timeoutMs },
-    }, context(identity, signal))));
+    }, context(identity, signal))), () => graph.hasBackendBinding(runId, sessionId, callId));
   }
 
   if (family === "evidence") {
+    const runId = `run-${identity}`; const sessionId = `session-${identity}`; const callId = `evidence-${identity}`;
     const store = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
     const broker = brokerFor(workspace, graph, options.permissionProfile);
     for (const tool of createEvidenceTools({ store, artifacts, taskId: `task-${identity}`, execution: graph.execution })) broker.register(tool);
     return finish(async ({ args, timeoutMs, signal }) => mapEvidence(await broker.invoke({
-      type: "tool_call", callId: `evidence-${identity}`, name: "run_evidence_command",
+      type: "tool_call", callId, name: "run_evidence_command",
       arguments: { label: "matrix", command: process.execPath, args, cwd: ".", timeoutMs },
-    }, context(identity, signal))), workspace, () => store.close());
+    }, context(identity, signal))), () => graph.hasBackendBinding(runId, sessionId, callId), workspace, () => store.close());
   }
 
   initializeGitProject(workspace);
@@ -130,9 +172,10 @@ async function createFamilyAdapter(t: TestContext, family: Family,
   const manager = new VerificationWorkspaceManager({ repositoryRoot: workspace,
     stateDirectory: join(root, "verification-state"), runId: `run-${identity}`, targetRevision: revision });
   await manager.create();
+  const generationId = `generation-${identity}`;
   const runtime = new FinalVerificationRuntime({ workspaceManager: manager, artifacts,
     runId: `run-${identity}`, taskId: "final-verification", integrationRevision: () => revision,
-    execution: graph.runnerOwnedExecution });
+    generationId, execution: graph.runnerOwnedExecution });
   return finish(async ({ args, timeoutMs, signal }) => {
     const command = { label: "matrix", executable: process.execPath, args, timeoutMs };
     const run = await runtime.run({ plan: finalPlan(), executionProfile: {
@@ -143,7 +186,8 @@ async function createFamilyAdapter(t: TestContext, family: Family,
       .find((candidate): candidate is FinalVerificationCommandFact => candidate.kind === "command")!;
     return { outcome: fact.timedOut ? "timed_out" : fact.cancelled ? "cancelled" : undefined,
       errorCode: fact.errorCode, cleanupState: fact.cleanup?.state };
-  }, manager.path, async () => await manager.cleanup().catch(() => undefined));
+  }, () => graph.hasBackendBinding(`run-${identity}`, "final-verification", `${generationId}:build:0:1`),
+  manager.path, async () => await manager.cleanup().catch(() => undefined));
 }
 
 function brokerFor(workspace: string, graph: ReturnType<typeof createProductionOneShotCommandFixture>, profile = "full") {
@@ -155,10 +199,10 @@ function brokerFor(workspace: string, graph: ReturnType<typeof createProductionO
 function mapProcess(output: ToolExecutionOutput): FamilyResult {
   const value = json(output) as { timedOut?: boolean; cancelled?: boolean; cleanup?: { state: string } };
   return { outcome: value.timedOut ? "timed_out" : value.cancelled ? "cancelled" : undefined,
-    errorCode: output.error?.code, cleanupState: value.cleanup?.state };
+    errorCode: output.error?.code, errorMessage: output.error?.message, cleanupState: value.cleanup?.state };
 }
 function mapEvidence(output: ToolExecutionOutput): FamilyResult {
-  if (output.isError) return { errorCode: output.error?.code };
+  if (output.isError) return { errorCode: output.error?.code, errorMessage: output.error?.message };
   const value = json(output) as { fact: { timedOut: boolean; cancelled: boolean; cleanup?: { state: string } } };
   return { outcome: value.fact.timedOut ? "timed_out" : value.fact.cancelled ? "cancelled" : undefined,
     cleanupState: value.fact.cleanup?.state };
@@ -197,6 +241,24 @@ function outcomeUnknownBackend(): ProcessBackend {
     observe: async () => ({ state: "exited", exitCode: 0 }), signal: async () => ({ state: "exited" }),
     verifyEmpty: async () => ({ empty: false, detail: "fault-injected unknown ownership" }),
     reconcile: async () => ({ state: "outcome_unknown" }), release: async () => ({ released: true }),
+  };
+}
+
+function launchBindingBarrier(): { decorate(backend: ProcessBackend): ProcessBackend; release(): void } {
+  let release!: () => void;
+  let released = false;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  return {
+    decorate: (backend) => ({
+      probe: async () => await backend.probe(),
+      launch: async (request) => { const launched = await backend.launch(request); await gate; return launched; },
+      observe: async (binding, output, fence) => await backend.observe(binding, output, fence),
+      signal: async (binding, action, fence) => await backend.signal(binding, action, fence),
+      verifyEmpty: async (binding, fence) => await backend.verifyEmpty(binding, fence),
+      reconcile: async (binding, fence) => await backend.reconcile(binding, fence),
+      release: async (binding, fence) => await backend.release(binding, fence),
+    }),
+    release: () => { if (!released) { released = true; release(); } },
   };
 }
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {

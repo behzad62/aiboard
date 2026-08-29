@@ -227,6 +227,74 @@ test("OCI deletion faults never orphan a successfully created container and reco
   }
 });
 
+test("OCI pre-effect create journal recovers every pre-identity failure without secret or container orphan", async (t) => {
+  for (const mode of ["throw", "nonzero", "invalid_id", "effect_then_throw"] as const) {
+    for (const deletionFails of [false, true]) {
+      await t.test(`${mode}; handoff deletion ${deletionFails ? "fails" : "succeeds"}`, async () => {
+        const fixture = await ociFixture();
+        const calls: OciCliInvocation[] = [];
+        const base = fakeCli(calls);
+        let failDeletion = deletionFails;
+        const cli: OciCli = {
+          ...base,
+          run: async (invocation) => {
+            if (invocation.args[0] !== "create") return await base.run(invocation);
+            if (mode === "throw") {
+              calls.push(structuredClone(invocation));
+              throw new Error("injected create transport failure");
+            }
+            if (mode === "nonzero") {
+              calls.push(structuredClone(invocation));
+              return { exitCode: 125, stdout: "", stderr: "injected create rejection" };
+            }
+            const effected = await base.run(invocation);
+            if (mode === "invalid_id") return { ...effected, stdout: "invalid id with spaces\n" };
+            throw new Error("injected transport loss after daemon effect");
+          },
+        };
+        const removeHandoff = async (path: string, root: string) => {
+          if (failDeletion) throw new Error("injected handoff deletion failure");
+          await rm(path, { force: true });
+          await rmdir(root).catch(() => undefined);
+        };
+        const providerId = `oci-create-journal-${mode}-${deletionFails}`;
+        const statePath = join(fixture.state, `oci-leases-${providerId}.json`);
+        try {
+          const provider = createOciExecutionIsolationProvider({
+            providerId, cliPath: fixture.cli, image: "fixture/image:configured", stateDirectory: fixture.state,
+            cli, removeEnvironmentHandoff: removeHandoff,
+          });
+          await provider.attest();
+          await assert.rejects(provider.acquire({
+            providerId, implementationDigest: "a".repeat(64), intent: fixture.intent, grant: fixture.claims,
+            environment: { APPROVED_SECRET: "journal-private-value" },
+          }));
+          const durable = readFileSync(statePath, "utf8");
+          assert.equal(durable.includes("journal-private-value"), false);
+          assert.equal(durable.includes("aiboard-"), true, "exact owned name is journaled before create");
+
+          failDeletion = false;
+          const restarted = createOciExecutionIsolationProvider({
+            providerId, cliPath: fixture.cli, image: "fixture/image:configured", stateDirectory: fixture.state,
+            cli, removeEnvironmentHandoff: removeHandoff,
+          });
+          await restarted.attest();
+          const recovered = await restarted.recoverOwned();
+          assert.equal(recovered.blockers.length, 0, JSON.stringify(recovered));
+          const transitions = recovered.transitions ?? [];
+          assert.equal(transitions.length, 1, JSON.stringify(recovered));
+          await restarted.acknowledgeRecovery!(transitions);
+          assert.deepEqual(await restarted.recoverOwned(), { cleaned: 0, blockers: [], transitions: [] });
+          assert.equal(readFileSync(statePath, "utf8"), "[]");
+          assert.equal(existsSync(join(fixture.state, "environment-handoffs")), false);
+          const effectExpected = mode === "invalid_id" || mode === "effect_then_throw";
+          assert.equal(calls.some((call) => call.args[0] === "rm"), effectExpected);
+        } finally { await fixture.close(); }
+      });
+    }
+  }
+});
+
 test("OCI network requires both grant and explicit provider policy", async () => {
   for (const [allowNetwork, grantNetwork, expected] of [
     [false, false, "none"],
@@ -550,10 +618,11 @@ test("OCI durable lease capacity refuses before create and bounds post-create pe
     assert.ok(Buffer.byteLength(JSON.stringify([...padded, row(2_000)])) > 1024 * 1024);
     await writeFile(statePath, paddedText);
     const creates = calls.filter((call) => call.args[0] === "create").length;
-    await assert.rejects(provider.acquire(request), (error) => error instanceof AggregateError &&
-      error.errors.some((item) => item instanceof Error && /byte bound/i.test(item.message)));
-    assert.equal(calls.filter((call) => call.args[0] === "create").length, creates + 1);
-    assert.equal(calls.filter((call) => call.args[0] === "rm").length >= 1, true);
+    await assert.rejects(provider.acquire(request), (error) =>
+      error instanceof OciExecutionIsolationError && error.code === "oci_recovery_blocked" &&
+      error.cause instanceof Error && /byte bound/i.test(error.cause.message));
+    assert.equal(calls.filter((call) => call.args[0] === "create").length, creates,
+      "pre-effect journal capacity failure must happen before create");
     assert.equal(readFileSync(statePath, "utf8"), paddedText);
 
     const malformed = JSON.stringify([{ ...row(0), lease: { ...row(0).lease, expiresAt: "not-a-time" } }]);
@@ -776,6 +845,7 @@ test("real Docker recovery blocks an exact image mismatch without removing the c
 function fakeCli(calls: OciCliInvocation[]) {
   const labelsByContainer = new Map<string, Record<string, string>>();
   const imageByContainer = new Map<string, string>();
+  const idByName = new Map<string, string>();
   let createdCount = 0;
   const runner = {
     psOutput: "",
@@ -786,6 +856,7 @@ function fakeCli(calls: OciCliInvocation[]) {
     removeExternally(containerId: string) {
       labelsByContainer.delete(containerId);
       imageByContainer.delete(containerId);
+      for (const [name, id] of idByName) if (id === containerId) idByName.delete(name);
     },
     async run(invocation: OciCliInvocation) {
       calls.push(structuredClone(invocation));
@@ -806,6 +877,7 @@ function fakeCli(calls: OciCliInvocation[]) {
         }
         createdCount += 1;
         const containerId = `container-fixture-${createdCount}`;
+        idByName.set(optionValues(invocation.args, "--name")[0]!, containerId);
         labelsByContainer.set(containerId, Object.fromEntries(
           optionValues(invocation.args, "--label").map((label) => {
             const separator = label.indexOf("=");
@@ -819,6 +891,11 @@ function fakeCli(calls: OciCliInvocation[]) {
         return { exitCode: 0, stdout: runner.psOutput, stderr: "" };
       }
       if (command === "inspect") {
+        if (invocation.args.includes("{{.Id}}")) {
+          const id = idByName.get(invocation.args.at(-1)!);
+          return id ? { exitCode: 0, stdout: `${id}\n`, stderr: "" }
+            : { exitCode: 1, stdout: "", stderr: "not found" };
+        }
         if (invocation.args.includes("{{.Image}}")) {
           const image = imageByContainer.get(invocation.args.at(-1)!);
           return image ? { exitCode: 0, stdout: `${image}\n`, stderr: "" }
@@ -833,8 +910,10 @@ function fakeCli(calls: OciCliInvocation[]) {
         };
       }
       if (command === "rm") {
-        labelsByContainer.delete(invocation.args.at(-1)!);
-        imageByContainer.delete(invocation.args.at(-1)!);
+        const id = invocation.args.at(-1)!;
+        labelsByContainer.delete(id);
+        imageByContainer.delete(id);
+        for (const [name, value] of idByName) if (value === id) idByName.delete(name);
         return { exitCode: 0, stdout: "", stderr: "" };
       }
       return { exitCode: 1, stdout: "", stderr: "unexpected fake command" };

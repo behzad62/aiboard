@@ -30,6 +30,7 @@ export interface ProductionOneShotCommandFixture {
   readonly artifacts: ArtifactStore;
   readonly root: string;
   reconcileStartup(): Promise<ReconciliationOutcome[]>;
+  hasBackendBinding(runId: string, sessionId: string, callId: string): boolean;
   close(): Promise<void>;
 }
 
@@ -41,6 +42,8 @@ export interface ProductionOneShotCommandFixtureOptions {
   readonly backendId?: string;
   readonly leaseDurationMs?: number;
   readonly leaseHeartbeatMs?: number;
+  readonly managedProcessStartDeadlineMs?: number;
+  readonly backendDecorator?: (backend: ProcessBackend) => ProcessBackend;
 }
 
 /** Test-scoped instance of the production grant/isolation/runtime/backend/output graph. */
@@ -56,11 +59,17 @@ export function createProductionOneShotCommandFixture(
     credentialResolver: { consume: () => { throw new Error("Unexpected credential grant."); } },
   });
   const managed = process.platform === "win32"
-    ? new ManagedProcessService({ stateDirectory: join(root, "managed") })
+    ? new ManagedProcessService({
+      stateDirectory: join(root, "managed"),
+      ...(options.managedProcessStartDeadlineMs
+        ? { startDeadlineMs: options.managedProcessStartDeadlineMs }
+        : {}),
+    })
     : undefined;
-  const backend = options.backend ?? (process.platform === "win32"
+  const nativeBackend = options.backend ?? (process.platform === "win32"
     ? createWindowsProcessBackend({ jobObjects: { service: managed! } })
     : createPosixProcessBackend({ stateDirectory: join(root, "backend") }));
+  const backend = options.backendDecorator ? options.backendDecorator(nativeBackend) : nativeBackend;
   const kernel = createSubprocessRuntimeKernel({
     registry: createProcessBackendRegistry([createProcessBackendRegistration({
       stableAdapterId: `test-${process.platform}-production-adapter`,
@@ -114,6 +123,10 @@ export function createProductionOneShotCommandFixture(
     artifacts,
     root,
     reconcileStartup: async () => await kernel.runtime.reconcileStartup(),
+    hasBackendBinding(runId, sessionId, callId) {
+      const invocationId = `inv-${createHash("sha256").update(`${runId}\0${sessionId}\0${callId}`).digest("hex")}`;
+      return kernel.readOnlyStore.readByInvocation(invocationId)?.backendBinding !== undefined;
+    },
     async close() {
       if (closed) return;
       closed = true;

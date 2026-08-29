@@ -45,6 +45,7 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
 /** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
 export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
+  private readonly controls = new Map<string, Promise<void>>();
   constructor(private readonly service: WindowsJobProcessService) {}
   async probe(): Promise<unknown> {
     if (!(await this.service.probeJobObjectAvailability()))
@@ -95,7 +96,8 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
         if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
       }
       this.offsets.set(identity.processId, { ...unread.next });
-      const snapshot = await this.service.reconcileOwnership(identity.processId, jobContext(identity));
+      const snapshot = await this.control(identity.processId, async () =>
+        await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
       const deliveredOutput = unread.stdout.byteLength > 0 || unread.stderr.byteLength > 0;
       if (snapshot.status === "stopped" && !deliveredOutput)
         return { state: "exited", ...(snapshot.exitCode === null ? {} : { exitCode: snapshot.exitCode }), ...(snapshot.signal ? { signal: snapshot.signal } : {}) };
@@ -106,12 +108,14 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   }
   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction): Promise<unknown> {
     const identity = jobIdentity(binding);
-    const snapshot = await this.service.signal(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobContext(identity));
+    const snapshot = await this.control(identity.processId, async () =>
+      await this.service.signal(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobContext(identity)));
     return { state: snapshot.status === "stopped" ? "exited" : "running" };
   }
   async verifyEmpty(binding: ProcessBackendBinding): Promise<unknown> {
     const identity = jobIdentity(binding);
-    const snapshot = await this.service.reconcileOwnership(identity.processId, jobContext(identity));
+    const snapshot = await this.control(identity.processId, async () =>
+      await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
   }
   async reconcile(binding: ProcessBackendBinding): Promise<unknown> {
@@ -120,7 +124,8 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       return { state: error instanceof JobIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
     }
     try {
-      const snapshot = await this.service.reconcileOwnership(identity.processId, jobContext(identity));
+      const snapshot = await this.control(identity.processId, async () =>
+        await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
       if (snapshot.startedAt !== identity.startedAt) return { state: "identity_mismatch" };
       if (snapshot.status === "running") return { state: "running" };
       if (snapshot.status === "exited_unknown")
@@ -129,8 +134,25 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     } catch { return { state: "outcome_unknown" }; }
   }
   async release(binding: ProcessBackendBinding): Promise<unknown> {
-    this.offsets.delete(jobIdentity(binding).processId);
+    const processId = jobIdentity(binding).processId;
+    await this.controls.get(processId);
+    this.controls.delete(processId);
+    this.offsets.delete(processId);
     return { released: true };
+  }
+
+  private async control<T>(processId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.controls.get(processId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.catch(() => undefined).then(() => current);
+    this.controls.set(processId, queued);
+    await previous.catch(() => undefined);
+    try { return await action(); }
+    finally {
+      release();
+      if (this.controls.get(processId) === queued) this.controls.delete(processId);
+    }
   }
 }
 

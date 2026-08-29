@@ -106,9 +106,10 @@ export interface OciExecutionIsolationProviderOptions {
 
 interface DurableOciLease {
   readonly lease: ExecutionIsolationLease;
-  readonly containerId: string;
+  readonly containerId?: string;
   readonly containerName: string;
   readonly runId: string;
+  readonly createStage?: "creating" | "bound";
   readonly cleanupStage: "active" | "cleanup_started" | "cleaned_pending_ack";
   readonly cleanupToken?: string;
   readonly cleanedAt?: string;
@@ -197,6 +198,56 @@ export function createOciExecutionIsolationProvider(
     });
   };
 
+  const settleCreatingRecord = async (
+    initialLeases: DurableOciLease[],
+    initialOwned: DurableOciLease,
+  ): Promise<{ leases: DurableOciLease[]; blockers: string[] }> => {
+    let leases = initialLeases;
+    let owned = initialOwned;
+    const blockers: string[] = [];
+    if (owned.environmentHandoffPath) {
+      try {
+        await removeEnvironmentHandoff(owned.environmentHandoffPath, environmentHandoffRoot);
+        const cleared = withoutEnvironmentHandoff(owned);
+        leases = leases.map((entry) => entry === owned ? cleared : entry);
+        owned = cleared;
+        await writeLeaseState(statePath, leases);
+      } catch (error) {
+        blockers.push(`OCI environment handoff cleanup remains blocked for lease ${owned.lease.leaseId}: ${bounded(error)}.`);
+      }
+    }
+    const discovery = await discoverExactNamedContainer(runCli, owned.containerName, providerId, owned);
+    if (discovery.state === "blocked") {
+      blockers.push(discovery.detail);
+      return { leases, blockers };
+    }
+    if (discovery.state === "absent") {
+      if (!owned.environmentHandoffPath) {
+        const pending = pendingCleanup(owned, clock());
+        leases = leases.map((entry) => entry === owned ? pending : entry);
+        await writeLeaseState(statePath, leases);
+      }
+      return { leases, blockers };
+    }
+    const bound: DurableOciLease = {
+      ...owned, containerId: discovery.containerId, createStage: "bound", cleanupStage: "cleanup_started",
+    };
+    leases = leases.map((entry) => entry === owned ? bound : entry);
+    owned = bound;
+    await writeLeaseState(statePath, leases);
+    const removed = await runCli(["rm", "--force", discovery.containerId]);
+    if (removed.exitCode !== 0) {
+      blockers.push(`Owned container ${discovery.containerId} cleanup failed: ${bounded(removed.stderr)}.`);
+      return { leases, blockers };
+    }
+    if (!owned.environmentHandoffPath) {
+      const pending = pendingCleanup(owned, clock());
+      leases = leases.map((entry) => entry === owned ? pending : entry);
+      await writeLeaseState(statePath, leases);
+    }
+    return { leases, blockers };
+  };
+
   return Object.freeze({
     async attest() {
       cliPath = await attestExecutable(configuredCli);
@@ -268,14 +319,6 @@ export function createOciExecutionIsolationProvider(
       args.push("--workdir", representation.cwd, acquisitionImageId, representation.executable);
       args.push(...representation.arguments);
       assertSafeOciArguments(args);
-      const created = await runCli(args);
-      if (created.exitCode !== 0) {
-        throw ociError("oci_create_failed", `OCI container create failed: ${bounded(created.stderr)}.`);
-      }
-      const containerId = created.stdout.trim();
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(containerId)) {
-        throw ociError("oci_create_failed", "OCI create returned an invalid container identity.");
-      }
       const acquiredAt = clock().toISOString();
       const lease = deepFreeze({
         leaseId,
@@ -288,23 +331,51 @@ export function createOciExecutionIsolationProvider(
         providerIdentity: request.implementationDigest,
         immutableImageId: acquisitionImageId,
       });
-      const owned: DurableOciLease = {
-        lease, containerId, containerName, runId: request.intent.runId, cleanupStage: "active",
+      const creating: DurableOciLease = {
+        lease, containerName, runId: request.intent.runId, createStage: "creating", cleanupStage: "cleanup_started",
         ...(environmentFile ? { environmentHandoffPath: environmentFile } : {}),
       };
       try {
         await withStateLock(statePath, async () => {
           const leases = await readLeaseState(statePath);
-          leases.push(owned);
+          leases.push(creating);
           await writeLeaseState(statePath, leases);
         });
       } catch (error) {
-        const cleanup = await runCli(["rm", "--force", containerId]);
         if (environmentFile) await removeEnvironmentHandoff(environmentFile, environmentHandoffRoot).catch(() => undefined);
-        throw new AggregateError(
-          [error, ...(cleanup.exitCode === 0 ? [] : [new Error(bounded(cleanup.stderr))])],
-          "Could not durably own newly created OCI container.",
-        );
+        throw ociError("oci_recovery_blocked", "Could not durably journal OCI create intent before launch.", error);
+      }
+      let containerId: string;
+      try {
+        const created = await runCli(args);
+        if (created.exitCode !== 0) {
+          throw ociError("oci_create_failed", `OCI container create failed: ${bounded(created.stderr)}.`);
+        }
+        containerId = created.stdout.trim();
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(containerId)) {
+          throw ociError("oci_create_failed", "OCI create returned an invalid container identity.");
+        }
+        await withStateLock(statePath, async () => {
+          const leases = await readLeaseState(statePath);
+          const owned = leases.find((entry) => entry.lease.leaseId === leaseId);
+          if (!owned || owned.createStage !== "creating") {
+            throw ociError("oci_recovery_blocked", "OCI create intent lost durable ownership before identity bind.");
+          }
+          await writeLeaseState(statePath, leases.map((entry) => entry === owned ? {
+            ...owned, containerId, createStage: "bound" as const, cleanupStage: "active" as const,
+          } : entry));
+        });
+      } catch (error) {
+        const settled = await withStateLock(statePath, async () => {
+          const leases = await readLeaseState(statePath);
+          const owned = leases.find((entry) => entry.lease.leaseId === leaseId);
+          if (!owned) return { leases, blockers: ["OCI create intent lost durable cleanup ownership."] };
+          return await settleCreatingRecord(leases, owned);
+        }).catch((cleanupError) => ({ leases: [], blockers: [`OCI create reconciliation failed: ${bounded(cleanupError)}.`] }));
+        if (settled.blockers.length > 0) {
+          throw ociError("oci_recovery_blocked", settled.blockers.join(" "), error);
+        }
+        throw error;
       }
       if (environmentFile) {
         try {
@@ -347,7 +418,7 @@ export function createOciExecutionIsolationProvider(
       await withStateLock(statePath, async () => {
         const leases = await readLeaseState(statePath);
         const owned = leases.find((entry) => entry.lease.leaseId === lease.leaseId);
-        if (!owned || owned.lease.providerId !== providerId ||
+        if (!owned || !owned.containerId || owned.createStage === "creating" || owned.lease.providerId !== providerId ||
             owned.lease.grantId !== lease.grantId || owned.lease.invocationId !== lease.invocationId) {
           throw ociError("oci_release_failed", "OCI lease is not durably owned by this provider.");
         }
@@ -378,6 +449,8 @@ export function createOciExecutionIsolationProvider(
       const owned = leases.find((entry) => entry.lease.leaseId === lease.leaseId);
       if (
         !owned ||
+        !owned.containerId ||
+        owned.createStage === "creating" ||
         owned.cleanupStage !== "active" ||
         owned.lease.providerId !== providerId ||
         owned.lease.invocationId !== intent.invocationId ||
@@ -437,8 +510,13 @@ export function createOciExecutionIsolationProvider(
           blockers.push(`OCI environment handoff cleanup remains blocked for lease ${owned.lease.leaseId}: ${bounded(error)}.`);
         }
       }
-      const byContainer = new Map(leases.map((entry) => [entry.containerId, entry]));
-      const remaining = new Set(leases);
+      for (const owned of [...leases].filter((entry) => entry.createStage === "creating")) {
+        const settled = await settleCreatingRecord(leases, owned);
+        leases = settled.leases;
+        blockers.push(...settled.blockers);
+      }
+      const byContainer = new Map(leases.flatMap((entry) => entry.containerId ? [[entry.containerId, entry] as const] : []));
+      const remaining = new Set(leases.filter((entry) => entry.createStage !== "creating"));
       for (const owned of leases.filter((entry) => entry.cleanupStage === "cleaned_pending_ack")) {
         if (owned.environmentHandoffPath) continue;
         transitions.push(cleanupTransition(owned, "cleaned"));
@@ -482,6 +560,7 @@ export function createOciExecutionIsolationProvider(
       }
       for (const owned of remaining) {
         if (listedDurableLeases.has(owned)) continue;
+        if (!owned.containerId) continue;
         const absence = await inspectContainerAbsence(runCli, owned.containerId);
         if (absence.absent) {
           remaining.delete(owned);
@@ -636,6 +715,38 @@ async function inspectOwnedContainer(
   } catch {
     return undefined;
   }
+}
+
+async function discoverExactNamedContainer(
+  runCli: (args: readonly string[]) => Promise<OciCliResult>,
+  containerName: string,
+  providerId: string,
+  owned: DurableOciLease,
+): Promise<{ state: "absent" } | { state: "found"; containerId: string } | { state: "blocked"; detail: string }> {
+  let inspected: OciCliResult;
+  try {
+    inspected = await runCli(["inspect", "--format", "{{.Id}}", containerName]);
+  } catch (error) {
+    return { state: "blocked", detail: `Exact OCI container discovery threw: ${bounded(error)}.` };
+  }
+  if (inspected.exitCode !== 0) {
+    const detail = bounded(inspected.stderr || inspected.stdout);
+    return /\b(?:no such (?:object|container)|not found)\b/i.test(detail)
+      ? { state: "absent" }
+      : { state: "blocked", detail: `Exact OCI container discovery failed: ${detail || "unclassified failure"}.` };
+  }
+  const containerId = inspected.stdout.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(containerId)) {
+    return { state: "blocked", detail: "Exact OCI container discovery returned an invalid identity." };
+  }
+  let identity: InspectedOwnedContainer | undefined;
+  try { identity = await inspectOwnedContainer(runCli, containerId); }
+  catch (error) {
+    return { state: "blocked", detail: `Exact OCI identity inspection threw: ${bounded(error)}.` };
+  }
+  return matchesOwnedScope(identity, providerId, owned)
+    ? { state: "found", containerId }
+    : { state: "blocked", detail: `Exact named container ${containerName} failed owned identity validation.` };
 }
 
 async function inspectContainerAbsence(
@@ -795,16 +906,20 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
   const leaseIds = new Set<string>();
   const containerIds = new Set<string>();
   return value.map((value) => {
-      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId", "cleanupStage", "cleanupToken", "cleanedAt", "environmentHandoffPath"]);
+      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId", "createStage", "cleanupStage", "cleanupToken", "cleanedAt", "environmentHandoffPath"]);
       const lease = exactLeaseObject(row.lease, ["leaseId", "providerId", "invocationId", "grantId", "grantedAccess", "acquiredAt", "expiresAt", "state", "providerIdentity", "immutableImageId"]);
       const textField = (input: unknown, pattern?: RegExp) => {
         if (typeof input !== "string" || !input || input.length > 512 || input.includes("\0") || (pattern && !pattern.test(input))) throw new Error();
         return input;
       };
       const leaseId = textField(lease.leaseId);
-      const containerId = textField(row.containerId, /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/);
-      if (leaseIds.has(leaseId) || containerIds.has(containerId)) throw new Error();
-      leaseIds.add(leaseId); containerIds.add(containerId);
+      const createStage = row.createStage === undefined ? "bound" : row.createStage;
+      if (createStage !== "creating" && createStage !== "bound") throw new Error();
+      const containerId = row.containerId === undefined ? undefined
+        : textField(row.containerId, /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/);
+      if ((createStage === "bound") !== (containerId !== undefined) || leaseIds.has(leaseId) ||
+          (containerId !== undefined && containerIds.has(containerId))) throw new Error();
+      leaseIds.add(leaseId); if (containerId) containerIds.add(containerId);
       if (lease.providerId !== pathProviderId(path) || lease.state !== "active" ||
           !Array.isArray(lease.grantedAccess) || lease.grantedAccess.length > MAX_DURABLE_ACCESS ||
           typeof lease.providerIdentity !== "string" || !/^[a-f0-9]{64}$/.test(lease.providerIdentity) ||
@@ -827,6 +942,7 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
       if (containerName !== expectedName) throw new Error();
       const cleanupStage = row.cleanupStage === undefined ? "active" : row.cleanupStage;
       if (!["active", "cleanup_started", "cleaned_pending_ack"].includes(String(cleanupStage)) ||
+          (createStage === "creating" && cleanupStage === "active") ||
           (cleanupStage === "cleaned_pending_ack") !== (row.cleanupToken !== undefined && row.cleanedAt !== undefined) ||
           (cleanupStage !== "cleaned_pending_ack" && (row.cleanupToken !== undefined || row.cleanedAt !== undefined)) ||
           (row.cleanedAt !== undefined && !canonicalTimestamp(row.cleanedAt))) throw new Error();
@@ -843,7 +959,9 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
           grantedAccess: access, acquiredAt: textField(lease.acquiredAt), ...(lease.expiresAt === undefined ? {} : { expiresAt: textField(lease.expiresAt) }),
           state: "active" as const, providerIdentity: lease.providerIdentity, immutableImageId: lease.immutableImageId,
         },
-        containerId, containerName, runId, cleanupStage: cleanupStage as DurableOciLease["cleanupStage"],
+        ...(containerId === undefined ? {} : { containerId }), containerName, runId,
+        createStage: createStage as DurableOciLease["createStage"],
+        cleanupStage: cleanupStage as DurableOciLease["cleanupStage"],
         ...(row.cleanupToken === undefined ? {} : { cleanupToken: textField(row.cleanupToken) }),
         ...(row.cleanedAt === undefined ? {} : { cleanedAt: textField(row.cleanedAt) }),
         ...(environmentHandoffPath === undefined ? {} : { environmentHandoffPath }),

@@ -450,6 +450,65 @@ test("Windows Job observation advances absolute offsets across incremental durab
   assert.deepEqual(parseProcessReconciliation(observation), { state: "exited", exitCode: 0 });
 });
 
+test("Windows Job serializes ownership observation with cancellation control", async () => {
+  let running = true;
+  let reconciliationActive = false;
+  let signalCalls = 0;
+  let releaseReconciliation!: () => void;
+  const reconciliationBarrier = new Promise<void>((resolve) => { releaseReconciliation = resolve; });
+  const snapshot = () => ({
+    processId: "job-control-serialization",
+    pid: 9001,
+    status: running ? "running" as const : "stopped" as const,
+    exitCode: running ? null : 143,
+    signal: running ? null : "SIGTERM" as const,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    stdout: "",
+    stderr: "",
+    ownershipReleased: !running,
+  });
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    readOutputSince: (_processId, _context, offsets) => ({
+      stdout: new Uint8Array(),
+      stderr: new Uint8Array(),
+      next: offsets,
+    }),
+    reconcileOwnership: async () => {
+      if (running) {
+        reconciliationActive = true;
+        await reconciliationBarrier;
+        reconciliationActive = false;
+      }
+      return snapshot();
+    },
+    signal: async () => {
+      signalCalls += 1;
+      if (reconciliationActive) {
+        const error = new Error("read ECONNRESET") as Error & { code: string };
+        error.code = "ECONNRESET";
+        throw error;
+      }
+      running = false;
+      return snapshot();
+    },
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const binding = jobBinding("job-control-serialization");
+
+  const observation = backend.observe(binding, async () => undefined, fence);
+  while (!reconciliationActive) await new Promise((resolve) => setImmediate(resolve));
+  const cancellation = backend.signal(binding, "terminate");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(signalCalls, 0, "cancellation must queue behind the in-flight authenticated ownership observation");
+
+  releaseReconciliation();
+  assert.equal(parseProcessSignalResult(await cancellation).state, "exited");
+  assert.deepEqual(parseProcessReconciliation(await observation), { state: "exited", exitCode: 143, signal: "SIGTERM" });
+});
+
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
 function request(args: string[]) {
   return {

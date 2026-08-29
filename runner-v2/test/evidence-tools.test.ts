@@ -258,13 +258,22 @@ test("evidence command records mechanical facts and artifacts without a verdict"
   }
 });
 
-test("evidence inspection is factual, read-only, and task scoped", async (t) => {
+test("evidence inspection is factual, read-only, and task scoped", async () => {
   const fixture = evidenceFixture();
   const store = new SqliteEvidenceStore(fixture.database);
   const artifacts = new ArtifactStore(fixture.artifacts);
+  const graph = createProductionOneShotCommandFixture(undefined, { artifacts });
   try {
-    const workerTools = tools(store, artifacts, t);
-    await workerTools.invoke(
+    const workerTools = new ToolRegistry();
+    for (const tool of createEvidenceTools({
+      store,
+      artifacts,
+      taskId: "task_a",
+      maxOutputBytes: 1024 * 1024,
+      attempt: 1,
+      execution: graph.internalExecution,
+    })) workerTools.register(tool);
+    const commandResult = await workerTools.invoke(
       {
         type: "tool_call",
         callId: "evidence_1",
@@ -278,6 +287,7 @@ test("evidence inspection is factual, read-only, and task scoped", async (t) => 
       },
       workerContext(fixture.workspace)
     );
+    assert.equal(commandResult.isError, false, JSON.stringify(commandResult.error));
     const inspected = await workerTools.invoke(
       {
         type: "tool_call",
@@ -298,6 +308,7 @@ test("evidence inspection is factual, read-only, and task scoped", async (t) => 
     assert.equal(records[0].status, "observed");
     assert.ok(records[0].fact);
   } finally {
+    await graph.close();
     store.close();
     fixture.cleanup();
   }
