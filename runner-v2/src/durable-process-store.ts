@@ -1492,10 +1492,11 @@ function reduceMutation(
         throw new Error(
           "Escalation completion has no matching durable request.",
         );
+      const durableOutcome = current.state === "exited" ? "exited" : outcome;
       const completed: DurableEscalationEntry = {
         ...pending,
         completedAt: mutation.at,
-        outcome,
+        outcome: durableOutcome,
         ...optionalText(data, "detail"),
       };
       return historyOnly(
@@ -1504,7 +1505,7 @@ function reduceMutation(
           escalation: [...current.escalation.slice(0, -1), completed],
         },
         mutation.at,
-        `${action}_${outcome}`,
+        `${action}_${durableOutcome}`,
       );
     }
     case "record_exit":

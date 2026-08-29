@@ -1004,8 +1004,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           (fence) =>
             selected.backend.signal(record.backendBinding!, action, fence),
         );
-        outcome = parseProcessSignalResult(signalled.result).state;
         signalEffectId = signalled.effectId;
+        outcome =
+          this.current(record.invocationId).state === "exited"
+            ? "exited"
+            : parseProcessSignalResult(signalled.result).state;
       }
       record = this.current(record.invocationId);
       record = this.mutate({
@@ -1018,6 +1021,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ...(detail ? { detail } : {}),
         ...(signalEffectId ? { effectId: signalEffectId } : {}),
       });
+      if (record.state === "exited") return;
       if (outcome === "failed") {
         if (record.state === "cleanup_blocked")
           throw new SubprocessRuntimeError(

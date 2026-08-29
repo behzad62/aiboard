@@ -664,6 +664,122 @@ test("effect family consumer matrix accepts only the exact semantic mutation", (
   }
 });
 
+test("late exact signal consumer cannot weaken an already proven exit", () => {
+  for (const lateOutcome of ["running", "failed"] as const) {
+    const kernel = createInMemoryDurableProcessKernel(stateKey);
+    const writer = writerFor(kernel);
+    let record = writer.claim(prepared()).record;
+    const apply = (command: Record<string, unknown>) => {
+      record = writer.apply({
+        ...command,
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+      });
+    };
+    apply({
+      type: "mark_output_prepared",
+      at: "2026-01-01T00:00:01.000Z",
+    });
+    apply({
+      type: "record_environment",
+      at: "2026-01-01T00:00:02.000Z",
+      environmentAudit: {
+        inheritedNames: [],
+        removedNames: [],
+        explicitSafeNames: [],
+        grantedNames: [],
+      },
+    });
+    apply({ type: "mark_launching", at: "2026-01-01T00:00:03.000Z" });
+    apply({
+      type: "bind_launch",
+      at: "2026-01-01T00:00:04.000Z",
+      binding: {
+        registryId: "registry",
+        backendId: "fake",
+        implementationGeneration: "generation",
+        implementationDigest: "b".repeat(64),
+        attestationVersion: 1,
+        attestationDigest: "c".repeat(64),
+        opaqueIdentity: "identity",
+        birthFingerprint: {
+          observedAt: "2026-01-01T00:00:04.000Z",
+          discriminator: "birth",
+        },
+        startedAt: "2026-01-01T00:00:04.000Z",
+      },
+    });
+    apply({
+      type: "begin_effect",
+      at: "2026-01-01T00:00:05.000Z",
+      effectId: "effect-observe",
+      family: "backend_observe",
+      resolution: "commit",
+    });
+    apply({
+      type: "request_stop",
+      at: "2026-01-01T00:00:06.000Z",
+      reason: "cancelled",
+    });
+    apply({
+      type: "start_escalation",
+      requestedAt: "2026-01-01T00:00:07.000Z",
+      action: "interrupt",
+    });
+    apply({
+      type: "begin_effect",
+      at: "2026-01-01T00:00:08.000Z",
+      effectId: "effect-signal",
+      family: "backend_signal",
+      resolution: "commit",
+    });
+    apply({
+      type: "complete_effect",
+      at: "2026-01-01T00:00:09.000Z",
+      effectId: "effect-observe",
+      leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+    });
+    apply({
+      type: "record_exit",
+      at: "2026-01-01T00:00:10.000Z",
+      effectId: "effect-observe",
+      observation: {
+        exitCode: 0,
+        observedAt: "2026-01-01T00:00:10.000Z",
+      },
+    });
+    apply({
+      type: "complete_effect",
+      at: "2026-01-01T00:00:11.000Z",
+      effectId: "effect-signal",
+      leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+    });
+    const provenExit = record;
+    apply({
+      type: "finish_escalation",
+      completedAt: "2026-01-01T00:00:12.000Z",
+      effectId: "effect-signal",
+      action: "interrupt",
+      outcome: lateOutcome,
+    });
+    assert.equal(record.state, "exited", lateOutcome);
+    assert.deepEqual(record.observation, provenExit.observation, lateOutcome);
+    assert.deepEqual(
+      record.history.slice(0, provenExit.history.length),
+      provenExit.history,
+      lateOutcome,
+    );
+    assert.ok(
+      record.history
+        .slice(provenExit.history.length)
+        .every(({ state }) => state === "exited"),
+      lateOutcome,
+    );
+    assert.equal(record.escalation.at(-1)?.outcome, "exited", lateOutcome);
+    assert.deepEqual(record.pendingEffects, [], lateOutcome);
+  }
+});
+
 test("completed effect marker survives SQLite restart and tampering fails integrity", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-effect-journal-"));
   t.after(async () => rm(root, { recursive: true, force: true }));

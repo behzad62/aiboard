@@ -1479,6 +1479,85 @@ test("same owner consumes observe before signal without stranding the exact sign
   assert.deepEqual(pendingEffectsOf(f.store.readByInvocation("invoke-1")), []);
 });
 
+test("observe-first preserves proven exit for late running and failed signal responses", async (t) => {
+  for (const signalState of ["running", "failed"] as const) {
+    await t.test(signalState, async () => {
+      const f = fixture();
+      const observeGate = deferred();
+      const observeStarted = deferred();
+      const signalGate = deferred();
+      const signalStarted = deferred();
+      const finalizeGate = deferred();
+      const finalizeStarted = deferred();
+      f.backend.signalValues = [{ state: signalState }];
+      f.backend.observeGate = observeGate.promise;
+      f.backend.onObserve = observeStarted.resolve;
+      f.backend.signalGate = signalGate.promise;
+      f.backend.onSignal = signalStarted.resolve;
+      f.outputs.finalizeGate = finalizeGate.promise;
+      f.outputs.onFinalize = finalizeStarted.resolve;
+      const invocation = f.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+      });
+      await observeStarted.promise;
+      const cancellation = f.runtime.cancel("invoke-1");
+      await signalStarted.promise;
+      observeGate.resolve();
+      await finalizeStarted.promise;
+      const provenExit = f.store.readByInvocation("invoke-1")!;
+      assert.equal(provenExit.state, "exited");
+      assert.deepEqual(provenExit.observation, {
+        exitCode: 0,
+        observedAt: "2026-01-01T00:00:00.000Z",
+      });
+      try {
+        signalGate.resolve();
+        assert.equal(await cancellation, true);
+        const afterSignal = f.store.readByInvocation("invoke-1")!;
+        assert.equal(afterSignal.state, "exited");
+        assert.deepEqual(afterSignal.observation, provenExit.observation);
+        assert.deepEqual(
+          afterSignal.history.slice(0, provenExit.history.length),
+          provenExit.history,
+        );
+        assert.ok(
+          afterSignal.history
+            .slice(provenExit.history.length)
+            .every(({ state }) => state === "exited"),
+        );
+        assert.equal(afterSignal.escalation.at(-1)?.outcome, "exited");
+        assert.deepEqual(
+          pendingEffectsOf(afterSignal).map(({ family, phase }) => ({
+            family,
+            phase,
+          })),
+          [{ family: "output_finalize", phase: "started" }],
+        );
+        assert.equal(
+          f.backend.calls.filter((call) => call.startsWith("signal:")).length,
+          1,
+        );
+      } finally {
+        signalGate.resolve();
+        finalizeGate.resolve();
+      }
+      const result = await invocation;
+      assert.equal(result.outcome, "cancelled");
+      const completed = f.store.readByInvocation("invoke-1")!;
+      assert.equal(completed.state, "cleaned");
+      assert.deepEqual(pendingEffectsOf(completed), []);
+      assert.equal(
+        completed.history.some(({ state }) =>
+          ["identity_mismatch", "cleanup_blocked"].includes(state),
+        ),
+        false,
+      );
+    });
+  }
+});
+
 test("cancel denies every live same-owner family except one active observation", async (t) => {
   await t.test("output_reopen", async (t) => {
     const f = await durableLaunchBlocker(t, "cancel-deny-reopen");
@@ -1776,6 +1855,121 @@ test("raw journaled rejection remains started and blocks retry cancel and startu
     f.outputs.calls.filter((call) => call.startsWith("finalize:")).length,
     finalizeCount,
   );
+});
+
+test("raw rejection marker survives SQLite restart and blocks every contender path", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-raw-rejection-restart-"));
+  const path = join(root, "process.sqlite");
+  const stateKey = new Uint8Array(32).fill(13);
+  const firstBackend = new Backend();
+  const firstOutputs = new Outputs();
+  const firstClock = new Clock();
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    firstBackend,
+    firstClock,
+    firstOutputs,
+  );
+  const opened: { second?: ReturnType<typeof runtimeFor> } = {};
+  t.after(async () => {
+    try {
+      first.readOnlyStore.close();
+    } catch {}
+    try {
+      opened.second?.readOnlyStore.close();
+    } catch {}
+    await rm(root, { recursive: true, force: true });
+  });
+  firstOutputs.failFinalizeFor.add("output-proc-invoke-1");
+  const result = await first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  assert.equal(result.outcome, "cleanup_failed");
+  const started = (
+    first.readOnlyStore.readByInvocation("invoke-1") as unknown as {
+      pendingEffects: readonly {
+        effectId: string;
+        family: string;
+        phase: string;
+      }[];
+    }
+  ).pendingEffects;
+  assert.equal(started.length, 1);
+  assert.deepEqual(
+    started.map(({ effectId, family, phase }) => ({ effectId, family, phase })),
+    [
+      {
+        effectId: started[0]!.effectId,
+        family: "output_finalize",
+        phase: "started",
+      },
+    ],
+  );
+  first.readOnlyStore.close();
+
+  const secondBackend = new Backend();
+  const secondOutputs = new Outputs();
+  const secondClock = new Clock();
+  secondClock.current = new Date("2026-01-01T00:30:00.000Z");
+  const second = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    secondBackend,
+    secondClock,
+    secondOutputs,
+  );
+  opened.second = second;
+  const assertSameStartedMarker = () => {
+    const pending = (
+      second!.readOnlyStore.readByInvocation("invoke-1") as unknown as {
+        pendingEffects: readonly {
+          effectId: string;
+          family: string;
+          phase: string;
+        }[];
+      }
+    ).pendingEffects;
+    assert.deepEqual(
+      pending.map(({ effectId, family, phase }) => ({
+        effectId,
+        family,
+        phase,
+      })),
+      [
+        {
+          effectId: started[0]!.effectId,
+          family: "output_finalize",
+          phase: "started",
+        },
+      ],
+    );
+  };
+  assert.deepEqual(await second.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+  ]);
+  assertSameStartedMarker();
+  assert.equal(await second.runtime.cancel("invoke-1"), false);
+  assertSameStartedMarker();
+  assert.equal(
+    (
+      await second.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+      })
+    ).outcome,
+    "cleanup_failed",
+  );
+  assertSameStartedMarker();
+  assert.deepEqual(await second.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+  ]);
+  assertSameStartedMarker();
+  assert.deepEqual(secondBackend.calls, []);
+  assert.deepEqual(secondOutputs.calls, []);
 });
 
 test("transient heartbeat failure leaves a started marker after raw success and blocks contenders", async (t) => {
