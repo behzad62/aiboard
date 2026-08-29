@@ -6,6 +6,7 @@ import type {
 } from "./execution-grants.js";
 import { assertCurrentConsumedExecutionGrantClaims } from "./execution-grants.js";
 import {
+  STREAMING_SESSION_RECORD_VERSION,
   getStreamingSessionStoreWriter,
   type StreamingSessionAccess,
   type StreamingSessionBackendBinding,
@@ -228,7 +229,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       const at = clock().toISOString();
       const record = {
         recordKind: "runner.streaming-session",
-        schemaVersion: 1,
+        schemaVersion: STREAMING_SESSION_RECORD_VERSION,
         revision: 0,
         sessionId,
         ownerId: `session-authority:${claims.runId}:${claims.grantId}`,

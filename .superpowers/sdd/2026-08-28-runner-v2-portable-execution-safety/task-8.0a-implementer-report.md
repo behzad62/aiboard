@@ -244,3 +244,52 @@ Each behavior below was added test-first. RED commands were run before the liste
 - Production/tests plus this force-added report: `17d7844e` (`fix(runner): recover expired pending cleanup`).
 - Report-hash follow-up: committed immediately after recording this production hash.
 - No unresolved implementation or validation concern is known. The packet still requires the prescribed independent re-review before the overall 8.0A reviewer exit gate can be claimed.
+
+## Fix Round 3 — re-review base `16e23e513e23eca86454a340a1e72f6b8f6b4ecb`
+
+### Scope and linked-finding audit
+
+- This round addresses both linked Important defects in `task-8.0a-rereview-2.md`: a recovered pending cleanup could not persist the `blocked` settlement, and the parser accepted any old cleanup fence without durable takeover provenance.
+- Changed production files: `runner-v2/src/streaming-session-store.ts` and `runner-v2/src/session-authority.ts`. Changed focused tests: `runner-v2/test/streaming-session-store.test.ts` and `runner-v2/test/session-authority.test.ts`.
+- No brief, review, progress ledger, controller evidence, 8.0B code, production child family, Git/MCP/LSP/managed/provider routing, CLI, construction graph, or child launch code was changed.
+- **Atomic recovered cleanup takeover:** schema version `2` adds immutable cleanup-effect provenance: the stable effect ID, its original owner/fence, and a chronological chain of exact one-step `from` → `to` owner/fence transitions. A post-expiry adopted `cleanup_pending` takeover re-fences the existing effect atomically with the record owner/fence/lease update; it does not mint another cleanup effect or change its ID/kind/created time.
+- **Closed parser:** version-2 cleanup effects require provenance. The parser checks the effect ID, origin, every contiguous fence step, timestamp order, final current owner/fence, and SessionAuthority ownership for any recovered chain. Pending, blocked, and released cleanup states again require the cleanup effect fence to equal the current record fence exactly. Version-1 records remain readable only under the pre-provenance strict-current-fence form; any reducer mutation upgrades to version 2. Historical version-0 terminal data remains supported when it retains its historical no-provenance effect shape.
+- **Blocked settlement:** `recoverAdopted()` receives the re-fenced existing effect and uses the same current fence to mark it blocked. The durable `cleanup_blocked` state then parses, retains its sole SessionAuthority owner, and a later recovery returns that blocker without invoking the external callback again.
+
+### TDD / fault evidence
+
+| Cycle | Exact RED command and observed failure | Minimum implementation / revert | GREEN result |
+| --- | --- | --- | --- |
+| Cleaned recovered effect must use the new fence | `npx tsx --test --test-name-pattern="recovers an expired adopted pending cleanup" runner-v2/test/session-authority.test.ts` — failed `0/1` with `1 !== 2` at the re-fenced cleanup assertion. | Added an atomic cleanup-pending takeover branch that accepts only the expected expired SessionAuthority owner, advances its fence exactly one step, re-fences the existing cleanup effect, and records its origin/takeover chain. | Same exact command passed `1/1` (`13.5412ms`); the replay saw `cleanup-1` at fence `2`, released once, and a later recovery remained refused. |
+| Recovered `blocked` settlement must survive | `npx tsx --test --test-name-pattern="durably blocks a re-fenced expired adopted cleanup" runner-v2/test/session-authority.test.ts` — failed `0/1` with `StreamingSessionStoreError: Streaming session cleanup effect ownership evidence is invalid` from `mark_cleanup_blocked` after the external callback ran. | Re-fencing makes the preserved effect equal the current fence before replay; strict current-fence parser rules are restored for pending, blocked, and released cleanup. | Same exact command passed `1/1` (`12.0963ms`): one replay persisted `cleanup_blocked`, and the next recovery made zero additional callback calls. |
+| Durable provenance / SQLite parser closure | `npx tsx --test --test-name-pattern="persists exact re-fenced cleanup takeover provenance" runner-v2/test/streaming-session-store.test.ts` — failed `0/1` because `cleanup.cleanupProvenance` was `undefined`. | Added version-2 nested provenance parsing and consistency checks. The SQLite reducer persists the same effect ID/fence/provenance with its HMAC-protected row before reopen. | Same exact command passed `1/1` (`41.1515ms`), including SQLite reopen and parser refusals for an arbitrary old effect fence, missing provenance, forged origin, wrong final owner, fence jump, and altered effect ID. |
+| Parser-provenance mutation / revert | Temporarily removed the `provenance.effectId !== cleanup.effectId` parser guard with `apply_patch`, then ran `npx tsx --test --test-name-pattern="persists exact re-fenced cleanup takeover provenance" runner-v2/test/streaming-session-store.test.ts`. It failed `0/1` with `Missing expected exception`, proving the altered-effect-identity variant could pass. | Restored the exact effect-ID guard with `apply_patch`; no mutation was retained. | Same exact command passed `1/1` (`35.7624ms`). |
+| Versioned-test compatibility | The first combined store/authority run reported three expected compatibility failures because schema version `2` became current: old tests still treated version `2` as unsupported and tried to cast a version-2 provenance-bearing effect to historical version `0`. | Updated only those expected-version fixtures: current records use `2`, unsupported uses `3`, and the historical-terminal fixture removes the later provenance property. | `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts` passed `56/56`. |
+
+### Required-regression coverage
+
+- The cleaned path validates pre-expiry and wrong-owner takeover refusal, generic expired-owner mutation refusal, stale pre-crash callback refusal, no input/access/relaunch authorization during pending or released cleanup, exact re-fenced replay, and exactly-once release.
+- The blocked path validates the same exact effect identity at fence `2`, durable `cleanup_blocked`, and a later no-replay recovery.
+- The SQLite parser test opens the same durable row after close and compares the full cleanup effect/provenance; it rejects arbitrary older fences, absent/forged provenance, wrong owner, non-contiguous fence jump, and mismatched effect identity.
+
+### Fresh focused and affected validation
+
+| Command | Result |
+| --- | --- |
+| `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts runner-v2/test/interactive-process-channel.test.ts runner-v2/test/execution-grants.test.ts` | Passed `85` tests, `0` failures. |
+| `npx tsx --test runner-v2/test/execution-grants.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/one-shot-command-executor.test.ts` | Passed `107` tests, `0` failures. |
+| `npm run typecheck:runner-v2` | Passed: `tsc -p runner-v2/tsconfig.json --noEmit`. |
+| `npx eslint runner-v2/src/streaming-session-store.ts runner-v2/src/session-authority.ts runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts` | Passed with no output. |
+| `git diff --check 16e23e513e23eca86454a340a1e72f6b8f6b4ecb --` | Passed (exit `0`; only Git line-ending warnings). |
+
+### Fake-state cleanup and self-review
+
+- Both new roots use `mkdtemp` outside the project and `finally` cleanup: `runner-v2-session-expired-cleanup-blocked-*` and `runner-v2-stream-cleanup-provenance-*`.
+- The exact final read-only scan is rerun after this report is written and before staging. It includes both new prefixes and the existing expired-cleanup prefix; no deletion workaround or controller-evidence change is used.
+- Review audit: the transition is atomic in both memory and SQLite writers; the effect ID remains `cleanup-1`; effect fence and record fence advance together; every provenance step is continuous and final-owner bound; old generic mutation/auth behavior remains closed; `cleanup_blocked` remains non-takeover-eligible; no family-facing input/access/relaunch surface is added.
+
+### Fix Round 3 commits and concerns
+
+- Production/tests plus this force-added report: pending commit.
+- Report-hash follow-up: committed immediately after the production hash is recorded.
+- No unresolved implementation or validation concern is known. The independent 8.0A re-review exit gate remains required.

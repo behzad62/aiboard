@@ -18,7 +18,7 @@ function pendingTransferRecord(
 ): Record<string, unknown> {
   return {
     recordKind: "runner.streaming-session",
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     sessionId: "stream-1",
     ownerId: "owner-1",
@@ -169,7 +169,7 @@ test("returns an immutable deep clone instead of retaining caller-owned durable 
 
 test("refuses an unsupported active streaming-session schema", () => {
   assert.throws(
-    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 2 })),
+    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 3 })),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
   );
 });
@@ -394,7 +394,7 @@ test("rejects unsupported schema versions even when their record claims to be te
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
   });
   assert.throws(
-    () => parseStreamingSessionRecord({ ...released, schemaVersion: 2 }),
+    () => parseStreamingSessionRecord({ ...released, schemaVersion: 3 }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_version",
   );
 });
@@ -415,7 +415,14 @@ test("preserves the known historical terminal streaming-session schema", () => {
     type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
   });
-  assert.equal(parseStreamingSessionRecord({ ...released, schemaVersion: 0 }).schemaVersion, 0);
+  assert.equal(parseStreamingSessionRecord({
+    ...released,
+    schemaVersion: 0,
+    effects: released.effects.map((effect) => {
+      const { cleanupProvenance: _cleanupProvenance, ...legacyEffect } = effect;
+      return legacyEffect;
+    }),
+  }).schemaVersion, 0);
 });
 
 test("changes the durable record digest for every independently meaningful claim category", () => {
@@ -696,6 +703,114 @@ test("requires ownership-lease expiry for takeover and refuses expired-owner dur
     }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "lease_not_expired",
   );
+});
+
+test("persists exact re-fenced cleanup takeover provenance and rejects forged variants", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-stream-cleanup-provenance-"));
+  const path = join(root, "sessions.sqlite");
+  let first: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  let reopened: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  try {
+    first = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(9));
+    const writer = getStreamingSessionStoreWriter(first);
+    const pending = writer.claim(pendingTransferRecord({
+      leaseExpiresAt: "2026-08-29T00:01:00.000Z",
+    })).record;
+    const active = writer.apply({
+      type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+      ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+    });
+    const cleaning = writer.apply({
+      type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+      ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+    });
+    const takenOver = writer.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: cleaning.revision,
+      ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-recovered", newFencingToken: 2,
+      leaseExpiresAt: "2026-08-29T00:02:00.000Z", at: "2026-08-29T00:01:00.000Z",
+    });
+    const cleanup = takenOver.effects.find((effect) => effect.kind === "cleanup")!;
+    assert.deepEqual(cleanup.cleanupProvenance, {
+      effectId: "cleanup-1", originOwnerId: "owner-1", originFencingToken: 1,
+      takeovers: [{
+        fromOwnerId: "owner-1", fromFencingToken: 1,
+        toOwnerId: "owner-recovered", toFencingToken: 2,
+        at: "2026-08-29T00:01:00.000Z",
+      }],
+    });
+    assert.equal(cleanup.fencingToken, 2);
+
+    const { cleanupProvenance, ...withoutProvenance } = cleanup;
+    const firstTakeover = cleanupProvenance!.takeovers[0]!;
+    const variants = [
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? { ...effect, fencingToken: 1 }
+          : effect),
+      },
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup" ? withoutProvenance : effect),
+      },
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? {
+            ...effect,
+            cleanupProvenance: { ...cleanupProvenance!, originOwnerId: "forged-owner" },
+          }
+          : effect),
+      },
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? {
+            ...effect,
+            cleanupProvenance: {
+              ...cleanupProvenance!,
+              takeovers: [{ ...firstTakeover, toOwnerId: "wrong-owner" }],
+            },
+          }
+          : effect),
+      },
+      {
+        ...takenOver,
+        fencingToken: 3,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? {
+            ...effect,
+            fencingToken: 3,
+            cleanupProvenance: {
+              ...cleanupProvenance!,
+              takeovers: [{ ...firstTakeover, toFencingToken: 3 }],
+            },
+          }
+          : effect),
+      },
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? { ...effect, effectId: "other-cleanup" }
+          : effect),
+      },
+    ];
+    for (const variant of variants) {
+      assert.throws(
+        () => parseStreamingSessionRecord(variant),
+        (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+      );
+    }
+
+    first.store.close();
+    reopened = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(9));
+    assert.deepEqual(reopened.store.readBySession("stream-1")?.effects.find((effect) => effect.kind === "cleanup"), cleanup);
+    reopened.store.close();
+  } finally {
+    try { first?.store.close(); } catch {}
+    try { reopened?.store.close(); } catch {}
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("persists fenced transfer acknowledgement through a SQLite reopen", async () => {
