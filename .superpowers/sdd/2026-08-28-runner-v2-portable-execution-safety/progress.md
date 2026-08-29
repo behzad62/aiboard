@@ -126,6 +126,12 @@ overlap is expected.
   provenance origin plus first transition is not anchored to immutable durable
   authority; commits `88f6059d`..`1f2e5173`). Round 4 escalates to a fresh
   higher-capability implementer; packet 8.0B remains locked.
+- Task 8.0A: fix round 4/5 (SQLite terminal coverage addressed, 1 provenance
+  finding open — current version-3 records are independently anchored, but an
+  active version-2 record can launder the same coherent forgery by deriving its
+  new anchor from untrusted provenance during upgrade; commits
+  `a9550821`..`a23b75e7`). Round 5 is the governed final fix attempt with fresh
+  escalation; packet 8.0B remains locked.
 
 ## Breaker rulings
 
