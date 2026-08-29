@@ -103,6 +103,7 @@ export interface ExecutionGrantAuthority {
 }
 
 interface GrantRecord {
+  readonly authority: object;
   readonly claims: ConsumedExecutionGrantClaims;
   state: "issued" | "consumed" | "revoked";
   revocationReason?: ExecutionGrantRevocationReason;
@@ -122,6 +123,7 @@ export function createExecutionGrantAuthority(
     throw new Error("Execution grant ttlMs must be an integer from 1 to 3600000.");
   }
   const owned = new Set<object>();
+  const authorityIdentity = Object.freeze({});
   let issuanceEpoch = 0;
 
   return Object.freeze({
@@ -154,7 +156,7 @@ export function createExecutionGrantAuthority(
       const grant = {} as OpaqueExecutionGrant;
       Object.defineProperty(grant, RUNNER_OPAQUE_GRANT, { value: true });
       Object.freeze(grant);
-      GRANTS.set(grant, { claims, state: "issued", isolationReserved: false, revokers: new Set() });
+      GRANTS.set(grant, { authority: authorityIdentity, claims, state: "issued", isolationReserved: false, revokers: new Set() });
       owned.add(grant);
       return grant;
     },
@@ -163,7 +165,7 @@ export function createExecutionGrantAuthority(
       grant: OpaqueExecutionGrant,
       expected: ExecutionGrantBinding,
     ): ConsumedExecutionGrantClaims {
-      const record = trustedRecord(grant, owned)!;
+      const record = trustedRecord(grant, authorityIdentity)!;
       if (record.state === "consumed") throw grantError("grant_consumed");
       if (record.state === "revoked") throw grantError("grant_revoked");
       if (Date.parse(record.claims.expiresAt) <= clock().getTime()) {
@@ -185,7 +187,7 @@ export function createExecutionGrantAuthority(
     },
 
     async revoke(grant: OpaqueExecutionGrant, reason: ExecutionGrantRevocationReason): Promise<boolean> {
-      const record = trustedRecord(grant, owned, false);
+      const record = trustedRecord(grant, authorityIdentity);
       if (!record || record.state === "revoked") return false;
       record.state = "revoked";
       record.revocationReason = reason;
@@ -364,7 +366,7 @@ function sameBinding(
 
 function trustedRecord(
   grant: OpaqueExecutionGrant,
-  owned: ReadonlySet<object>,
+  authority: object,
   required = true,
 ): GrantRecord | undefined {
   if (!grant || typeof grant !== "object") {
@@ -372,11 +374,7 @@ function trustedRecord(
     return undefined;
   }
   const record = GRANTS.get(grant as object);
-  if (!record) {
-    if (required) throw grantError("grant_forged");
-    return undefined;
-  }
-  if (!owned.has(grant as object) && record.state === "issued") {
+  if (!record || record.authority !== authority) {
     if (required) throw grantError("grant_forged");
     return undefined;
   }

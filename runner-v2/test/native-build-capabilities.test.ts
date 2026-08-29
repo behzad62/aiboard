@@ -96,6 +96,12 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
       boundary: "provider_specific_not_universal_security_boundary",
       records: [],
     });
+    const enforcementPath = join(runRoot(fixture.state, "capability_metadata"), "execution-isolation", "execution-enforcement-state.json");
+    writeFileSync(enforcementPath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+    const oversizedBytes = statSync(enforcementPath).size;
+    await assert.rejects(handle.observability(), /Durable enforcement state is unreadable/);
+    assert.equal(statSync(enforcementPath).size, oversizedBytes, "failed projection reads must not mutate state");
+    rmSync(enforcementPath);
 
     await handle.close();
     handle = undefined;

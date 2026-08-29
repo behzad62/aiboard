@@ -37,6 +37,7 @@ const PROVIDER_LABEL = "ai-board.runner-v2.provider";
 const RUN_LABEL = "ai-board.runner-v2.run";
 const INVOCATION_LABEL = "ai-board.runner-v2.invocation";
 const GRANT_LABEL = "ai-board.runner-v2.grant";
+const IMAGE_LABEL = "ai-board.runner-v2.image";
 const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
 const STATE_LOCK_TIMEOUT_MS = 10_000;
 
@@ -230,6 +231,7 @@ export function createOciExecutionIsolationProvider(
         `${RUN_LABEL}=${safeLabel(request.intent.runId, "run id")}`,
         `${INVOCATION_LABEL}=${safeLabel(request.intent.invocationId, "invocation id")}`,
         `${GRANT_LABEL}=${safeLabel(request.grant.grantId, "grant id")}`,
+        `${IMAGE_LABEL}=${acquisitionImageId}`,
       ];
       const args = ["create", "--name", containerName];
       for (const label of labels) args.push("--label", label);
@@ -257,6 +259,7 @@ export function createOciExecutionIsolationProvider(
         acquiredAt,
         state: "active" as const,
         providerIdentity: request.implementationDigest,
+        immutableImageId: acquisitionImageId,
       });
       try {
         await withStateLock(statePath, async () => {
@@ -282,7 +285,7 @@ export function createOciExecutionIsolationProvider(
             owned.lease.grantId !== lease.grantId || owned.lease.invocationId !== lease.invocationId) {
           throw ociError("oci_release_failed", "OCI lease is not durably owned by this provider.");
         }
-        const identity = await inspectOwnedLabels(runCli, owned.containerId);
+        const identity = await inspectOwnedContainer(runCli, owned.containerId);
         if (!matchesOwnedScope(identity, providerId, owned)) {
           throw ociError("oci_release_failed", "OCI container identity no longer matches its durable lease.");
         }
@@ -318,6 +321,7 @@ export function createOciExecutionIsolationProvider(
       }
       let cleaned = 0;
       const blockers: string[] = [];
+      const transitions: import("./execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [];
       const remaining = new Set(leases);
       const listedDurableLeases = new Set<DurableOciLease>();
       for (const containerId of listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
@@ -327,18 +331,21 @@ export function createOciExecutionIsolationProvider(
           continue;
         }
         listedDurableLeases.add(owned);
-        const labels = await inspectOwnedLabels(runCli, containerId);
-        if (!matchesOwnedScope(labels, providerId, owned)) {
+        const identity = await inspectOwnedContainer(runCli, containerId);
+        if (!matchesOwnedScope(identity, providerId, owned)) {
           blockers.push(`Labelled container ${containerId} failed owned identity validation.`);
+          transitions.push(cleanupTransition(owned, "blocked", "Owned container identity validation failed."));
           continue;
         }
         const removed = await runCli(["rm", "--force", containerId]);
         if (removed.exitCode !== 0) {
           blockers.push(`Owned container ${containerId} cleanup failed: ${bounded(removed.stderr)}.`);
+          transitions.push(cleanupTransition(owned, "blocked", `Owned container cleanup failed: ${bounded(removed.stderr)}.`));
           continue;
         }
         remaining.delete(owned);
         cleaned += 1;
+        transitions.push(cleanupTransition(owned, "cleaned"));
       }
       for (const owned of remaining) {
         if (listedDurableLeases.has(owned)) continue;
@@ -346,17 +353,34 @@ export function createOciExecutionIsolationProvider(
         if (absence.absent) {
           remaining.delete(owned);
           cleaned += 1;
+          transitions.push(cleanupTransition(owned, "cleaned"));
           continue;
         }
         blockers.push(
           `Durable container ${owned.containerId} was omitted from the owned listing and its absence could not be verified: ${absence.detail}.`,
         );
+        transitions.push(cleanupTransition(owned, "blocked", `Owned container absence could not be verified: ${absence.detail}.`));
       }
       await writeLeaseState(statePath, [...remaining]);
-      return { cleaned, blockers };
+      return { cleaned, blockers, transitions };
       });
     },
   });
+}
+
+function cleanupTransition(
+  owned: DurableOciLease,
+  status: "cleaned" | "blocked",
+  blocker?: string,
+): import("./execution-isolation-provider.js").ExecutionIsolationCleanupTransition {
+  return {
+    status, runId: owned.runId, invocationId: owned.lease.invocationId,
+    grantId: owned.lease.grantId, leaseId: owned.lease.leaseId,
+    providerId: owned.lease.providerId, implementationDigest: owned.lease.providerIdentity,
+    ...(owned.lease.immutableImageId ? { immutableImageId: owned.lease.immutableImageId } : {}),
+    access: owned.lease.grantedAccess,
+    ...(blocker ? { blocker: blocker.slice(0, 512) } : {}),
+  };
 }
 
 async function representGrant(request: ExecutionIsolationAcquireRequest): Promise<{
@@ -426,16 +450,24 @@ async function representGrant(request: ExecutionIsolationAcquireRequest): Promis
   };
 }
 
-async function inspectOwnedLabels(
+interface InspectedOwnedContainer {
+  readonly labels: Record<string, unknown>;
+  readonly imageId: string;
+}
+
+async function inspectOwnedContainer(
   runCli: (args: readonly string[]) => Promise<OciCliResult>,
   containerId: string,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<InspectedOwnedContainer | undefined> {
   const inspected = await runCli(["inspect", "--format", "{{json .Config.Labels}}", containerId]);
   if (inspected.exitCode !== 0) return undefined;
   try {
     const labels = JSON.parse(inspected.stdout) as unknown;
-    return labels && typeof labels === "object" && !Array.isArray(labels)
-      ? labels as Record<string, unknown> : undefined;
+    if (!labels || typeof labels !== "object" || Array.isArray(labels)) return undefined;
+    const image = await runCli(["inspect", "--format", "{{.Image}}", containerId]);
+    const imageId = image.stdout.trim();
+    return image.exitCode === 0 && /^sha256:[a-f0-9]{64}$/.test(imageId)
+      ? { labels: labels as Record<string, unknown>, imageId } : undefined;
   } catch {
     return undefined;
   }
@@ -457,15 +489,19 @@ async function inspectContainerAbsence(
 }
 
 function matchesOwnedScope(
-  labels: Record<string, unknown> | undefined,
+  identity: InspectedOwnedContainer | undefined,
   providerId: string,
   owned: DurableOciLease,
 ): boolean {
+  const labels = identity?.labels;
   return labels?.[OWNED_LABEL] === "true" &&
     labels[PROVIDER_LABEL] === providerId &&
     labels[RUN_LABEL] === owned.runId &&
     labels[INVOCATION_LABEL] === owned.lease.invocationId &&
-    labels[GRANT_LABEL] === owned.lease.grantId;
+    labels[GRANT_LABEL] === owned.lease.grantId &&
+    typeof owned.lease.immutableImageId === "string" &&
+    labels[IMAGE_LABEL] === owned.lease.immutableImageId &&
+    identity?.imageId === owned.lease.immutableImageId;
 }
 
 async function attestExecutable(input: string): Promise<string> {

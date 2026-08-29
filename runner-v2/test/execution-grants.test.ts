@@ -45,8 +45,13 @@ test("issues a canonical opaque grant and consumes it for exactly its bound call
       callId: "call-1",
       permissionProfile: "project",
     } as const;
+    const foreignAuthority = createExecutionGrantAuthority();
     assert.throws(
-      () => createExecutionGrantAuthority().consume(grant, binding),
+      () => foreignAuthority.consume(grant, binding),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_forged",
+    );
+    await assert.rejects(
+      foreignAuthority.revoke(grant, "completed"),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_forged",
     );
     const attempts = await Promise.allSettled([

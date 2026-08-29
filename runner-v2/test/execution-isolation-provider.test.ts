@@ -34,6 +34,38 @@ test("durable enforcement projection rejects unknown or forged state", async () 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("durable enforcement projection enforces exact byte, record, access, and field bounds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-enforcement-bounds-"));
+  const path = join(root, "state.json");
+  const record = {
+    occurredAt: "2026-08-28T10:00:00.000Z", runId: "r", invocationId: "i", grantId: "g",
+    status: "active", enforcement: "write_confinement_exact_grant",
+    disclosure: "provider_specific_not_universal_boundary", access: [],
+  };
+  const state = (records: unknown[]) => ({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records });
+  try {
+    await writeFile(path, JSON.stringify(state(Array.from({ length: 1_000 }, () => record))));
+    assert.equal((await readExecutionEnforcementState(path)).records.length, 1_000);
+    await writeFile(path, JSON.stringify(state([{
+      ...record, runId: "x".repeat(512),
+      access: Array.from({ length: 256 }, (_, index) => ({ canonicalPath: `C:/exact/${index}`, mode: "read" })),
+    }])));
+    assert.equal((await readExecutionEnforcementState(path)).records[0]?.access.length, 256);
+    for (const value of [
+      state(Array.from({ length: 1_001 }, () => record)),
+      state([{ ...record, access: Array.from({ length: 257 }, () => ({ canonicalPath: "C:/x", mode: "read" })) }]),
+      state([{ ...record, runId: "x".repeat(513) }]),
+    ]) {
+      await writeFile(path, JSON.stringify(value));
+      await assert.rejects(readExecutionEnforcementState(path), (error) =>
+        error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked");
+    }
+    await writeFile(path, Buffer.alloc(1024 * 1024 + 1, 0x20));
+    await assert.rejects(readExecutionEnforcementState(path), (error) =>
+      error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("durable enforcement projection preserves concurrent writes across OS processes", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-enforcement-processes-"));
   const statePath = join(root, "state.json");
@@ -111,6 +143,16 @@ test("one consumed grant is global across selectors and authority revocation rel
     })));
     assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
     assert.equal(provider.acquisitions, 1);
+    const foreign = createExecutionGrantAuthority();
+    const foreignAttempts = await Promise.allSettled([
+      foreign.revoke(fixture.grant, "completed"),
+      Promise.resolve().then(() => foreign.consume(fixture.grant, fixture.binding)),
+    ]);
+    assert.equal(foreignAttempts.every((outcome) => outcome.status === "rejected" &&
+      outcome.reason instanceof Error && "code" in outcome.reason && outcome.reason.code === "grant_forged"), true);
+    await foreign.revokeAll("restart");
+    assert.equal(provider.releases, 0);
+    assert.equal(first.activeLeases().length + second.activeLeases().length, 1);
     assert.equal(await fixture.authority.revoke(fixture.grant, "completed"), true);
     assert.equal(provider.releases, 1);
     assert.deepEqual(first.activeLeases(), []);
@@ -240,6 +282,37 @@ test("durable enforcement projection reopens Full, strict lease, revocation, and
   }
 });
 
+test("restart projection correlates multiple exact cleaned and blocked lease transitions", async () => {
+  const first = await isolationFixture();
+  const second = await isolationFixture();
+  const statePath = join(first.root, "partial-recovery.json");
+  try {
+    const provider = fakeProvider("fixture-partial-recovery", { partialRecovery: true });
+    const registry = createExecutionIsolationRegistry([createExecutionIsolationProviderRegistration({
+      stableProviderId: "fixture-partial-recovery", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider,
+    })]);
+    const left = createExecutionIsolationSelector(registry, { ...first.selectorOptions, statePath });
+    const right = createExecutionIsolationSelector(registry, { ...second.selectorOptions, statePath });
+    const [one, two] = await Promise.all([
+      left.acquire({ permissionProfile: "project", intent: first.intent, grant: first.claims }),
+      right.acquire({ permissionProfile: "project", intent: { ...second.intent, invocationId: "invocation-2" }, grant: second.claims }),
+    ]);
+    assert.equal(one.enforcement, "write_confinement_exact_grant");
+    assert.equal(two.enforcement, "write_confinement_exact_grant");
+    await left.recoverOwnedLeases();
+    const reopened = await createExecutionIsolationSelector(createExecutionIsolationRegistry([]), { statePath }).enforcementState();
+    const active = reopened.records.filter((record) => record.status === "active");
+    const terminal = reopened.records.filter((record) => record.status === "cleaned" || record.status === "blocked");
+    assert.equal(active.length, 2);
+    assert.deepEqual(new Set(terminal.map((record) => record.leaseId)), new Set(active.map((record) => record.leaseId)));
+    assert.deepEqual(terminal.map((record) => record.status), ["cleaned", "blocked"]);
+    assert.deepEqual(reopened.recoverySummaries?.at(-1), {
+      occurredAt: "2026-08-28T10:00:00.000Z", providerId: "fixture-partial-recovery",
+      cleanedCount: 1, blockerCount: 1, blockers: ["fixture partial cleanup blocker"],
+    });
+  } finally { await first.close(); await second.close(); }
+});
+
 test("release failure remains visible and restart cleanup invokes only owned provider leases", async () => {
   const fixture = await isolationFixture();
   try {
@@ -281,12 +354,14 @@ function fakeProvider(providerId: string, mutation: {
   releaseFails?: boolean;
   mechanism?: string;
   ociIdentity?: boolean;
+  partialRecovery?: boolean;
 } = {}): ExecutionIsolationProvider & {
   acquisitions: number;
   releases: number;
   recoveries: number;
   releaseFails: boolean;
 } {
+  const cleanupTransitions: import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [];
   const provider = {
     acquisitions: 0,
     releases: 0,
@@ -315,7 +390,7 @@ function fakeProvider(providerId: string, mutation: {
     },
     async acquire(request: Parameters<ExecutionIsolationProvider["acquire"]>[0]) {
       provider.acquisitions += 1;
-      return {
+      const lease = {
         leaseId: `lease-${request.grant.grantId}`,
         providerId: request.providerId,
         invocationId: request.intent.invocationId,
@@ -324,7 +399,15 @@ function fakeProvider(providerId: string, mutation: {
         acquiredAt: "2026-08-28T10:00:00.000Z",
         state: "active" as const,
         providerIdentity: request.implementationDigest,
+        ...(mutation.ociIdentity ? { immutableImageId: `sha256:${"1".repeat(64)}` } : {}),
       };
+      cleanupTransitions.push({
+        status: "cleaned", runId: request.intent.runId, invocationId: lease.invocationId,
+        grantId: lease.grantId, leaseId: lease.leaseId, providerId: lease.providerId,
+        implementationDigest: lease.providerIdentity, immutableImageId: lease.immutableImageId,
+        access: lease.grantedAccess,
+      });
+      return lease;
     },
     async release() {
       provider.releases += 1;
@@ -332,7 +415,11 @@ function fakeProvider(providerId: string, mutation: {
     },
     async recoverOwned() {
       provider.recoveries += 1;
-      return { cleaned: 1, blockers: [] };
+      const transitions = cleanupTransitions.map((transition, index) => mutation.partialRecovery && index === 1
+        ? { ...transition, status: "blocked" as const, blocker: "fixture partial cleanup blocker" }
+        : transition);
+      const blockers = transitions.filter((transition) => transition.status === "blocked").map((transition) => transition.blocker!);
+      return { cleaned: transitions.filter((transition) => transition.status === "cleaned").length, blockers, transitions };
     },
   };
   return provider;
@@ -365,6 +452,7 @@ async function isolationFixture(permissionProfile: "project" | "full" = "project
     root,
     authority,
     grant,
+    binding,
     intent: {
       invocationId: "invocation",
       runId: "run",

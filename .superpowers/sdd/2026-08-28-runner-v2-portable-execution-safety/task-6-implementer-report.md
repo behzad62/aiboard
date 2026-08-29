@@ -166,3 +166,54 @@ Reviewed `task-6-review-1.md` under the receiving-review discipline. All nine fi
 - Final residue audit at the validation boundary: zero Runner-owned labelled containers, Task 6 temp directories, OCI/enforcement lock directories, or fixture processes.
 
 Residual boundary remains Task 7 routing only. Task 6 now durably exposes enforcement outcomes but does not claim existing generated process families consume them.
+
+## Governed Fix Round 2/5 — review 2
+
+Reviewed `task-6-review-2.md` against canonical Task 6 before editing. All three residual findings and the evidence-gate finding were valid; no technical pushback was required.
+
+### Repair 1 — exact issuing-authority ownership
+
+- Every grant record now retains its private issuing-authority identity. Issue, consume, revoke, and revoke-all remain authority-local for the entire issued/consumed/revoked lifecycle; state no longer weakens ownership after consumption.
+- A foreign authority concurrently attempting consume and revoke receives typed `grant_forged`; its restart revoke-all cannot release the issuer's live provider lease. The issuer still revokes the consumed authority exactly once and releases the active lease once. Global one-call reservation across selectors sharing that issuer remains intact.
+- Listener authority is not exposed as a model or public grant field: a foreign authority holding only the opaque object cannot produce the runtime-branded consumed claims accepted by the internal listener registration seam. Failed foreign consume therefore cannot register a lease callback, and the issuer's existing callback remains the only live cleanup authority.
+- Mutation RED: temporarily removed the authority identity comparison in `trustedRecord`; `npx tsx --test --test-name-pattern="one consumed grant is global" runner-v2/test/execution-isolation-provider.test.ts` failed 0/1 at the assertion that every foreign attempt was rejected. Mutation reverted. Exact GREEN: 1/1 pass.
+
+### Repair 2 — exact acquisition image identity
+
+- OCI's image ID resolved immediately before `create` is now embedded in the durable lease, an exact owned-container image label, returned lease/selection claim, and enforcement projection.
+- Release and recovery compare durable image identity, exact label identity, and Docker inspect's actual `.Image` identity before removal. Missing legacy image identity and any mismatch remain typed blockers; unknown or mismatched containers are never removed.
+- Deterministic overlapping providers use different attest-time and acquire-time identities. Both acquire-time IDs survive shared-state interleaving, exact create argv/labels, durable lease state, actual-image inspection, and user-visible projection without cross-binding or orphaning.
+- Mutation RED: temporarily projected the earlier attestation image instead of the acquired lease image; `npx tsx --test --test-name-pattern="overlapping OCI provider instances" runner-v2/test/oci-execution-isolation-provider.test.ts` failed 0/1, observing IDs `111...`/`222...` instead of acquired `333...`/`444...`. Mutation reverted. Exact GREEN: 1/1 pass.
+- Real Docker mismatch fixture tampers the durable exact image, reopens recovery, observes one typed blocker and zero cleanup, confirms the exact container still exists, then force-removes it in `finally`.
+
+### Repair 3 — exact bounded cleanup projection and ingestion
+
+- Provider recovery now returns redacted exact cleaned/blocked transition descriptors carrying the real run, invocation, grant, lease, provider, implementation, acquired image, access, status, and blocker identity. OCI emits a transition for every durable lease outcome; it never fabricates identities for an unknown labelled container.
+- Selector recovery appends each exact transition and a separate bounded provider summary. Reopening state correlates multiple prior active lease IDs to one cleaned and one blocked terminal record, including the exact acquired image and access identity.
+- Projection ingestion is capped before full parse at 1 MiB, probes through the cap to close stat/read growth races, and validates at most 1,000 records, 256 access entries per record, 256 summaries, 64 blockers, exact enums/keys/digests/images, 512-character ordinary fields, and 4,096-character canonical paths. Over-bound or forged state fails closed as `isolation_recovery_blocked`, is preserved byte-for-byte, and causes no provider side effect. Valid Task 6 state without recovery summaries remains readable.
+- Mutation RED: temporarily accepted `MAX_ENFORCEMENT_RECORDS + 1`; `npx tsx --test --test-name-pattern="enforces exact byte" runner-v2/test/execution-isolation-provider.test.ts` failed 0/1 with a missing expected rejection. Mutation reverted. Exact GREEN: 1/1 pass. Boundary cases at 1,000 records, 256 access entries, and 512-character fields pass; each next value and a 1 MiB + 1 file reject.
+
+### Round 2 validation evidence
+
+Literal final focused command required by review:
+
+`npx tsx --test --test-reporter=dot runner-v2/test/execution-grants.test.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts runner-v2/test/tool-broker.test.ts runner-v2/test/runner-capabilities-config.test.ts runner-v2/test/runner-capability-contract.test.ts runner-v2/test/native-build-capabilities.test.ts`
+
+Result: exit 0, 79/79 dots passed, zero failures/skips.
+
+- Exact OCI/real-Docker command: `npx tsx --test runner-v2/test/oci-execution-isolation-provider.test.ts` — 10/10 pass, 0 fail, 0 skip. This includes outside-write denial, symlink escalation denial, network denial, live-child cleanup, forced-error cleanup, exact acquired-image concurrency, full-ID restart recovery, and exact image-mismatch non-removal.
+- Broad affected CLI/native command: `npx tsx --test --test-reporter=dot runner-v2/test/cli-capabilities-config.test.ts runner-v2/test/native-build-capabilities.test.ts runner-v2/test/native-build-initialization.test.ts` — exit 0, 51/51 pass.
+- Inherited Task 1–5 command: `npx tsx --test --test-reporter=dot runner-v2/test/execution-safety-contracts.test.ts runner-v2/test/child-environment.test.ts runner-v2/test/bounded-output-spool.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/posix-process-backend.test.ts runner-v2/test/windows-process-backend.test.ts runner-v2/test/managed-process.test.ts` — exit 0, 192/192 dots passed.
+- `npm run typecheck:runner-v2` — exit 0.
+- `npx eslint runner-v2/src/execution-grants.ts runner-v2/src/execution-isolation-provider.ts runner-v2/src/oci-execution-isolation-provider.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts runner-v2/test/native-build-capabilities.test.ts` — exit 0, no findings.
+- `npx eslint runner-v2/test/execution-grants.test.ts` — exit 0 after adding the explicit pre-consumption foreign-revoke assertion; its exact test file is 4/4 GREEN.
+- `git diff --check` — exit 0; only Git autocrlf notices.
+- Static scope/prohibition scan over the three changed source modules found no Node `24.18.0` pin, install command, ambient environment forwarding, Task 7 route, or filesystem fence. The only privileged/host-PID/socket strings are the explicit rejection deny-list.
+- Final Docker residue query `docker ps -a --filter "label=ai-board.runner-v2.owned=true" --format "{{.ID}} {{.Labels}}"` returned empty. TEMP queries for `runner-oci-*` and `runner-enforcement-*` returned empty; all focused processes exited and no lease/projection lock directory remains.
+
+### Self-audit, cleanup, rollback, and residual boundary
+
+- Cross-authority races, exactly-once selector reservation, restart issuance barriers, revocation cleanup, cross-process projection locking, overlapping OCI state writers, acquisition failure cleanup, actual image mismatch, partial recovery, confirmed absence, and unknown/mismatched container safety are covered and green.
+- Durable enforcement remains redacted and explicitly says `provider_specific_not_universal_security_boundary`; opaque grant objects, nonces, secrets, and ambient credentials are never persisted.
+- Rollback is this focused Fix Round 2 commit. No database migration, image pull, executable install, external configuration mutation, or Windows-only primitive was introduced.
+- The only residual boundary is canonical Task 7: generated process families are not yet routed through Task 6 selection and no current projection claims otherwise.

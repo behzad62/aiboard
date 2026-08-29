@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
 import type { PermissionProfile } from "./contracts.js";
@@ -59,6 +59,7 @@ export interface ExecutionIsolationLease {
   readonly expiresAt?: string;
   readonly state: "active" | "released" | "revocation_failed";
   readonly providerIdentity: string;
+  readonly immutableImageId?: string;
 }
 
 export interface ExecutionIsolationAcquireRequest {
@@ -71,6 +72,20 @@ export interface ExecutionIsolationAcquireRequest {
 export interface ExecutionIsolationRecoveryResult {
   readonly cleaned: number;
   readonly blockers: readonly string[];
+  readonly transitions?: readonly ExecutionIsolationCleanupTransition[];
+}
+
+export interface ExecutionIsolationCleanupTransition {
+  readonly status: "cleaned" | "blocked";
+  readonly runId: string;
+  readonly invocationId: string;
+  readonly grantId: string;
+  readonly leaseId: string;
+  readonly providerId: string;
+  readonly implementationDigest: string;
+  readonly immutableImageId?: string;
+  readonly access: ConsumedExecutionGrantClaims["access"];
+  readonly blocker?: string;
 }
 
 export interface ExecutionIsolationProvider {
@@ -145,7 +160,16 @@ export interface ExecutionEnforcementState {
   readonly version: 1;
   readonly boundary: "provider_specific_not_universal_security_boundary";
   readonly records: readonly ExecutionEnforcementRecord[];
+  readonly recoverySummaries?: readonly Readonly<{
+    occurredAt: string; providerId: string; cleanedCount: number; blockerCount: number;
+    blockers: readonly string[];
+  }>[];
 }
+
+const MAX_ENFORCEMENT_STATE_BYTES = 1024 * 1024;
+const MAX_ENFORCEMENT_RECORDS = 1_000;
+const MAX_ENFORCEMENT_ACCESS = 256;
+const MAX_RECOVERY_SUMMARIES = 256;
 
 interface TrustedProvider {
   readonly providerId: string;
@@ -305,7 +329,7 @@ export function createExecutionIsolationSelector(
             status: "active", enforcement: "write_confinement_exact_grant",
             disclosure: "provider_specific_not_universal_boundary", providerId: provider.providerId,
             implementationDigest: provider.implementationDigest,
-            ...(attestation.imageIdentity ? { immutableImageId: attestation.imageIdentity.immutableId } : {}),
+            ...(lease.immutableImageId ? { immutableImageId: lease.immutableImageId } : {}),
             leaseId: lease.leaseId, access: input.grant.access,
           });
         } catch (error) {
@@ -356,7 +380,7 @@ export function createExecutionIsolationSelector(
           const result = await provider.provider.recoverOwned();
           const blockers = Object.freeze([...result.blockers]);
           results.push(Object.freeze({ providerId: provider.providerId, cleaned: result.cleaned, blockers }));
-          await persistRecovery(options.statePath, provider.providerId, result.cleaned, blockers, clock());
+          await persistRecovery(options.statePath, provider.providerId, result, clock());
           if (blockers.length === 0) {
             for (const [leaseId, value] of active) {
               if (value.provider.providerId === provider.providerId) active.delete(leaseId);
@@ -388,7 +412,7 @@ const STATE_WRITES = new Map<string, Promise<void>>();
 
 export async function readExecutionEnforcementState(path: string): Promise<ExecutionEnforcementState> {
   try {
-    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    const value = JSON.parse(await readBoundedState(path)) as unknown;
     return parseEnforcementState(value);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyEnforcementState();
@@ -397,8 +421,9 @@ export async function readExecutionEnforcementState(path: string): Promise<Execu
 }
 
 function parseEnforcementState(value: unknown): ExecutionEnforcementState {
-  const object = exactObject(value, new Set(["version", "boundary", "records"]));
+  const object = exactObject(value, new Set(["version", "boundary", "records", "recoverySummaries"]));
   if (object.version !== 1 || object.boundary !== "provider_specific_not_universal_security_boundary" || !Array.isArray(object.records)) throw new Error();
+  if (object.records.length > MAX_ENFORCEMENT_RECORDS) throw new Error();
   const statuses = new Set(["active", "revoked", "blocked", "unconfined_explicit_full", "cleaned"]);
   const enforcement = new Set(["unconfined_explicit_full", "write_confinement_exact_grant"]);
   const disclosure = new Set(["unconfined_explicit_full", "provider_specific_not_universal_boundary"]);
@@ -408,20 +433,58 @@ function parseEnforcementState(value: unknown): ExecutionEnforcementState {
       "providerId", "implementationDigest", "immutableImageId", "leaseId", "access", "blocker",
     ]));
     if (!statuses.has(record.status as string) || !enforcement.has(record.enforcement as string) ||
-        !disclosure.has(record.disclosure as string) || !Array.isArray(record.access)) throw new Error();
+        !disclosure.has(record.disclosure as string) || !Array.isArray(record.access) ||
+        record.access.length > MAX_ENFORCEMENT_ACCESS) throw new Error();
     for (const key of ["occurredAt", "runId", "invocationId", "grantId"] as const) safeText(record[key]);
     if (!Number.isFinite(Date.parse(record.occurredAt as string))) throw new Error();
     for (const key of ["providerId", "implementationDigest", "immutableImageId", "leaseId", "blocker"] as const) {
       if (record[key] !== undefined) safeText(record[key]);
     }
+    if (record.implementationDigest !== undefined) safeDigest(record.implementationDigest);
+    if (record.immutableImageId !== undefined) parseImmutableImageId(record.immutableImageId);
     const access = record.access.map((item) => {
       const accessEntry = exactObject(item, new Set(["canonicalPath", "mode"]));
       if (!["read", "write", "create"].includes(accessEntry.mode as string)) throw new Error();
-      return { canonicalPath: safeText(accessEntry.canonicalPath), mode: accessEntry.mode as "read" | "write" | "create" };
+      return { canonicalPath: boundedProjectionText(accessEntry.canonicalPath, 4_096), mode: accessEntry.mode as "read" | "write" | "create" };
     });
     return { ...record, access } as unknown as ExecutionEnforcementRecord;
   });
-  return deepFreeze({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records });
+  const recoverySummaries = object.recoverySummaries === undefined ? undefined : parseRecoverySummaries(object.recoverySummaries);
+  return deepFreeze({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records,
+    ...(recoverySummaries ? { recoverySummaries } : {}) });
+}
+
+async function readBoundedState(path: string): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const stat = await handle.stat();
+    if (stat.size > MAX_ENFORCEMENT_STATE_BYTES) throw new Error("enforcement state exceeds byte bound");
+    // Always probe through the byte limit so a file that grows after stat cannot
+    // be accepted from a valid-looking prefix.
+    const buffer = Buffer.alloc(MAX_ENFORCEMENT_STATE_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > MAX_ENFORCEMENT_STATE_BYTES) throw new Error("enforcement state exceeds byte bound");
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally { await handle.close(); }
+}
+
+function parseRecoverySummaries(value: unknown) {
+  if (!Array.isArray(value) || value.length > MAX_RECOVERY_SUMMARIES) throw new Error();
+  return value.map((entry) => {
+    const summary = exactObject(entry, new Set(["occurredAt", "providerId", "cleanedCount", "blockerCount", "blockers"]));
+    if (!Number.isSafeInteger(summary.cleanedCount) || (summary.cleanedCount as number) < 0 ||
+        !Number.isSafeInteger(summary.blockerCount) || (summary.blockerCount as number) < 0 ||
+        (summary.cleanedCount as number) > MAX_ENFORCEMENT_RECORDS || (summary.blockerCount as number) > 64 ||
+        !Array.isArray(summary.blockers) || summary.blockers.length > 64) throw new Error();
+    const occurredAt = safeText(summary.occurredAt); if (!Number.isFinite(Date.parse(occurredAt))) throw new Error();
+    return { occurredAt, providerId: safeText(summary.providerId), cleanedCount: summary.cleanedCount as number,
+      blockerCount: summary.blockerCount as number, blockers: summary.blockers.map(safeText) };
+  });
+}
+
+function boundedProjectionText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0") || value.length > maxLength) throw new Error();
+  return value;
 }
 
 function emptyEnforcementState(): ExecutionEnforcementState {
@@ -429,15 +492,16 @@ function emptyEnforcementState(): ExecutionEnforcementState {
 }
 
 async function appendEnforcementRecord(path: string, record: ExecutionEnforcementRecord): Promise<void> {
+  const validated = parseEnforcementState({
+    version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [record],
+  }).records[0]!;
   const previous = STATE_WRITES.get(path) ?? Promise.resolve();
   const next = previous.then(async () => {
     await withProjectionLock(path, async () => {
       const state = await readExecutionEnforcementState(path);
-      const updated = { ...state, records: [...state.records, structuredClone(record)].slice(-1_000) };
+      const updated = { ...state, records: [...state.records, structuredClone(validated)].slice(-1_000) };
       await mkdir(dirname(path), { recursive: true });
-      const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-      try { await writeFile(temporary, JSON.stringify(updated), { flag: "wx", mode: 0o600 }); await rename(temporary, path); }
-      finally { await rm(temporary, { force: true }); }
+      await writeBoundedEnforcementState(path, updated);
     });
   });
   STATE_WRITES.set(path, next.catch(() => undefined));
@@ -472,21 +536,71 @@ function enforcementRecord(
     invocationId: selection.lease.invocationId, grantId: selection.lease.grantId,
     status, enforcement: selection.enforcement, disclosure: selection.disclosure,
     providerId: selection.providerId, implementationDigest: selection.implementationDigest,
-    ...(selection.attestation.imageIdentity ? { immutableImageId: selection.attestation.imageIdentity.immutableId } : {}),
+    ...(selection.lease.immutableImageId ? { immutableImageId: selection.lease.immutableImageId } : {}),
     leaseId: selection.lease.leaseId, access: selection.lease.grantedAccess,
   };
 }
 
 async function persistRecovery(
-  statePath: string | undefined, providerId: string, cleaned: number, blockers: readonly string[], now: Date,
+  statePath: string | undefined, providerId: string, result: ExecutionIsolationRecoveryResult, now: Date,
 ): Promise<void> {
-  if (!statePath || (blockers.length === 0 && cleaned === 0)) return;
-  await appendEnforcementRecord(statePath, {
-    occurredAt: now.toISOString(), runId: "recovery", invocationId: "recovery", grantId: "recovery",
-    status: blockers.length > 0 ? "blocked" : "cleaned", enforcement: "write_confinement_exact_grant",
-    disclosure: "provider_specific_not_universal_boundary", providerId, access: [],
-    ...(blockers.length > 0 ? { blocker: blockers.join("; ").slice(0, 512) } : {}),
+  if (!statePath || (result.blockers.length === 0 && result.cleaned === 0)) return;
+  if ((result.transitions?.length ?? 0) > MAX_ENFORCEMENT_RECORDS || result.blockers.length > 64) {
+    throw new ExecutionIsolationError("isolation_recovery_blocked", "Recovery projection exceeds its bounded shape.");
+  }
+  for (const transition of result.transitions ?? []) {
+    if (transition.providerId !== providerId) throw new ExecutionIsolationError(
+      "isolation_recovery_blocked", "Recovery transition provider identity is invalid.");
+    await appendEnforcementRecord(statePath, {
+      occurredAt: now.toISOString(), runId: transition.runId,
+      invocationId: transition.invocationId, grantId: transition.grantId,
+      status: transition.status, enforcement: "write_confinement_exact_grant",
+      disclosure: "provider_specific_not_universal_boundary", providerId,
+      implementationDigest: transition.implementationDigest,
+      ...(transition.immutableImageId ? { immutableImageId: transition.immutableImageId } : {}),
+      leaseId: transition.leaseId, access: transition.access,
+      ...(transition.blocker ? { blocker: transition.blocker } : {}),
+    });
+  }
+  await appendRecoverySummary(statePath, {
+    occurredAt: now.toISOString(), providerId, cleanedCount: result.cleaned,
+    blockerCount: result.blockers.length, blockers: result.blockers.slice(0, 64).map((value) => value.slice(0, 512)),
   });
+}
+
+async function appendRecoverySummary(
+  path: string,
+  summary: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number],
+): Promise<void> {
+  const validated = parseRecoverySummaries([summary])[0]!;
+  const previous = STATE_WRITES.get(path) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    await withProjectionLock(path, async () => {
+      const state = await readExecutionEnforcementState(path);
+      const updated = { ...state,
+        recoverySummaries: [...(state.recoverySummaries ?? []), structuredClone(validated)].slice(-MAX_RECOVERY_SUMMARIES) };
+      await writeBoundedEnforcementState(path, updated);
+    });
+  });
+  STATE_WRITES.set(path, next.catch(() => undefined));
+  await next;
+}
+
+async function writeBoundedEnforcementState(path: string, state: ExecutionEnforcementState): Promise<void> {
+  const records = [...state.records];
+  const summaries = [...(state.recoverySummaries ?? [])];
+  let serialized = "";
+  while (true) {
+    serialized = JSON.stringify({ ...state, records,
+      ...(summaries.length > 0 ? { recoverySummaries: summaries } : { recoverySummaries: undefined }) });
+    if (Buffer.byteLength(serialized) <= MAX_ENFORCEMENT_STATE_BYTES) break;
+    if (records.length > 1) records.shift();
+    else if (summaries.length > 0) summaries.shift();
+    else throw new ExecutionIsolationError("isolation_recovery_blocked", "One enforcement record exceeds the durable projection bound.");
+  }
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try { await writeFile(temporary, serialized, { flag: "wx", mode: 0o600 }); await rename(temporary, path); }
+  finally { await rm(temporary, { force: true }); }
 }
 
 function parseAttestation(value: unknown): ExecutionIsolationAttestation {
@@ -551,6 +665,12 @@ function parseImageIdentity(value: unknown): { configuredReference: string; immu
   return { configuredReference: safeText(input.configuredReference), immutableId };
 }
 
+function parseImmutableImageId(value: unknown): string {
+  const immutableId = safeText(value);
+  if (!/^sha256:[a-f0-9]{64}$/.test(immutableId)) throw new Error();
+  return immutableId;
+}
+
 function assertGrantMatches(
   intent: ExecutionInvocationIntent,
   grant: ConsumedExecutionGrantClaims,
@@ -571,7 +691,7 @@ function parseAndValidateLease(
 ): ExecutionIsolationLease {
   const input = exactObject(value, new Set([
     "leaseId", "providerId", "invocationId", "grantId", "grantedAccess",
-    "acquiredAt", "expiresAt", "state", "providerIdentity",
+    "acquiredAt", "expiresAt", "state", "providerIdentity", "immutableImageId",
   ]));
   if (!Array.isArray(input.grantedAccess) || input.state !== "active") throw new Error();
   const access = input.grantedAccess.map((entry) => {
@@ -590,6 +710,7 @@ function parseAndValidateLease(
     ...(input.expiresAt === undefined ? {} : { expiresAt: dateText(input.expiresAt) }),
     state: "active",
     providerIdentity: safeDigest(input.providerIdentity),
+    ...(input.immutableImageId === undefined ? {} : { immutableImageId: parseImmutableImageId(input.immutableImageId) }),
   };
   if (lease.providerId !== provider.providerId ||
       lease.invocationId !== intent.invocationId ||
