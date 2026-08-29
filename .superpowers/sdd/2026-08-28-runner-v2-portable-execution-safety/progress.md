@@ -24,7 +24,7 @@
 | 5 | P6.4c adapters | verified complete after carried prerequisite | `4d53078a` | `task-5-implementer-report.md`, `task-6a-prerequisite-report.md` | approved after breaker residuals closed at Task 6 entry | 5 + 3 carried fixes | `e57c2a1f`, `e29d5b8f`, `4f940cb3`, `16fca6d2`, `dfcb6a33`, `f8c1ad06`, carried `5307d1b7`, `18b97fc9`, `9c59feec`, `b997aade` | fresh re-review approved: all seven blocking effect families durably journaled, exact consumers enforced, malformed/ambiguous effects retained, authority loss fail-closed |
 | 6 | P6.4d isolation/grants | verified complete after carried Task 7 entry prerequisite | `b997aade` | `task-6-implementer-report.md`, `task-7a-prerequisite-report.md` | breaker residual independently approved at Task 7 entry | 5 + 3 carried prerequisite fixes | initial `88266699`, fixes through `6be10f70`, carried `b1ea2f92`, `74e7aec3`, `04f00723`, `8eb593f0` | exact grants, truthful provider/Full selection, configured OCI, two-phase cleanup evidence, bounded durable projection, concurrency/capacity safety, real Docker and zero residue approved |
 | 7 | P6.4e one-shot/evidence/verification | verified complete | `8eb593f0` | `task-7-brief.md`, `task-7-implementer-report.md`, review/fix reports through `task-7-review-round-5.md` | final governed round 5 approved; zero Critical/Important findings | 5 feature review rounds | initial `560a061f`, fixes through `30e8b8ff` | independent 130/130 + 49/49 + 8/8, type/lint/diff/residue green; no Task 8 scope or Node pin |
-| 8 | P6.4e remaining child families | 8.0A ready for implementation | `a0b3fb7a` | `task-8-brief.md`, focused `task-8.0a-brief.md` | specification gate approved in `task-8-spec-review-4.md` after four focused rounds | 0 | — | zero Critical/Important architecture ambiguity; execute 8.0A → 8.0B → Git → MCP → LSP → managed → audit serially |
+| 8 | P6.4e remaining child families | 8.0A verified complete; 8.0B next eligible | `a0b3fb7a` | `task-8-brief.md`, `task-8.0a-brief.md`, `task-8.0a-implementer-report.md` | specification gate approved; implementation approved after governed fix round 5 | 5 | through `5106dcb8` | fresh controller: 89/89 focused, 107/107 Task 7, typecheck/lint/diff/residue/scope green; zero residual Critical/Important findings |
 | 9 | P6.4f Git hardening | blocked by 8 | — | — | — | 0 | — | — |
 | 10 | P6.4g filesystem fence | blocked by 9 (serial doctrine) | — | — | — | 0 | — | — |
 | 11 | P6.4h recovery/disclosure | blocked by 10 | — | — | — | 0 | — | — |
@@ -132,6 +132,16 @@ overlap is expected.
   new anchor from untrusted provenance during upgrade; commits
   `a9550821`..`a23b75e7`). Round 5 is the governed final fix attempt with fresh
   escalation; packet 8.0B remains locked.
+- Task 8.0A: fix round 5/5 (1 addressed, 0 open — unanchored active version-2
+  cleanup evidence is typed quarantined and byte-preserved; reducer laundering
+  is independently blocked; safe cleanup-free migration and terminal history
+  remain closed; commits `78aa035b`..`5106dcb8`). Re-review reports zero new or
+  residual Critical/Important findings.
+- Task 8.0A: complete (commits `6eba9a1d`..`5106dcb8`, review clean after five
+  governed rounds). Fresh controller verification: 89/89 focused and 107/107
+  affected Task 7 tests, Runner typecheck, targeted lint, net diff check, clean
+  worktree, exact source-scope audit, and zero Task 8.0A temp roots. Packet 8.0B
+  is unlocked; no production child family migrated in 8.0A.
 
 ## Breaker rulings
 
