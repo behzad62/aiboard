@@ -142,6 +142,16 @@ overlap is expected.
   affected Task 7 tests, Runner typecheck, targeted lint, net diff check, clean
   worktree, exact source-scope audit, and zero Task 8.0A temp roots. Packet 8.0B
   is unlocked; no production child family migrated in 8.0A.
+- Task 8.0B architecture gate: first focused review found five Important
+  ambiguities in staged authority, durable ownership handoff, output checkpoint
+  ordering, internal MCP discovery ownership, and independent Windows semantic
+  probes. The revised brief makes staging mandatory, uses one atomic streaming
+  storage boundary, closes retained replay/checkpoint acknowledgement ordering,
+  explicitly owns the narrow B3 discovery executor, and separates portable,
+  batch, tree/birth, and optional Job capabilities. Re-review 2 APPROVED with
+  zero Critical/Important ambiguity; its two Minor terminology clarifications
+  were folded into the brief. Internal packet 8.0B1 is unlocked; production
+  adapters, CLI construction, and child families remain unchanged.
 
 ## Breaker rulings
 
