@@ -14,6 +14,7 @@ import {
   StreamingSessionStoreError,
   createInMemoryStreamingSessionStore,
   getStreamingSessionStoreWriter,
+  openSqliteStreamingSessionStore,
 } from "../src/streaming-session-store.js";
 
 test("consumes one launch grant exactly once and persists only immutable session claims", async () => {
@@ -906,8 +907,11 @@ test("uses SessionAuthority-only fenced cleanup after transfer acknowledgement",
 test("recovers an expired adopted pending cleanup only after a new fenced owner takes over", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-expired-cleanup-"));
   const workspace = join(root, "workspace");
+  const path = join(root, "sessions.sqlite");
   await mkdir(workspace);
   let now = new Date("2026-08-29T00:00:00.000Z");
+  let first: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  let reopened: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
   try {
     const grants = createExecutionGrantAuthority({ clock: () => now, ttlMs: 120_000 });
     const binding = {
@@ -918,8 +922,8 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
       ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
       externalApproved: false, destructiveApproved: false, networkApproved: false,
     });
-    const store = createInMemoryStreamingSessionStore();
-    const sessions = createSessionAuthority({ grants, sessions: store, clock: () => now });
+    first = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(10));
+    const sessions = createSessionAuthority({ grants, sessions: first, clock: () => now });
     const begun = sessions.beginTransfer({
       sessionId: "stream-1", grant, binding,
       lease: {
@@ -937,7 +941,7 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
       sessionId: "stream-1", ownerId: begun.record.ownerId, fencingToken: begun.record.fencingToken,
       expectedRevision: begun.record.revision, effectId: begun.record.effects[0]!.effectId,
     }).record;
-    const writer = getStreamingSessionStoreWriter(store);
+    const writer = getStreamingSessionStoreWriter(first);
     const cleaning = writer.apply({
       type: "begin_cleanup", sessionId: "stream-1", ownerId: active.ownerId, fencingToken: active.fencingToken,
       expectedRevision: active.revision, effectId: "cleanup-1", at: "2026-08-29T00:00:01.000Z",
@@ -1043,7 +1047,23 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
       }),
       (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
     );
+    first.store.close();
+    reopened = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(10));
+    const restarted = createSessionAuthority({ grants, sessions: reopened, clock: () => now });
+    let reopenedReplayCalls = 0;
+    assert.throws(
+      () => restarted.recoverAdopted({
+        sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
+        replay: () => { reopenedReplayCalls += 1; return "cleaned"; },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
+    );
+    assert.equal(reopenedReplayCalls, 0);
+    assert.equal(reopened.store.readBySession("stream-1")?.state, "released");
+    reopened.store.close();
   } finally {
+    try { first?.store.close(); } catch {}
+    try { reopened?.store.close(); } catch {}
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -1051,8 +1071,11 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
 test("durably blocks a re-fenced expired adopted cleanup exactly once", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-expired-cleanup-blocked-"));
   const workspace = join(root, "workspace");
+  const path = join(root, "sessions.sqlite");
   await mkdir(workspace);
   let now = new Date("2026-08-29T00:00:00.000Z");
+  let first: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  let reopened: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
   try {
     const grants = createExecutionGrantAuthority({ clock: () => now, ttlMs: 120_000 });
     const binding = {
@@ -1063,8 +1086,8 @@ test("durably blocks a re-fenced expired adopted cleanup exactly once", async ()
       ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
       externalApproved: false, destructiveApproved: false, networkApproved: false,
     });
-    const store = createInMemoryStreamingSessionStore();
-    const sessions = createSessionAuthority({ grants, sessions: store, clock: () => now });
+    first = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(11));
+    const sessions = createSessionAuthority({ grants, sessions: first, clock: () => now });
     const begun = sessions.beginTransfer({
       sessionId: "stream-1", grant, binding,
       lease: {
@@ -1082,7 +1105,7 @@ test("durably blocks a re-fenced expired adopted cleanup exactly once", async ()
       sessionId: "stream-1", ownerId: begun.record.ownerId, fencingToken: begun.record.fencingToken,
       expectedRevision: begun.record.revision, effectId: begun.record.effects[0]!.effectId,
     }).record;
-    const cleaning = getStreamingSessionStoreWriter(store).apply({
+    const cleaning = getStreamingSessionStoreWriter(first).apply({
       type: "begin_cleanup", sessionId: "stream-1", ownerId: active.ownerId, fencingToken: active.fencingToken,
       expectedRevision: active.revision, effectId: "cleanup-1", at: "2026-08-29T00:00:01.000Z",
     });
@@ -1115,13 +1138,19 @@ test("durably blocks a re-fenced expired adopted cleanup exactly once", async ()
         }],
       },
     });
-    const later = sessions.recoverAdopted({
+    first.store.close();
+    reopened = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(11));
+    const restarted = createSessionAuthority({ grants, sessions: reopened, clock: () => now });
+    const later = restarted.recoverAdopted({
       sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
       replay: () => { replayCalls += 1; return "blocked"; },
     });
     assert.equal(later.record.state, "cleanup_blocked");
     assert.equal(replayCalls, 1);
+    reopened.store.close();
   } finally {
+    try { first?.store.close(); } catch {}
+    try { reopened?.store.close(); } catch {}
     await rm(root, { recursive: true, force: true });
   }
 });

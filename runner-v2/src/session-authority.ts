@@ -243,6 +243,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         envelope: structuredClone(input.envelope),
         lease: structuredClone(input.lease),
         backendBinding: structuredClone(input.backendBinding),
+        cleanupCreationAuthority: null,
         cleanupOwner: "tool_broker",
         state: "pending_transfer",
         history: [{ state: "pending_transfer", at }],

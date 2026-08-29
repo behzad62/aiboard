@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -18,7 +19,7 @@ function pendingTransferRecord(
 ): Record<string, unknown> {
   return {
     recordKind: "runner.streaming-session",
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 0,
     sessionId: "stream-1",
     ownerId: "owner-1",
@@ -58,6 +59,7 @@ function pendingTransferRecord(
       },
       startedAt: "2026-08-29T00:00:00.000Z",
     },
+    cleanupCreationAuthority: null,
     cleanupOwner: "tool_broker",
     state: "pending_transfer",
     history: [{ state: "pending_transfer", at: "2026-08-29T00:00:00.000Z" }],
@@ -169,14 +171,15 @@ test("returns an immutable deep clone instead of retaining caller-owned durable 
 
 test("refuses an unsupported active streaming-session schema", () => {
   assert.throws(
-    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 3 })),
+    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 4 })),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
   );
 });
 
 test("refuses an active record that tries to downgrade to the historical schema", () => {
+  const { cleanupCreationAuthority: _cleanupCreationAuthority, ...legacyShape } = pendingTransferRecord();
   assert.throws(
-    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 0 })),
+    () => parseStreamingSessionRecord({ ...legacyShape, schemaVersion: 0 }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsafe_downgrade",
   );
 });
@@ -394,7 +397,7 @@ test("rejects unsupported schema versions even when their record claims to be te
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
   });
   assert.throws(
-    () => parseStreamingSessionRecord({ ...released, schemaVersion: 3 }),
+    () => parseStreamingSessionRecord({ ...released, schemaVersion: 4 }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_version",
   );
 });
@@ -415,8 +418,9 @@ test("preserves the known historical terminal streaming-session schema", () => {
     type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
   });
+  const { cleanupCreationAuthority: _cleanupCreationAuthority, ...legacyReleased } = released;
   assert.equal(parseStreamingSessionRecord({
-    ...released,
+    ...legacyReleased,
     schemaVersion: 0,
     effects: released.effects.map((effect) => {
       const { cleanupProvenance: _cleanupProvenance, ...legacyEffect } = effect;
@@ -437,6 +441,13 @@ test("changes the durable record digest for every independently meaningful claim
     { ...record, envelope: { ...(record.envelope as object), networkApproved: true } },
     { ...record, lease: { ...(record.lease as object), providerId: "other-provider" } },
     { ...record, backendBinding: { ...(record.backendBinding as object), backendId: "other-backend" } },
+    {
+      ...record,
+      cleanupCreationAuthority: {
+        effectId: "cleanup-1", ownerId: "owner-1", fencingToken: 1,
+        createdAt: "2026-08-29T00:00:01.000Z",
+      },
+    },
     { ...record, effects: [{ ...(record.effects as Array<object>)[0]!, effectId: "other-effect" }] },
   ];
   for (const variant of variants) assert.notEqual(digestStreamingSessionRecord(variant), baseDigest);
@@ -705,7 +716,46 @@ test("requires ownership-lease expiry for takeover and refuses expired-owner dur
   );
 });
 
-test("persists exact re-fenced cleanup takeover provenance and rejects forged variants", async () => {
+test("upgrades integrity-protected version-2 cleanup evidence before recovery takeover", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-stream-cleanup-v2-upgrade-"));
+  const path = join(root, "sessions.sqlite");
+  let store: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  try {
+    const source = createInMemoryStreamingSessionStore();
+    const sourceWriter = getStreamingSessionStoreWriter(source);
+    const pending = sourceWriter.claim(pendingTransferRecord({
+      leaseExpiresAt: "2026-08-29T00:01:00.000Z",
+    })).record;
+    const active = sourceWriter.apply({
+      type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+      ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+    });
+    const currentCleaning = sourceWriter.apply({
+      type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+      ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+    });
+    const { cleanupCreationAuthority: _currentAnchor, ...legacyCleaning } = currentCleaning;
+
+    store = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(12));
+    const writer = getStreamingSessionStoreWriter(store);
+    const legacy = writer.claim({ ...legacyCleaning, schemaVersion: 2 }).record;
+    const takenOver = writer.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: legacy.revision,
+      ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-recovered", newFencingToken: 2,
+      leaseExpiresAt: "2026-08-29T00:02:00.000Z", at: "2026-08-29T00:01:00.000Z",
+    });
+    assert.equal(takenOver.schemaVersion, 3);
+    assert.deepEqual(takenOver.cleanupCreationAuthority, {
+      effectId: "cleanup-1", ownerId: "owner-1", fencingToken: 1,
+      createdAt: "2026-08-29T00:00:02.000Z",
+    });
+  } finally {
+    try { store?.store.close(); } catch {}
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("anchors multi-step cleanup takeover provenance and rejects coherent forgery", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-stream-cleanup-provenance-"));
   const path = join(root, "sessions.sqlite");
   let first: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
@@ -724,25 +774,46 @@ test("persists exact re-fenced cleanup takeover provenance and rejects forged va
       type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
       ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
     });
-    const takenOver = writer.apply({
+    const firstTakeover = writer.apply({
       type: "takeover", sessionId: "stream-1", expectedRevision: cleaning.revision,
       ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-recovered", newFencingToken: 2,
       leaseExpiresAt: "2026-08-29T00:02:00.000Z", at: "2026-08-29T00:01:00.000Z",
     });
+    const takenOver = writer.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: firstTakeover.revision,
+      ownerId: "owner-recovered", fencingToken: 2, newOwnerId: "owner-third", newFencingToken: 3,
+      leaseExpiresAt: "2026-08-29T00:03:00.000Z", at: "2026-08-29T00:02:00.000Z",
+    });
     const cleanup = takenOver.effects.find((effect) => effect.kind === "cleanup")!;
+    assert.deepEqual(takenOver.cleanupCreationAuthority, {
+      effectId: "cleanup-1", ownerId: "owner-1", fencingToken: 1,
+      createdAt: "2026-08-29T00:00:02.000Z",
+    });
+    assert.equal(Object.isFrozen(takenOver.cleanupCreationAuthority), true);
     assert.deepEqual(cleanup.cleanupProvenance, {
       effectId: "cleanup-1", originOwnerId: "owner-1", originFencingToken: 1,
       takeovers: [{
         fromOwnerId: "owner-1", fromFencingToken: 1,
         toOwnerId: "owner-recovered", toFencingToken: 2,
         at: "2026-08-29T00:01:00.000Z",
+      }, {
+        fromOwnerId: "owner-recovered", fromFencingToken: 2,
+        toOwnerId: "owner-third", toFencingToken: 3,
+        at: "2026-08-29T00:02:00.000Z",
       }],
     });
-    assert.equal(cleanup.fencingToken, 2);
+    assert.equal(cleanup.fencingToken, 3);
 
     const { cleanupProvenance, ...withoutProvenance } = cleanup;
-    const firstTakeover = cleanupProvenance!.takeovers[0]!;
+    const firstTransition = cleanupProvenance!.takeovers[0]!;
+    const secondTransition = cleanupProvenance!.takeovers[1]!;
+    const { cleanupCreationAuthority: _missingAnchor, ...withoutAnchor } = takenOver;
+    assert.throws(
+      () => parseStreamingSessionRecord(withoutAnchor),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record",
+    );
     const variants = [
+      { ...takenOver, cleanupCreationAuthority: null },
       {
         ...takenOver,
         effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
@@ -758,32 +829,56 @@ test("persists exact re-fenced cleanup takeover provenance and rejects forged va
         effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
           ? {
             ...effect,
-            cleanupProvenance: { ...cleanupProvenance!, originOwnerId: "forged-owner" },
-          }
-          : effect),
-      },
-      {
-        ...takenOver,
-        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
-          ? {
-            ...effect,
             cleanupProvenance: {
               ...cleanupProvenance!,
-              takeovers: [{ ...firstTakeover, toOwnerId: "wrong-owner" }],
+              originOwnerId: "forged-owner",
+              takeovers: [{ ...firstTransition, fromOwnerId: "forged-owner" }, secondTransition],
             },
           }
           : effect),
       },
       {
         ...takenOver,
-        fencingToken: 3,
+        cleanupCreationAuthority: { ...takenOver.cleanupCreationAuthority!, ownerId: "forged-owner" },
+      },
+      {
+        ...takenOver,
+        fencingToken: 4,
         effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
           ? {
             ...effect,
-            fencingToken: 3,
+            fencingToken: 4,
             cleanupProvenance: {
               ...cleanupProvenance!,
-              takeovers: [{ ...firstTakeover, toFencingToken: 3 }],
+              originFencingToken: 2,
+              takeovers: [
+                { ...firstTransition, fromFencingToken: 2, toFencingToken: 3 },
+                { ...secondTransition, fromFencingToken: 3, toFencingToken: 4 },
+              ],
+            },
+          }
+          : effect),
+      },
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? {
+            ...effect,
+            cleanupProvenance: {
+              ...cleanupProvenance!,
+              takeovers: [firstTransition, { ...secondTransition, fromOwnerId: "wrong-owner" }],
+            },
+          }
+          : effect),
+      },
+      {
+        ...takenOver,
+        effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+          ? {
+            ...effect,
+            cleanupProvenance: {
+              ...cleanupProvenance!,
+              takeovers: [firstTransition, { ...secondTransition, fromFencingToken: 1 }],
             },
           }
           : effect),
@@ -806,6 +901,27 @@ test("persists exact re-fenced cleanup takeover provenance and rejects forged va
     reopened = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(9));
     assert.deepEqual(reopened.store.readBySession("stream-1")?.effects.find((effect) => effect.kind === "cleanup"), cleanup);
     reopened.store.close();
+
+    const database = new DatabaseSync(path);
+    const row = database.prepare("SELECT record_json FROM streaming_sessions WHERE session_id = ?")
+      .get("stream-1") as { record_json: string };
+    const forged = JSON.parse(row.record_json) as Record<string, unknown>;
+    const forgedEffects = forged.effects as Array<Record<string, unknown>>;
+    const forgedCleanup = forgedEffects.find((effect) => effect.kind === "cleanup")!;
+    const forgedProvenance = forgedCleanup.cleanupProvenance as Record<string, unknown>;
+    const forgedTakeovers = forgedProvenance.takeovers as Array<Record<string, unknown>>;
+    forgedProvenance.originOwnerId = "forged-owner";
+    forgedTakeovers[0]!.fromOwnerId = "forged-owner";
+    (forged.cleanupCreationAuthority as Record<string, unknown>).ownerId = "forged-owner";
+    database.prepare("UPDATE streaming_sessions SET record_json = ? WHERE session_id = ?")
+      .run(JSON.stringify(forged), "stream-1");
+    database.close();
+    const tampered = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(9));
+    assert.throws(
+      () => tampered.store.readBySession("stream-1"),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record",
+    );
+    tampered.store.close();
   } finally {
     try { first?.store.close(); } catch {}
     try { reopened?.store.close(); } catch {}

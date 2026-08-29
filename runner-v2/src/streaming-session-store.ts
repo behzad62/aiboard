@@ -27,7 +27,7 @@ export class StreamingSessionStoreError extends Error {
 }
 
 export const STREAMING_SESSION_RECORD_KIND = "runner.streaming-session" as const;
-export const STREAMING_SESSION_RECORD_VERSION = 2 as const;
+export const STREAMING_SESSION_RECORD_VERSION = 3 as const;
 
 export type StreamingSessionState =
   | "pending_transfer"
@@ -114,6 +114,14 @@ export interface StreamingSessionCleanupTakeover {
   readonly at: string;
 }
 
+/** Durable authority fact written when cleanup is created and never re-fenced. */
+export interface StreamingSessionCleanupCreationAuthority {
+  readonly effectId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly createdAt: string;
+}
+
 export interface StreamingSessionHistoryEntry {
   readonly state: StreamingSessionState;
   readonly at: string;
@@ -121,7 +129,7 @@ export interface StreamingSessionHistoryEntry {
 
 export interface StreamingSessionRecord {
   readonly recordKind: typeof STREAMING_SESSION_RECORD_KIND;
-  readonly schemaVersion: 0 | 1 | typeof STREAMING_SESSION_RECORD_VERSION;
+  readonly schemaVersion: 0 | 1 | 2 | typeof STREAMING_SESSION_RECORD_VERSION;
   readonly revision: number;
   readonly sessionId: string;
   readonly ownerId: string;
@@ -135,6 +143,7 @@ export interface StreamingSessionRecord {
   readonly envelope: StreamingSessionEnvelope;
   readonly lease: StreamingSessionLease;
   readonly backendBinding: StreamingSessionBackendBinding;
+  readonly cleanupCreationAuthority?: StreamingSessionCleanupCreationAuthority | null;
   readonly cleanupOwner: StreamingSessionCleanupOwner;
   readonly state: StreamingSessionState;
   readonly history: readonly StreamingSessionHistoryEntry[];
@@ -157,11 +166,16 @@ const PENDING_TRANSFER_KEYS = new Set([
   "envelope",
   "lease",
   "backendBinding",
+  "cleanupCreationAuthority",
   "cleanupOwner",
   "state",
   "history",
   "effects",
 ]);
+
+const LEGACY_STREAMING_SESSION_KEYS = new Set(
+  [...PENDING_TRANSFER_KEYS].filter((key) => key !== "cleanupCreationAuthority"),
+);
 
 const STREAMING_SESSION_STATES = new Set([
   "pending_transfer",
@@ -399,8 +413,11 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
   }
   const record = value;
   assertNoForbiddenDurableValues(record);
-  assertExactKeys(record, PENDING_TRANSFER_KEYS, "streaming session record");
-  assertRequiredKeys(record, PENDING_TRANSFER_KEYS, "streaming session record");
+  const recordKeys = record.schemaVersion === 0 || record.schemaVersion === 1 || record.schemaVersion === 2
+    ? LEGACY_STREAMING_SESSION_KEYS
+    : PENDING_TRANSFER_KEYS;
+  assertExactKeys(record, recordKeys, "streaming session record");
+  assertRequiredKeys(record, recordKeys, "streaming session record");
   if (record.recordKind !== STREAMING_SESSION_RECORD_KIND) {
     throw new StreamingSessionStoreError("invalid_record", "Streaming session record kind is invalid.");
   }
@@ -411,7 +428,7 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
     );
   }
   if (record.schemaVersion !== STREAMING_SESSION_RECORD_VERSION &&
-      record.schemaVersion !== 1 && record.schemaVersion !== 0) {
+      record.schemaVersion !== 2 && record.schemaVersion !== 1 && record.schemaVersion !== 0) {
     throw new StreamingSessionStoreError(
       record.state === "released" ? "unsupported_version" : "unsupported_active_version",
       "Streaming session schema version is unsupported.",
@@ -434,9 +451,12 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
   parseEnvelope(record.envelope);
   parseLease(record.lease);
   parseBackendBinding(record.backendBinding);
+  const cleanupCreationAuthority = record.schemaVersion === STREAMING_SESSION_RECORD_VERSION
+    ? parseCleanupCreationAuthority(record.cleanupCreationAuthority)
+    : undefined;
   const history = parseHistory(record.history);
   const effects = parseEffects(record.effects, record.schemaVersion as StreamingSessionRecord["schemaVersion"]);
-  assertStateCombination(record as Partial<StreamingSessionRecord>, effects);
+  assertStateCombination(record as Partial<StreamingSessionRecord>, effects, cleanupCreationAuthority);
   assertHistoryForState(history, record.state as StreamingSessionState, record.revision as number);
   return deepFreeze(structuredClone(record)) as Readonly<StreamingSessionRecord>;
 }
@@ -695,7 +715,7 @@ function parseEffects(
       throw new StreamingSessionStoreError("invalid_effect", "Pending effect has a terminal acknowledgement.");
     }
     if (effect.cleanupProvenance !== undefined) parseCleanupProvenance(effect.cleanupProvenance);
-    if (schemaVersion < STREAMING_SESSION_RECORD_VERSION && effect.cleanupProvenance !== undefined) {
+    if (schemaVersion < 2 && effect.cleanupProvenance !== undefined) {
       throw new StreamingSessionStoreError("invalid_state", "Legacy streaming-session effects cannot carry cleanup provenance.");
     }
     if (effectIds.has(effect.effectId as string)) {
@@ -705,6 +725,30 @@ function parseEffects(
     effectKinds.add(effect.kind as string);
   }
   return value as readonly StreamingSessionEffect[];
+}
+
+function parseCleanupCreationAuthority(
+  value: unknown,
+): StreamingSessionCleanupCreationAuthority | null {
+  if (value === null) return null;
+  assertExactKeys(
+    value,
+    new Set(["effectId", "ownerId", "fencingToken", "createdAt"]),
+    "streaming session cleanup creation authority",
+  );
+  const authority = value as Record<string, unknown>;
+  assertRequiredKeys(
+    authority,
+    new Set(["effectId", "ownerId", "fencingToken", "createdAt"]),
+    "streaming session cleanup creation authority",
+  );
+  requiredText(authority.effectId, "cleanupCreationAuthority.effectId");
+  requiredText(authority.ownerId, "cleanupCreationAuthority.ownerId");
+  if (!Number.isSafeInteger(authority.fencingToken) || (authority.fencingToken as number) < 1) {
+    throw new StreamingSessionStoreError("invalid_record", "Streaming session cleanup creation authority fence is invalid.");
+  }
+  assertTimestamp(authority.createdAt, "cleanupCreationAuthority.createdAt");
+  return value as StreamingSessionCleanupCreationAuthority;
 }
 
 function parseCleanupProvenance(value: unknown): StreamingSessionCleanupProvenance {
@@ -755,6 +799,7 @@ function parseCleanupProvenance(value: unknown): StreamingSessionCleanupProvenan
 function assertStateCombination(
   record: Partial<StreamingSessionRecord>,
   effects: readonly StreamingSessionEffect[],
+  cleanupCreationAuthority: StreamingSessionCleanupCreationAuthority | null | undefined,
 ): void {
   const transfer = effects.find((effect) => effect.kind === "transfer");
   const cleanup = effects.find((effect) => effect.kind === "cleanup");
@@ -783,8 +828,13 @@ function assertStateCombination(
     }
   };
   const requiresCleanupProvenance = () => {
-    if (!cleanup) return;
-    if ((record.schemaVersion as number) < STREAMING_SESSION_RECORD_VERSION) {
+    if (!cleanup) {
+      if (cleanupCreationAuthority !== null && cleanupCreationAuthority !== undefined) {
+        throw new StreamingSessionStoreError("invalid_state", "Streaming session has cleanup authority without an effect.");
+      }
+      return;
+    }
+    if ((record.schemaVersion as number) < 2) {
       if (cleanup.cleanupProvenance !== undefined) {
         throw new StreamingSessionStoreError("invalid_state", "Legacy cleanup evidence cannot carry takeover provenance.");
       }
@@ -795,6 +845,14 @@ function assertStateCombination(
         provenance.effectId !== cleanup.effectId ||
         provenance.originFencingToken < transfer.fencingToken) {
       throw new StreamingSessionStoreError("invalid_state", "Streaming session cleanup provenance is invalid.");
+    }
+    if ((record.schemaVersion as number) >= STREAMING_SESSION_RECORD_VERSION &&
+        (!cleanupCreationAuthority ||
+         cleanupCreationAuthority.effectId !== cleanup.effectId ||
+         cleanupCreationAuthority.createdAt !== cleanup.createdAt ||
+         cleanupCreationAuthority.ownerId !== provenance.originOwnerId ||
+         cleanupCreationAuthority.fencingToken !== provenance.originFencingToken)) {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session cleanup creation authority is invalid.");
     }
     let ownerId = provenance.originOwnerId;
     let fencingToken = provenance.originFencingToken;
@@ -948,6 +1006,22 @@ function cleanupProvenanceFor(
   };
 }
 
+function cleanupCreationAuthorityFor(
+  effect: Readonly<StreamingSessionEffect>,
+  ownerId: string,
+  fencingToken: number,
+): StreamingSessionCleanupCreationAuthority {
+  if (effect.kind !== "cleanup") {
+    throw new StreamingSessionStoreError("invalid_effect", "Streaming session cleanup authority requires a cleanup effect.");
+  }
+  return {
+    effectId: effect.effectId,
+    ownerId: effect.cleanupProvenance?.originOwnerId ?? ownerId,
+    fencingToken: effect.cleanupProvenance?.originFencingToken ?? fencingToken,
+    createdAt: effect.createdAt,
+  };
+}
+
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
@@ -1011,6 +1085,11 @@ function applyStreamingSessionCommand(
     throw new StreamingSessionStoreError("lease_expired", "Streaming session ownership lease has expired.");
   }
   const currentEffects = current.effects;
+  const currentCleanup = currentEffects.find((effect) => effect.kind === "cleanup");
+  const durableCleanupCreationAuthority = current.cleanupCreationAuthority ??
+    (currentCleanup
+      ? cleanupCreationAuthorityFor(currentCleanup, current.ownerId, current.fencingToken)
+      : null);
   const nextRevision = (current.revision as number) + 1;
   const acknowledge = (effectId: string, kind: "transfer" | "cleanup") => {
     const effect = currentEffects.find((candidate) => candidate.effectId === effectId);
@@ -1043,7 +1122,7 @@ function applyStreamingSessionCommand(
     if (assertTimestamp(leaseExpiresAt, "leaseExpiresAt") <= atTimestamp) {
       throw new StreamingSessionStoreError("invalid_state", "Streaming session takeover lease must extend beyond takeover time.");
     }
-    const cleanup = currentEffects.find((effect) => effect.kind === "cleanup");
+    const cleanup = currentCleanup;
     if (current.state === "cleanup_pending") {
       if (!cleanup || cleanup.status !== "pending" || cleanup.owner !== "session_authority" ||
           (input.newFencingToken as number) !== (current.fencingToken as number) + 1) {
@@ -1073,6 +1152,7 @@ function applyStreamingSessionCommand(
       : currentEffects;
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       ownerId: newOwnerId,
@@ -1088,6 +1168,7 @@ function applyStreamingSessionCommand(
     }
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       state: "stopping",
@@ -1102,6 +1183,7 @@ function applyStreamingSessionCommand(
     const effectId = requiredText(input.effectId, "effectId");
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       effects: acknowledge(effectId, "transfer"),
@@ -1126,6 +1208,12 @@ function applyStreamingSessionCommand(
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       state: "cleanup_pending",
+      cleanupCreationAuthority: {
+        effectId,
+        ownerId: current.ownerId,
+        fencingToken: current.fencingToken,
+        createdAt: at,
+      },
       history: [...(current.history as readonly unknown[]), { state: "cleanup_pending", at }],
       effects: [...currentEffects, {
         effectId,
@@ -1150,6 +1238,7 @@ function applyStreamingSessionCommand(
     const effectId = requiredText(input.effectId, "effectId");
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       state: "released",
@@ -1169,6 +1258,7 @@ function applyStreamingSessionCommand(
     }
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       state: "cleanup_blocked",
@@ -1202,6 +1292,7 @@ function applyStreamingSessionCommand(
     }
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       state: disposition,
@@ -1216,6 +1307,7 @@ function applyStreamingSessionCommand(
     acknowledge(effectId, "transfer");
     return parseStreamingSessionRecord({
       ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
       schemaVersion: STREAMING_SESSION_RECORD_VERSION,
       revision: nextRevision,
       state: "transfer_ambiguous",
@@ -1225,6 +1317,7 @@ function applyStreamingSessionCommand(
   }
   return parseStreamingSessionRecord({
     ...current,
+    cleanupCreationAuthority: durableCleanupCreationAuthority,
     schemaVersion: STREAMING_SESSION_RECORD_VERSION,
     revision: nextRevision,
     state: "active",
