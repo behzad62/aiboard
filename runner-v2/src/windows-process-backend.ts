@@ -77,13 +77,15 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       sessionId,
       actor: { role: "worker", id: sessionId },
     }, request.intent.workingDirectory);
-    const identity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt };
+    const opaqueIdentity: JobOpaqueIdentity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt };
+    const birthDiscriminator = createHash("sha256").update(`${snapshot.processId}\0${snapshot.startedAt}`).digest("hex");
+    const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
     this.registerLane(identity);
     return {
-      opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
+      opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
       birthFingerprint: {
         observedAt: snapshot.startedAt,
-        discriminator: createHash("sha256").update(`${snapshot.processId}\0${snapshot.startedAt}`).digest("hex"),
+        discriminator: birthDiscriminator,
       },
       rootPid: snapshot.pid,
       startedAt: snapshot.startedAt,
@@ -192,7 +194,9 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
         if (this.activations.get(identity.processId) === activation) this.activations.delete(identity.processId);
       }).catch(() => undefined);
     }
-    return await activation;
+    const lane = await activation;
+    this.assertLaneIdentity(lane, identity);
+    return lane;
   }
 
   private registerLane(identity: JobIdentity): JobControlLane {
@@ -201,31 +205,43 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       this.assertLaneIdentity(existing, identity);
       return existing;
     }
-    const lane: JobControlLane = { tail: Promise.resolve(), releaseRequested: false, startedAt: identity.startedAt };
+    const lane: JobControlLane = {
+      tail: Promise.resolve(),
+      releaseRequested: false,
+      identity: { ...identity },
+    };
     this.controls.set(identity.processId, lane);
     return lane;
   }
 
   private assertLaneIdentity(lane: JobControlLane, identity: JobIdentity): void {
-    if (lane.startedAt !== identity.startedAt) throw new JobIdentityMismatchError("Windows Job startedAt identity mismatch.");
+    const owned = lane.identity;
+    if (
+      owned.processId !== identity.processId ||
+      owned.runId !== identity.runId ||
+      owned.sessionId !== identity.sessionId ||
+      owned.startedAt !== identity.startedAt ||
+      owned.birthDiscriminator !== identity.birthDiscriminator
+    ) throw new JobIdentityMismatchError("Windows Job exact identity mismatch.");
   }
 }
 
 interface JobControlLane {
   tail: Promise<void>;
   releaseRequested: boolean;
-  startedAt: string;
+  identity: JobIdentity;
   release?: Promise<void>;
 }
 
-interface JobIdentity { processId: string; runId: string; sessionId: string; startedAt: string }
+interface JobOpaqueIdentity { processId: string; runId: string; sessionId: string; startedAt: string }
+interface JobIdentity extends JobOpaqueIdentity { birthDiscriminator: string }
 class JobIdentityMismatchError extends Error {}
 function jobIdentity(binding: ProcessBackendBinding): JobIdentity {
-  const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as JobIdentity;
+  const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as JobOpaqueIdentity;
   if (!value.processId || !value.runId || !value.sessionId || !value.startedAt) throw new Error("Windows Job identity is invalid.");
   const discriminator = createHash("sha256").update(`${value.processId}\0${value.startedAt}`).digest("hex");
   if (binding.birthFingerprint.discriminator !== discriminator) throw new JobIdentityMismatchError("Windows Job birth fingerprint is invalid.");
-  return value;
+  return { ...value, birthDiscriminator: discriminator };
 }
 function jobContext(identity: JobIdentity) {
   return { runId: identity.runId, sessionId: identity.sessionId, actor: { role: "worker" as const, id: identity.sessionId } };

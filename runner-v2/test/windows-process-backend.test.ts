@@ -552,6 +552,41 @@ test("Windows Job serializes ownership observation with cancellation control", a
   assert.deepEqual(parseProcessReconciliation(await observation), { state: "exited", exitCode: 143, signal: "SIGTERM" });
 });
 
+test("Windows Job shared activation rejects a different exact birth before service action", async () => {
+  let entered!: () => void;
+  let resume!: () => void;
+  const activationEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const activationBarrier = new Promise<void>((resolve) => { resume = resolve; });
+  let reconciliations = 0;
+  let signalCalls = 0;
+  const processId = "job-shared-activation-identity";
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    readOutputSince: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+    reconcileOwnership: async () => {
+      reconciliations += 1;
+      if (reconciliations === 1) { entered(); await activationBarrier; }
+      return stoppedJobSnapshot(processId);
+    },
+    signal: async () => { signalCalls += 1; return stoppedJobSnapshot(processId); },
+    releaseOwnership: async () => stoppedJobSnapshot(processId),
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const firstBirth = jobBindingAt(processId, "2026-01-01T00:00:00.000Z");
+  const secondBirth = jobBindingAt(processId, "2026-01-02T00:00:00.000Z");
+
+  const firstVerification = backend.verifyEmpty(firstBirth);
+  await activationEntered;
+  const wrongBirthSignal = backend.signal(secondBirth, "terminate");
+  resume();
+
+  assert.equal(parseProcessEmptyVerification(await firstVerification).empty, true);
+  await assert.rejects(wrongBirthSignal, /identity mismatch/i);
+  assert.equal(signalCalls, 0, "the different birth must be rejected before its service action");
+  assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(firstBirth)).empty, true, "the valid lane must not be poisoned");
+});
+
 test("Windows Job release waits for active output delivery and closes later observation", async () => {
   let releaseOutput!: () => void;
   const barrier = new Promise<void>((resolve) => { releaseOutput = resolve; });
