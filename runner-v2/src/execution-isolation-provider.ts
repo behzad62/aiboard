@@ -618,7 +618,7 @@ async function appendEnforcementRecord(path: string, record: ExecutionEnforcemen
       const state = await readExecutionEnforcementState(path);
       const updated = { ...state, records: [...state.records, structuredClone(validated)] };
       await mkdir(dirname(path), { recursive: true });
-      await writeBoundedEnforcementState(path, updated);
+      await writeBoundedEnforcementState(path, updated, [validated]);
     });
   });
   STATE_WRITES.set(path, next.catch(() => undefined));
@@ -712,7 +712,7 @@ async function appendRecoveryOperation(
       if (state.recoverySummaries?.some((entry) => entry.operationId === validated.operationId)) return;
       const updated = { ...state, records: [...state.records, ...records.map((record) => structuredClone(record))],
         recoverySummaries: [...(state.recoverySummaries ?? []), structuredClone(validated)] };
-      await writeBoundedEnforcementState(path, updated, validated.operationId);
+      await writeBoundedEnforcementState(path, updated, records);
     });
   });
   STATE_WRITES.set(path, next.catch(() => undefined));
@@ -722,44 +722,23 @@ async function appendRecoveryOperation(
 async function writeBoundedEnforcementState(
   path: string,
   state: ExecutionEnforcementState,
-  protectedRecoveryOperationId?: string,
+  appendedRecords: readonly ExecutionEnforcementRecord[] = [],
 ): Promise<void> {
   const records = [...state.records];
   const summaries = [...(state.recoverySummaries ?? [])];
+  const appendedRecordKeys = new Set(appendedRecords.map((record) => JSON.stringify(record)));
   let serialized = "";
   while (true) {
     serialized = JSON.stringify({ ...state, records,
       ...(summaries.length > 0 ? { recoverySummaries: summaries } : { recoverySummaries: undefined }) });
     if (records.length <= MAX_ENFORCEMENT_RECORDS && summaries.length <= MAX_RECOVERY_SUMMARIES &&
         Buffer.byteLength(serialized) <= MAX_ENFORCEMENT_STATE_BYTES) break;
-    if (protectedRecoveryOperationId) {
-      if (!evictSafeIndependentEnforcementRecord(records, summaries, protectedRecoveryOperationId)) {
-        throw new ExecutionIsolationError(
-          "isolation_recovery_blocked",
-          "The complete newly recovered isolation operation exceeds the durable projection capacity.",
-        );
-      }
-      continue;
+    if (!evictSafeIndependentEnforcementRecord(records, summaries, appendedRecordKeys)) {
+      throw new ExecutionIsolationError(
+        "isolation_recovery_blocked",
+        "Durable enforcement projection capacity cannot retain the complete recovery audit history.",
+      );
     }
-    const oldest = records[0];
-    const group = oldest?.leaseId ? summaries.find((summary) => summary.occurredAt === oldest.occurredAt &&
-      summary.providerId === oldest.providerId && summary.leaseIds?.includes(oldest.leaseId!) &&
-      (oldest.recoveryOperationId ? summary.operationId === oldest.recoveryOperationId : summary.operationId === undefined)) : undefined;
-    if (group) {
-      const leaseIds = new Set(group.leaseIds);
-      summaries.splice(summaries.indexOf(group), 1);
-      for (let index = records.length - 1; index >= 0; index -= 1) {
-        const record = records[index]!;
-        if (record.occurredAt === group.occurredAt && record.providerId === group.providerId && record.leaseId && leaseIds.has(record.leaseId) &&
-            (group.operationId ? record.recoveryOperationId === group.operationId : record.recoveryOperationId === undefined)) records.splice(index, 1);
-      }
-    } else if (records.length > 1) records.shift();
-    else if (summaries.length > 0) {
-      const summary = summaries.shift()!;
-      const leaseIds = new Set(summary.leaseIds ?? []);
-      for (let index = records.length - 1; index >= 0; index -= 1) if (records[index]!.leaseId && leaseIds.has(records[index]!.leaseId!)) records.splice(index, 1);
-    }
-    else throw new ExecutionIsolationError("isolation_recovery_blocked", "One enforcement record exceeds the durable projection bound.");
   }
   parseEnforcementState(JSON.parse(serialized));
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
@@ -770,20 +749,29 @@ async function writeBoundedEnforcementState(
 function evictSafeIndependentEnforcementRecord(
   records: ExecutionEnforcementRecord[],
   summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
-  protectedRecoveryOperationId: string,
+  appendedRecordKeys: ReadonlySet<string>,
 ): boolean {
-  const groupedLeaseIds = new Set<string>();
-  for (const summary of summaries) {
-    for (const leaseId of summary.leaseIds ?? []) groupedLeaseIds.add(leaseId);
-  }
   const independent = records.findIndex((record) =>
-    record.recoveryOperationId !== protectedRecoveryOperationId &&
-    !groupedLeaseIds.has(record.leaseId ?? "") &&
+    !isRecoveryAuditTransition(record, summaries) &&
+    !appendedRecordKeys.has(JSON.stringify(record)) &&
     record.status !== "active",
   );
   if (independent < 0) return false;
   records.splice(independent, 1);
   return true;
+}
+
+function isRecoveryAuditTransition(
+  record: ExecutionEnforcementRecord,
+  summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
+): boolean {
+  return summaries.some((summary) =>
+    record.occurredAt === summary.occurredAt &&
+    record.providerId === summary.providerId &&
+    record.leaseId !== undefined &&
+    (summary.leaseIds ?? []).includes(record.leaseId) &&
+    (summary.operationId ? record.recoveryOperationId === summary.operationId : record.recoveryOperationId === undefined),
+  );
 }
 
 function parseAttestation(value: unknown): ExecutionIsolationAttestation {

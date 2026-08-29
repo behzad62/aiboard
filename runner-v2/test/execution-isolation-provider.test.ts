@@ -588,6 +588,84 @@ test("a concurrent recovery cannot evict an acknowledged-or-pending recovery aud
   } finally { await fixture.close(); }
 });
 
+test("ordinary Full enforcement append cannot evict a durable recovery group under capacity pressure", async () => {
+  const recoveryFixture = await isolationFixture();
+  const fullFixture = await isolationFixture("full", (workspace) => boundedAccess(workspace, "ordinary-full", 220).map((entry) => ({
+    path: entry.canonicalPath,
+    mode: entry.mode,
+  })));
+  try {
+    const providerId = "fixture-ordinary-protection";
+    const provider = fakeProvider(providerId, {
+      recoveryTransitions: [capacityTransition(providerId, "ordinary-recovery", "2026-08-28T10:00:00.000Z", boundedAccess(recoveryFixture.root, "ordinary-recovery"))],
+    });
+    const statePath = join(recoveryFixture.root, "ordinary-protection.json");
+    const recoverySelector = selectorFor(providerId, provider, statePath, recoveryFixture.selectorOptions);
+    assert.equal((await recoverySelector.recoverOwnedLeases())[0]?.cleaned, 1);
+    const before = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
+    const fullSelector = createExecutionIsolationSelector(createExecutionIsolationRegistry([]), {
+      ...fullFixture.selectorOptions,
+      statePath,
+    });
+    assert.equal(fullFixture.claims.access.length, 220);
+
+    await assert.rejects(
+      fullSelector.acquire({ permissionProfile: "full", intent: fullFixture.intent, grant: fullFixture.claims }),
+      (error) => error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked",
+    );
+
+    const after = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
+    const state = await readExecutionEnforcementState(statePath);
+    assert.deepEqual(after, before);
+    assert.equal(state.records.some((record) => record.leaseId === "ordinary-recovery" && record.status === "cleaned"), true);
+    assert.equal(state.recoverySummaries?.some((summary) => summary.leaseIds?.includes("ordinary-recovery")), true);
+  } finally {
+    await recoveryFixture.close();
+    await fullFixture.close();
+  }
+});
+
+test("ordinary append never shifts an oldest active record or a recovery group when record capacity is full", async () => {
+  const recoveryFixture = await isolationFixture();
+  const fullFixture = await isolationFixture("full");
+  try {
+    const providerId = "fixture-ordinary-active";
+    const provider = fakeProvider(providerId, {
+      recoveryTransitions: [capacityTransition(providerId, "ordinary-active-recovery", "2026-08-28T10:00:00.000Z", [])],
+    });
+    const statePath = join(recoveryFixture.root, "ordinary-active.json");
+    const recoverySelector = selectorFor(providerId, provider, statePath, recoveryFixture.selectorOptions);
+    assert.equal((await recoverySelector.recoverOwnedLeases())[0]?.cleaned, 1);
+    const recoveryState = await readExecutionEnforcementState(statePath);
+    const fullState = {
+      version: 1,
+      boundary: "provider_specific_not_universal_security_boundary",
+      records: [...recoveryState.records, ...Array.from({ length: 999 }, (_, index) => activeProjectionRecord(index))],
+      recoverySummaries: recoveryState.recoverySummaries,
+    };
+    await writeFile(statePath, JSON.stringify(fullState));
+    const before = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
+    const fullSelector = createExecutionIsolationSelector(createExecutionIsolationRegistry([]), {
+      ...fullFixture.selectorOptions,
+      statePath,
+    });
+
+    await assert.rejects(
+      fullSelector.acquire({ permissionProfile: "full", intent: fullFixture.intent, grant: fullFixture.claims }),
+      (error) => error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked",
+    );
+
+    const after = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
+    const state = await readExecutionEnforcementState(statePath);
+    assert.deepEqual(after, before);
+    assert.equal(state.records.some((record) => record.leaseId === "ordinary-active-recovery"), true);
+    assert.equal(state.records.filter((record) => record.status === "active").length, 999);
+  } finally {
+    await recoveryFixture.close();
+    await fullFixture.close();
+  }
+});
+
 test("capacity-blocked recovery retains its tombstone and later persists the identical group once capacity is available", async () => {
   const fixture = await isolationFixture();
   try {
@@ -784,8 +862,8 @@ function fakeProvider(providerId: string, mutation: {
   return provider;
 }
 
-function boundedAccess(root: string, label: string) {
-  return Array.from({ length: 132 }, (_, index) => ({
+function boundedAccess(root: string, label: string, count = 132) {
+  return Array.from({ length: count }, (_, index) => ({
     canonicalPath: join(root, `bounded-${label}-${index}-${"x".repeat(3_950)}`),
     mode: "write" as const,
   }));
@@ -836,7 +914,10 @@ function selectorFor(
   ]), { ...selectorOptions, statePath });
 }
 
-async function isolationFixture(permissionProfile: "project" | "full" = "project") {
+async function isolationFixture(
+  permissionProfile: "project" | "full" = "project",
+  accessForWorkspace?: (workspace: string) => readonly { path: string; mode: "read" | "write" | "create" }[],
+) {
   const root = await mkdtemp(join(tmpdir(), "runner-isolation-"));
   const workspace = join(root, "workspace");
   await mkdir(workspace);
@@ -854,13 +935,14 @@ async function isolationFixture(permissionProfile: "project" | "full" = "project
   const grant = await authority.issue({
     ...binding,
     workspacePath: workspace,
-    access: [{ path: workspace, mode: "write" }],
+    access: accessForWorkspace?.(workspace) ?? [{ path: workspace, mode: "write" }],
     externalApproved: false,
     destructiveApproved: false,
     networkApproved: false,
   });
   return {
     root,
+    workspace,
     authority,
     grant,
     binding,
