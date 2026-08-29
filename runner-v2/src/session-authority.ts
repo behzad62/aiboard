@@ -238,6 +238,13 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
   const retainedClaims = new Map<string, ConsumedExecutionGrantClaims>();
   const launchAuthorizationUsed = new Set<string>();
   const grantIdsByCall = new Map<string, string>();
+  const consumeLaunchGrant = (grant: OpaqueExecutionGrant, binding: ExecutionGrantBinding): ConsumedExecutionGrantClaims => {
+    const callKey = executionGrantCallKey(binding);
+    if (grantIdsByCall.has(callKey)) throw new SessionAuthorityError("second_grant_for_call", "A ToolBroker call cannot mint, stage, or reuse a second session grant.");
+    const claims = options.grants.consume(grant, binding);
+    grantIdsByCall.set(callKey, claims.grantId);
+    return claims;
+  };
   return Object.freeze({
     stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization {
       const sessionId = requiredText(input.sessionId, "sessionId");
@@ -246,12 +253,13 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         throw new SessionAuthorityError("session_collision", "Streaming session id is already reserved.");
       }
       const callKey = executionGrantCallKey(input.binding);
-      if (grantIdsByCall.has(callKey)) {
-        throw new SessionAuthorityError("launch_call_consumed", "The launching ToolBroker call is already staged.");
+      let claims: ConsumedExecutionGrantClaims;
+      try { claims = consumeLaunchGrant(input.grant, input.binding); }
+      catch (error) {
+        if (error instanceof SessionAuthorityError && error.code === "second_grant_for_call") throw new SessionAuthorityError("launch_call_consumed", "The launching ToolBroker call is already staged.");
+        throw error;
       }
-      const claims = options.grants.consume(input.grant, input.binding);
       assertCurrentConsumedExecutionGrantClaims(claims);
-      grantIdsByCall.set(callKey, claims.grantId);
       const authorization = Object.freeze({ [RUNNER_STAGED_LAUNCH_AUTHORIZATION]: true }) as StagedLaunchAuthorization;
       STAGED_LAUNCHES.set(authorization as object, { sessionId, launchId, callKey, claims, used: false });
       return authorization;
@@ -318,15 +326,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         }
         return Object.freeze({ record: existing });
       }
-      const callKey = executionGrantCallKey(input.binding);
-      if (grantIdsByCall.has(callKey)) {
-        throw new SessionAuthorityError(
-          "second_grant_for_call",
-          "A ToolBroker call cannot mint or reuse a second session grant.",
-        );
-      }
-      const claims = options.grants.consume(input.grant, input.binding);
-      grantIdsByCall.set(callKey, claims.grantId);
+      const claims = consumeLaunchGrant(input.grant, input.binding);
       assertSessionEnvelopeSubset(input.envelope, claims);
       assertLeaseAccessSubset(input.lease, claims);
       assertEnvelopeWithinLease(input.envelope, input.lease);

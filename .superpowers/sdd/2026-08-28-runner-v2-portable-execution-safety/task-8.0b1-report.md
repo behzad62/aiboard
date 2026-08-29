@@ -34,7 +34,7 @@
    cancellation and oversized-frame cleanup; additive channel-v2 metadata;
    protocol/evidence tee; strict sequence/offset/length/digest checking; exact
    acknowledgement; and current delivery authorization.
-3. Exact GREEN: 5/5 tests. The mutable caller buffer, saturation/release,
+3. Exact GREEN grew to 12/12 tests. The mutable caller buffer, saturation/release,
    cancellation, evidence-write failure, sequence gap, and authorization
    refusal cases are covered.
 
@@ -47,11 +47,51 @@
    wait and fails typed for non-v2 output.
 3. Added bounded host-row startup reconciliation; its fake recovery never
    launches.
-4. Exact GREEN: 3/3 tests.
+4. Exact GREEN grew to 8/8 tests.
+
+## Mandatory gap closure RED/GREEN evidence
+
+- Durable checkpoint contract RED: `streaming-output-checkpoint.test.ts` failed
+  because `parseOutputCheckpointRecord` did not exist. GREEN is 4/4, covering
+  strict version/keys, recursive payload refusal, record/window capacity,
+  accepted→intent→consumed, exact replay, HMAC/tamper/reopen and read-only.
+- Durable controller ordering RED observed `missing` at delivery/ack checkpoints;
+  retained-window recovery RED had no method. GREEN proves accepted commit,
+  consuming intent, authorized delivery, consumed commit, then acknowledgement;
+  exact consumed replay suppression and ambiguous delivery/ack become durable
+  `outcome_unknown`.
+- Queue terminal cleanup RED hung a blocked producer until the 30-second exact
+  test timeout. GREEN rejects/wipes queued and waiting owned buffers and settles
+  all producer/consumer waiters on oversize or cancellation.
+- Host cleanup RED rejected `ownerExpiresAt` as unknown and had no cleanup
+  transitions. GREEN covers pending/blocked/released, consecutive expired-owner
+  takeover, immutable origin plus takeover provenance, stale fence, and forged
+  provenance refusal.
+- SQLite adoption fault RED ignored the injected boundary and initially exposed
+  the test handle-cleanup defect; after fixing fixture cleanup, GREEN proves
+  rollback after session insert and wholly post-adoption state after commit.
+  Reopen evidence covers every prepared/isolation/launch/bind/handshake boundary.
+- Runtime cancellation RED left the host `bound` and allowed an active abort to
+  adopt. GREEN settles exact cleaned/blocked journal terminals, waits the active
+  effect barrier, releases one lease, and refuses revocation at isolate, launch,
+  channel, output, and handshake boundaries.
+- Adopted recovery RED left the session active with missing retained bytes.
+  GREEN reattaches without terminal wait/relaunch, validates the provider replay
+  window against durable accepted metadata, and records `outcome_unknown` or
+  `input_unavailable` through SessionAuthority.
+- Runtime v2 composition now creates the checkpoint, queue, evidence tee and
+  controller before output starts. A fake emitted protocol chunk proves one
+  evidence write, one authorized delivery, one consumed checkpoint and one
+  provider acknowledgement; the returned facade contains no channel/backend.
+- Controlled mutations were reverted: disabling current output authorization
+  made its exact test RED; acknowledging before consumed commit made ordering
+  RED; ignoring the host fence made the fencing test RED. Each exact check was
+  GREEN after revert.
 
 ## Current validation
 
-- New B1 focused tests plus exact 8.0A tests: 101/101 green.
+- New B1 focused tests: 34/34 green in the final validation rerun.
+- Exact 8.0A plus staged-kernel affected tests: 99/99 green.
 - Exact Task 7 compatibility tests: 127/127 green.
 - `npm run typecheck:runner-v2`: green.
 - Targeted ESLint over every changed source/test: green after replacing an
@@ -69,24 +109,15 @@
 - All byte queues clear owned references on cancellation/oversize. Runtime
   failure detaches the fake channel and releases the fake lease.
 - No B1-named temporary directory or spill was created by the focused tests.
+- One positively owned SQLite root left by the deliberately failing first
+  adoption-fault test was validated as the exact Temp child containing only
+  `sessions.sqlite`, removed non-recursively, and re-inspected. Final matching
+  B1 temp-root residue count is zero.
 
 ## Self-review concerns for independent review
 
-1. The output controller presently keeps accepted/consumed checkpoints in its
-   bounded private map. The approved brief requires these metadata checkpoints,
-   one consuming intent, reopen/replay, HMAC/tamper/read-only behavior, and
-   provider-retention proof to live durably in the same SQLite kernel. This is
-   not yet implemented and must be treated as an Important/Critical incomplete
-   requirement, not inferred from the fake controller test.
-2. The host journal currently implements the positive staged path and atomic
-   handoff, but its cleanup-pending/blocked/released/takeover transitions and
-   crash/fault injection at every boundary remain incomplete.
-3. Startup recovery currently settles unhanded host rows only. Adopted-session
-   exact reattach/output-window attestation and typed persistence of unavailable/
-   unknown recovery outcomes remain incomplete.
-4. The runtime failure path calls injected release/reconcile but does not yet
-   settle the host journal into a fenced cleanup terminal branch.
-
-The implementation is intentionally not represented as independently approved
-or as packet-complete. The listed gaps require governed repair before B1 may
-unlock B2.
+- No known mandatory implementation gap remains from the four controller-returned
+  items. Independent review is still required and this report does not claim
+  approval or unlock B2.
+- B1 remains deliberately fake-provider-only. Native/POSIX/Windows/Job/OCI
+  behavior remains owned by B2/B3 and was not inferred from these tests.

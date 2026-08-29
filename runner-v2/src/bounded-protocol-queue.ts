@@ -31,8 +31,9 @@ export class BoundedProtocolQueue {
     if (bytes.byteLength < 1) return Promise.reject(new ProtocolQueueError("invalid_configuration", "Protocol chunks must be non-empty."));
     if (bytes.byteLength > this.maxFrameBytes) {
       bytes.fill(0);
-      this.clearOwned();
-      return Promise.reject(new ProtocolQueueError("frame_too_large", "Protocol frame exceeds the explicit limit."));
+      const error = new ProtocolQueueError("frame_too_large", "Protocol frame exceeds the explicit limit.");
+      this.fail(error);
+      return Promise.reject(error);
     }
     if (this.canAccept(bytes)) { this.enqueue(bytes); return Promise.resolve(); }
     return new Promise<void>((resolve, reject) => this.producers.push({ bytes, resolve, reject }));
@@ -47,7 +48,11 @@ export class BoundedProtocolQueue {
 
   cancel(reason: string): void {
     if (this.cancelled) return;
-    this.cancelled = new ProtocolQueueError("cancelled", reason || "Protocol queue cancelled.");
+    this.fail(new ProtocolQueueError("cancelled", reason || "Protocol queue cancelled."));
+  }
+
+  private fail(error: ProtocolQueueError): void {
+    this.cancelled = error;
     this.clearOwned();
     for (const producer of this.producers.splice(0)) { producer.bytes.fill(0); producer.reject(this.cancelled); }
     for (const consumer of this.consumers.splice(0)) consumer.reject(this.cancelled);

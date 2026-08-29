@@ -14,6 +14,7 @@ export function createProtocolEvidenceTee(options: { readonly queue: BoundedProt
       } catch {
         return Object.freeze({ evidenceLossy: true as const, reason: "evidence_write_failed" as const });
       } finally {
+        protocol.fill(0);
         evidence.fill(0);
       }
     },
