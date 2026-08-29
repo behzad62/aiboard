@@ -24,6 +24,8 @@ import { createWindowsProcessBackend } from "../../src/windows-process-backend.j
 export interface ProductionOneShotCommandFixture {
   readonly execution: OneShotCommandExecutor;
   readonly internalExecution: OneShotCommandExecutor;
+  /** Production Runner-owned entry used by non-model families such as final verification. */
+  readonly runnerOwnedExecution: OneShotCommandExecutor;
   readonly executionGrants: ReturnType<typeof createExecutionGrantAuthority>;
   readonly artifacts: ArtifactStore;
   readonly root: string;
@@ -107,6 +109,7 @@ export function createProductionOneShotCommandFixture(
   const fixture: ProductionOneShotCommandFixture = {
     execution,
     internalExecution,
+    runnerOwnedExecution: internalExecution,
     executionGrants,
     artifacts,
     root,

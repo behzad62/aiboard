@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse } from "node:path";
@@ -20,6 +20,7 @@ import {
   OciExecutionIsolationError,
   createNativeOciCli,
   createOciExecutionIsolationProvider,
+  type OciCli,
   type OciCliInvocation,
 } from "../src/oci-execution-isolation-provider.js";
 
@@ -158,6 +159,71 @@ test("OCI child environment never enters the attested Docker control-plane envir
     assert.equal(calls.every((call) => Object.keys(call.environment).length === 0), true);
   } finally {
     await fixture.close();
+  }
+});
+
+test("OCI deletion faults never orphan a successfully created container and recover deterministically", async (t) => {
+  for (const containerCleanupFails of [false, true]) {
+    await t.test(containerCleanupFails ? "handoff and compensation fail" : "handoff deletion fails", async () => {
+      const fixture = await ociFixture();
+      const calls: OciCliInvocation[] = [];
+      const base = fakeCli(calls);
+      let failHandoff = true;
+      let failContainerCleanup = containerCleanupFails;
+      const cli: OciCli = {
+        ...base,
+        run: async (invocation) => {
+          if (invocation.args[0] === "rm" && failContainerCleanup) {
+            calls.push(invocation);
+            return { exitCode: 1, stdout: "", stderr: "injected rm failure" };
+          }
+          return await base.run(invocation);
+        },
+      };
+      const removeHandoff = async (path: string, root: string) => {
+        if (failHandoff) throw new Error("injected handoff unlink failure");
+        await rm(path, { force: true });
+        await rmdir(root).catch(() => undefined);
+      };
+      try {
+        const provider = createOciExecutionIsolationProvider({
+          providerId: `oci-deletion-fault-${containerCleanupFails}`,
+          cliPath: fixture.cli,
+          image: "fixture/image:configured",
+          stateDirectory: fixture.state,
+          cli,
+          removeEnvironmentHandoff: removeHandoff,
+        });
+        await provider.attest();
+        await assert.rejects(provider.acquire({
+          providerId: `oci-deletion-fault-${containerCleanupFails}`,
+          implementationDigest: "a".repeat(64),
+          intent: fixture.intent,
+          grant: fixture.claims,
+          environment: { APPROVED_SECRET: "private-value" },
+        }), (error: unknown) => (error as { code?: unknown }).code === "oci_recovery_blocked");
+        const statePath = join(fixture.state, `oci-leases-oci-deletion-fault-${containerCleanupFails}.json`);
+        const durable = readFileSync(statePath, "utf8");
+        assert.equal(durable.includes("container-fixture-1"), true, "created effect is durably owned");
+        assert.equal(durable.includes("private-value"), false);
+        assert.equal(calls.some((call) => call.args[0] === "rm"), true, "compensation is attempted");
+
+        failHandoff = false;
+        failContainerCleanup = false;
+        base.psOutput = "container-fixture-1\n";
+        const recovered = await provider.recoverOwned();
+        assert.equal(recovered.blockers.length, 0, JSON.stringify(recovered));
+        const transitions = recovered.transitions ?? [];
+        assert.equal(transitions.length, 1, JSON.stringify(recovered));
+        await provider.acknowledgeRecovery!(transitions);
+        base.psOutput = "";
+        assert.deepEqual(await provider.recoverOwned(), { cleaned: 0, blockers: [], transitions: [] });
+        assert.equal(existsSync(join(fixture.state, "environment-handoffs")), false);
+        assert.equal(readFileSync(statePath, "utf8"), "[]");
+      } finally {
+        await fixture.close();
+      }
+    });
   }
 });
 
@@ -407,12 +473,15 @@ test("OCI durable lease ingestion rejects forged or oversized state before any C
     const validText = readFileSync(statePath, "utf8");
     const valid = JSON.parse(validText) as Record<string, unknown>[];
     const leaseObject = valid[0]!.lease as { grantedAccess: Record<string, unknown>[]; immutableImageId: string };
+    const externalHandoffSentinel = join(second.root, "environment-11111111-1111-4111-8111-111111111111.env");
+    await writeFile(externalHandoffSentinel, "must-not-delete");
     const forged = [
       [{ ...valid[0], unknown: true }],
       [{ ...valid[0], lease: { ...(valid[0]!.lease as object), immutableImageId: "sha256:bad" } }],
       [{ ...valid[0], lease: { ...(valid[0]!.lease as object), grantedAccess: [{ canonicalPath: "relative", mode: "write" }] } }],
       [{ ...valid[0], lease: { ...(valid[0]!.lease as object), grantedAccess: [leaseObject.grantedAccess[0], leaseObject.grantedAccess[0]] } }],
       [{ ...valid[0], runId: "forged-label-identity" }],
+      [{ ...valid[0], environmentHandoffPath: externalHandoffSentinel }],
       [valid[0], valid[0]],
     ];
     for (const value of forged) {
@@ -423,6 +492,7 @@ test("OCI durable lease ingestion rejects forged or oversized state before any C
         error instanceof OciExecutionIsolationError && error.code === "oci_recovery_blocked");
       assert.equal(calls.length, before);
       assert.equal(readFileSync(statePath, "utf8"), text);
+      assert.equal(readFileSync(externalHandoffSentinel, "utf8"), "must-not-delete");
     }
     await writeFile(statePath, Buffer.alloc(1024 * 1024 + 1, 0x20));
     const before = calls.length;

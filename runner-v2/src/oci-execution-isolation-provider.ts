@@ -12,6 +12,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import {
+  basename,
+  dirname,
   isAbsolute,
   join,
   parse,
@@ -98,6 +100,8 @@ export interface OciExecutionIsolationProviderOptions {
   readonly expectedCliIdentity?: Readonly<{ path: string; digest: string }>;
   readonly cli?: OciCli;
   readonly clock?: () => Date;
+  /** Injectable private-file cleanup seam for deterministic fault testing. */
+  readonly removeEnvironmentHandoff?: (path: string, root: string) => Promise<void>;
 }
 
 interface DurableOciLease {
@@ -108,6 +112,7 @@ interface DurableOciLease {
   readonly cleanupStage: "active" | "cleanup_started" | "cleaned_pending_ack";
   readonly cleanupToken?: string;
   readonly cleanedAt?: string;
+  readonly environmentHandoffPath?: string;
 }
 
 export async function createConfiguredOciIsolationSelector(
@@ -170,6 +175,7 @@ export function createOciExecutionIsolationProvider(
   const statePath = join(stateDirectory, `oci-leases-${providerId}.json`);
   const environmentHandoffRoot = join(stateDirectory, "environment-handoffs");
   const cli = options.cli ?? createNativeOciCli();
+  const removeEnvironmentHandoff = options.removeEnvironmentHandoff ?? removePrivateEnvironmentHandoff;
   const clock = options.clock ?? (() => new Date());
   let cliPath: string | undefined;
   let cliDigest: string | undefined;
@@ -262,12 +268,7 @@ export function createOciExecutionIsolationProvider(
       args.push("--workdir", representation.cwd, acquisitionImageId, representation.executable);
       args.push(...representation.arguments);
       assertSafeOciArguments(args);
-      let created: OciCliResult;
-      try {
-        created = await runCli(args);
-      } finally {
-        if (environmentFile) await removePrivateEnvironmentHandoff(environmentFile, environmentHandoffRoot);
-      }
+      const created = await runCli(args);
       if (created.exitCode !== 0) {
         throw ociError("oci_create_failed", `OCI container create failed: ${bounded(created.stderr)}.`);
       }
@@ -287,18 +288,57 @@ export function createOciExecutionIsolationProvider(
         providerIdentity: request.implementationDigest,
         immutableImageId: acquisitionImageId,
       });
+      const owned: DurableOciLease = {
+        lease, containerId, containerName, runId: request.intent.runId, cleanupStage: "active",
+        ...(environmentFile ? { environmentHandoffPath: environmentFile } : {}),
+      };
       try {
         await withStateLock(statePath, async () => {
           const leases = await readLeaseState(statePath);
-          leases.push({ lease, containerId, containerName, runId: request.intent.runId, cleanupStage: "active" });
+          leases.push(owned);
           await writeLeaseState(statePath, leases);
         });
       } catch (error) {
         const cleanup = await runCli(["rm", "--force", containerId]);
+        if (environmentFile) await removeEnvironmentHandoff(environmentFile, environmentHandoffRoot).catch(() => undefined);
         throw new AggregateError(
           [error, ...(cleanup.exitCode === 0 ? [] : [new Error(bounded(cleanup.stderr))])],
           "Could not durably own newly created OCI container.",
         );
+      }
+      if (environmentFile) {
+        try {
+          await removeEnvironmentHandoff(environmentFile, environmentHandoffRoot);
+          await withStateLock(statePath, async () => {
+            const leases = await readLeaseState(statePath);
+            await writeLeaseState(statePath, leases.map((entry) => entry.lease.leaseId === leaseId
+              ? withoutEnvironmentHandoff(entry) : entry));
+          });
+        } catch (error) {
+          await withStateLock(statePath, async () => {
+            const leases = await readLeaseState(statePath);
+            const entry = leases.find((candidate) => candidate.lease.leaseId === leaseId);
+            if (!entry) throw ociError("oci_recovery_blocked", "Created OCI container lost durable cleanup ownership.");
+            const started = { ...entry, cleanupStage: "cleanup_started" as const };
+            await writeLeaseState(statePath, leases.map((candidate) => candidate === entry ? started : candidate));
+          });
+          const cleanup = await runCli(["rm", "--force", containerId]);
+          if (cleanup.exitCode === 0) {
+            await withStateLock(statePath, async () => {
+              const leases = await readLeaseState(statePath);
+              const entry = leases.find((candidate) => candidate.lease.leaseId === leaseId);
+              if (entry) await writeLeaseState(statePath, leases.map((candidate) => candidate === entry
+                ? pendingCleanup(entry, clock()) : candidate));
+            });
+          }
+          throw ociError(
+            "oci_recovery_blocked",
+            cleanup.exitCode === 0
+              ? "OCI environment handoff cleanup failed; container compensation is durably pending acknowledgement."
+              : `OCI environment handoff cleanup and container compensation failed: ${bounded(cleanup.stderr)}.`,
+            error,
+          );
+        }
       }
       return lease;
     },
@@ -373,7 +413,6 @@ export function createOciExecutionIsolationProvider(
       }
       return await withStateLock(statePath, async () => {
       let leases = await readLeaseState(statePath);
-      const byContainer = new Map(leases.map((entry) => [entry.containerId, entry]));
       const listed = await runCli([
         "ps", "--all",
         "--no-trunc",
@@ -387,8 +426,21 @@ export function createOciExecutionIsolationProvider(
       let cleaned = 0;
       const blockers: string[] = [];
       const transitions: import("./execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [];
+      for (const owned of [...leases]) {
+        if (!owned.environmentHandoffPath) continue;
+        try {
+          await removeEnvironmentHandoff(owned.environmentHandoffPath, environmentHandoffRoot);
+          const cleared = withoutEnvironmentHandoff(owned);
+          leases = leases.map((entry) => entry === owned ? cleared : entry);
+          await writeLeaseState(statePath, leases);
+        } catch (error) {
+          blockers.push(`OCI environment handoff cleanup remains blocked for lease ${owned.lease.leaseId}: ${bounded(error)}.`);
+        }
+      }
+      const byContainer = new Map(leases.map((entry) => [entry.containerId, entry]));
       const remaining = new Set(leases);
       for (const owned of leases.filter((entry) => entry.cleanupStage === "cleaned_pending_ack")) {
+        if (owned.environmentHandoffPath) continue;
         transitions.push(cleanupTransition(owned, "cleaned"));
         cleaned += 1;
         remaining.delete(owned);
@@ -473,6 +525,11 @@ export function createOciExecutionIsolationProvider(
 function pendingCleanup(owned: DurableOciLease, now: Date): DurableOciLease {
   return { ...owned, cleanupStage: "cleaned_pending_ack", cleanupToken: owned.cleanupToken ?? `cleanup-${randomUUID()}`,
     cleanedAt: owned.cleanedAt ?? now.toISOString() };
+}
+
+function withoutEnvironmentHandoff(owned: DurableOciLease): DurableOciLease {
+  const { environmentHandoffPath: _removed, ...rest } = owned;
+  return rest;
 }
 
 function cleanupTransition(
@@ -738,7 +795,7 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
   const leaseIds = new Set<string>();
   const containerIds = new Set<string>();
   return value.map((value) => {
-      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId", "cleanupStage", "cleanupToken", "cleanedAt"]);
+      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId", "cleanupStage", "cleanupToken", "cleanedAt", "environmentHandoffPath"]);
       const lease = exactLeaseObject(row.lease, ["leaseId", "providerId", "invocationId", "grantId", "grantedAccess", "acquiredAt", "expiresAt", "state", "providerIdentity", "immutableImageId"]);
       const textField = (input: unknown, pattern?: RegExp) => {
         if (typeof input !== "string" || !input || input.length > 512 || input.includes("\0") || (pattern && !pattern.test(input))) throw new Error();
@@ -773,6 +830,13 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
           (cleanupStage === "cleaned_pending_ack") !== (row.cleanupToken !== undefined && row.cleanedAt !== undefined) ||
           (cleanupStage !== "cleaned_pending_ack" && (row.cleanupToken !== undefined || row.cleanedAt !== undefined)) ||
           (row.cleanedAt !== undefined && !canonicalTimestamp(row.cleanedAt))) throw new Error();
+      const environmentHandoffPath = row.environmentHandoffPath === undefined
+        ? undefined : textField(row.environmentHandoffPath);
+      if (environmentHandoffPath !== undefined && (
+        !isAbsolute(environmentHandoffPath) || resolve(environmentHandoffPath) !== environmentHandoffPath ||
+        normalize(dirname(environmentHandoffPath)) !== normalize(join(dirname(path), "environment-handoffs")) ||
+        !/^environment-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.env$/i.test(basename(environmentHandoffPath))
+      )) throw new Error();
       return {
         lease: {
           leaseId, providerId: textField(lease.providerId), invocationId, grantId: textField(lease.grantId),
@@ -782,6 +846,7 @@ function parseLeaseState(value: unknown, path: string): DurableOciLease[] {
         containerId, containerName, runId, cleanupStage: cleanupStage as DurableOciLease["cleanupStage"],
         ...(row.cleanupToken === undefined ? {} : { cleanupToken: textField(row.cleanupToken) }),
         ...(row.cleanedAt === undefined ? {} : { cleanedAt: textField(row.cleanedAt) }),
+        ...(environmentHandoffPath === undefined ? {} : { environmentHandoffPath }),
       };
   });
 }
