@@ -121,6 +121,11 @@ overlap is expected.
   cleanup can settle, but recovered failure cannot persist `cleanup_blocked`,
   and accepting an arbitrary older effect fence lacks durable takeover
   provenance; commits `17d7844e`..`3431499f`). Packet 8.0B remains locked.
+- Task 8.0A: fix round 3/5 (1 linked defect addressed, 1 open — cleaned and
+  blocked settlement now work after takeover, but a coherently forged
+  provenance origin plus first transition is not anchored to immutable durable
+  authority; commits `88f6059d`..`1f2e5173`). Round 4 escalates to a fresh
+  higher-capability implementer; packet 8.0B remains locked.
 
 ## Breaker rulings
 
