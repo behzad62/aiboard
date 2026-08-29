@@ -109,6 +109,15 @@ overlap is expected.
   Critical/Important ambiguity. Implementation order is locked to 8.0A, 8.0B,
   8.1 Git, 8.2 MCP, 8.3 LSP, 8.4 managed, then 8.5 provider/static closure.
 
+## Task 8 execution log
+
+- Task 8.0A: initial implementation commits `ddbe9008`, `35608732`; controller
+  cleanup evidence `99aea024`; initial review found eight Important issues.
+- Task 8.0A: fix round 1/5 (7 addressed, 1 open — expired
+  `cleanup_pending` ownership lease strands the exact cleanup effect because
+  owner acknowledgement and takeover are both refused; commits
+  `0f5b36a8`..`89fa9656`). Packet 8.0B remains locked.
+
 ## Breaker rulings
 
 - Ruling: Task 5's unjournaled recovery output-reopen, backend-observe/output-write,
