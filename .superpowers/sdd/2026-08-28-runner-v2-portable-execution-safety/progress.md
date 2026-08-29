@@ -24,7 +24,7 @@
 | 5 | P6.4c adapters | verified complete after carried prerequisite | `4d53078a` | `task-5-implementer-report.md`, `task-6a-prerequisite-report.md` | approved after breaker residuals closed at Task 6 entry | 5 + 3 carried fixes | `e57c2a1f`, `e29d5b8f`, `4f940cb3`, `16fca6d2`, `dfcb6a33`, `f8c1ad06`, carried `5307d1b7`, `18b97fc9`, `9c59feec`, `b997aade` | fresh re-review approved: all seven blocking effect families durably journaled, exact consumers enforced, malformed/ambiguous effects retained, authority loss fail-closed |
 | 6 | P6.4d isolation/grants | verified complete after carried Task 7 entry prerequisite | `b997aade` | `task-6-implementer-report.md`, `task-7a-prerequisite-report.md` | breaker residual independently approved at Task 7 entry | 5 + 3 carried prerequisite fixes | initial `88266699`, fixes through `6be10f70`, carried `b1ea2f92`, `74e7aec3`, `04f00723`, `8eb593f0` | exact grants, truthful provider/Full selection, configured OCI, two-phase cleanup evidence, bounded durable projection, concurrency/capacity safety, real Docker and zero residue approved |
 | 7 | P6.4e one-shot/evidence/verification | verified complete | `8eb593f0` | `task-7-brief.md`, `task-7-implementer-report.md`, review/fix reports through `task-7-review-round-5.md` | final governed round 5 approved; zero Critical/Important findings | 5 feature review rounds | initial `560a061f`, fixes through `30e8b8ff` | independent 130/130 + 49/49 + 8/8, type/lint/diff/residue green; no Task 8 scope or Node pin |
-| 8 | P6.4e remaining child families | implementation preparation in progress | `30e8b8ff` | task brief pending | unlocked by verified Task 7 | 0 | — | migrate remaining child-process families through the shared portable runtime |
+| 8 | P6.4e remaining child families | 8.0A ready for implementation | `a0b3fb7a` | `task-8-brief.md`, focused `task-8.0a-brief.md` | specification gate approved in `task-8-spec-review-4.md` after four focused rounds | 0 | — | zero Critical/Important architecture ambiguity; execute 8.0A → 8.0B → Git → MCP → LSP → managed → audit serially |
 | 9 | P6.4f Git hardening | blocked by 8 | — | — | — | 0 | — | — |
 | 10 | P6.4g filesystem fence | blocked by 9 (serial doctrine) | — | — | — | 0 | — | — |
 | 11 | P6.4h recovery/disclosure | blocked by 10 | — | — | — | 0 | — | — |
@@ -95,6 +95,19 @@ overlap is expected.
 |---|---|---|---|
 | Three uniquely named `runner-v2-launch-orphan-*` system-temp roots from Task 4 prove-red runs could not be removed because host policy rejected both safe cleanup attempts; each was inspected and contains only its owned `state.sqlite`. | Low | 12 | Deferred cleanup/residue audit; do not broaden Task 5 |
 | One inert Task 5 evidence directory for stopped supervisor PID 41160 remains under the task-owned temp namespace because both recursive and exact file deletion were denied by host policy; all three associated exact fixture processes were revalidated and stopped. | Low | 12 | Deferred cleanup/residue audit; no live process remains |
+
+## Task 8 specification gate
+
+- Task 8 architecture inventory covered every production child family, the
+  shared construction graph, direct-launch seams, platform-host allowlist, and
+  the negative configured-local-provider audit.
+- Four focused specification reviews resolved grant lifetime, durable
+  SessionAuthority transfer, per-operation authorization, internal execution
+  principals, streaming recovery/output ownership, managed cancellation, and
+  contract/runtime packet ownership.
+- Final verdict: `task-8-spec-review-4.md` APPROVED with zero
+  Critical/Important ambiguity. Implementation order is locked to 8.0A, 8.0B,
+  8.1 Git, 8.2 MCP, 8.3 LSP, 8.4 managed, then 8.5 provider/static closure.
 
 ## Breaker rulings
 
