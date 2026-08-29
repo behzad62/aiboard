@@ -191,5 +191,6 @@ Each behavior below was added test-first. RED commands were run before the liste
 
 ### Fix-round commits and concerns
 
-- The production/test fix commit and the forced report-finalization commit are created after this section is staged; their exact hashes are in the final handoff.
+- Production/tests plus this force-added report: `0f5b36a8` (`fix(runner): harden streaming session authority contracts`).
+- This small report-hash follow-up is committed separately after recording the production hash; the final handoff lists both hashes.
 - No unresolved implementation or validation concern remains. The packet still requires its prescribed independent review before the overall 8.0A reviewer exit gate may be claimed.
