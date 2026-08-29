@@ -104,3 +104,92 @@ Each behavior below was added test-first. RED commands were run before the liste
 
 1. The code and specified focused/affected gates are green, but the host policy prevented removing the single verified stale Temp root described above. It should be removed manually or by an authorized cleanup mechanism before claiming the packet’s “temp state is empty” gate.
 2. This was a sole-implementer packet under the no-subagent instruction. An independent reviewer has not yet supplied the brief-required zero Critical/Important review; route the committed diff to that reviewer before declaring PACKET 8.0A VERIFIED 100% COMPLETE.
+
+## Fix Round 1 — review base `99aea024df90d55b08d574821ea527ee3eafd97b`
+
+### Scope, files, and constraints
+
+- This round addresses all eight Important findings in `task-8.0a-review-1.md`; it does not start 8.0B or migrate a production child family.
+- Changed production files: `runner-v2/src/execution-grants.ts`, `runner-v2/src/session-authority.ts`, `runner-v2/src/streaming-session-store.ts`, and `runner-v2/src/interactive-process-channel.ts`.
+- Changed focused tests: `runner-v2/test/execution-grants.test.ts`, `runner-v2/test/session-authority.test.ts`, `runner-v2/test/streaming-session-store.test.ts`, and `runner-v2/test/interactive-process-channel.test.ts`.
+- No brief, progress ledger, review file, or controller evidence file was edited. No Git/MCP/LSP/managed/provider routing appears in this round’s diff.
+
+### Finding-by-finding audit and TDD evidence
+
+1. **ToolBroker-only expiry/revocation**
+   - Regression: `observing expired consumed claims leaves exactly-once cleanup to ToolBroker revocation` registers an actual consumed-grant revoker, expires currentness, then proves `revoke()` runs cleanup once and only once.
+   - RED: `npx tsx --test --test-name-pattern="observing expired consumed claims" runner-v2/test/execution-grants.test.ts` failed with `false !== true`: currentness had already changed the record to revoked, so ToolBroker could not run the revoker.
+   - Minimum fix: `assertCurrentConsumedExecutionGrantClaims()` now only rejects expiry; it never changes lifecycle state. ToolBroker’s `revoke`/`revokeAll` remain the only path that changes state and runs registered revokers.
+   - GREEN: the same command passed `1/1`.
+
+2. **Exact SessionAuthority facts in interactive operations**
+   - Regression: `carries the exact SessionAuthority binding and access assertion into an interactive write` constructs a real grant, transfer, acknowledgement, opaque operation authorization, full binding/access assertion, and invokes `SessionAuthority.assertOperationAuthorization` through the registry.
+   - RED: `npx tsx --test --test-name-pattern="carries the exact SessionAuthority binding" runner-v2/test/interactive-process-channel.test.ts` failed with `TypeError: Cannot read properties of undefined (reading 'runId')`, proving the registry supplied only session/operation facts.
+   - Minimum fix: write/control/family request types now require `SessionOperationAuthorization` plus the complete `OperationAuthorizationAssertion`; `authorize` receives both. Every family-facing gate verifies the request session/operation and delegates all exact binding/access facts to SessionAuthority. No out-of-band identity map was introduced.
+   - GREEN: the same command passed `1/1`; the full interactive file subsequently passed.
+
+3. **Per-delivery current authorization/fence validation**
+   - Regressions: `stops family output delivery after ToolBroker revokes the source call`, `... grant expires`, `... fenced SessionAuthority takeover`, and `... lifecycle release` subscribe first, emit allowed bytes, then change current authority and assert later bytes are not delivered.
+   - RED: `npx tsx --test --test-name-pattern="stops family output delivery" runner-v2/test/interactive-process-channel.test.ts` failed all three authority cases because the post-change byte remained in the delivery array.
+   - Minimum fix: family subscription performs a current attachment/release/fence/full-SessionAuthority check for every backend callback and unsubscribes fail-closed on rejection.
+   - GREEN: the same command passed `3/3`.
+   - Mutation RED/revert for release: after adding the lifecycle-release case, I temporarily removed `current.released` from the callback guard. `npx tsx --test --test-name-pattern="stops family output delivery after lifecycle release" runner-v2/test/interactive-process-channel.test.ts` failed with `after-release` present. I restored the release guard with `apply_patch`; the exact command then passed `1/1`.
+
+4. **Serialized writes and owned payload bytes**
+   - Regression: `serializes overlapping writes and delivers a byte copy that survives caller mutation` blocks the first backend write, starts a concurrent duplicate sequence, mutates the caller buffer after invocation, then checks one backend start, one in-flight writer, one sequence reservation, and original delivered bytes.
+   - Test-design correction: the first draft used sequence 2 and correctly failed immediately as out-of-order before exercising the race; I changed only the test to a concurrent duplicate sequence. No production code changed in that correction.
+   - RED: `npx tsx --test --test-name-pattern="serializes overlapping writes" runner-v2/test/interactive-process-channel.test.ts` failed `2 !== 1`, proving both duplicate writes reached the backend.
+   - Minimum fix: each attachment owns a settled write tail. `write()` snapshots scalar fields and copies the `Uint8Array` at API entry, serializes validation/backend work, reserves `nextSequence` before awaiting the acknowledgement, and marks an unknown outcome fail-closed.
+   - GREEN: the same command passed `1/1`; delivered bytes remained `first` after caller mutation.
+
+5. **Immutable, fenced attachment/reattachment and capability cleanup**
+   - Regression: `clones attachment evidence and safely rejects stale attachment or reattachment without leaking channels` mutates caller binding/fence after attach and reattach, accepts a newer fence while detaching the displaced channel, rejects lower-fence attach/reattach, detaches their returned capabilities, and confirms the newer channel remains current.
+   - RED: `npx tsx --test --test-name-pattern="clones attachment evidence" runner-v2/test/interactive-process-channel.test.ts` failed with `Interactive channel fence is stale` after caller mutation.
+   - Minimum fix: attach/reattach clone and freeze exact binding/fence before provider calls; per-session attachment changes serialize; only a strictly newer fence may replace a live attachment; a replacement first releases the old channel; rejected/invalid/stale returned channels are detached or fail closed; release also serializes against attachment changes.
+   - GREEN: the same command passed `1/1`.
+
+6. **Durable ownership-lease enforcement**
+   - Regressions: `rejects an expired durable session owner before issuing a new family authorization`; `requires ownership-lease expiry for takeover and refuses expired-owner durable mutations`. The latter covers pre-expiry takeover refusal, expiry-time owner mutation refusal, post-expiry takeover, and cleanup-state takeover refusal.
+   - RED (authorization): `npx tsx --test --test-name-pattern="rejects an expired durable session owner" runner-v2/test/session-authority.test.ts` failed with `Missing expected exception`.
+   - RED (reducer): `npx tsx --test --test-name-pattern="requires ownership-lease expiry" runner-v2/test/streaming-session-store.test.ts` failed with `Missing expected exception` for pre-expiry takeover.
+   - Minimum fix: SessionAuthority checks `leaseExpiresAt` on issuing/asserting operation authorization. The reducer rejects an expired SessionAuthority owner’s mutation, permits takeover only after expiry from adopted non-cleanup states, rejects pre-expiry takeover, and requires a new takeover lease beyond the takeover time.
+   - GREEN: both exact commands passed `1/1`.
+   - Compatibility RED/revert: the established fenced-takeover tests now correctly failed with `lease_not_expired`. I changed their fake clocks/fixtures to reach the durable lease expiry before takeover, then reran `npx tsx --test runner-v2/test/session-authority.test.ts` (`19/19`) and `npx tsx --test runner-v2/test/streaming-session-store.test.ts` (`34/34` at that point) green.
+
+7. **Strict effect owner/fence parser closure**
+   - Regression: `rejects forged transfer and cleanup effect owner or fence evidence` now rejects forged pending transfer ownership/fence, forged active cleanup evidence, forged released cleanup owners, and still accepts a real provider-lease cleanup/release path.
+   - RED: `npx tsx --test --test-name-pattern="rejects forged transfer and cleanup effect" runner-v2/test/streaming-session-store.test.ts` initially reported `Missing expected exception` for the forged transfer; later focused REDs reported missing released cleanup-owner rejection and then invalid provider-lease release while hardening the release-history check.
+   - Minimum fix: pending/ambiguous effects require the exact ToolBroker owner/current fence; adopted transfer evidence requires ToolBroker ownership and a fence no newer than current; pending/blocked cleanup requires exact current cleanup owner/fence; released cleanup requires the owner implied by the state before cleanup and the exact current fence.
+   - GREEN: the same exact command passed `1/1`. A first provider-release test draft omitted the required `acknowledge_ambiguous_transfer`; I corrected only that test transition before the final intended RED. No production change was hidden by the draft correction.
+
+8. **Collision-safe session ID claim and pre-consumption authority check**
+   - Store regression: `makes an exact session claim idempotent but rejects a semantic session-ID collision in memory and SQLite` checks same-identity idempotence and typed `identity_conflict` for changed immutable input on both backends.
+   - RED: `npx tsx --test --test-name-pattern="makes an exact session claim idempotent" runner-v2/test/streaming-session-store.test.ts` failed with `Missing expected exception`.
+   - Minimum fix: memory and SQLite claim paths compare canonical complete immutable identity before returning an existing record and throw typed `identity_conflict` on mismatch.
+   - GREEN: the same command passed `1/1`.
+   - SessionAuthority regression: `refuses a semantic streaming session-ID collision before consuming the new grant` first covers a different call and then a same-call/different-lease collision, proving both fresh grants remain consumable after typed `session_collision`.
+   - REDs: `npx tsx --test --test-name-pattern="refuses a semantic streaming session-ID collision" runner-v2/test/session-authority.test.ts` first failed because the store `identity_conflict` escaped after consuming the grant; the extended same-call case then failed because `second_grant_for_call` was raised before semantic collision comparison.
+   - Minimum fix: SessionAuthority reads an existing session and compares full immutable input identity before consumption and before call-key reuse checks; mismatch is typed `session_collision`, while store races remain typed at the store boundary.
+   - GREEN: the same command passed `1/1`.
+
+### Focused and affected validation (fresh after all fixes)
+
+| Command | Result |
+| --- | --- |
+| `npx tsx --test runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts runner-v2/test/interactive-process-channel.test.ts runner-v2/test/execution-grants.test.ts` | Passed: `82` tests, `0` failures. |
+| `npx tsx --test runner-v2/test/execution-grants.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/one-shot-command-executor.test.ts` | Passed: `107` tests, `0` failures. |
+| `npm run typecheck:runner-v2` | Passed: `tsc -p runner-v2/tsconfig.json --noEmit`. |
+| `npx eslint runner-v2/src/execution-grants.ts runner-v2/src/streaming-session-store.ts runner-v2/src/session-authority.ts runner-v2/src/interactive-process-channel.ts runner-v2/test/execution-grants.test.ts runner-v2/test/streaming-session-store.test.ts runner-v2/test/session-authority.test.ts runner-v2/test/interactive-process-channel.test.ts` | Passed with no lint output. |
+| `git diff --check 99aea024df90d55b08d574821ea527ee3eafd97b --` | Passed (exit `0`; only Git’s line-ending warnings). |
+
+### Fake-state cleanup and final self-review
+
+- Every fix-round temporary root was created by `mkdtemp` and removed in a `finally` block. The exact final read-only scan was: `$tempRoot = [System.IO.Path]::GetTempPath(); $leftovers = Get-ChildItem -LiteralPath $tempRoot -Directory | Where-Object { $_.Name -match '^(runner-grant-expiry-owner-|runner-v2-(channel-authority|channel-family-output|session-collision|session-expired-lease|session-stale-auth)-)' }; if ($leftovers) { $leftovers | Select-Object -ExpandProperty FullName; exit 1 }; 'No Task 8.0A fix-round temporary roots remain.'` It printed `No Task 8.0A fix-round temporary roots remain.`
+- The controller separately removed the old stale temp root and recorded its evidence in `task-8.0a-controller-evidence.md`; that file was not recreated or modified here. This supersedes the historical stale-root concern above for this fix round.
+- Diff audit: only the four 8.0A contract modules and four focused test files changed; no production family, Task 7 implementation, construction graph, Git/MCP/LSP/managed/provider routing, CLI, or child launch code changed.
+- Safety audit: expiry no longer performs an independent revoke; every interactive family request has full opaque authorization facts; every delivered family byte rechecks current auth/fence; writes are serialized/copy-owned/nonreplayable; attachment state is cloned/fenced/cleanup-safe; durable lease and effect evidence are closed; exact identity collisions cannot alias a new grant request.
+
+### Fix-round commits and concerns
+
+- The production/test fix commit and the forced report-finalization commit are created after this section is staged; their exact hashes are in the final handoff.
+- No unresolved implementation or validation concern remains. The packet still requires its prescribed independent review before the overall 8.0A reviewer exit gate may be claimed.

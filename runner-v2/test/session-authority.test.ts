@@ -75,6 +75,66 @@ test("consumes one launch grant exactly once and persists only immutable session
   }
 });
 
+test("refuses a semantic streaming session-ID collision before consuming the new grant", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-session-collision-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const grants = createExecutionGrantAuthority();
+    const binding = {
+      runId: "run-1", sessionId: "agent-session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const sessions = createSessionAuthority({ grants, sessions: createInMemoryStreamingSessionStore() });
+    const transfer = (
+      grant: Awaited<ReturnType<typeof grants.issue>>,
+      inputBinding: typeof binding,
+      leaseId = "lease-1",
+    ) => {
+      return sessions.beginTransfer({
+        sessionId: "stream-1", grant, binding: inputBinding,
+        lease: {
+          leaseId, providerId: "fake-provider", invocationId: "invoke-1",
+          providerIdentity: "a".repeat(64), acquiredAt: "2026-08-29T00:00:00.000Z",
+          access: [{ canonicalPath: workspace, mode: "write" }],
+        },
+        backendBinding: backendBinding(),
+        envelope: {
+          access: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+          networkApproved: false, externalApproved: false, destructiveApproved: false,
+        },
+      });
+    };
+    const firstGrant = await grants.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    await transfer(firstGrant, binding);
+
+    const collisionBinding = { ...binding, runId: "other-run", callId: "call-2" };
+    const collisionGrant = await grants.issue({
+      ...collisionBinding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    assert.throws(
+      () => transfer(collisionGrant, collisionBinding),
+      (error) => error instanceof SessionAuthorityError && (error as { code: string }).code === "session_collision",
+    );
+    assert.doesNotThrow(() => grants.consume(collisionGrant, collisionBinding));
+    const sameCallCollisionGrant = await grants.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    assert.throws(
+      () => transfer(sameCallCollisionGrant, binding, "different-lease"),
+      (error) => error instanceof SessionAuthorityError && (error as { code: string }).code === "session_collision",
+    );
+    assert.doesNotThrow(() => grants.consume(sameCallCollisionGrant, binding));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("refuses a session envelope that broadens the launch grant's exact path access", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-envelope-"));
   const workspace = join(root, "workspace");
@@ -346,6 +406,7 @@ test("invalidates a current operation authorization after a fenced recovery take
   const workspace = join(root, "workspace");
   await mkdir(workspace);
   try {
+    let now = new Date("2026-08-29T00:00:00.000Z");
     const grants = createExecutionGrantAuthority();
     const binding = {
       runId: "run-1", sessionId: "agent-session-1", actor: { role: "worker" as const, id: "worker-1" },
@@ -357,7 +418,7 @@ test("invalidates a current operation authorization after a fenced recovery take
     });
     const sessions = createSessionAuthority({
       grants, sessions: createInMemoryStreamingSessionStore(),
-      clock: () => new Date("2026-08-29T00:00:00.000Z"),
+      clock: () => now,
     });
     const begun = sessions.beginTransfer({
       sessionId: "stream-1", grant, binding,
@@ -381,6 +442,7 @@ test("invalidates a current operation authorization after a fenced recovery take
       requestAccess: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
       networkApproved: false, externalApproved: false, destructiveApproved: false,
     });
+    now = new Date("2026-08-29T00:01:00.000Z");
     sessions.takeover({
       sessionId: "stream-1", ownerId: active.ownerId, fencingToken: active.fencingToken,
       expectedRevision: active.revision, newOwnerId: "session-authority:recovered",
@@ -498,6 +560,55 @@ test("expires a session operation authorization when the source call grant expir
         networkApproved: false, externalApproved: false, destructiveApproved: false,
       }),
       (error) => error instanceof SessionAuthorityError && error.code === "authorization_revoked",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects an expired durable session owner before issuing a new family authorization", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-session-expired-lease-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  let now = new Date("2026-08-29T00:00:00.000Z");
+  try {
+    const grants = createExecutionGrantAuthority({ clock: () => now, ttlMs: 120_000 });
+    const binding = {
+      runId: "run-1", sessionId: "agent-session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await grants.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    const sessions = createSessionAuthority({
+      grants, sessions: createInMemoryStreamingSessionStore(), clock: () => now,
+    });
+    const begun = sessions.beginTransfer({
+      sessionId: "stream-1", grant, binding,
+      lease: {
+        leaseId: "lease-1", providerId: "fake-provider", invocationId: "invoke-1",
+        providerIdentity: "a".repeat(64), acquiredAt: now.toISOString(),
+        access: [{ canonicalPath: workspace, mode: "write" }],
+      },
+      backendBinding: backendBinding(),
+      envelope: {
+        access: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      },
+    });
+    sessions.acknowledgeTransfer({
+      sessionId: "stream-1", ownerId: begun.record.ownerId, fencingToken: begun.record.fencingToken,
+      expectedRevision: begun.record.revision, effectId: begun.record.effects[0]!.effectId,
+    });
+    now = new Date("2026-08-29T00:01:00.000Z");
+    assert.throws(
+      () => sessions.authorizeLaunchOperation({
+        sessionId: "stream-1", operation: "request",
+        requestAccess: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "authorization_stale",
     );
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -8,6 +8,7 @@ import {
   ExecutionGrantError,
   assertCurrentConsumedExecutionGrantClaims,
   createExecutionGrantAuthority,
+  registerConsumedExecutionGrantRevoker,
 } from "../src/execution-grants.js";
 
 test("issues a canonical opaque grant and consumes it for exactly its bound call", async () => {
@@ -149,6 +150,40 @@ test("makes consumed claims unusable after the ToolBroker revokes their opaque g
       () => assertCurrentConsumedExecutionGrantClaims(claims),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked",
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("observing expired consumed claims leaves exactly-once cleanup to ToolBroker revocation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-expiry-owner-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  let now = new Date("2026-08-29T00:00:00.000Z");
+  try {
+    const authority = createExecutionGrantAuthority({ clock: () => now, ttlMs: 10 });
+    const binding = {
+      runId: "run-1", sessionId: "session-1", actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await authority.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    const claims = authority.consume(grant, binding);
+    let cleanupCalls = 0;
+    await registerConsumedExecutionGrantRevoker(claims, async () => { cleanupCalls += 1; });
+    now = new Date("2026-08-29T00:00:00.010Z");
+
+    assert.throws(
+      () => assertCurrentConsumedExecutionGrantClaims(claims),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_expired",
+    );
+    assert.equal(cleanupCalls, 0);
+    assert.equal(await authority.revoke(grant, "timed_out"), true);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(await authority.revoke(grant, "timed_out"), false);
+    assert.equal(cleanupCalls, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

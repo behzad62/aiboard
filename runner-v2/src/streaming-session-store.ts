@@ -12,8 +12,11 @@ export type StreamingSessionStoreErrorCode =
   | "unsupported_version"
   | "forbidden_durable_value"
   | "capacity_exceeded"
+  | "identity_conflict"
   | "revision_conflict"
   | "stale_fence"
+  | "lease_expired"
+  | "lease_not_expired"
   | "invalid_effect";
 
 export class StreamingSessionStoreError extends Error {
@@ -205,7 +208,15 @@ export function createInMemoryStreamingSessionStore(
         );
       }
       const existing = records.get(sessionId);
-      if (existing) return Object.freeze({ record: cloneRecord(existing), won: false });
+      if (existing) {
+        if (!sameStreamingSessionIdentity(existing, parsed)) {
+          throw new StreamingSessionStoreError(
+            "identity_conflict",
+            "Streaming session id belongs to a different immutable authority.",
+          );
+        }
+        return Object.freeze({ record: cloneRecord(existing), won: false });
+      }
       if (records.size >= maxRecords) {
         throw new StreamingSessionStoreError(
           "capacity_exceeded",
@@ -309,7 +320,15 @@ export function openSqliteStreamingSessionStore(
       ).run(sessionId, recordJson, integrity, parsed.revision, maxRecords) as { changes?: number };
       if (result.changes === 1) return Object.freeze({ record: cloneRecord(parsed), won: true });
       const existing = read(sessionId);
-      if (existing) return Object.freeze({ record: cloneRecord(existing), won: false });
+      if (existing) {
+        if (!sameStreamingSessionIdentity(existing, parsed)) {
+          throw new StreamingSessionStoreError(
+            "identity_conflict",
+            "Streaming session id belongs to a different immutable authority.",
+          );
+        }
+        return Object.freeze({ record: cloneRecord(existing), won: false });
+      }
       throw new StreamingSessionStoreError("capacity_exceeded", "Streaming session capacity is full; active ownership was retained.");
     },
     apply(command: unknown) {
@@ -677,17 +696,34 @@ function assertStateCombination(
       throw new StreamingSessionStoreError("invalid_state", "Streaming session state requires acknowledged transfer.");
     }
   };
+  const requiresTransferOwner = () => {
+    if (transfer.owner !== "tool_broker") {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session transfer effect owner is invalid.");
+    }
+  };
+  const requiresTransferFenceAtOrBeforeCurrent = () => {
+    if (transfer.fencingToken > (record.fencingToken as number)) {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session transfer effect fence is invalid.");
+    }
+  };
+  const requiresExactCurrentCleanupEffect = () => {
+    if (!cleanup || cleanup.owner !== record.cleanupOwner || cleanup.fencingToken !== record.fencingToken) {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session cleanup effect ownership evidence is invalid.");
+    }
+  };
   const requiresNoCleanup = () => {
     if (cleanup) throw new StreamingSessionStoreError("invalid_state", "Streaming session state has premature cleanup evidence.");
   };
   switch (state) {
     case "pending_transfer":
-      if (record.cleanupOwner !== "tool_broker" || transfer.status !== "pending" || cleanup) {
+      if (record.cleanupOwner !== "tool_broker" || transfer.status !== "pending" ||
+          transfer.owner !== "tool_broker" || transfer.fencingToken !== record.fencingToken || cleanup) {
         throw new StreamingSessionStoreError("invalid_state", "Pending transfer must retain one ToolBroker-owned transfer effect.");
       }
       return;
     case "transfer_ambiguous":
-      if (record.cleanupOwner !== "provider_lease" || transfer.status === "blocked" || cleanup) {
+      if (record.cleanupOwner !== "provider_lease" || transfer.status === "blocked" ||
+          transfer.owner !== "tool_broker" || transfer.fencingToken !== record.fencingToken || cleanup) {
         throw new StreamingSessionStoreError("invalid_state", "Ambiguous transfer must retain provider-lease ownership.");
       }
       return;
@@ -700,6 +736,8 @@ function assertStateCombination(
         throw new StreamingSessionStoreError("invalid_state", "Adopted streaming session has invalid cleanup ownership.");
       }
       requiresAcknowledgedTransfer();
+      requiresTransferOwner();
+      requiresTransferFenceAtOrBeforeCurrent();
       requiresNoCleanup();
       return;
     case "cleanup_pending":
@@ -708,6 +746,9 @@ function assertStateCombination(
         throw new StreamingSessionStoreError("invalid_state", "Cleanup pending requires exact current-owner cleanup evidence.");
       }
       requiresAcknowledgedTransfer();
+      requiresTransferOwner();
+      requiresTransferFenceAtOrBeforeCurrent();
+      requiresExactCurrentCleanupEffect();
       return;
     case "cleanup_blocked":
       if ((record.cleanupOwner !== "provider_lease" && record.cleanupOwner !== "session_authority") ||
@@ -715,12 +756,21 @@ function assertStateCombination(
         throw new StreamingSessionStoreError("invalid_state", "Cleanup blocked requires exact blocked cleanup evidence.");
       }
       requiresAcknowledgedTransfer();
+      requiresTransferOwner();
+      requiresTransferFenceAtOrBeforeCurrent();
+      requiresExactCurrentCleanupEffect();
       return;
     case "released":
       if (record.cleanupOwner !== "none" || !cleanup || cleanup.status !== "acknowledged") {
         throw new StreamingSessionStoreError("invalid_state", "Released session requires acknowledged cleanup evidence.");
       }
       requiresAcknowledgedTransfer();
+      requiresTransferOwner();
+      requiresTransferFenceAtOrBeforeCurrent();
+      if (cleanup.owner !== cleanupOwnerBeforeRelease(record) ||
+          cleanup.fencingToken !== record.fencingToken) {
+        throw new StreamingSessionStoreError("invalid_state", "Released streaming session cleanup evidence is invalid.");
+      }
       return;
   }
 }
@@ -770,6 +820,10 @@ function isCleanupOwner(value: unknown): value is StreamingSessionCleanupOwner {
     value === "session_authority" || value === "none";
 }
 
+function cleanupOwnerBeforeRelease(record: Partial<StreamingSessionRecord>): "provider_lease" | "session_authority" {
+  return record.history?.at(-3)?.state === "transfer_ambiguous" ? "provider_lease" : "session_authority";
+}
+
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
@@ -811,6 +865,26 @@ function applyStreamingSessionCommand(
     throw new StreamingSessionStoreError("stale_fence", "Streaming session ownership fence is stale.");
   }
   const at = requiredText(input.at, "at");
+  const atTimestamp = assertTimestamp(at, "at");
+  const ownershipLeaseExpiresAt = assertTimestamp(current.leaseExpiresAt, "leaseExpiresAt");
+  const hasSessionAuthorityLease = current.cleanupOwner === "session_authority";
+  if (input.type === "takeover") {
+    if (!hasSessionAuthorityLease || ![
+      "active",
+      "stopping",
+      "input_unavailable",
+      "backend_unavailable",
+      "outcome_unknown",
+    ].includes(current.state)) {
+      throw new StreamingSessionStoreError("invalid_state", "Only an adopted session without pending cleanup can be taken over.");
+    }
+    if (atTimestamp < ownershipLeaseExpiresAt) {
+      throw new StreamingSessionStoreError("lease_not_expired", "Streaming session ownership lease has not expired.");
+    }
+  } else if ((hasSessionAuthorityLease || input.type === "acknowledge_transfer") &&
+      atTimestamp >= ownershipLeaseExpiresAt) {
+    throw new StreamingSessionStoreError("lease_expired", "Streaming session ownership lease has expired.");
+  }
   const currentEffects = current.effects;
   const nextRevision = (current.revision as number) + 1;
   const acknowledge = (effectId: string, kind: "transfer" | "cleanup") => {
@@ -833,7 +907,9 @@ function applyStreamingSessionCommand(
       throw new StreamingSessionStoreError("stale_fence", "Streaming session takeover fence is invalid.");
     }
     const leaseExpiresAt = requiredText(input.leaseExpiresAt, "leaseExpiresAt");
-    assertTimestamp(leaseExpiresAt, "leaseExpiresAt");
+    if (assertTimestamp(leaseExpiresAt, "leaseExpiresAt") <= atTimestamp) {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session takeover lease must extend beyond takeover time.");
+    }
     return parseStreamingSessionRecord({
       ...current,
       revision: nextRevision,
@@ -1005,4 +1081,35 @@ function canonicalJson(value: unknown): string {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, nested]) => JSON.stringify(key) + ":" + canonicalJson(nested));
   return "{" + entries.join(",") + "}";
+}
+
+function sameStreamingSessionIdentity(
+  left: Readonly<StreamingSessionRecord>,
+  right: Readonly<StreamingSessionRecord>,
+): boolean {
+  return canonicalJson({
+    recordKind: left.recordKind,
+    schemaVersion: left.schemaVersion,
+    sessionId: left.sessionId,
+    runId: left.runId,
+    agentSessionId: left.agentSessionId,
+    actor: left.actor,
+    toolName: left.toolName,
+    callId: left.callId,
+    envelope: left.envelope,
+    lease: left.lease,
+    backendBinding: left.backendBinding,
+  }) === canonicalJson({
+    recordKind: right.recordKind,
+    schemaVersion: right.schemaVersion,
+    sessionId: right.sessionId,
+    runId: right.runId,
+    agentSessionId: right.agentSessionId,
+    actor: right.actor,
+    toolName: right.toolName,
+    callId: right.callId,
+    envelope: right.envelope,
+    lease: right.lease,
+    backendBinding: right.backendBinding,
+  });
 }

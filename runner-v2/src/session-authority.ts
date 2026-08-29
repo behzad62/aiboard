@@ -25,7 +25,8 @@ export type SessionAuthorityErrorCode =
   | "launch_call_consumed"
   | "recovery_refused"
   | "binding_mismatch"
-  | "second_grant_for_call";
+  | "second_grant_for_call"
+  | "session_collision";
 
 export class SessionAuthorityError extends Error {
   constructor(readonly code: SessionAuthorityErrorCode, message: string) {
@@ -201,6 +202,17 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
   const grantIdsByCall = new Map<string, string>();
   return Object.freeze({
     beginTransfer(input: SessionAuthorityTransferRequest) {
+      const sessionId = requiredText(input.sessionId, "sessionId");
+      const existing = options.sessions.store.readBySession(sessionId);
+      if (existing) {
+        if (!sameSessionTransferIdentity(existing, input)) {
+          throw new SessionAuthorityError(
+            "session_collision",
+            "Streaming session id belongs to a different immutable authority.",
+          );
+        }
+        return Object.freeze({ record: existing });
+      }
       const callKey = executionGrantCallKey(input.binding);
       if (grantIdsByCall.has(callKey)) {
         throw new SessionAuthorityError(
@@ -218,7 +230,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         recordKind: "runner.streaming-session",
         schemaVersion: 1,
         revision: 0,
-        sessionId: requiredText(input.sessionId, "sessionId"),
+        sessionId,
         ownerId: `session-authority:${claims.runId}:${claims.grantId}`,
         fencingToken: 1,
         leaseExpiresAt: new Date(clock().getTime() + 60_000).toISOString(),
@@ -291,6 +303,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       if (!record || record.state !== "active") {
         throw new SessionAuthorityError("session_unavailable", "Streaming session is not active.");
       }
+      assertCurrentSessionLease(record, clock);
       const claims = retainedClaims.get(input.sessionId);
       if (!claims) {
         throw new SessionAuthorityError("session_unavailable", "Launching call claims are unavailable.");
@@ -313,6 +326,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       if (!record || record.state !== "active") {
         throw new SessionAuthorityError("session_unavailable", "Streaming session is not active.");
       }
+      assertCurrentSessionLease(record, clock);
       const callKey = executionGrantCallKey(input.binding);
       if (grantIdsByCall.has(callKey)) {
         throw new SessionAuthorityError(
@@ -359,6 +373,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       if (!record || record.state !== "active") {
         throw new SessionAuthorityError("session_unavailable", "Streaming session is no longer active.");
       }
+      assertCurrentSessionLease(record, clock);
       if (record.ownerId !== details.ownerId || record.fencingToken !== details.fencingToken) {
         throw new SessionAuthorityError("authorization_stale", "Session operation authorization has a stale owner fence.");
       }
@@ -667,6 +682,15 @@ function assertCurrentClaims(claims: ConsumedExecutionGrantClaims): void {
   }
 }
 
+function assertCurrentSessionLease(
+  record: Readonly<StreamingSessionRecord>,
+  clock: () => Date,
+): void {
+  if (Date.parse(record.leaseExpiresAt) <= clock().getTime()) {
+    throw new SessionAuthorityError("authorization_stale", "Streaming session ownership lease has expired.");
+  }
+}
+
 function pendingEffect(
   record: Readonly<StreamingSessionRecord>,
   kind: "transfer" | "cleanup",
@@ -761,4 +785,29 @@ function executionGrantCallKey(binding: ExecutionGrantBinding): string {
     binding.callId,
     binding.permissionProfile,
   ].join("\0");
+}
+
+function sameSessionTransferIdentity(
+  record: Readonly<StreamingSessionRecord>,
+  input: SessionAuthorityTransferRequest,
+): boolean {
+  return record.sessionId === input.sessionId &&
+    record.runId === input.binding.runId &&
+    record.agentSessionId === input.binding.sessionId &&
+    record.actor.role === input.binding.actor.role &&
+    record.actor.id === input.binding.actor.id &&
+    record.toolName === input.binding.toolName &&
+    record.callId === input.binding.callId &&
+    canonicalJson(record.envelope) === canonicalJson(input.envelope) &&
+    canonicalJson(record.lease) === canonicalJson(input.lease) &&
+    canonicalJson(record.backendBinding) === canonicalJson(input.backendBinding);
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nested]) => JSON.stringify(key) + ":" + canonicalJson(nested));
+  return "{" + entries.join(",") + "}";
 }

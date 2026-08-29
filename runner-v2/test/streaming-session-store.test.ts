@@ -87,6 +87,75 @@ test("rejects a pending-transfer record without its exact pending transfer effec
   );
 });
 
+test("rejects forged transfer and cleanup effect owner or fence evidence", () => {
+  assert.throws(
+    () => parseStreamingSessionRecord(pendingTransferRecord({
+      effects: [{
+        effectId: "transfer-1", kind: "transfer", status: "pending", owner: "session_authority",
+        fencingToken: 99, createdAt: "2026-08-29T00:00:00.000Z",
+      }],
+    })),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+  );
+
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  const pending = writer.claim(pendingTransferRecord()).record;
+  const active = writer.apply({
+    type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  const cleaning = writer.apply({
+    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+  });
+  assert.throws(
+    () => parseStreamingSessionRecord({
+      ...cleaning,
+      effects: cleaning.effects.map((effect) => effect.kind === "cleanup"
+        ? { ...effect, owner: "provider_lease", fencingToken: 99 }
+        : effect),
+    }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+  );
+  const released = writer.apply({
+    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
+  });
+  for (const owner of ["tool_broker", "provider_lease"] as const) {
+    assert.throws(
+      () => parseStreamingSessionRecord({
+        ...released,
+        effects: released.effects.map((effect) => effect.kind === "cleanup"
+          ? { ...effect, owner }
+          : effect),
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+    );
+  }
+
+  const providerKernel = createInMemoryStreamingSessionStore();
+  const providerWriter = getStreamingSessionStoreWriter(providerKernel);
+  const providerPending = providerWriter.claim(pendingTransferRecord()).record;
+  const providerAmbiguous = providerWriter.apply({
+    type: "mark_transfer_ambiguous", sessionId: "stream-1", expectedRevision: providerPending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  const providerAcknowledged = providerWriter.apply({
+    type: "acknowledge_ambiguous_transfer", sessionId: "stream-1", expectedRevision: providerAmbiguous.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "transfer-1",
+  });
+  const providerCleaning = providerWriter.apply({
+    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: providerAcknowledged.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
+  });
+  const providerReleased = providerWriter.apply({
+    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: providerCleaning.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:04.000Z", effectId: "cleanup-1",
+  });
+  assert.equal(providerReleased.state, "released");
+});
+
 test("returns an immutable deep clone instead of retaining caller-owned durable data", () => {
   const source = pendingTransferRecord();
   const parsed = parseStreamingSessionRecord(source);
@@ -204,6 +273,32 @@ test("refuses record-capacity overflow without evicting active cleanup ownership
   const retained = kernel.store.readBySession("stream-1");
   assert.equal(retained?.cleanupOwner, "tool_broker");
   assert.equal(retained?.effects[0]?.effectId, "transfer-1");
+});
+
+test("makes an exact session claim idempotent but rejects a semantic session-ID collision in memory and SQLite", async () => {
+  const assertCollision = (kernel: ReturnType<typeof createInMemoryStreamingSessionStore>) => {
+    const writer = getStreamingSessionStoreWriter(kernel);
+    const first = writer.claim(pendingTransferRecord());
+    const exactRetry = writer.claim(pendingTransferRecord());
+    assert.equal(first.won, true);
+    assert.equal(exactRetry.won, false);
+    assert.equal(exactRetry.record.runId, "run-1");
+    assert.throws(
+      () => writer.claim(pendingTransferRecord({ runId: "other-run" })),
+      (error) => error instanceof StreamingSessionStoreError && (error as { code: string }).code === "identity_conflict",
+    );
+    assert.equal(kernel.store.readBySession("stream-1")?.runId, "run-1");
+  };
+
+  assertCollision(createInMemoryStreamingSessionStore());
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-stream-store-collision-"));
+  const sqlite = openSqliteStreamingSessionStore(join(root, "sessions.sqlite"), new Uint8Array(32).fill(8));
+  try {
+    assertCollision(sqlite);
+  } finally {
+    sqlite.store.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("acknowledges the exact fenced transfer before making a session active", () => {
@@ -532,7 +627,9 @@ test("requires a fenced stopping transition before an adopted session begins cle
 test("fenced recovery can take over an adopted session without reviving an old owner", () => {
   const kernel = createInMemoryStreamingSessionStore();
   const writer = getStreamingSessionStoreWriter(kernel);
-  const pending = writer.claim(pendingTransferRecord()).record;
+  const pending = writer.claim(pendingTransferRecord({
+    leaseExpiresAt: "2026-08-29T00:00:02.000Z",
+  })).record;
   const active = writer.apply({
     type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
@@ -551,6 +648,53 @@ test("fenced recovery can take over an adopted session without reviving an old o
       at: "2026-08-29T00:00:03.000Z",
     }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "stale_fence",
+  );
+});
+
+test("requires ownership-lease expiry for takeover and refuses expired-owner durable mutations", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  const pending = writer.claim(pendingTransferRecord({
+    leaseExpiresAt: "2026-08-29T00:01:00.000Z",
+  })).record;
+  const active = writer.apply({
+    type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  assert.throws(
+    () => writer.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: active.revision,
+      ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-recovered", newFencingToken: 2,
+      leaseExpiresAt: "2026-08-29T00:02:00.000Z", at: "2026-08-29T00:00:30.000Z",
+    }),
+    (error) => error instanceof StreamingSessionStoreError && (error as { code: string }).code === "lease_not_expired",
+  );
+  assert.throws(
+    () => writer.apply({
+      type: "mark_disposition", disposition: "outcome_unknown", sessionId: "stream-1",
+      expectedRevision: active.revision, ownerId: "owner-1", fencingToken: 1,
+      at: "2026-08-29T00:01:00.000Z",
+    }),
+    (error) => error instanceof StreamingSessionStoreError && (error as { code: string }).code === "lease_expired",
+  );
+  const takenOver = writer.apply({
+    type: "takeover", sessionId: "stream-1", expectedRevision: active.revision,
+    ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-recovered", newFencingToken: 2,
+    leaseExpiresAt: "2026-08-29T00:02:00.000Z", at: "2026-08-29T00:01:00.000Z",
+  });
+  assert.equal(takenOver.ownerId, "owner-recovered");
+  assert.equal(takenOver.fencingToken, 2);
+  const cleaning = writer.apply({
+    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: takenOver.revision,
+    ownerId: "owner-recovered", fencingToken: 2, at: "2026-08-29T00:01:01.000Z", effectId: "cleanup-1",
+  });
+  assert.throws(
+    () => writer.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: cleaning.revision,
+      ownerId: "owner-recovered", fencingToken: 2, newOwnerId: "owner-third", newFencingToken: 3,
+      leaseExpiresAt: "2026-08-29T00:03:00.000Z", at: "2026-08-29T00:02:00.000Z",
+    }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
   );
 });
 

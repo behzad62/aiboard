@@ -309,8 +309,6 @@ export function assertCurrentConsumedExecutionGrantClaims(
   const record = CONSUMED_CLAIMS.get(value as object)!;
   if (record.state === "revoked") throw grantError("grant_revoked");
   if (Date.parse(record.claims.expiresAt) <= record.clock().getTime()) {
-    record.state = "revoked";
-    record.revocationReason = "expired";
     throw grantError("grant_expired");
   }
   return value;
