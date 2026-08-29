@@ -594,10 +594,15 @@ export class ManagedProcessService {
         `Managed process ${processId} cannot release backend ownership before verified terminal ownership.`,
       );
     }
-    record.backendOwnershipReleasedAt = this.clock();
-    record.updatedAt = record.backendOwnershipReleasedAt;
-    this.persist(record);
-    return { ...this.snapshot(record), ownershipReleased: true };
+    const releasedAt = this.clock();
+    const candidate: ManagedProcessRecord = {
+      ...record,
+      backendOwnershipReleasedAt: releasedAt,
+      updatedAt: releasedAt,
+    };
+    this.persist(candidate);
+    this.records.set(processId, candidate);
+    return { ...this.snapshot(candidate), ownershipReleased: true };
   }
 
   async probeJobObjectAvailability(): Promise<boolean> {

@@ -200,7 +200,34 @@ test("backend ownership release is exact, durable across service restart, and id
       first.releaseOwnership(started.processId, context, "2026-01-01T00:00:00.000Z"),
       /startedAt|identity/i,
     );
+    const persistence = first as unknown as {
+      records: Map<string, { backendOwnershipReleasedAt?: string; updatedAt: string }>;
+      persist(record: { backendOwnershipReleasedAt?: string }): void;
+      readRecord(processId: string): unknown;
+    };
+    const originalPersist = persistence.persist.bind(first);
+    persistence.readRecord = () => null;
+    let markerPersistCalls = 0;
+    persistence.persist = (record) => {
+      if (record.backendOwnershipReleasedAt) {
+        markerPersistCalls += 1;
+        if (markerPersistCalls === 1) throw new Error("injected backend release persist failure");
+      }
+      originalPersist(record);
+    };
+    const updatedBeforeRelease = persistence.records.get(started.processId)?.updatedAt;
+    await assert.rejects(
+      first.releaseOwnership(started.processId, context, started.startedAt),
+      /injected backend release persist failure/,
+    );
+    assert.equal(persistence.records.get(started.processId)?.backendOwnershipReleasedAt, undefined);
+    assert.equal(persistence.records.get(started.processId)?.updatedAt, updatedBeforeRelease);
+    const failedDiskRecord = JSON.parse(readFileSync(join(state, `${started.processId}.json`), "utf8")) as {
+      backendOwnershipReleasedAt?: string;
+    };
+    assert.equal(failedDiskRecord.backendOwnershipReleasedAt, undefined);
     assert.equal((await first.releaseOwnership(started.processId, context, started.startedAt)).ownershipReleased, true);
+    assert.equal(markerPersistCalls, 2, "retry must perform the second durable marker persist");
     assert.equal((await first.releaseOwnership(started.processId, context, started.startedAt)).ownershipReleased, true);
     first.close();
 
