@@ -376,23 +376,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         });
         continue;
       }
-      if (snapshot.ownerId !== this.ownerId && leaseIsLive) {
-        outcomes.push({ invocationId, state: "leased" });
-        continue;
-      }
       try {
-        if (snapshot.ownerId !== this.ownerId) {
-          snapshot = this.writer.apply({
-            type: "takeover_lease",
-            invocationId,
-            expectedRevision: snapshot.revision,
-            ownerId: this.ownerId,
-            fencingToken: snapshot.fencingToken + 1,
-            at: this.now(),
-            leaseExpiresAt: this.leaseExpiry(),
-          });
+        const owned = this.takeRecoveryOwnership(snapshot);
+        if (!owned) {
+          outcomes.push({ invocationId, state: "leased" });
+          continue;
         }
-        this.fences.set(invocationId, snapshot.fencingToken);
+        snapshot = owned;
         await this.reconcileRecord(snapshot);
       } catch (error) {
         await this.classifyReconciliationFailure(snapshot, error);
@@ -1320,11 +1310,19 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     snapshot: DurableSubprocessRecord,
   ): DurableSubprocessRecord | undefined {
     let record = this.current(snapshot.invocationId);
-    if (record.ownerId !== this.ownerId) {
-      if (
-        Date.parse(record.leaseExpiresAt) >
-        this.options.clock.now().getTime()
-      ) return undefined;
+    const leaseIsLive =
+      Date.parse(record.leaseExpiresAt) > this.options.clock.now().getTime();
+    if (leaseIsLive && record.ownerId !== this.ownerId) return undefined;
+    if (leaseIsLive) {
+      this.fences.set(record.invocationId, record.fencingToken);
+      record = this.applyCurrent(record, (revision) => ({
+        type: "renew_lease",
+        invocationId: record.invocationId,
+        expectedRevision: revision,
+        at: this.now(),
+        leaseExpiresAt: this.leaseExpiry(),
+      }));
+    } else {
       record = this.writer.apply({
         type: "takeover_lease",
         invocationId: record.invocationId,

@@ -177,7 +177,10 @@ class Backend implements ProcessBackend {
   launchError?: unknown;
   observeGate?: Promise<void>;
   verifyGate?: Promise<void>;
+  reconcileGate?: Promise<void>;
+  signalGate?: Promise<void>;
   onSignal?: (action: string) => void;
+  onReconcile?: () => void;
   onRelease?: () => void;
   probe = async (fence?: unknown) => {
     this.calls.push("probe");
@@ -212,6 +215,7 @@ class Backend implements ProcessBackend {
     this.calls.push(`signal:${action}`);
     this.fences.push(fence);
     this.onSignal?.(action);
+    await this.signalGate;
     return this.signalValues.shift() ?? { state: "exited" };
   };
   verifyEmpty = async (_binding?: unknown, fence?: unknown) => {
@@ -223,6 +227,8 @@ class Backend implements ProcessBackend {
   reconcile = async (_binding?: unknown, fence?: unknown) => {
     this.calls.push("reconcile");
     this.fences.push(fence);
+    this.onReconcile?.();
+    await this.reconcileGate;
     return this.reconcileValue;
   };
   release = async (_binding?: unknown, fence?: unknown) => {
@@ -294,6 +300,10 @@ function runtimeFor(
   backend: Backend,
   clock: Clock,
   outputs: Outputs,
+  leaseOptions: {
+    readonly leaseDurationMs?: number;
+    readonly leaseHeartbeatMs?: number;
+  } = {},
 ): ReturnType<typeof createSubprocessRuntimeKernel> {
   const environments = createChildEnvironmentFactory({
     credentialResolver: {
@@ -312,6 +322,7 @@ function runtimeFor(
     outputs,
     createLogicalProcessId: (invocationId) => `proc-${invocationId}`,
     escalationGraceMs: [10, 20],
+    ...leaseOptions,
   });
   composed.grantsController.issue(grantValue());
   return composed;
@@ -320,15 +331,31 @@ function runtimeFor(
 async function durableLaunchBlocker(
   t: { after(callback: () => Promise<void>): void },
   suffix = "blocked",
+  leaseOptions: {
+    readonly leaseDurationMs?: number;
+    readonly leaseHeartbeatMs?: number;
+  } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), `runner-v2-${suffix}-`));
-  t.after(async () => rm(root, { recursive: true, force: true }));
   const path = join(root, "process.sqlite");
   const stateKey = new Uint8Array(32).fill(7);
   const backend = new Backend();
   const clock = new Clock();
   const outputs = new Outputs();
-  const first = runtimeFor({ kind: "sqlite", path }, stateKey, backend, clock, outputs);
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    backend,
+    clock,
+    outputs,
+    leaseOptions,
+  );
+  t.after(async () => {
+    try {
+      first.readOnlyStore.close();
+    } catch {}
+    await rm(root, { recursive: true, force: true });
+  });
   const launchDetail = `owned descendant remains; evidence retained at ${root}`;
   backend.launchError = Object.assign(new Error(launchDetail), {
     code: "native_process_launch_cleanup_blocked",
@@ -349,8 +376,7 @@ async function durableLaunchBlocker(
   assert.equal(blocked.cleanup.state, "failed");
   const blockerDetail = blocked.cleanup.detail;
   backend.launchError = undefined;
-  first.readOnlyStore.close();
-  return { path, stateKey, backend, clock, outputs, blockerDetail };
+  return { path, stateKey, backend, clock, outputs, blockerDetail, first };
 }
 
 async function seedRecoverable(
@@ -633,6 +659,11 @@ test("recoverable launch cleanup blocker binds identity and persists without pre
   assert.equal(f.backend.calls.includes("observe"), false);
   assert.equal(f.backend.calls.includes("release"), false);
   assert.equal(f.outputs.calls.some((call) => call.startsWith("cleanup:")), false);
+  const liveFence = record.fencingToken;
+  const liveTakeovers = record.mutations.filter(
+    (mutation) => mutation.kind === "takeover_lease",
+  ).length;
+  f.clock.current = new Date(f.clock.current.getTime() + 1_000);
 
   const retry = await f.runtime.invoke({
     intent: intent(),
@@ -640,11 +671,28 @@ test("recoverable launch cleanup blocker binds identity and persists without pre
     ambientEnvironment: {},
   });
   assert.equal(retry.outcome, "cleanup_failed");
+  const afterLiveRetry = f.store.readByInvocation("invoke-1")!;
+  assert.equal(afterLiveRetry.fencingToken, liveFence);
+  assert.ok(
+    Date.parse(afterLiveRetry.leaseExpiresAt) > Date.parse(record.leaseExpiresAt),
+  );
+  assert.ok(
+    afterLiveRetry.mutations
+      .slice(record.mutations.length)
+      .some((mutation) => mutation.kind === "renew_lease"),
+  );
+  assert.equal(
+    afterLiveRetry.mutations.filter(
+      (mutation) => mutation.kind === "takeover_lease",
+    ).length,
+    liveTakeovers,
+  );
   assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
 });
 
 test("restart reattests a live launch blocker and retry never relaunches", async (t) => {
   const f = await durableLaunchBlocker(t);
+  const expired = f.first.readOnlyStore.readByInvocation("invoke-1")!;
   f.clock.current = new Date(f.clock.current.getTime() + 301_000);
   f.backend.reconcileValue = { state: "running" };
   const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
@@ -654,6 +702,8 @@ test("restart reattests a live launch blocker and retry never relaunches", async
   ]);
   const blocked = recovery.readOnlyStore.readByInvocation("invoke-1");
   assert.equal(blocked?.cleanup.state, "failed");
+  assert.notEqual(blocked?.ownerId, expired.ownerId);
+  assert.equal(blocked?.fencingToken, expired.fencingToken + 1);
   assert.ok(blocked?.mutations.some((mutation) => mutation.kind === "adopt_backend"));
   assert.equal(f.backend.calls.filter((call) => call === "reconcile").length, 2);
   f.backend.reconcileValue = { state: "exited", exitCode: 0 };
@@ -667,6 +717,245 @@ test("restart reattests a live launch blocker and retry never relaunches", async
   assert.equal(recovery.readOnlyStore.readByInvocation("invoke-1")?.state, "cleaned");
   assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
   recovery.readOnlyStore.close();
+});
+
+test("expired same-owner retry advances its durable fence before effects and heartbeats across takeover attempts", async (t) => {
+  const f = await durableLaunchBlocker(t, "same-owner-retry", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  const expired = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  f.backend.verifyValue = { empty: true, proofArtifactId: "same-owner-retry" };
+  const gate = deferred();
+  const started = deferred();
+  const outputFenceStart = f.outputs.fences.length;
+  const backendFenceStart = f.backend.fences.length;
+  f.backend.reconcileGate = gate.promise;
+  f.backend.onReconcile = started.resolve;
+  const retry = f.first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  let contender: ReturnType<typeof createSubprocessRuntimeKernel> | undefined;
+  try {
+    await started.promise;
+    const active = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(active.ownerId, expired.ownerId);
+    assert.equal(active.fencingToken, expired.fencingToken + 1);
+    assert.ok(Date.parse(active.leaseExpiresAt) > f.clock.now().getTime());
+    assert.equal(active.mutations.at(-1)?.kind, "takeover_lease");
+    assert.ok(f.outputs.fences.length > outputFenceStart);
+    assert.ok(f.backend.fences.length > backendFenceStart);
+    assert.ok(
+      [...f.outputs.fences.slice(outputFenceStart), ...f.backend.fences.slice(backendFenceStart)].every(
+        (fence) =>
+          (fence as { fencingToken?: number } | undefined)?.fencingToken ===
+          active.fencingToken,
+      ),
+    );
+
+    f.clock.current = new Date(f.clock.current.getTime() + 50);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const heartbeated = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(heartbeated.fencingToken, active.fencingToken);
+    assert.ok(Date.parse(heartbeated.leaseExpiresAt) > f.clock.now().getTime());
+
+    const contenderBackend = new Backend();
+    const contenderOutputs = new Outputs();
+    contender = runtimeFor(
+      { kind: "sqlite", path: f.path },
+      f.stateKey,
+      contenderBackend,
+      f.clock,
+      contenderOutputs,
+      { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+    );
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "leased" },
+    ]);
+    assert.deepEqual(contenderBackend.calls, []);
+    assert.deepEqual(contenderOutputs.calls, []);
+  } finally {
+    gate.resolve();
+  }
+  assert.equal((await retry).outcome, "exited");
+  assert.equal(
+    f.backend.calls.filter((call) => call === "release").length,
+    1,
+  );
+  assert.equal(
+    f.outputs.calls.filter((call) => call.startsWith("finalize:")).length,
+    1,
+  );
+  assert.equal(
+    f.outputs.calls.filter((call) => call.startsWith("cleanup:")).length,
+    0,
+  );
+  contender?.readOnlyStore.close();
+});
+
+test("expired same-owner cancellation advances its durable fence before a blocked signal and prevents takeover", async (t) => {
+  const f = await durableLaunchBlocker(t, "same-owner-cancel", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  const expired = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "running" };
+  f.backend.verifyValue = { empty: true, proofArtifactId: "same-owner-cancel" };
+  f.backend.signalValues = [{ state: "exited" }];
+  const gate = deferred();
+  const started = deferred();
+  const outputFenceStart = f.outputs.fences.length;
+  const backendFenceStart = f.backend.fences.length;
+  f.backend.signalGate = gate.promise;
+  f.backend.onSignal = () => {
+    f.backend.reconcileValue = { state: "exited", signal: "SIGINT" };
+    started.resolve();
+  };
+  const cancellation = f.first.runtime.cancel("invoke-1");
+  let contender: ReturnType<typeof createSubprocessRuntimeKernel> | undefined;
+  try {
+    await started.promise;
+    const active = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(active.ownerId, expired.ownerId);
+    assert.equal(active.fencingToken, expired.fencingToken + 1);
+    assert.ok(Date.parse(active.leaseExpiresAt) > f.clock.now().getTime());
+    assert.equal(
+      active.mutations.find(
+        (mutation) => mutation.fencingToken === active.fencingToken,
+      )?.kind,
+      "takeover_lease",
+    );
+    assert.ok(f.outputs.fences.length > outputFenceStart);
+    assert.ok(f.backend.fences.length > backendFenceStart);
+    assert.ok(
+      [...f.outputs.fences.slice(outputFenceStart), ...f.backend.fences.slice(backendFenceStart)].every(
+        (fence) =>
+          (fence as { fencingToken?: number } | undefined)?.fencingToken ===
+          active.fencingToken,
+      ),
+    );
+
+    f.clock.current = new Date(f.clock.current.getTime() + 50);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const heartbeated = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.ok(Date.parse(heartbeated.leaseExpiresAt) > f.clock.now().getTime());
+
+    const contenderBackend = new Backend();
+    const contenderOutputs = new Outputs();
+    contender = runtimeFor(
+      { kind: "sqlite", path: f.path },
+      f.stateKey,
+      contenderBackend,
+      f.clock,
+      contenderOutputs,
+      { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+    );
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "leased" },
+    ]);
+    assert.deepEqual(contenderBackend.calls, []);
+    assert.deepEqual(contenderOutputs.calls, []);
+  } finally {
+    gate.resolve();
+  }
+  assert.equal(await cancellation, true);
+  assert.deepEqual(
+    f.backend.calls.filter((call) => call.startsWith("signal:")),
+    ["signal:interrupt"],
+  );
+  assert.equal(
+    f.backend.calls.filter((call) => call === "release").length,
+    1,
+  );
+  assert.equal(
+    f.outputs.calls.filter((call) => call.startsWith("finalize:")).length,
+    1,
+  );
+  assert.equal(
+    f.outputs.calls.filter((call) => call.startsWith("cleanup:")).length,
+    0,
+  );
+  contender?.readOnlyStore.close();
+});
+
+test("recovery heartbeat failure permits takeover but stale same-owner recovery cannot commit after its effect", async (t) => {
+  const f = await durableLaunchBlocker(t, "same-owner-fence-loss", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  const expired = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  const gate = deferred();
+  const started = deferred();
+  f.backend.reconcileGate = gate.promise;
+  f.backend.onReconcile = started.resolve;
+  const stale = f.first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  await started.promise;
+  const active = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(active.fencingToken, expired.fencingToken + 1);
+  f.first.readOnlyStore.close();
+  f.clock.current = new Date(f.clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const takeoverBackend = new Backend();
+  takeoverBackend.reconcileValue = { state: "exited", exitCode: 0 };
+  takeoverBackend.verifyValue = {
+    empty: true,
+    proofArtifactId: "heartbeat-failure-takeover",
+  };
+  const takeoverOutputs = new Outputs();
+  const takeover = runtimeFor(
+    { kind: "sqlite", path: f.path },
+    f.stateKey,
+    takeoverBackend,
+    f.clock,
+    takeoverOutputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  assert.deepEqual(await takeover.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "cleaned" },
+  ]);
+  const cleaned = takeover.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(cleaned.fencingToken, active.fencingToken + 1);
+  assert.notEqual(cleaned.ownerId, active.ownerId);
+  const committedRevision = cleaned.revision;
+
+  gate.resolve();
+  await assert.rejects(stale, /owner|fenc|stale|database|closed/i);
+  const afterStale = takeover.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(afterStale.revision, committedRevision);
+  assert.equal(afterStale.state, "cleaned");
+  assert.equal(f.backend.calls.filter((call) => call === "release").length, 0);
+  assert.equal(
+    f.outputs.calls.filter((call) => call.startsWith("finalize:")).length,
+    0,
+  );
+  assert.equal(
+    takeoverBackend.calls.filter((call) => call === "release").length,
+    1,
+  );
+  assert.equal(
+    takeoverOutputs.calls.filter((call) => call.startsWith("finalize:"))
+      .length,
+    1,
+  );
+  assert.equal(
+    [...f.outputs.calls, ...takeoverOutputs.calls].filter((call) =>
+      call.startsWith("cleanup:"),
+    ).length,
+    0,
+  );
+  takeover.readOnlyStore.close();
 });
 
 test("restart closes a launch blocker only after natural exit and verified release", async (t) => {
