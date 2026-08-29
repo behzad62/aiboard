@@ -217,3 +217,41 @@ Result: exit 0, 79/79 dots passed, zero failures/skips.
 - Durable enforcement remains redacted and explicitly says `provider_specific_not_universal_security_boundary`; opaque grant objects, nonces, secrets, and ambient credentials are never persisted.
 - Rollback is this focused Fix Round 2 commit. No database migration, image pull, executable install, external configuration mutation, or Windows-only primitive was introduced.
 - The only residual boundary is canonical Task 7: generated process families are not yet routed through Task 6 selection and no current projection claims otherwise.
+
+## Governed Fix Round 3/5 — review 3
+
+Read and reproduced `task-6-review-3.md` before editing. Both Important areas were valid; no technical pushback was required.
+
+### Exactly-once terminal cleanup
+
+- Selector release, duplicate release, issuer revoke/cancel/timeout callbacks, and projection-failure cleanup now converge on one per-selection in-flight terminal operation. One concurrent terminal wave invokes the provider once and every caller observes the same settlement and single terminal projection.
+- Grant revoker registration returns a private idempotent disposer. Successful or failed terminal settlement removes the authority callback; successful settlement removes the active lease. A genuine provider failure leaves one visible `revocation_failed` lease and one blocker, clears the failed in-flight result, and permits one explicit governed retry/recovery without unconstrained duplicate calls.
+- Mutation RED command: `npx tsx --test --test-name-pattern="concurrent release" runner-v2/test/execution-isolation-provider.test.ts`. Temporarily disabled reuse of the in-flight promise; result 0/1, provider calls were 3 instead of 1. Mutation reverted. GREEN result 1/1.
+
+### Exact recovery contract and semantic durable projection
+
+- Selector validates every recovery result before persistence: bounded exact transition array required, cleaned count equals exact cleaned descriptors, lease IDs are unique, provider/implementation identities match the registered provider, blocked descriptors carry blockers, cleaned descriptors do not, and every run/invocation/grant/lease/image/access identity passes the same closed projection parser.
+- Dishonest cleaned-without-descriptor, duplicate, provider mismatch, and cleaned-plus-blocked duplicate tables fail typed and persist no cleanup claim.
+- Projection parsing now enforces a closed Full/strict lifecycle matrix. Full has only the explicit Full shape. Active/revoked/cleaned provider records require exact provider, digest, grant and lease identities; blocked lease records require their blocker and exact identities. Access is bounded, absolute, normalized, non-aliased, unique, and mode-valid.
+- Recovery summaries now carry a collision-resistant operation digest and bounded exact lease IDs. New summaries correlate exactly to terminal transitions; valid earlier summaries remain readable only when their timestamp/provider/counts correlate to exact transitions. Forged counts, missing/duplicate transitions, relative paths, alias/conflicting roots, invalid lifecycle combinations, unknown/long fields, and existing byte/record/access over-bounds fail closed without mutation.
+- Mutation RED command: `npx tsx --test --test-name-pattern="dishonest recovery" runner-v2/test/execution-isolation-provider.test.ts`. Temporarily bypassed selector recovery validation; result 0/1 because cleaned `1` was accepted instead of `0`. Mutation reverted. GREEN result 1/1.
+
+### Bounded validated OCI durable state
+
+- OCI lease files are capped at 1 MiB before full parse and at 1,000 leases, 256 access roots per lease, and bounded strings. Exact-key parsing validates active lifecycle, provider/file identity, sha256 implementation/image identities, dates, unique lease/container IDs, exact generated container-name/label identity, absolute normalized non-conflicting access roots, and exact modes.
+- Acquire pre-validates existing state before image/create CLI calls. Release and recovery validate before inspect/rm/listing. Malformed, forged, or oversized bytes remain untouched and produce typed failure/blockers with zero OCI CLI action.
+- The deterministic table covers unknown keys, invalid image, relative roots, duplicate/conflicting access destinations, inconsistent run/container identity, duplicate lease/container IDs, and 1 MiB + 1 bytes. Release/acquire/recovery all fail closed.
+- Mutation RED command: `npx tsx --test --test-name-pattern="durable lease ingestion" runner-v2/test/oci-execution-isolation-provider.test.ts`. Temporarily returned parsed JSON before exact validation; result 0/1 with a missing expected rejection. Mutation reverted. GREEN result 1/1.
+
+### Literal final validation
+
+- Focused Task 6: `npx tsx --test --test-reporter=dot runner-v2/test/execution-grants.test.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts runner-v2/test/tool-broker.test.ts runner-v2/test/runner-capabilities-config.test.ts runner-v2/test/runner-capability-contract.test.ts runner-v2/test/native-build-capabilities.test.ts` — exit 0, 83/83 pass.
+- Isolation/OCI detailed gate: `npx tsx --test runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts` — 25/25 pass, 0 fail, 0 skip; all three real-Docker fixtures pass.
+- Broad CLI/native: `npx tsx --test --test-reporter=dot runner-v2/test/cli-capabilities-config.test.ts runner-v2/test/native-build-capabilities.test.ts runner-v2/test/native-build-initialization.test.ts` — exit 0, 51/51 pass.
+- Inherited Task 1–5: `npx tsx --test --test-reporter=dot runner-v2/test/execution-safety-contracts.test.ts runner-v2/test/child-environment.test.ts runner-v2/test/bounded-output-spool.test.ts runner-v2/test/process-backend-contract.test.ts runner-v2/test/durable-process-store.test.ts runner-v2/test/subprocess-runtime.test.ts runner-v2/test/posix-process-backend.test.ts runner-v2/test/windows-process-backend.test.ts runner-v2/test/managed-process.test.ts` — exit 0, 192/192 pass.
+- `npm run typecheck:runner-v2` — exit 0.
+- `npx eslint runner-v2/src/execution-grants.ts runner-v2/src/execution-isolation-provider.ts runner-v2/src/oci-execution-isolation-provider.ts runner-v2/test/execution-isolation-provider.test.ts runner-v2/test/oci-execution-isolation-provider.test.ts` — exit 0.
+- `git diff --check` — exit 0, autocrlf notices only. Static scan found no Node pin/install, ambient environment forwarding, Task 7 routing, or new platform semantic; privileged/host-PID/socket strings remain rejection-only.
+- Final Docker label listing and `runner-oci-*`/`runner-enforcement-*` TEMP queries returned empty. No live fixture process or lock residue remained.
+
+Residual boundary remains Task 7 process-family routing only. No database migration, external install/pull, or Windows-only product semantic was added.

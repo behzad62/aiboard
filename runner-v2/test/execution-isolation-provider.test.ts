@@ -40,7 +40,8 @@ test("durable enforcement projection enforces exact byte, record, access, and fi
   const record = {
     occurredAt: "2026-08-28T10:00:00.000Z", runId: "r", invocationId: "i", grantId: "g",
     status: "active", enforcement: "write_confinement_exact_grant",
-    disclosure: "provider_specific_not_universal_boundary", access: [],
+    disclosure: "provider_specific_not_universal_boundary", providerId: "provider",
+    implementationDigest: "a".repeat(64), leaseId: "lease", access: [],
   };
   const state = (records: unknown[]) => ({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records });
   try {
@@ -48,12 +49,12 @@ test("durable enforcement projection enforces exact byte, record, access, and fi
     assert.equal((await readExecutionEnforcementState(path)).records.length, 1_000);
     await writeFile(path, JSON.stringify(state([{
       ...record, runId: "x".repeat(512),
-      access: Array.from({ length: 256 }, (_, index) => ({ canonicalPath: `C:/exact/${index}`, mode: "read" })),
+      access: Array.from({ length: 256 }, (_, index) => ({ canonicalPath: join(root, `exact-${index}`), mode: "read" })),
     }])));
     assert.equal((await readExecutionEnforcementState(path)).records[0]?.access.length, 256);
     for (const value of [
       state(Array.from({ length: 1_001 }, () => record)),
-      state([{ ...record, access: Array.from({ length: 257 }, () => ({ canonicalPath: "C:/x", mode: "read" })) }]),
+      state([{ ...record, access: Array.from({ length: 257 }, (_, index) => ({ canonicalPath: join(root, `over-${index}`), mode: "read" })) }]),
       state([{ ...record, runId: "x".repeat(513) }]),
     ]) {
       await writeFile(path, JSON.stringify(value));
@@ -63,6 +64,33 @@ test("durable enforcement projection enforces exact byte, record, access, and fi
     await writeFile(path, Buffer.alloc(1024 * 1024 + 1, 0x20));
     await assert.rejects(readExecutionEnforcementState(path), (error) =>
       error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("durable enforcement projection rejects invalid lifecycle, paths, aliases, and uncorrelated summaries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-enforcement-semantic-"));
+  const path = join(root, "state.json");
+  const strict = {
+    occurredAt: "2026-08-28T10:00:00.000Z", runId: "run", invocationId: "inv", grantId: "grant",
+    status: "active", enforcement: "write_confinement_exact_grant", disclosure: "provider_specific_not_universal_boundary",
+    providerId: "provider", implementationDigest: "a".repeat(64), leaseId: "lease", access: [],
+  };
+  const state = (records: unknown[], recoverySummaries?: unknown[]) => ({
+    version: 1, boundary: "provider_specific_not_universal_security_boundary", records,
+    ...(recoverySummaries ? { recoverySummaries } : {}),
+  });
+  try {
+    for (const value of [
+      state([{ ...strict, providerId: undefined }]),
+      state([{ ...strict, status: "unconfined_explicit_full", enforcement: "unconfined_explicit_full", disclosure: "unconfined_explicit_full" }]),
+      state([{ ...strict, access: [{ canonicalPath: "relative", mode: "write" }] }]),
+      state([{ ...strict, access: [{ canonicalPath: root, mode: "read" }, { canonicalPath: root, mode: "write" }] }]),
+      state([], [{ occurredAt: strict.occurredAt, providerId: "provider", cleanedCount: 1, blockerCount: 0, blockers: [] }]),
+    ]) {
+      await writeFile(path, JSON.stringify(value));
+      await assert.rejects(readExecutionEnforcementState(path), (error) =>
+        error instanceof ExecutionIsolationError && error.code === "isolation_recovery_blocked");
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -119,6 +147,8 @@ test("selects strict isolation by verified semantic confinement and exact consum
     await selector.release(selection);
     assert.equal(provider.releases, 1);
     assert.deepEqual(selector.activeLeases(), []);
+    assert.equal(await fixture.authority.revoke(fixture.grant, "completed"), true);
+    assert.equal(provider.releases, 1, "terminal release must dispose the authority listener");
   } finally {
     await fixture.close();
   }
@@ -159,6 +189,43 @@ test("one consumed grant is global across selectors and authority revocation rel
     assert.deepEqual(second.activeLeases(), []);
   } finally {
     await fixture.close();
+  }
+});
+
+test("concurrent release, duplicate release, and authority revoke share one terminal cleanup", async () => {
+  for (const fail of [false, true]) {
+    const fixture = await isolationFixture();
+    try {
+      let unblock!: () => void;
+      const gate = new Promise<void>((resolve) => { unblock = resolve; });
+      const provider = fakeProvider(`fixture-terminal-${fail}`, { releaseGate: gate, releaseFails: fail });
+      const statePath = join(fixture.root, `terminal-${fail}.json`);
+      const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+        createExecutionIsolationProviderRegistration({
+          stableProviderId: `fixture-terminal-${fail}`, codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider,
+        }),
+      ]), { ...fixture.selectorOptions, statePath });
+      const selection = await selector.acquire({ permissionProfile: "project", intent: fixture.intent, grant: fixture.claims });
+      const wave = [selector.release(selection), selector.release(selection), fixture.authority.revoke(fixture.grant, "completed")];
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(provider.releases, 1);
+      unblock();
+      const outcomes = await Promise.allSettled(wave);
+      assert.equal(provider.releases, 1);
+      const terminal = (await readExecutionEnforcementState(statePath)).records.filter((record) =>
+        record.status === "revoked" || record.status === "blocked");
+      assert.equal(terminal.length, 1);
+      if (fail) {
+        assert.equal(outcomes.every((outcome) => outcome.status === "rejected"), true);
+        assert.equal(selector.activeLeases()[0]?.state, "revocation_failed");
+        provider.releaseFails = false;
+        await selector.release(selection);
+        assert.equal(provider.releases, 2);
+      } else {
+        assert.equal(outcomes.every((outcome) => outcome.status === "fulfilled"), true);
+        assert.deepEqual(selector.activeLeases(), []);
+      }
+    } finally { await fixture.close(); }
   }
 });
 
@@ -306,11 +373,40 @@ test("restart projection correlates multiple exact cleaned and blocked lease tra
     assert.equal(active.length, 2);
     assert.deepEqual(new Set(terminal.map((record) => record.leaseId)), new Set(active.map((record) => record.leaseId)));
     assert.deepEqual(terminal.map((record) => record.status), ["cleaned", "blocked"]);
-    assert.deepEqual(reopened.recoverySummaries?.at(-1), {
+    assert.deepEqual({ ...reopened.recoverySummaries?.at(-1), operationId: undefined, leaseIds: undefined }, {
       occurredAt: "2026-08-28T10:00:00.000Z", providerId: "fixture-partial-recovery",
-      cleanedCount: 1, blockerCount: 1, blockers: ["fixture partial cleanup blocker"],
+      cleanedCount: 1, blockerCount: 1, blockers: ["fixture partial cleanup blocker"], operationId: undefined, leaseIds: undefined,
     });
+    assert.match(reopened.recoverySummaries?.at(-1)?.operationId ?? "", /^[a-f0-9]{64}$/);
+    assert.deepEqual(new Set(reopened.recoverySummaries?.at(-1)?.leaseIds), new Set(terminal.map((record) => record.leaseId!)));
   } finally { await first.close(); await second.close(); }
+});
+
+test("dishonest recovery counts, duplicates, identities, and contradictory transitions fail closed", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const exact = {
+      status: "cleaned" as const, runId: "run", invocationId: "invocation", grantId: "grant",
+      leaseId: "lease", providerId: "dishonest", implementationDigest: "a".repeat(64), access: fixture.claims.access,
+    };
+    for (const result of [
+      { cleaned: 1, blockers: [], transitions: [] },
+      { cleaned: 2, blockers: [], transitions: [exact, exact] },
+      { cleaned: 1, blockers: [], transitions: [{ ...exact, providerId: "other" }] },
+      { cleaned: 1, blockers: ["contradiction"], transitions: [exact, { ...exact, status: "blocked" as const, blocker: "contradiction" }] },
+    ]) {
+      const provider = fakeProvider("dishonest");
+      provider.recoverOwned = async () => result;
+      const statePath = join(fixture.root, `dishonest-${Math.random()}.json`);
+      const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+        createExecutionIsolationProviderRegistration({ stableProviderId: "dishonest", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+      ]), { statePath });
+      const recovery = await selector.recoverOwnedLeases();
+      assert.equal(recovery[0]?.cleaned, 0);
+      assert.equal(recovery[0]?.blockers.length, 1);
+      assert.deepEqual((await readExecutionEnforcementState(statePath)).records, []);
+    }
+  } finally { await fixture.close(); }
 });
 
 test("release failure remains visible and restart cleanup invokes only owned provider leases", async () => {
@@ -355,6 +451,7 @@ function fakeProvider(providerId: string, mutation: {
   mechanism?: string;
   ociIdentity?: boolean;
   partialRecovery?: boolean;
+  releaseGate?: Promise<void>;
 } = {}): ExecutionIsolationProvider & {
   acquisitions: number;
   releases: number;
@@ -411,6 +508,7 @@ function fakeProvider(providerId: string, mutation: {
     },
     async release() {
       provider.releases += 1;
+      if (mutation.releaseGate) await mutation.releaseGate;
       if (provider.releaseFails) throw new Error("fixture release failed");
     },
     async recoverOwned() {

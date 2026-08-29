@@ -243,15 +243,23 @@ export function reserveConsumedExecutionGrantForIsolation(
 export async function registerConsumedExecutionGrantRevoker(
   claims: ConsumedExecutionGrantClaims,
   revoker: () => Promise<void>,
-): Promise<boolean> {
+): Promise<Readonly<{ registered: boolean; dispose: () => void }>> {
   assertRunnerConsumedExecutionGrantClaims(claims);
   const record = CONSUMED_CLAIMS.get(claims as object)!;
   if (record.state === "revoked") {
     await revoker();
-    return false;
+    return Object.freeze({ registered: false, dispose: () => undefined });
   }
   record.revokers.add(revoker);
-  return true;
+  let disposed = false;
+  return Object.freeze({
+    registered: true,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      record.revokers.delete(revoker);
+    },
+  });
 }
 
 export function assertRunnerConsumedExecutionGrantClaims(

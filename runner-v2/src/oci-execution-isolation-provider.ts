@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -40,6 +41,9 @@ const GRANT_LABEL = "ai-board.runner-v2.grant";
 const IMAGE_LABEL = "ai-board.runner-v2.image";
 const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
 const STATE_LOCK_TIMEOUT_MS = 10_000;
+const MAX_LEASE_STATE_BYTES = 1024 * 1024;
+const MAX_DURABLE_LEASES = 1_000;
+const MAX_DURABLE_ACCESS = 256;
 
 export type OciExecutionIsolationErrorCode =
   | "oci_configuration_invalid"
@@ -220,6 +224,7 @@ export function createOciExecutionIsolationProvider(
         throw ociError("oci_grant_unrepresentable", "OCI request does not match its exact grant.");
       }
       const representation = await representGrant(request);
+      await withStateLock(statePath, async () => { await readLeaseState(statePath); });
       const acquisitionImageId = await attestImage(runCli, image);
       const leaseId = `oci-lease-${randomUUID()}`;
       const containerName = `aiboard-${createHash("sha256")
@@ -317,7 +322,7 @@ export function createOciExecutionIsolationProvider(
         "--format", "{{.ID}}",
       ]);
       if (listed.exitCode !== 0) {
-        return { cleaned: 0, blockers: [`OCI owned-container listing failed: ${bounded(listed.stderr)}.`] };
+        return { cleaned: 0, blockers: [`OCI owned-container listing failed: ${bounded(listed.stderr)}.`], transitions: [] };
       }
       let cleaned = 0;
       const blockers: string[] = [];
@@ -607,13 +612,77 @@ function assertSafeOciArguments(args: readonly string[]): void {
 
 async function readLeaseState(path: string): Promise<DurableOciLease[]> {
   try {
-    const parsed = JSON.parse((await readFile(path)).toString("utf8")) as unknown;
-    if (!Array.isArray(parsed)) throw new Error();
-    return parsed as DurableOciLease[];
+    const handle = await open(path, "r");
+    let text: string;
+    try {
+      const stat = await handle.stat();
+      if (stat.size > MAX_LEASE_STATE_BYTES) throw new Error();
+      const buffer = Buffer.alloc(MAX_LEASE_STATE_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (bytesRead > MAX_LEASE_STATE_BYTES) throw new Error();
+      text = buffer.subarray(0, bytesRead).toString("utf8");
+    } finally { await handle.close(); }
+    const parsed = JSON.parse(text) as unknown;
+    if (!Array.isArray(parsed) || parsed.length > MAX_DURABLE_LEASES) throw new Error();
+    const leaseIds = new Set<string>();
+    const containerIds = new Set<string>();
+    return parsed.map((value) => {
+      const row = exactLeaseObject(value, ["lease", "containerId", "containerName", "runId"]);
+      const lease = exactLeaseObject(row.lease, ["leaseId", "providerId", "invocationId", "grantId", "grantedAccess", "acquiredAt", "expiresAt", "state", "providerIdentity", "immutableImageId"]);
+      const textField = (input: unknown, pattern?: RegExp) => {
+        if (typeof input !== "string" || !input || input.length > 512 || input.includes("\0") || (pattern && !pattern.test(input))) throw new Error();
+        return input;
+      };
+      const leaseId = textField(lease.leaseId);
+      const containerId = textField(row.containerId, /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/);
+      if (leaseIds.has(leaseId) || containerIds.has(containerId)) throw new Error();
+      leaseIds.add(leaseId); containerIds.add(containerId);
+      if (lease.providerId !== pathProviderId(path) || lease.state !== "active" ||
+          !Array.isArray(lease.grantedAccess) || lease.grantedAccess.length > MAX_DURABLE_ACCESS ||
+          typeof lease.providerIdentity !== "string" || !/^[a-f0-9]{64}$/.test(lease.providerIdentity) ||
+          typeof lease.immutableImageId !== "string" || !/^sha256:[a-f0-9]{64}$/.test(lease.immutableImageId) ||
+          !Number.isFinite(Date.parse(String(lease.acquiredAt)))) throw new Error();
+      const accessSeen = new Map<string, string>();
+      const access = lease.grantedAccess.map((entry) => {
+        const item = exactLeaseObject(entry, ["canonicalPath", "mode"]);
+        const canonicalPath = textField(item.canonicalPath);
+        if (!isAbsolute(canonicalPath) || resolve(canonicalPath) !== canonicalPath || !["read", "write", "create"].includes(String(item.mode))) throw new Error();
+        const key = process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
+        if (accessSeen.has(key)) throw new Error();
+        accessSeen.set(key, String(item.mode));
+        return { canonicalPath, mode: item.mode as "read" | "write" | "create" };
+      });
+      const runId = textField(row.runId);
+      const invocationId = textField(lease.invocationId);
+      const expectedName = `aiboard-${createHash("sha256").update(`${lease.providerId}\0${runId}\0${invocationId}\0${leaseId}`).digest("hex").slice(0, 32)}`;
+      const containerName = textField(row.containerName, /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/);
+      if (containerName !== expectedName) throw new Error();
+      return {
+        lease: {
+          leaseId, providerId: textField(lease.providerId), invocationId, grantId: textField(lease.grantId),
+          grantedAccess: access, acquiredAt: textField(lease.acquiredAt), ...(lease.expiresAt === undefined ? {} : { expiresAt: textField(lease.expiresAt) }),
+          state: "active" as const, providerIdentity: lease.providerIdentity, immutableImageId: lease.immutableImageId,
+        },
+        containerId, containerName, runId,
+      };
+    });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw ociError("oci_recovery_blocked", "OCI durable lease state is unreadable.", error);
   }
+}
+
+function exactLeaseObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+  const object = value as Record<string, unknown>;
+  if (Object.keys(object).some((key) => !keys.includes(key))) throw new Error();
+  return object;
+}
+
+function pathProviderId(path: string): string {
+  const match = /oci-leases-(.+)\.json$/.exec(path);
+  if (!match) throw new Error();
+  return match[1]!;
 }
 
 async function writeLeaseState(path: string, leases: readonly DurableOciLease[]): Promise<void> {

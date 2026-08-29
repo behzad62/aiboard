@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 import type { PermissionProfile } from "./contracts.js";
 import type {
@@ -162,7 +162,7 @@ export interface ExecutionEnforcementState {
   readonly records: readonly ExecutionEnforcementRecord[];
   readonly recoverySummaries?: readonly Readonly<{
     occurredAt: string; providerId: string; cleanedCount: number; blockerCount: number;
-    blockers: readonly string[];
+    blockers: readonly string[]; operationId?: string; leaseIds?: readonly string[];
   }>[];
 }
 
@@ -244,7 +244,44 @@ export function createExecutionIsolationSelector(
     provider: TrustedProvider;
     selection: Extract<ExecutionIsolationSelection, { lease: unknown }>;
     runId: string;
+    disposeRevoker?: () => void;
+    visibleLease?: ExecutionIsolationLease;
   }>();
+  const terminalOperations = new WeakMap<object, Promise<void>>();
+
+  const cleanupLease = (
+    selection: Extract<ExecutionIsolationSelection, { lease: unknown }>,
+    terminalStatus: "revoked" | "blocked",
+    blocker: string,
+  ): Promise<void> => {
+    const existing = terminalOperations.get(selection as object);
+    if (existing) return existing;
+    const owned = active.get(selection.lease.leaseId);
+    if (!owned || owned.selection !== selection) return Promise.reject(new ExecutionIsolationError(
+      "isolation_lease_invalid", "Isolation lease is not owned by this Runner selector."));
+    const operation = (async () => {
+      try {
+        await owned.provider.provider.release(selection.lease);
+      } catch (error) {
+        owned.visibleLease = deepFreeze({ ...selection.lease, state: "revocation_failed" as const });
+        owned.disposeRevoker?.();
+        await persist({ ...enforcementRecord({ ...selection, lease: owned.visibleLease }, owned.runId, "blocked", clock()), blocker });
+        throw new ExecutionIsolationError("isolation_revocation_failed", "Isolation lease revocation failed.", { cause: error });
+      }
+      active.delete(selection.lease.leaseId);
+      owned.disposeRevoker?.();
+      try {
+        await persist(enforcementRecord(selection, owned.runId, terminalStatus, clock()));
+      } catch (error) {
+        throw new ExecutionIsolationError("isolation_recovery_blocked", "Released isolation lease terminal evidence could not be persisted.", { cause: error });
+      }
+    })();
+    terminalOperations.set(selection as object, operation);
+    void operation.catch(() => {
+      if (terminalOperations.get(selection as object) === operation) terminalOperations.delete(selection as object);
+    });
+    return operation;
+  };
 
   return Object.freeze({
     async acquire(input: {
@@ -305,21 +342,11 @@ export function createExecutionIsolationSelector(
           lease,
         });
         active.set(lease.leaseId, { provider, selection, runId: input.intent.runId });
-        const registered = await registerConsumedExecutionGrantRevoker(input.grant, async () => {
-          const owned = active.get(lease.leaseId);
-          if (!owned) return;
-          try {
-            await owned.provider.provider.release(owned.selection.lease);
-            active.delete(lease.leaseId);
-            await persist(enforcementRecord(owned.selection, owned.runId, "revoked", clock()));
-          } catch (error) {
-            const failed = deepFreeze({ ...owned.selection.lease, state: "revocation_failed" as const });
-            owned.selection = deepFreeze({ ...owned.selection, lease: failed });
-            await persist({ ...enforcementRecord(owned.selection, owned.runId, "blocked", clock()), blocker: "Authority revocation could not release the isolation lease." });
-            throw error;
-          }
-        });
-        if (!registered) {
+        const registration = await registerConsumedExecutionGrantRevoker(input.grant, async () =>
+          cleanupLease(selection, "revoked", "Authority revocation could not release the isolation lease."));
+        const owned = active.get(lease.leaseId);
+        if (owned) owned.disposeRevoker = registration.dispose;
+        if (!registration.registered) {
           throw new ExecutionIsolationError("isolation_grant_mismatch", "Isolation grant was revoked during provider acquisition.");
         }
         try {
@@ -333,8 +360,7 @@ export function createExecutionIsolationSelector(
             leaseId: lease.leaseId, access: input.grant.access,
           });
         } catch (error) {
-          await provider.provider.release(lease);
-          active.delete(lease.leaseId);
+          await cleanupLease(selection, "blocked", "Isolation lease cleanup after projection failure failed.");
           throw error;
         }
         return selection;
@@ -350,34 +376,14 @@ export function createExecutionIsolationSelector(
 
     async release(selection: ExecutionIsolationSelection): Promise<void> {
       if (selection.enforcement === "unconfined_explicit_full") return;
-      const owned = active.get(selection.lease.leaseId);
-      if (!owned || owned.selection !== selection) {
-        throw new ExecutionIsolationError(
-          "isolation_lease_invalid",
-          "Isolation lease is not owned by this Runner selector.",
-        );
-      }
-      try {
-        await owned.provider.provider.release(selection.lease);
-        active.delete(selection.lease.leaseId);
-        await persist(enforcementRecord(selection, owned.runId, "revoked", clock()));
-      } catch (error) {
-        const failed = deepFreeze({ ...selection.lease, state: "revocation_failed" as const });
-        owned.selection = deepFreeze({ ...selection, lease: failed });
-        await persist({ ...enforcementRecord(owned.selection, owned.runId, "blocked", clock()), blocker: "Isolation lease revocation failed." });
-        throw new ExecutionIsolationError(
-          "isolation_revocation_failed",
-          "Isolation lease revocation failed.",
-          { cause: error },
-        );
-      }
+      await cleanupLease(selection, "revoked", "Isolation lease revocation failed.");
     },
 
     async recoverOwnedLeases() {
       const results: { providerId: string; cleaned: number; blockers: readonly string[] }[] = [];
       for (const provider of providers) {
         try {
-          const result = await provider.provider.recoverOwned();
+          const result = validateRecoveryResult(await provider.provider.recoverOwned(), provider);
           const blockers = Object.freeze([...result.blockers]);
           results.push(Object.freeze({ providerId: provider.providerId, cleaned: result.cleaned, blockers }));
           await persistRecovery(options.statePath, provider.providerId, result, clock());
@@ -398,14 +404,52 @@ export function createExecutionIsolationSelector(
     },
 
     activeLeases(): readonly ExecutionIsolationLease[] {
-      return Object.freeze([...active.values()].map(({ selection }) =>
-        deepFreeze({ ...selection.lease, grantedAccess: selection.lease.grantedAccess.map((x) => ({ ...x })) })));
+      return Object.freeze([...active.values()].map(({ selection, visibleLease }) => {
+        const lease = visibleLease ?? selection.lease;
+        return deepFreeze({ ...lease, grantedAccess: lease.grantedAccess.map((x) => ({ ...x })) });
+      }));
     },
 
     async enforcementState(): Promise<ExecutionEnforcementState> {
       return options.statePath ? await readExecutionEnforcementState(options.statePath) : emptyEnforcementState();
     },
   });
+}
+
+function validateRecoveryResult(
+  value: ExecutionIsolationRecoveryResult,
+  provider: TrustedProvider,
+): ExecutionIsolationRecoveryResult {
+  if (!value || typeof value !== "object" || !Number.isSafeInteger(value.cleaned) || value.cleaned < 0 ||
+      value.cleaned > MAX_ENFORCEMENT_RECORDS || !Array.isArray(value.blockers) || value.blockers.length > 64 ||
+      !Array.isArray(value.transitions) || value.transitions.length > MAX_ENFORCEMENT_RECORDS) {
+    throw new ExecutionIsolationError("isolation_recovery_blocked", "Isolation provider returned an invalid recovery contract.");
+  }
+  const blockers = value.blockers.map(safeText);
+  const seen = new Set<string>();
+  const transitions = value.transitions.map((transition) => {
+    if (!transition || typeof transition !== "object" || !["cleaned", "blocked"].includes(transition.status) ||
+        transition.providerId !== provider.providerId || transition.implementationDigest !== provider.implementationDigest ||
+        seen.has(transition.leaseId) || !Array.isArray(transition.access) || transition.access.length > MAX_ENFORCEMENT_ACCESS) {
+      throw new ExecutionIsolationError("isolation_recovery_blocked", "Isolation provider returned contradictory recovery identities.");
+    }
+    seen.add(transition.leaseId);
+    const record = parseEnforcementState({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [{
+      occurredAt: new Date(0).toISOString(), runId: transition.runId, invocationId: transition.invocationId,
+      grantId: transition.grantId, status: transition.status, enforcement: "write_confinement_exact_grant",
+      disclosure: "provider_specific_not_universal_boundary", providerId: transition.providerId,
+      implementationDigest: transition.implementationDigest, ...(transition.immutableImageId ? { immutableImageId: transition.immutableImageId } : {}),
+      leaseId: transition.leaseId, access: transition.access, ...(transition.blocker ? { blocker: transition.blocker } : {}),
+    }] }).records[0]!;
+    if ((transition.status === "blocked") !== Boolean(transition.blocker)) {
+      throw new ExecutionIsolationError("isolation_recovery_blocked", "Isolation recovery blocker status is inconsistent.");
+    }
+    return deepFreeze({ ...transition, access: record.access });
+  });
+  if (transitions.filter((item) => item.status === "cleaned").length !== value.cleaned) {
+    throw new ExecutionIsolationError("isolation_recovery_blocked", "Isolation recovery cleaned count lacks exact descriptors.");
+  }
+  return deepFreeze({ cleaned: value.cleaned, blockers, transitions });
 }
 
 const STATE_WRITES = new Map<string, Promise<void>>();
@@ -442,14 +486,43 @@ function parseEnforcementState(value: unknown): ExecutionEnforcementState {
     }
     if (record.implementationDigest !== undefined) safeDigest(record.implementationDigest);
     if (record.immutableImageId !== undefined) parseImmutableImageId(record.immutableImageId);
+    const accessKeys = new Set<string>();
     const access = record.access.map((item) => {
       const accessEntry = exactObject(item, new Set(["canonicalPath", "mode"]));
       if (!["read", "write", "create"].includes(accessEntry.mode as string)) throw new Error();
-      return { canonicalPath: boundedProjectionText(accessEntry.canonicalPath, 4_096), mode: accessEntry.mode as "read" | "write" | "create" };
+      const canonicalPath = boundedProjectionText(accessEntry.canonicalPath, 4_096);
+      if (!isAbsolute(canonicalPath) || resolve(canonicalPath) !== canonicalPath) throw new Error();
+      const pathKey = process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
+      if (accessKeys.has(pathKey)) throw new Error();
+      accessKeys.add(pathKey);
+      return { canonicalPath, mode: accessEntry.mode as "read" | "write" | "create" };
     });
+    const full = record.status === "unconfined_explicit_full";
+    if (full !== (record.enforcement === "unconfined_explicit_full" && record.disclosure === "unconfined_explicit_full") ||
+        (full && [record.providerId, record.implementationDigest, record.immutableImageId, record.leaseId, record.blocker].some((field) => field !== undefined)) ||
+        (!full && (record.enforcement !== "write_confinement_exact_grant" || record.disclosure !== "provider_specific_not_universal_boundary")) ||
+        ((record.status === "blocked") !== Boolean(record.blocker)) ||
+        (["active", "revoked", "cleaned"].includes(record.status as string) &&
+          (!record.providerId || !record.implementationDigest || !record.leaseId))) throw new Error();
     return { ...record, access } as unknown as ExecutionEnforcementRecord;
   });
   const recoverySummaries = object.recoverySummaries === undefined ? undefined : parseRecoverySummaries(object.recoverySummaries);
+  const terminalKeys = new Set<string>();
+  for (const record of records.filter((item) => item.status === "cleaned" || item.status === "blocked")) {
+    if (!record.leaseId) continue;
+    const key = `${record.occurredAt}\0${record.providerId ?? ""}\0${record.leaseId}`;
+    if (terminalKeys.has(key)) throw new Error();
+    terminalKeys.add(key);
+  }
+  for (const summary of recoverySummaries ?? []) {
+    const related = records.filter((record) => record.occurredAt === summary.occurredAt && record.providerId === summary.providerId &&
+      (record.status === "cleaned" || record.status === "blocked"));
+    if (related.filter((record) => record.status === "cleaned").length !== summary.cleanedCount ||
+        summary.blockers.length !== summary.blockerCount ||
+        related.filter((record) => record.status === "blocked" && record.leaseId).length > summary.blockerCount ||
+        (summary.leaseIds && (summary.leaseIds.length !== related.filter((record) => record.leaseId).length ||
+          summary.leaseIds.some((leaseId) => !related.some((record) => record.leaseId === leaseId))))) throw new Error();
+  }
   return deepFreeze({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records,
     ...(recoverySummaries ? { recoverySummaries } : {}) });
 }
@@ -471,14 +544,20 @@ async function readBoundedState(path: string): Promise<string> {
 function parseRecoverySummaries(value: unknown) {
   if (!Array.isArray(value) || value.length > MAX_RECOVERY_SUMMARIES) throw new Error();
   return value.map((entry) => {
-    const summary = exactObject(entry, new Set(["occurredAt", "providerId", "cleanedCount", "blockerCount", "blockers"]));
+    const summary = exactObject(entry, new Set(["occurredAt", "providerId", "cleanedCount", "blockerCount", "blockers", "operationId", "leaseIds"]));
     if (!Number.isSafeInteger(summary.cleanedCount) || (summary.cleanedCount as number) < 0 ||
         !Number.isSafeInteger(summary.blockerCount) || (summary.blockerCount as number) < 0 ||
         (summary.cleanedCount as number) > MAX_ENFORCEMENT_RECORDS || (summary.blockerCount as number) > 64 ||
-        !Array.isArray(summary.blockers) || summary.blockers.length > 64) throw new Error();
+        !Array.isArray(summary.blockers) || summary.blockers.length > 64 ||
+        (summary.operationId === undefined) !== (summary.leaseIds === undefined) ||
+        (summary.leaseIds !== undefined && (!Array.isArray(summary.leaseIds) || summary.leaseIds.length > MAX_ENFORCEMENT_RECORDS))) throw new Error();
     const occurredAt = safeText(summary.occurredAt); if (!Number.isFinite(Date.parse(occurredAt))) throw new Error();
+    const leaseIds = summary.leaseIds === undefined ? undefined : (summary.leaseIds as unknown[]).map(safeText);
+    if (leaseIds && new Set(leaseIds).size !== leaseIds.length) throw new Error();
     return { occurredAt, providerId: safeText(summary.providerId), cleanedCount: summary.cleanedCount as number,
-      blockerCount: summary.blockerCount as number, blockers: summary.blockers.map(safeText) };
+      blockerCount: summary.blockerCount as number, blockers: summary.blockers.map(safeText),
+      ...(summary.operationId === undefined ? {} : { operationId: safeDigest(summary.operationId),
+        leaseIds }) };
   });
 }
 
@@ -548,11 +627,12 @@ async function persistRecovery(
   if ((result.transitions?.length ?? 0) > MAX_ENFORCEMENT_RECORDS || result.blockers.length > 64) {
     throw new ExecutionIsolationError("isolation_recovery_blocked", "Recovery projection exceeds its bounded shape.");
   }
+  const occurredAt = now.toISOString();
   for (const transition of result.transitions ?? []) {
     if (transition.providerId !== providerId) throw new ExecutionIsolationError(
       "isolation_recovery_blocked", "Recovery transition provider identity is invalid.");
     await appendEnforcementRecord(statePath, {
-      occurredAt: now.toISOString(), runId: transition.runId,
+      occurredAt, runId: transition.runId,
       invocationId: transition.invocationId, grantId: transition.grantId,
       status: transition.status, enforcement: "write_confinement_exact_grant",
       disclosure: "provider_specific_not_universal_boundary", providerId,
@@ -563,8 +643,10 @@ async function persistRecovery(
     });
   }
   await appendRecoverySummary(statePath, {
-    occurredAt: now.toISOString(), providerId, cleanedCount: result.cleaned,
+    occurredAt, providerId, cleanedCount: result.cleaned,
     blockerCount: result.blockers.length, blockers: result.blockers.slice(0, 64).map((value) => value.slice(0, 512)),
+    operationId: createHash("sha256").update(`${providerId}\0${occurredAt}\0${(result.transitions ?? []).map((item) => item.leaseId).join("\0")}`).digest("hex"),
+    leaseIds: (result.transitions ?? []).map((item) => item.leaseId),
   });
 }
 

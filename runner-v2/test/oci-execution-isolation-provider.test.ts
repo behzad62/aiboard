@@ -305,6 +305,48 @@ test("overlapping OCI provider instances preserve both durable leases without or
   }
 });
 
+test("OCI durable lease ingestion rejects forged or oversized state before any CLI action", async () => {
+  const first = await ociFixture();
+  const second = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-ingest", cliPath: first.cli, image: "fixture:latest", stateDirectory: first.state, cli: fakeCli(calls),
+    });
+    await provider.attest();
+    const lease = await provider.acquire({ providerId: "oci-ingest", implementationDigest: "a".repeat(64), intent: first.intent, grant: first.claims });
+    const statePath = join(first.state, "oci-leases-oci-ingest.json");
+    const validText = readFileSync(statePath, "utf8");
+    const valid = JSON.parse(validText) as Record<string, unknown>[];
+    const leaseObject = valid[0]!.lease as { grantedAccess: Record<string, unknown>[]; immutableImageId: string };
+    const forged = [
+      [{ ...valid[0], unknown: true }],
+      [{ ...valid[0], lease: { ...(valid[0]!.lease as object), immutableImageId: "sha256:bad" } }],
+      [{ ...valid[0], lease: { ...(valid[0]!.lease as object), grantedAccess: [{ canonicalPath: "relative", mode: "write" }] } }],
+      [{ ...valid[0], lease: { ...(valid[0]!.lease as object), grantedAccess: [leaseObject.grantedAccess[0], leaseObject.grantedAccess[0]] } }],
+      [{ ...valid[0], runId: "forged-label-identity" }],
+      [valid[0], valid[0]],
+    ];
+    for (const value of forged) {
+      const text = JSON.stringify(value);
+      await writeFile(statePath, text);
+      const before = calls.length;
+      await assert.rejects(provider.recoverOwned(), (error) =>
+        error instanceof OciExecutionIsolationError && error.code === "oci_recovery_blocked");
+      assert.equal(calls.length, before);
+      assert.equal(readFileSync(statePath, "utf8"), text);
+    }
+    await writeFile(statePath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+    const before = calls.length;
+    await assert.rejects(provider.release(lease as never), /durable lease state is unreadable/i);
+    await assert.rejects(provider.acquire({
+      providerId: "oci-ingest", implementationDigest: "a".repeat(64),
+      intent: { ...second.intent, invocationId: "invocation-2" }, grant: second.claims,
+    }), /durable lease state is unreadable/i);
+    assert.equal(calls.length, before, "invalid durable state must trigger no inspect, rm, image, or create CLI action");
+  } finally { await first.close(); await second.close(); }
+});
+
 test("real Docker fixture denies outside writes, symlink escalation, network, and cleans a live child", async (t) => {
   const docker = availableDockerFixture();
   if (!docker) {
