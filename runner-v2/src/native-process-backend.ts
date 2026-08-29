@@ -19,6 +19,12 @@ export interface NativeOwnedProcessBackendOptions {
   readonly platform: "posix" | "windows";
   readonly backendId: string;
   readonly capabilities: ExecutionSafetyCapabilities;
+  readonly operations?: NativeProcessOperations;
+}
+export interface NativeProcessOperations {
+  processBirth(pid: number, platform: "posix" | "windows"): string | undefined;
+  listPosixGroup(groupId: number): readonly number[] | undefined;
+  signal(pid: number, signal: NodeJS.Signals): void;
 }
 
 interface Identity {
@@ -39,7 +45,7 @@ interface SupervisorState {
   readonly status: "running" | "stopped" | "outcome_unknown";
   readonly exitCode: number | null;
   readonly signal: string | null;
-  readonly knownPids: number[];
+  readonly knownProcesses: readonly { readonly pid: number; readonly birth: string }[];
   readonly error: string | null;
   readonly updatedAt: string;
 }
@@ -48,10 +54,12 @@ class OwnedProcessIdentityMismatchError extends Error {}
 export class NativeOwnedProcessBackend implements ProcessBackend {
   private readonly stateDirectory: string;
   private readonly pollIntervalMs: number;
+  private readonly operations: NativeProcessOperations;
   private readonly outputOffsets = new Map<string, { stdout: number; stderr: number }>();
   constructor(private readonly options: NativeOwnedProcessBackendOptions) {
     this.stateDirectory = resolve(options.stateDirectory ?? join(tmpdir(), "aiboard-portable-processes"));
     this.pollIntervalMs = options.pollIntervalMs ?? 25;
+    this.operations = options.operations ?? DEFAULT_OPERATIONS;
     mkdirSync(this.stateDirectory, { recursive: true });
   }
 
@@ -90,13 +98,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     });
     if (!child.pid) throw new Error("Portable process supervisor has no PID.");
     child.unref();
+    let identity: Identity | undefined;
     try {
-      const state = await this.waitForState(directory, nonce, child.pid, 5_000);
-      if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
-      const supervisorBirth = processBirth(child.pid, this.options.platform);
+      const supervisorBirth = await this.waitForBirth(child.pid, 1_000);
       if (!supervisorBirth) throw new Error("Portable supervisor birth identity is unavailable.");
-      const startedAt = state.updatedAt;
-      const identity: Identity = {
+      identity = {
         version: 1,
         backendId: this.options.backendId,
         nonce,
@@ -104,6 +110,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         supervisorPid: child.pid,
         supervisorBirth,
       };
+      const state = await this.waitForState(directory, nonce, child.pid, 5_000);
+      if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
+      const startedAt = state.updatedAt;
       return {
         opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
         birthFingerprint: {
@@ -114,7 +123,32 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         startedAt,
       };
     } catch (error) {
-      try { process.kill(child.pid, "SIGKILL"); } catch {}
+      if (!identity) {
+        const failedState = readState(directory);
+        if (
+          failedState?.nonce === nonce &&
+          failedState.supervisorPid === child.pid &&
+          failedState.status === "outcome_unknown" &&
+          failedState.knownProcesses.length === 0 &&
+          !pidAlive(child.pid)
+        ) {
+          rmSync(directory, { recursive: true, force: true });
+          throw error;
+        }
+        throw new AggregateError(
+          [error, new Error(`Launch cleanup identity is unavailable; evidence retained at ${directory}.`)],
+          "Portable process launch failed before safe cleanup identity was established.",
+        );
+      }
+      try {
+        await this.cleanupFailedLaunch(identity);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Portable process launch failed and owned cleanup could not be verified; evidence retained at ${directory}.`,
+        );
+      }
+      rmSync(directory, { recursive: true, force: true });
       throw error;
     }
   }
@@ -141,27 +175,36 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const identity = this.identity(binding);
     const validation = this.validate(identity);
     if (validation === "mismatch") throw new Error("Owned process identity mismatch.");
-    if (validation === "exited")
-      return (await this.isEmpty(identity)) ? { state: "exited" } : { state: "running" };
+    if (validation === "exited") return this.signalState(await this.emptiness(identity));
     if (this.options.platform === "posix") {
       const signal = action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM";
-      process.kill(-identity.supervisorPid, signal);
+      this.operations.signal(-identity.supervisorPid, signal);
     } else {
+      const beforeSignal = await this.emptiness(identity);
+      if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
+      if (beforeSignal === "outcome_unknown") throw new Error("Owned descendant identity is unavailable.");
       const state = readState(identity.directory);
       const sequence = (state?.handledControl ?? 0) + 1;
       writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action }), { mode: 0o600 });
     }
     await delay(action === "force_terminate" ? 250 : 75);
-    return (await this.isEmpty(identity)) ? { state: "exited" } : { state: "running" };
+    return this.signalState(await this.emptiness(identity));
   }
 
   async verifyEmpty(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
     if (this.validate(identity) === "mismatch")
       return { empty: false, detail: "Owned process identity changed before quiescence verification." };
-    return (await this.isEmpty(identity))
-      ? { empty: true, proofArtifactId: `native-empty:${identity.nonce}` }
-      : { empty: false, detail: "Owned process group/tree still has live members." };
+    const emptiness = await this.emptiness(identity);
+    if (emptiness === "empty") return { empty: true, proofArtifactId: `native-empty:${identity.nonce}` };
+    return {
+      empty: false,
+      detail: emptiness === "nonempty"
+        ? "Owned process group/tree still has live members."
+        : emptiness === "identity_mismatch"
+          ? "Owned process identity changed before quiescence verification."
+          : "Owned process membership could not be enumerated or verified.",
+    };
   }
 
   async reconcile(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
@@ -176,7 +219,10 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid)
       return { state: "identity_mismatch" };
     if (state.status === "outcome_unknown") return { state: "outcome_unknown" };
-    if (validation === "live" || !(await this.isEmpty(identity))) return { state: "running" };
+    const emptiness = await this.emptiness(identity);
+    if (emptiness === "identity_mismatch") return { state: "identity_mismatch" };
+    if (emptiness === "outcome_unknown") return { state: "outcome_unknown" };
+    if (validation === "live" || emptiness === "nonempty") return { state: "running" };
     return {
       state: "exited",
       ...(state.exitCode === null ? {} : { exitCode: state.exitCode }),
@@ -186,7 +232,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
-    if (!(await this.isEmpty(identity))) throw new Error("Cannot release non-empty owned process identity.");
+    const emptiness = await this.emptiness(identity);
+    if (emptiness !== "empty")
+      throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
     this.outputOffsets.delete(identity.nonce);
     rmSync(identity.directory, { recursive: true, force: true });
     return { released: true };
@@ -206,14 +254,64 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     return value;
   }
   private validate(identity: Identity): "live" | "exited" | "mismatch" {
-    const current = processBirth(identity.supervisorPid, this.options.platform);
+    const current = this.operations.processBirth(identity.supervisorPid, this.options.platform);
     if (!current) return "exited";
     return current === identity.supervisorBirth ? "live" : "mismatch";
   }
-  private async isEmpty(identity: Identity): Promise<boolean> {
-    if (this.options.platform === "posix") return posixGroupMembers(identity.supervisorPid).length === 0;
+  private async emptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+    if (this.options.platform === "posix") {
+      const members = this.operations.listPosixGroup(identity.supervisorPid);
+      return members === undefined ? "outcome_unknown" : members.length === 0 ? "empty" : "nonempty";
+    }
     const state = readState(identity.directory);
-    return !state || state.knownPids.every((pid) => !pidAlive(pid));
+    if (!state || !Array.isArray(state.knownProcesses)) return "outcome_unknown";
+    let live = false;
+    for (const process of state.knownProcesses) {
+      if (!Number.isSafeInteger(process.pid) || !process.birth) return "outcome_unknown";
+      const current = this.operations.processBirth(process.pid, "windows");
+      if (!current) continue;
+      if (current !== process.birth) return "identity_mismatch";
+      live = true;
+    }
+    return live ? "nonempty" : "empty";
+  }
+  private signalState(emptiness: "empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"): { state: "running" | "exited" } {
+    if (emptiness === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
+    if (emptiness === "outcome_unknown") throw new Error("Owned process membership could not be verified after signal.");
+    return { state: emptiness === "empty" ? "exited" : "running" };
+  }
+  private async cleanupFailedLaunch(identity: Identity): Promise<void> {
+    const validation = this.validate(identity);
+    if (validation === "mismatch") throw new Error("Launch cleanup refused a recycled supervisor identity.");
+    if (validation === "live") {
+      if (this.options.platform === "posix") {
+        const members = this.operations.listPosixGroup(identity.supervisorPid);
+        if (members === undefined) throw new Error("Launch cleanup could not enumerate the owned POSIX group.");
+        this.operations.signal(-identity.supervisorPid, "SIGKILL");
+      } else {
+        await delay(Math.max(250, this.pollIntervalMs * 2));
+        const before = await this.emptiness(identity);
+        if (before === "identity_mismatch") throw new Error("Launch cleanup refused a recycled Windows descendant.");
+        if (before === "outcome_unknown") throw new Error("Launch cleanup could not validate Windows descendants.");
+        const state = readState(identity.directory);
+        const sequence = (state?.handledControl ?? 0) + 1;
+        writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action: "force_terminate" }), { mode: 0o600 });
+      }
+    }
+    const deadline = Date.now() + 3_000;
+    const requiredStableMs = this.options.platform === "windows" ? 500 : 100;
+    let emptySince: number | undefined;
+    while (Date.now() < deadline) {
+      const emptiness = await this.emptiness(identity);
+      if (emptiness === "identity_mismatch") throw new Error("Launch cleanup observed a recycled owned identity.");
+      if (emptiness === "outcome_unknown") throw new Error("Launch cleanup lost ownership verification.");
+      if (emptiness === "empty") {
+        emptySince ??= Date.now();
+        if (Date.now() - emptySince >= requiredStableMs) return;
+      } else emptySince = undefined;
+      await delay(this.pollIntervalMs);
+    }
+    throw new Error("Launch cleanup did not produce verified emptiness before its deadline.");
   }
   private async flushOutput(identity: Identity, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>): Promise<void> {
     const offsets = this.outputOffsets.get(identity.nonce) ?? { stdout: 0, stderr: 0 };
@@ -236,12 +334,22 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     throw new Error("Portable process supervisor startup timed out.");
   }
+  private async waitForBirth(pid: number, timeoutMs: number): Promise<string | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const birth = this.operations.processBirth(pid, this.options.platform);
+      if (birth) return birth;
+      if (!pidAlive(pid)) return undefined;
+      await delay(this.pollIntervalMs);
+    }
+    return undefined;
+  }
 }
 
 function readState(directory: string): SupervisorState | undefined {
   try { return JSON.parse(readFileSync(join(directory, "state.json"), "utf8")) as SupervisorState; } catch { return undefined; }
 }
-function processBirth(pid: number, platform: "posix" | "windows"): string | undefined {
+function osProcessBirth(pid: number, platform: "posix" | "windows"): string | undefined {
   try {
     if (platform === "windows") {
       return execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$p=Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" -ErrorAction SilentlyContinue;if($p){$p.CreationDate.ToUniversalTime().ToString('o')}`], { encoding: "utf8", windowsHide: true }).trim() || undefined;
@@ -256,12 +364,22 @@ function processBirth(pid: number, platform: "posix" | "windows"): string | unde
     }
   } catch { return undefined; }
 }
-function posixGroupMembers(groupId: number): number[] {
+function osPosixGroupMembers(groupId: number): number[] | undefined {
   try {
-    return execFileSync("ps", ["-o", "pid=", "-g", String(groupId)], { encoding: "utf8" }).split(/\s+/).map(Number).filter((pid) => pid > 0);
-  } catch { return []; }
+    return execFileSync("ps", ["-e", "-o", "pid=,pgid="], { encoding: "utf8" })
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(([, pgid]) => pgid === groupId)
+      .map(([pid]) => pid!)
+      .filter((pid) => pid > 0);
+  } catch { return undefined; }
 }
 function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+const DEFAULT_OPERATIONS: NativeProcessOperations = {
+  processBirth: osProcessBirth,
+  listPosixGroup: osPosixGroupMembers,
+  signal: (pid, signal) => process.kill(pid, signal),
+};

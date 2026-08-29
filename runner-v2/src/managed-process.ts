@@ -1,9 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
-  mkdirSync,
+  closeSync,
+  existsSync,
+  fstatSync,
   lstatSync,
+  mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   writeFileSync,
@@ -104,6 +109,11 @@ export interface ManagedProcessServiceOptions {
 
 export interface ManagedProcessOwnershipSnapshot extends ManagedProcessSnapshot {
   ownershipReleased: boolean;
+}
+export interface ManagedProcessOutputRead {
+  readonly stdout: Uint8Array;
+  readonly stderr: Uint8Array;
+  readonly next: { readonly stdout: number; readonly stderr: number };
 }
 
 /**
@@ -543,6 +553,48 @@ export class ManagedProcessService {
     return { ...this.snapshot(record), ownershipReleased: status.ownershipReleased };
   }
 
+  async probeJobObjectAvailability(): Promise<boolean> {
+    if (this.platform !== "win32" || process.platform !== "win32") return false;
+    const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
+    if (!existsSync(this.supervisorScriptPath) || !existsSync(jobHost)) return false;
+    const probe = spawnSync(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$ErrorActionPreference='Stop';" +
+          "$source='using System;using System.Runtime.InteropServices;public static class JobProbe{" +
+          "[DllImport(\"kernel32.dll\",CharSet=CharSet.Unicode,SetLastError=true)]public static extern IntPtr CreateJobObject(IntPtr a,string n);" +
+          "[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);}';" +
+          "Add-Type -TypeDefinition $source;" +
+          "$h=[JobProbe]::CreateJobObject([IntPtr]::Zero,$null);if($h -eq [IntPtr]::Zero){exit 1};" +
+          "$ok=[JobProbe]::CloseHandle($h);if(-not $ok){exit 1};exit 0",
+      ],
+      { windowsHide: true, stdio: "ignore" },
+    );
+    return probe.status === 0;
+  }
+
+  readOutputSince(
+    processId: string,
+    context: ToolExecutionContext,
+    offsets: { readonly stdout: number; readonly stderr: number },
+  ): ManagedProcessOutputRead {
+    const record = this.ownedRecord(processId, context);
+    const stdout = unreadBytes(record.stdoutPath, offsets.stdout, this.maxPollBytes);
+    const stderr = unreadBytes(record.stderrPath, offsets.stderr, this.maxPollBytes);
+    return {
+      stdout,
+      stderr,
+      next: {
+        stdout: offsets.stdout + stdout.byteLength,
+        stderr: offsets.stderr + stderr.byteLength,
+      },
+    };
+  }
+
   private persist(record: ManagedProcessRecord): void {
     const destination = join(this.stateDirectory, `${record.processId}.json`);
     const temporary = `${destination}.${randomUUID()}.tmp`;
@@ -559,6 +611,24 @@ export class ManagedProcessService {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
     }
+  }
+}
+
+function unreadBytes(path: string, offset: number, maximum: number): Uint8Array {
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Managed process output offset is invalid.");
+  let descriptor: number;
+  try { descriptor = openSync(path, "r"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Uint8Array();
+    throw error;
+  }
+  try {
+    const size = fstatSync(descriptor).size;
+    if (offset > size) throw new Error("Managed process output offset exceeds the durable stream length.");
+    const buffer = Buffer.allocUnsafe(Math.min(maximum, size - offset));
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.byteLength, offset);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    closeSync(descriptor);
   }
 }
 

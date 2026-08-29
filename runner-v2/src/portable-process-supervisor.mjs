@@ -12,7 +12,8 @@ let handledControl = 0;
 let targetExited = false;
 let targetExitCode = null;
 let targetSignal = null;
-const knownPids = new Set();
+const knownProcesses = new Map();
+let ownershipMismatch = false;
 
 const child = spawn(config.executable, config.arguments, {
   cwd: config.workingDirectory,
@@ -21,7 +22,6 @@ const child = spawn(config.executable, config.arguments, {
   stdio: ["ignore", "pipe", "pipe"],
 });
 if (!child.pid) fail("Owned process has no PID.");
-knownPids.add(child.pid);
 child.stdout.on("data", (chunk) => appendFileSync(stdoutPath, chunk));
 child.stderr.on("data", (chunk) => appendFileSync(stderrPath, chunk));
 child.once("error", (error) => fail(error.message));
@@ -41,6 +41,10 @@ process.on("SIGINT", () => {});
 function tick() {
   try {
     if (config.platform === "windows") refreshWindowsTree();
+    if (ownershipMismatch) {
+      publish("outcome_unknown", "Owned Windows descendant birth identity changed.");
+      return;
+    }
     handleControl();
     const active = activeOwnedPids();
     if (targetExited && active.length === 0) {
@@ -61,7 +65,11 @@ function handleControl() {
   handledControl = request.sequence;
   if (config.platform === "windows") {
     refreshWindowsTree();
-    const roots = [...knownPids].filter(isAlive);
+    if (ownershipMismatch) {
+      publish("outcome_unknown", "Refused to signal a recycled Windows descendant PID.");
+      return;
+    }
+    const roots = [...knownProcesses].filter(([pid, birth]) => currentWindowsBirth(pid) === birth).map(([pid]) => pid);
     for (const pid of roots) {
       spawnSync("taskkill.exe", ["/PID", String(pid), "/T", ...(request.action === "force_terminate" ? ["/F"] : [])], {
         windowsHide: true,
@@ -73,32 +81,55 @@ function handleControl() {
 }
 
 function refreshWindowsTree() {
-  const script = "$ErrorActionPreference='SilentlyContinue';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId)\"}";
+  const script = "$ErrorActionPreference='SilentlyContinue';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"}";
   const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     windowsHide: true,
   });
   if (result.status !== 0) return;
-  const rows = String(result.stdout).split(/\r?\n/).map((line) => line.split(",").map(Number)).filter(([pid, parent]) => pid > 0 && parent >= 0);
+  const rows = String(result.stdout).split(/\r?\n/).map((line) => {
+    const [pid, parent, birth] = line.split(",");
+    return { pid: Number(pid), parent: Number(parent), birth };
+  }).filter(({ pid, parent, birth }) => pid > 0 && parent >= 0 && birth);
+  const current = new Map(rows.map(({ pid, birth }) => [pid, birth]));
+  for (const [pid, birth] of knownProcesses) {
+    const observed = current.get(pid);
+    if (observed && observed !== birth) ownershipMismatch = true;
+  }
+  const owned = new Set([child.pid, ...knownProcesses.keys()]);
   let changed = true;
   while (changed) {
     changed = false;
-    for (const [pid, parent] of rows) {
-      if (knownPids.has(parent) && !knownPids.has(pid)) {
-        knownPids.add(pid);
+    for (const { pid, parent } of rows) {
+      if (owned.has(parent) && !owned.has(pid)) {
+        owned.add(pid);
         changed = true;
       }
     }
+  }
+  for (const pid of owned) {
+    const birth = current.get(pid);
+    if (birth) knownProcesses.set(pid, birth);
   }
 }
 
 function activeOwnedPids() {
   if (config.platform === "posix") {
-    const result = spawnSync("ps", ["-o", "pid=", "-g", String(process.pid)], { encoding: "utf8" });
+    const result = spawnSync("ps", ["-e", "-o", "pid=,pgid="], { encoding: "utf8" });
     if (result.status !== 0) return [];
-    return String(result.stdout).split(/\s+/).map(Number).filter((pid) => pid > 0 && pid !== process.pid && isAlive(pid));
+    return String(result.stdout).split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(([, pgid]) => pgid === process.pid)
+      .map(([pid]) => pid)
+      .filter((pid) => pid > 0 && pid !== process.pid && isAlive(pid));
   }
-  return [...knownPids].filter(isAlive);
+  return [...knownProcesses].filter(([pid, birth]) => currentWindowsBirth(pid) === birth).map(([pid]) => pid);
+}
+
+function currentWindowsBirth(pid) {
+  const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction SilentlyContinue;if($p){$p.CreationDate.ToUniversalTime().ToString('o')}`;
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true });
+  return result.status === 0 ? String(result.stdout).trim() || undefined : undefined;
 }
 
 function isAlive(pid) {
@@ -116,7 +147,7 @@ function publish(status, error = null) {
     status,
     exitCode: targetExitCode,
     signal: targetSignal,
-    knownPids: [...knownPids],
+    knownProcesses: [...knownProcesses].map(([pid, birth]) => ({ pid, birth })),
     error,
     updatedAt: new Date().toISOString(),
   };

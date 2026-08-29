@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createWindowsProcessBackend } from "../src/windows-process-backend.js";
+import {
+  createWindowsProcessBackend,
+  WindowsJobObjectProcessBackend,
+  type WindowsJobProcessService,
+} from "../src/windows-process-backend.js";
 import { ManagedProcessService } from "../src/managed-process.js";
+import type { NativeProcessOperations } from "../src/native-process-backend.js";
 import {
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
@@ -54,6 +60,55 @@ test("Windows reconciliation distinguishes missing opaque identity from a birth 
   assert.deepEqual(await backend.reconcile(mismatch, fence), { state: "identity_mismatch" });
 });
 
+test("Windows portable ownership rejects a recycled descendant before control is written", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-identity-contract-"));
+  const operations: NativeProcessOperations = {
+    processBirth: (pid) => pid === 9001 ? "supervisor-birth" : "recycled-birth",
+    listPosixGroup: () => undefined,
+    signal: () => undefined,
+  };
+  const backend = createWindowsProcessBackend({ stateDirectory: root, operations });
+  const stateDirectory = join(root, "identity");
+  mkdirSync(stateDirectory);
+  writeFileSync(join(stateDirectory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v1",
+    nonce: "windows-contract-nonce",
+    supervisorPid: 9001,
+    childPid: 9002,
+    revision: 1,
+    handledControl: 0,
+    status: "running",
+    exitCode: null,
+    signal: null,
+    knownProcesses: [{ pid: 9002, birth: "owned-descendant-birth" }],
+    error: null,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }));
+  const binding = portableWindowsBinding(stateDirectory, "supervisor-birth");
+  try {
+    assert.deepEqual(parseProcessReconciliation(await backend.reconcile(binding, fence)), { state: "identity_mismatch" });
+    await assert.rejects(backend.signal(binding, "force_terminate", fence), /identity/i);
+    assert.equal(existsSync(join(stateDirectory, "control.json")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows portable launch failure verifies owned cleanup instead of killing only the supervisor PID", async () => {
+  if (process.platform !== "win32") return;
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-launch-cleanup-"));
+  const backend = createWindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 20 });
+  try {
+    await assert.rejects(backend.launch({
+      ...request([]),
+      intent: { ...request([]).intent, executable: join(root, "missing-executable.exe") },
+    }), /launch|process|supervisor|cleanup|ENOENT/i);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Windows native supervisor owns a surviving descendant after launcher exit", async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows supervisor ownership requires a Windows host.");
@@ -76,8 +131,9 @@ test("Windows native supervisor owns a surviving descendant after launcher exit"
   } finally {
     await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8"));
-    const state = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as { knownPids: number[] };
-    for (const pid of [...state.knownPids, identity.supervisorPid]) {
+    const state = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as { knownProcesses: Array<{ pid: number; birth: string }> };
+    assert.ok(state.knownProcesses.every((process) => process.birth.length > 0));
+    for (const pid of [...state.knownProcesses.map((process) => process.pid), identity.supervisorPid]) {
       try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" }); } catch {}
     }
     await backend.release(binding, fence).catch(() => undefined);
@@ -94,6 +150,8 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
   mkdirSync(workspace);
   const service = new ManagedProcessService({ stateDirectory: join(root, "state") });
   const backend = createWindowsProcessBackend({ jobObjects: { service } });
+  const attestation = await backend.probe() as { capabilities: Record<string, string> };
+  assert.equal(attestation.capabilities.crash_cleanup, "enforced");
   const jobRequest = request([
     "-e",
     "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),30)",
@@ -109,6 +167,17 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
   }));
   const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
   try {
+    assert.deepEqual(
+      parseProcessReconciliation(await backend.reconcile({
+        ...binding,
+        birthFingerprint: { ...binding.birthFingerprint, discriminator: "0".repeat(64) },
+      }, fence)),
+      { state: "identity_mismatch" },
+    );
+    assert.deepEqual(
+      parseProcessReconciliation(await backend.reconcile({ ...binding, opaqueIdentity: "missing" }, fence)),
+      { state: "outcome_unknown" },
+    );
     await new Promise((resolve) => setTimeout(resolve, 150));
     assert.equal(parseProcessReconciliation(await backend.reconcile(binding, fence)).state, "running");
     const observation = backend.observe(binding, async () => undefined, fence);
@@ -121,6 +190,88 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
     service.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
+});
+
+test("Windows Job observation uses absolute durable offsets beyond the configured tail", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows Job Object output fixture requires a Windows host.");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-backend-output-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const maxPollBytes = 64 * 1024;
+  const service = new ManagedProcessService({ stateDirectory: join(root, "state"), maxPollBytes });
+  const backend = createWindowsProcessBackend({ jobObjects: { service } });
+  const oversized = "x".repeat(300_000);
+  const outputRequest = request(["-e", "process.stdout.write('x'.repeat(300000))"]);
+  const launch = parseProcessLaunchResult(await backend.launch({
+    ...outputRequest,
+    intent: { ...outputRequest.intent, invocationId: "windows-job-output", workingDirectory: workspace },
+    grant: { ...outputRequest.grant, invocationId: "windows-job-output" },
+  }));
+  const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
+  const chunks: Buffer[] = [];
+  try {
+    const observation = await backend.observe(binding, async (stream, bytes) => {
+      if (stream === "stdout") {
+        assert.ok(bytes.byteLength <= maxPollBytes);
+        chunks.push(Buffer.from(bytes));
+      }
+    }, fence);
+    assert.equal(parseProcessReconciliation(observation).state, "exited");
+    assert.equal(Buffer.concat(chunks).toString(), oversized);
+    assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, true);
+  } finally {
+    await service.stopRun("run").catch(() => undefined);
+    service.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("Windows Job observation advances absolute offsets across incremental durable reads", async () => {
+  const durable = Buffer.from("first-second-third");
+  const requestedOffsets: number[] = [];
+  let deliveredThrough = 0;
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    signal: async () => { throw new Error("fixture does not signal"); },
+    readOutputSince: (_processId, _context, offsets) => {
+      requestedOffsets.push(offsets.stdout);
+      if (requestedOffsets.length > 4) throw new Error("absolute output offset did not advance");
+      const end = Math.min(offsets.stdout + 6, durable.byteLength);
+      const stdout = durable.subarray(offsets.stdout, end);
+      deliveredThrough = end;
+      return {
+        stdout,
+        stderr: new Uint8Array(),
+        next: { stdout: end, stderr: offsets.stderr },
+      };
+    },
+    reconcileOwnership: async () => ({
+      processId: "job-output-contract",
+      pid: 9001,
+      status: deliveredThrough === durable.byteLength ? "stopped" : "running",
+      exitCode: deliveredThrough === durable.byteLength ? 0 : null,
+      signal: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      stdout: "",
+      stderr: "",
+      ownershipReleased: deliveredThrough === durable.byteLength,
+    }),
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const chunks: Buffer[] = [];
+
+  const observation = await backend.observe(jobBinding("job-output-contract"), async (stream, bytes) => {
+    if (stream === "stdout") chunks.push(Buffer.from(bytes));
+  }, fence);
+
+  assert.deepEqual(requestedOffsets, [0, 6, 12, 18]);
+  assert.equal(Buffer.concat(chunks).toString(), "first-second-third");
+  assert.deepEqual(parseProcessReconciliation(observation), { state: "exited", exitCode: 0 });
 });
 
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
@@ -156,5 +307,42 @@ function bindingFor(launch: ProcessLaunchResult) {
     attestationVersion: 1,
     attestationDigest: "2".repeat(64),
     ...launch,
+  };
+}
+
+function portableWindowsBinding(directory: string, birth: string) {
+  const identity = {
+    version: 1,
+    backendId: "runner-windows-supervisor-v1",
+    nonce: "windows-contract-nonce",
+    directory,
+    supervisorPid: 9001,
+    supervisorBirth: birth,
+  };
+  return bindingFor({
+    opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
+    birthFingerprint: {
+      observedAt: "2026-01-01T00:00:00.000Z",
+      discriminator: createHash("sha256").update(`windows-contract-nonce\0${birth}`).digest("hex"),
+    },
+    rootPid: 9001,
+    startedAt: "2026-01-01T00:00:00.000Z",
+  });
+}
+
+function jobBinding(processId: string) {
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const identity = { processId, runId: "run", sessionId: "session", startedAt };
+  return {
+    ...bindingFor({
+      opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
+      birthFingerprint: {
+        observedAt: startedAt,
+        discriminator: createHash("sha256").update(`${processId}\0${startedAt}`).digest("hex"),
+      },
+      rootPid: 9001,
+      startedAt,
+    }),
+    backendId: "runner-windows-job-v1",
   };
 }

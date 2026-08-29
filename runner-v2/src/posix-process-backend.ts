@@ -1,8 +1,10 @@
 import { NativeOwnedProcessBackend } from "./native-process-backend.js";
+import type { NativeProcessOperations } from "./native-process-backend.js";
 
 export interface PosixProcessBackendOptions {
   readonly stateDirectory?: string;
   readonly pollIntervalMs?: number;
+  readonly operations?: NativeProcessOperations;
 }
 
 export class PosixProcessBackend extends NativeOwnedProcessBackend {

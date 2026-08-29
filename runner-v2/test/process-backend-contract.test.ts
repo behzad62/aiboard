@@ -17,7 +17,7 @@ import {
   type ProcessBackend,
   type ProcessBackendRegistration,
 } from "../src/process-backend.js";
-import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "../src/windows-process-backend.js";
+import { createWindowsProcessBackend, WindowsJobObjectProcessBackend, type WindowsJobProcessService } from "../src/windows-process-backend.js";
 
 const capabilities = {
   tree_termination: "enforced",
@@ -335,7 +335,7 @@ test("normal reattestation rejects copied identity while explicit trusted restar
 
 test("portable Windows baseline is available without Job Objects but strict guarantees require the Job enhancement", async () => {
   const baseline = createWindowsProcessBackend({ jobObjects: "unavailable" });
-  const job = new WindowsJobObjectProcessBackend({} as never);
+  const job = new WindowsJobObjectProcessBackend(jobService(true));
   const trusted = createProcessBackendRegistry([
     createProcessBackendRegistration({
       stableAdapterId: "windows-portable",
@@ -364,4 +364,25 @@ test("portable Windows baseline is available without Job Objects but strict guar
     }),
   ]);
   await assert.rejects(selectProcessBackend(baselineOnly, ["tree_termination"]), /required semantic capabilities/i);
+  const unavailableJob = createProcessBackendRegistry([
+    createProcessBackendRegistration({
+      stableAdapterId: "windows-job-unavailable",
+      backendId: "runner-windows-job-v1",
+      codeDigest: "9".repeat(64),
+      configDigest: "a".repeat(64),
+      backend: new WindowsJobObjectProcessBackend(jobService(false)),
+    }),
+  ]);
+  await assert.rejects(selectProcessBackend(unavailableJob, ["crash_cleanup"]), /required semantic capabilities/i);
 });
+
+function jobService(available: boolean): WindowsJobProcessService {
+  const unavailable = async (): Promise<never> => { throw new Error("fixture operation is unavailable"); };
+  return {
+    probeJobObjectAvailability: async () => available,
+    start: unavailable,
+    signal: unavailable,
+    reconcileOwnership: unavailable,
+    readOutputSince: () => { throw new Error("fixture operation is unavailable"); },
+  };
+}
