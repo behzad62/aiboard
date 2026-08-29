@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { createExecutionGrantAuthority, ExecutionGrantError } from "../src/execution-grants.js";
@@ -1151,6 +1153,120 @@ test("durably blocks a re-fenced expired adopted cleanup exactly once", async ()
   } finally {
     try { first?.store.close(); } catch {}
     try { reopened?.store.close(); } catch {}
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("quarantines active version-2 cleanup before replay or model-call authority", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-session-v2-cleanup-quarantine-"));
+  const workspace = join(root, "workspace");
+  const path = join(root, "sessions.sqlite");
+  const integrityKey = new Uint8Array(32).fill(13);
+  await mkdir(workspace);
+  let sqlite: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  let now = new Date("2026-08-29T00:00:00.000Z");
+  try {
+    const grants = createExecutionGrantAuthority({ clock: () => now, ttlMs: 120_000 });
+    const binding = {
+      runId: "run-1", sessionId: "agent-session-1",
+      actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "process.start", callId: "call-1", permissionProfile: "project" as const,
+    };
+    const grant = await grants.issue({
+      ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    });
+    const source = createInMemoryStreamingSessionStore();
+    const sourceAuthority = createSessionAuthority({ grants, sessions: source, clock: () => now });
+    const begun = sourceAuthority.beginTransfer({
+      sessionId: "stream-1", grant, binding,
+      lease: {
+        leaseId: "lease-1", providerId: "provider-1", invocationId: "invocation-1",
+        providerIdentity: "a".repeat(64), acquiredAt: now.toISOString(),
+        access: [{ canonicalPath: workspace, mode: "write" }],
+      },
+      backendBinding: backendBinding(),
+      envelope: {
+        access: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      },
+    });
+    const active = sourceAuthority.acknowledgeTransfer({
+      sessionId: "stream-1", ownerId: begun.record.ownerId, fencingToken: begun.record.fencingToken,
+      expectedRevision: begun.record.revision, effectId: begun.record.effects[0]!.effectId,
+    }).record;
+    const sourceWriter = getStreamingSessionStoreWriter(source);
+    const cleaning = sourceWriter.apply({
+      type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+      ownerId: active.ownerId, fencingToken: active.fencingToken,
+      effectId: "cleanup-1", at: "2026-08-29T00:00:01.000Z",
+    });
+    now = new Date("2026-08-29T00:01:00.000Z");
+    const takenOver = sourceWriter.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: cleaning.revision,
+      ownerId: cleaning.ownerId, fencingToken: cleaning.fencingToken,
+      newOwnerId: "recovery-owner", newFencingToken: 2,
+      leaseExpiresAt: "2026-08-29T00:03:00.000Z", at: now.toISOString(),
+    });
+    const cleanup = takenOver.effects.find((effect) => effect.kind === "cleanup")!;
+    const provenance = cleanup.cleanupProvenance!;
+    const { cleanupCreationAuthority: _anchor, ...unanchored } = takenOver;
+    const legacy = {
+      ...unanchored,
+      schemaVersion: 2,
+      effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+        ? {
+          ...effect,
+          cleanupProvenance: {
+            ...provenance,
+            originOwnerId: "forged-origin",
+            takeovers: [{ ...provenance.takeovers[0]!, fromOwnerId: "forged-origin" }],
+          },
+        }
+        : effect),
+    };
+    const recordJson = JSON.stringify(legacy);
+    const integrity = createHmac("sha256", integrityKey).update(recordJson).digest("hex");
+    const database = new DatabaseSync(path);
+    database.exec(
+      "CREATE TABLE streaming_sessions (" +
+      "session_id TEXT PRIMARY KEY, record_json TEXT NOT NULL, integrity TEXT NOT NULL, revision INTEGER NOT NULL)",
+    );
+    database.prepare(
+      "INSERT INTO streaming_sessions (session_id, record_json, integrity, revision) VALUES (?, ?, ?, ?)",
+    ).run("stream-1", recordJson, integrity, legacy.revision);
+    database.close();
+
+    sqlite = openSqliteStreamingSessionStore(path, integrityKey);
+    const restarted = createSessionAuthority({ grants, sessions: sqlite, clock: () => now });
+    let replayCalls = 0;
+    assert.throws(
+      () => restarted.recoverAdopted({
+        sessionId: "stream-1", ownerId: "recovery-owner", fencingToken: 2,
+        replay: () => { replayCalls += 1; return "cleaned"; },
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
+    );
+    assert.equal(replayCalls, 0);
+    assert.throws(
+      () => restarted.authorizeLaunchOperation({
+        sessionId: "stream-1", operation: "write",
+        requestAccess: [{ canonicalPath: workspace, mode: "write" }], credentialNames: [],
+        networkApproved: false, externalApproved: false, destructiveApproved: false,
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
+    );
+    assert.throws(
+      () => restarted.takeover({
+        sessionId: "stream-1", ownerId: "recovery-owner", fencingToken: 2,
+        expectedRevision: legacy.revision, newOwnerId: "third-owner", newFencingToken: 3,
+        leaseExpiresAt: "2026-08-29T00:04:00.000Z",
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
+    );
+    sqlite.store.close();
+  } finally {
+    try { sqlite?.store.close(); } catch {}
     await rm(root, { recursive: true, force: true });
   }
 });

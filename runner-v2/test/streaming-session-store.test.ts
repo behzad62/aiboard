@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +74,41 @@ function pendingTransferRecord(
     }],
     ...overrides,
   };
+}
+
+function writeSignedStreamingSessionRow(
+  path: string,
+  integrityKey: Uint8Array,
+  record: Record<string, unknown>,
+): Readonly<{ record_json: string; integrity: string; revision: number }> {
+  const recordJson = JSON.stringify(record);
+  const integrity = createHmac("sha256", integrityKey).update(recordJson).digest("hex");
+  const revision = record.revision as number;
+  const database = new DatabaseSync(path);
+  database.exec(
+    "CREATE TABLE streaming_sessions (" +
+    "session_id TEXT PRIMARY KEY, record_json TEXT NOT NULL, integrity TEXT NOT NULL, revision INTEGER NOT NULL)",
+  );
+  database.prepare(
+    "INSERT INTO streaming_sessions (session_id, record_json, integrity, revision) VALUES (?, ?, ?, ?)",
+  ).run(record.sessionId as string, recordJson, integrity, revision);
+  database.close();
+  return Object.freeze({ record_json: recordJson, integrity, revision });
+}
+
+function readSignedStreamingSessionRow(
+  path: string,
+): Readonly<{ record_json: string; integrity: string; revision: number }> {
+  const database = new DatabaseSync(path, { readOnly: true });
+  const row = database.prepare(
+    "SELECT record_json, integrity, revision FROM streaming_sessions WHERE session_id = ?",
+  ).get("stream-1") as { record_json: string; integrity: string; revision: number };
+  database.close();
+  return Object.freeze({
+    record_json: row.record_json,
+    integrity: row.integrity,
+    revision: row.revision,
+  });
 }
 
 test("rejects unknown fields on a durable pending-transfer session record", () => {
@@ -716,10 +752,12 @@ test("requires ownership-lease expiry for takeover and refuses expired-owner dur
   );
 });
 
-test("upgrades integrity-protected version-2 cleanup evidence before recovery takeover", async () => {
-  const root = await mkdtemp(join(tmpdir(), "runner-v2-stream-cleanup-v2-upgrade-"));
+test("quarantines coherent forged active version-2 cleanup provenance without mutating SQLite", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-stream-cleanup-v2-quarantine-"));
   const path = join(root, "sessions.sqlite");
-  let store: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  const integrityKey = new Uint8Array(32).fill(12);
+  let first: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  let reopened: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
   try {
     const source = createInMemoryStreamingSessionStore();
     const sourceWriter = getStreamingSessionStoreWriter(source);
@@ -730,29 +768,115 @@ test("upgrades integrity-protected version-2 cleanup evidence before recovery ta
       type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
       ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
     });
-    const currentCleaning = sourceWriter.apply({
+    const cleaning = sourceWriter.apply({
       type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
       ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
     });
-    const { cleanupCreationAuthority: _currentAnchor, ...legacyCleaning } = currentCleaning;
-
-    store = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(12));
-    const writer = getStreamingSessionStoreWriter(store);
-    const legacy = writer.claim({ ...legacyCleaning, schemaVersion: 2 }).record;
-    const takenOver = writer.apply({
-      type: "takeover", sessionId: "stream-1", expectedRevision: legacy.revision,
+    const takenOver = sourceWriter.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: cleaning.revision,
       ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-recovered", newFencingToken: 2,
-      leaseExpiresAt: "2026-08-29T00:02:00.000Z", at: "2026-08-29T00:01:00.000Z",
+      leaseExpiresAt: "2026-08-29T00:03:00.000Z", at: "2026-08-29T00:01:00.000Z",
     });
-    assert.equal(takenOver.schemaVersion, 3);
-    assert.deepEqual(takenOver.cleanupCreationAuthority, {
-      effectId: "cleanup-1", ownerId: "owner-1", fencingToken: 1,
-      createdAt: "2026-08-29T00:00:02.000Z",
-    });
+    const { cleanupCreationAuthority: _anchor, ...unanchored } = takenOver;
+    const cleanup = takenOver.effects.find((effect) => effect.kind === "cleanup")!;
+    const provenance = cleanup.cleanupProvenance!;
+    const forged = {
+      ...unanchored,
+      schemaVersion: 2,
+      effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
+        ? {
+          ...effect,
+          cleanupProvenance: {
+            ...provenance,
+            originOwnerId: "forged-origin",
+            takeovers: [{ ...provenance.takeovers[0]!, fromOwnerId: "forged-origin" }],
+          },
+        }
+        : effect),
+    };
+    const before = writeSignedStreamingSessionRow(path, integrityKey, forged);
+
+    first = openSqliteStreamingSessionStore(path, integrityKey);
+    const writer = getStreamingSessionStoreWriter(first);
+    assert.throws(
+      () => writer.apply({
+        type: "takeover", sessionId: "stream-1", expectedRevision: forged.revision,
+        ownerId: "owner-recovered", fencingToken: 2, newOwnerId: "owner-third", newFencingToken: 3,
+        leaseExpiresAt: "2026-08-29T00:04:00.000Z", at: "2026-08-29T00:03:00.000Z",
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
+    );
+    assert.throws(
+      () => first!.store.readBySession("stream-1"),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
+    );
+    assert.deepEqual(readSignedStreamingSessionRow(path), before);
+    first.store.close();
+
+    reopened = openSqliteStreamingSessionStore(path, integrityKey);
+    assert.throws(
+      () => reopened!.store.readBySession("stream-1"),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
+    );
+    assert.deepEqual(readSignedStreamingSessionRow(path), before);
+    reopened.store.close();
   } finally {
-    try { store?.store.close(); } catch {}
+    try { first?.store.close(); } catch {}
+    try { reopened?.store.close(); } catch {}
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("upgrades cleanup-free active version-2 state only by creating independently anchored cleanup", () => {
+  const source = createInMemoryStreamingSessionStore();
+  const sourceWriter = getStreamingSessionStoreWriter(source);
+  const pending = sourceWriter.claim(pendingTransferRecord()).record;
+  const currentActive = sourceWriter.apply({
+    type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  const { cleanupCreationAuthority: _anchor, ...legacyActive } = currentActive;
+
+  const store = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(store);
+  const active = writer.claim({ ...legacyActive, schemaVersion: 2 }).record;
+  const cleaning = writer.apply({
+    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+  });
+  assert.equal(cleaning.schemaVersion, 3);
+  assert.deepEqual(cleaning.cleanupCreationAuthority, {
+    effectId: "cleanup-1", ownerId: "owner-1", fencingToken: 1,
+    createdAt: "2026-08-29T00:00:02.000Z",
+  });
+  assert.deepEqual(cleaning.effects.find((effect) => effect.kind === "cleanup")?.cleanupProvenance, {
+    effectId: "cleanup-1", originOwnerId: "owner-1", originFencingToken: 1, takeovers: [],
+  });
+});
+
+test("keeps released version-2 cleanup history readable without making it mutable authority", () => {
+  const source = createInMemoryStreamingSessionStore();
+  const sourceWriter = getStreamingSessionStoreWriter(source);
+  const pending = sourceWriter.claim(pendingTransferRecord()).record;
+  const active = sourceWriter.apply({
+    type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  const cleaning = sourceWriter.apply({
+    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+  });
+  const released = sourceWriter.apply({
+    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
+  });
+  const { cleanupCreationAuthority: _anchor, ...unanchoredReleased } = released;
+  const historical = parseStreamingSessionRecord({ ...unanchoredReleased, schemaVersion: 2 });
+  assert.equal(historical.state, "released");
+  assert.equal(historical.schemaVersion, 2);
+  assert.equal(historical.cleanupOwner, "none");
+  assert.equal(historical.effects.find((effect) => effect.kind === "cleanup")?.status, "acknowledged");
+  assert.equal(historical.cleanupCreationAuthority, undefined);
 });
 
 test("anchors multi-step cleanup takeover provenance and rejects coherent forgery", async () => {

@@ -456,6 +456,13 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
     : undefined;
   const history = parseHistory(record.history);
   const effects = parseEffects(record.effects, record.schemaVersion as StreamingSessionRecord["schemaVersion"]);
+  if (record.schemaVersion === 2 && record.state !== "released" &&
+      effects.some((effect) => effect.kind === "cleanup")) {
+    throw new StreamingSessionStoreError(
+      "unsupported_active_version",
+      "Active version-2 cleanup evidence has no independently verifiable creation authority.",
+    );
+  }
   assertStateCombination(record as Partial<StreamingSessionRecord>, effects, cleanupCreationAuthority);
   assertHistoryForState(history, record.state as StreamingSessionState, record.revision as number);
   return deepFreeze(structuredClone(record)) as Readonly<StreamingSessionRecord>;
@@ -1087,7 +1094,7 @@ function applyStreamingSessionCommand(
   const currentEffects = current.effects;
   const currentCleanup = currentEffects.find((effect) => effect.kind === "cleanup");
   const durableCleanupCreationAuthority = current.cleanupCreationAuthority ??
-    (currentCleanup
+    (current.schemaVersion < 2 && currentCleanup
       ? cleanupCreationAuthorityFor(currentCleanup, current.ownerId, current.fencingToken)
       : null);
   const nextRevision = (current.revision as number) + 1;
