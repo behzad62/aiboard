@@ -1479,8 +1479,8 @@ test("same owner consumes observe before signal without stranding the exact sign
   assert.deepEqual(pendingEffectsOf(f.store.readByInvocation("invoke-1")), []);
 });
 
-test("observe-first preserves proven exit for late running and failed signal responses", async (t) => {
-  for (const signalState of ["running", "failed"] as const) {
+test("observe-first preserves proven exit for every valid late signal response", async (t) => {
+  for (const signalState of ["exited", "running"] as const) {
     await t.test(signalState, async () => {
       const f = fixture();
       const observeGate = deferred();
@@ -1555,6 +1555,151 @@ test("observe-first preserves proven exit for late running and failed signal res
         false,
       );
     });
+  }
+});
+
+test("malformed observe-first signal remains completed across SQLite restart", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-malformed-signal-"));
+  const path = join(root, "process.sqlite");
+  const stateKey = new Uint8Array(32).fill(14);
+  const firstBackend = new Backend();
+  const firstOutputs = new Outputs();
+  const firstClock = new Clock();
+  const first = runtimeFor(
+    { kind: "sqlite", path },
+    stateKey,
+    firstBackend,
+    firstClock,
+    firstOutputs,
+  );
+  const opened: { second?: ReturnType<typeof runtimeFor> } = {};
+  const observeGate = deferred();
+  const observeStarted = deferred();
+  const signalGate = deferred();
+  const signalStarted = deferred();
+  const finalizeGate = deferred();
+  const finalizeStarted = deferred();
+  firstBackend.signalValues = [{ state: "failed" }];
+  firstBackend.observeGate = observeGate.promise;
+  firstBackend.onObserve = observeStarted.resolve;
+  firstBackend.signalGate = signalGate.promise;
+  firstBackend.onSignal = signalStarted.resolve;
+  firstOutputs.finalizeGate = finalizeGate.promise;
+  firstOutputs.onFinalize = finalizeStarted.resolve;
+  let firstClosed = false;
+  t.after(async () => {
+    observeGate.resolve();
+    signalGate.resolve();
+    finalizeGate.resolve();
+    if (!firstClosed) {
+      try {
+        first.readOnlyStore.close();
+      } catch {}
+    }
+    try {
+      opened.second?.readOnlyStore.close();
+    } catch {}
+    await rm(root, { recursive: true, force: true });
+  });
+  const invocation = first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  const invocationSettled = invocation.then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (reason: unknown) => ({ status: "rejected" as const, reason }),
+  );
+  await observeStarted.promise;
+  const cancellation = first.runtime.cancel("invoke-1");
+  await signalStarted.promise;
+  observeGate.resolve();
+  await finalizeStarted.promise;
+  const provenExit = first.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(provenExit.state, "exited");
+  signalGate.resolve();
+  try {
+    assert.equal(await cancellation, false);
+    const malformed = first.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(malformed.state, "exited");
+    assert.deepEqual(malformed.observation, provenExit.observation);
+    assert.deepEqual(
+      malformed.history.slice(0, provenExit.history.length),
+      provenExit.history,
+    );
+    const signalMarker = malformed.pendingEffects.find(
+      ({ family }) => family === "backend_signal",
+    );
+    assert.ok(signalMarker);
+    assert.equal(signalMarker.phase, "completed");
+    assert.equal(signalMarker.ownerId, malformed.ownerId);
+    assert.equal(signalMarker.fencingToken, malformed.fencingToken);
+    assert.equal(
+      firstBackend.calls.filter((call) => call.startsWith("signal:")).length,
+      1,
+    );
+    const markersBeforeRestart = structuredClone(malformed.pendingEffects);
+    assert.deepEqual(
+      markersBeforeRestart.map(({ family, phase }) => ({ family, phase })),
+      [
+        { family: "backend_signal", phase: "completed" },
+        { family: "output_finalize", phase: "started" },
+      ],
+    );
+
+    first.readOnlyStore.close();
+    firstClosed = true;
+    finalizeGate.resolve();
+    assert.equal((await invocationSettled).status, "rejected");
+
+    const secondBackend = new Backend();
+    const secondOutputs = new Outputs();
+    const secondClock = new Clock();
+    secondClock.current = new Date("2026-01-01T00:30:00.000Z");
+    const second = runtimeFor(
+      { kind: "sqlite", path },
+      stateKey,
+      secondBackend,
+      secondClock,
+      secondOutputs,
+    );
+    opened.second = second;
+    const assertUnchanged = () => {
+      const restarted = second.readOnlyStore.readByInvocation("invoke-1")!;
+      assert.equal(restarted.state, "exited");
+      assert.deepEqual(restarted.observation, provenExit.observation);
+      assert.deepEqual(restarted.pendingEffects, markersBeforeRestart);
+      const persistedSignal = restarted.pendingEffects.find(
+        ({ family }) => family === "backend_signal",
+      );
+      assert.deepEqual(persistedSignal, signalMarker);
+    };
+    assert.deepEqual(await second.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    assertUnchanged();
+    assert.equal(await second.runtime.cancel("invoke-1"), false);
+    assertUnchanged();
+    await assert.rejects(
+      second.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+      }),
+      /outcome|timed out/i,
+    );
+    assertUnchanged();
+    assert.deepEqual(await second.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    assertUnchanged();
+    assert.deepEqual(secondBackend.calls, []);
+    assert.deepEqual(secondOutputs.calls, []);
+  } finally {
+    observeGate.resolve();
+    signalGate.resolve();
+    finalizeGate.resolve();
+    await invocationSettled;
   }
 });
 

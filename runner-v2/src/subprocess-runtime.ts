@@ -1004,11 +1004,12 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           (fence) =>
             selected.backend.signal(record.backendBinding!, action, fence),
         );
+        const parsedOutcome = parseProcessSignalResult(signalled.result).state;
         signalEffectId = signalled.effectId;
         outcome =
           this.current(record.invocationId).state === "exited"
             ? "exited"
-            : parseProcessSignalResult(signalled.result).state;
+            : parsedOutcome;
       }
       record = this.current(record.invocationId);
       record = this.mutate({
