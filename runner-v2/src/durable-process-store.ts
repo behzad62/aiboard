@@ -75,6 +75,16 @@ export interface DurableOutputPrepareFailure {
   readonly failedAt: string;
   readonly detail: string;
 }
+export interface DurablePendingEffect {
+  readonly effectId: string;
+  readonly family: string;
+  readonly phase: "started" | "completed";
+  readonly resolution: "settle" | "commit";
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly startedAt: string;
+  readonly completedAt?: string;
+}
 export interface DurableSubprocessResult {
   readonly outcome:
     "exited" | "timed_out" | "cancelled" | "launch_failed" | "cleanup_failed";
@@ -103,7 +113,10 @@ export type DurableProcessMutationKind =
   | "complete"
   | "fail_launch"
   | "fail"
-  | "settle_output_cleanup";
+  | "settle_output_cleanup"
+  | "begin_effect"
+  | "settle_effect"
+  | "complete_effect";
 export interface DurableProcessMutation {
   readonly kind: DurableProcessMutationKind;
   readonly revision: number;
@@ -138,6 +151,7 @@ export interface DurableSubprocessRecord {
   readonly stopIntent?: DurableStopIntent;
   readonly observation?: DurableChildObservation;
   readonly outputPrepareFailure?: DurableOutputPrepareFailure;
+  readonly pendingEffect?: DurablePendingEffect;
   readonly output?: readonly ProcessOutputDisposition[];
   readonly result?: DurableSubprocessResult;
   readonly mutations: readonly DurableProcessMutation[];
@@ -156,6 +170,23 @@ export interface DurableClaimResult {
 }
 
 export type DurableProcessCommand =
+  | {
+      readonly type: "begin_effect";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+      readonly family: string;
+      readonly resolution: "settle" | "commit";
+    }
+  | {
+      readonly type: "settle_effect" | "complete_effect";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+      readonly leaseExpiresAt: string;
+    }
   | {
       readonly type: "renew_lease";
       readonly invocationId: string;
@@ -711,6 +742,7 @@ const BASE_KEYS = [
   "environmentAudit",
   "escalation",
   "cleanup",
+  "pendingEffect",
   "mutations",
 ];
 const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
@@ -807,6 +839,9 @@ function parseRecordShape(
             object.outputPrepareFailure,
           ),
         }),
+    ...(object.pendingEffect === undefined
+      ? {}
+      : { pendingEffect: parsePendingEffect(object.pendingEffect) }),
     ...(object.output === undefined
       ? {}
       : { output: parseOutput(object.output) }),
@@ -934,6 +969,9 @@ function parseMutation(value: unknown): DurableProcessMutation {
       "fail_launch",
       "fail",
       "settle_output_cleanup",
+      "begin_effect",
+      "settle_effect",
+      "complete_effect",
     ]),
     "mutation kind",
   );
@@ -980,6 +1018,11 @@ function parseMutation(value: unknown): DurableProcessMutation {
       optional: ["cleanup", "result", "output"],
     },
     settle_output_cleanup: { required: [] },
+    begin_effect: {
+      required: ["effectId", "family", "resolution"],
+    },
+    settle_effect: { required: ["effectId", "leaseExpiresAt"] },
+    complete_effect: { required: ["effectId", "leaseExpiresAt"] },
   };
   const shape = keysByKind[kind];
   assertExactKeys(
@@ -1047,6 +1090,7 @@ function deriveRecord(
       throw new Error("Durable process mutation sequence is invalid.");
     if (mutation.kind === "takeover_lease") {
       if (
+        record.pendingEffect ||
         Date.parse(record.leaseExpiresAt) > Date.parse(mutation.at) ||
         mutation.fencingToken !== record.fencingToken + 1
       )
@@ -1066,6 +1110,7 @@ function deriveRecord(
     ) {
       throw new Error("Durable process mutation fence is invalid.");
     }
+    assertEffectMutationAllowed(record, mutation.kind);
     record = reduceMutation(record, mutation);
     assertStateInvariants(record);
   }
@@ -1077,14 +1122,78 @@ function reduceMutation(
   mutation: DurableProcessMutation,
 ): DurableSubprocessRecord {
   const data = mutation.data;
+  const consumeCompletedEffect =
+    current.pendingEffect?.phase === "completed" &&
+    ![
+      "renew_lease",
+      "begin_effect",
+      "settle_effect",
+      "complete_effect",
+    ].includes(mutation.kind);
+  const { pendingEffect: _pendingEffect, ...withoutPendingEffect } = current;
   const base = {
-    ...current,
+    ...(consumeCompletedEffect ? withoutPendingEffect : current),
     revision: mutation.revision,
     mutations: [...current.mutations, mutation],
   };
   switch (mutation.kind) {
     case "prepared":
       throw new Error("Prepared mutation may appear only once.");
+    case "begin_effect":
+      if (current.pendingEffect)
+        throw new Error("A durable process effect is already unresolved.");
+      return historyOnly(
+        {
+          ...base,
+          pendingEffect: {
+            effectId: safeId(data.effectId, "effectId"),
+            family: safeId(data.family, "effect family"),
+            phase: "started",
+            resolution: requiredEnum(
+              data.resolution,
+              new Set<"settle" | "commit">(["settle", "commit"]),
+              "effect resolution",
+            ),
+            ownerId: mutation.ownerId,
+            fencingToken: mutation.fencingToken,
+            startedAt: mutation.at,
+          },
+        },
+        mutation.at,
+        `effect_${safeId(data.family, "effect family")}_started`,
+      );
+    case "settle_effect": {
+      const effect = requiredPendingEffect(current, data.effectId, "started");
+      const { pendingEffect: _effect, ...withoutEffect } = current;
+      return historyOnly(
+        {
+          ...withoutEffect,
+          revision: mutation.revision,
+          mutations: [...current.mutations, mutation],
+          leaseExpiresAt: dateText(data.leaseExpiresAt, "leaseExpiresAt"),
+        },
+        mutation.at,
+        `effect_${effect.family}_settled`,
+      );
+    }
+    case "complete_effect": {
+      const effect = requiredPendingEffect(current, data.effectId, "started");
+      if (effect.resolution !== "commit")
+        throw new Error("A settled effect cannot await a durable commit.");
+      return historyOnly(
+        {
+          ...base,
+          leaseExpiresAt: dateText(data.leaseExpiresAt, "leaseExpiresAt"),
+          pendingEffect: {
+            ...effect,
+            phase: "completed",
+            completedAt: mutation.at,
+          },
+        },
+        mutation.at,
+        `effect_${effect.family}_completed`,
+      );
+    }
     case "renew_lease":
       return historyOnly(
         {
@@ -1411,6 +1520,46 @@ function reduceMutation(
   }
 }
 
+function assertEffectMutationAllowed(
+  record: DurableSubprocessRecord,
+  kind: DurableProcessMutationKind,
+): void {
+  const effect = record.pendingEffect;
+  if (!effect) {
+    if (kind === "settle_effect" || kind === "complete_effect")
+      throw new Error("Durable process effect settlement has no matching start.");
+    return;
+  }
+  if (kind === "takeover_lease" || kind === "begin_effect")
+    throw new Error("Process effect outcome is unresolved.");
+  if (kind === "renew_lease") return;
+  if (effect.phase === "started") {
+    if (kind !== "settle_effect" && kind !== "complete_effect")
+      throw new Error("Process effect is still in flight.");
+    return;
+  }
+  if (kind === "settle_effect" || kind === "complete_effect")
+    throw new Error("Completed process effect requires its semantic commit.");
+}
+
+function requiredPendingEffect(
+  record: DurableSubprocessRecord,
+  rawEffectId: unknown,
+  phase: DurablePendingEffect["phase"],
+): DurablePendingEffect {
+  const effectId = safeId(rawEffectId, "effectId");
+  const effect = record.pendingEffect;
+  if (
+    !effect ||
+    effect.effectId !== effectId ||
+    effect.phase !== phase ||
+    effect.ownerId !== record.ownerId ||
+    effect.fencingToken !== record.fencingToken
+  )
+    throw new Error("Durable process effect settlement is stale or replayed.");
+  return effect;
+}
+
 function historyOnly(
   current: DurableSubprocessRecord,
   at: string,
@@ -1439,6 +1588,18 @@ function commandData(
   command: OwnedDurableProcessCommand,
 ): Readonly<Record<string, unknown>> {
   switch (command.type) {
+    case "begin_effect":
+      return {
+        effectId: command.effectId,
+        family: command.family,
+        resolution: command.resolution,
+      };
+    case "settle_effect":
+    case "complete_effect":
+      return {
+        effectId: command.effectId,
+        leaseExpiresAt: command.leaseExpiresAt,
+      };
     case "renew_lease":
     case "takeover_lease":
       return { leaseExpiresAt: command.leaseExpiresAt };
@@ -1490,6 +1651,8 @@ function applyCommand(
   if (command.expectedRevision !== current.revision)
     throw new Error(`Process revision conflict for ${current.invocationId}.`);
   if (command.type === "takeover_lease") {
+    if (current.pendingEffect)
+      throw new Error("Process effect outcome is unresolved.");
     if (Date.parse(current.leaseExpiresAt) > Date.parse(command.at))
       throw new Error("Process lease is still live.");
     if (command.fencingToken !== current.fencingToken + 1)
@@ -1512,6 +1675,7 @@ function applyCommand(
   ) {
     throw new Error("Process lease owner or fencing token is stale.");
   }
+  assertEffectMutationAllowed(current, command.type);
   const mutation = parseMutation({
     kind: command.type,
     revision: current.revision + 1,
@@ -1583,6 +1747,14 @@ function assertStateInvariants(record: DurableSubprocessRecord): void {
     (record.state !== "prepared" || record.outputPrepared)
   )
     throw new Error("Durable output prepare failure is inconsistent.");
+  if (
+    record.pendingEffect &&
+    (record.pendingEffect.ownerId !== record.ownerId ||
+      record.pendingEffect.fencingToken !== record.fencingToken ||
+      (record.pendingEffect.phase === "completed" &&
+        record.pendingEffect.resolution !== "commit"))
+  )
+    throw new Error("Durable pending effect authority is inconsistent.");
   const needsBinding = [
     "running",
     "stopping",
@@ -1899,6 +2071,46 @@ function parseOutputPrepareFailure(
     detail: text(o.detail, "detail"),
   };
 }
+function parsePendingEffect(value: unknown): DurablePendingEffect {
+  const o = strictRecord(value, "pending effect");
+  assertKeys(
+    o,
+    new Set([
+      "effectId",
+      "family",
+      "phase",
+      "resolution",
+      "ownerId",
+      "fencingToken",
+      "startedAt",
+      "completedAt",
+    ]),
+    "pending effect",
+  );
+  const phase = requiredEnum(
+    o.phase,
+    new Set<"started" | "completed">(["started", "completed"]),
+    "effect phase",
+  );
+  if ((phase === "completed") !== (o.completedAt !== undefined))
+    throw new Error("Pending effect completion evidence is invalid.");
+  return {
+    effectId: safeId(o.effectId, "effectId"),
+    family: safeId(o.family, "effect family"),
+    phase,
+    resolution: requiredEnum(
+      o.resolution,
+      new Set<"settle" | "commit">(["settle", "commit"]),
+      "effect resolution",
+    ),
+    ownerId: safeId(o.ownerId, "effect ownerId"),
+    fencingToken: requiredInteger(o.fencingToken, "effect fencingToken", 1),
+    startedAt: dateText(o.startedAt, "effect startedAt"),
+    ...(o.completedAt === undefined
+      ? {}
+      : { completedAt: dateText(o.completedAt, "effect completedAt") }),
+  };
+}
 function parseOutput(value: unknown): ProcessOutputDisposition[] {
   if (!Array.isArray(value)) throw new Error("Output is invalid.");
   return value.map((entry) => {
@@ -2143,6 +2355,13 @@ function assertDurableProcessValue(record: DurableSubprocessRecord): void {
     unknown
   >;
   delete snapshot.fencingToken;
+  if (snapshot.pendingEffect && typeof snapshot.pendingEffect === "object") {
+    const pendingEffect = {
+      ...(snapshot.pendingEffect as Record<string, unknown>),
+    };
+    delete pendingEffect.fencingToken;
+    snapshot.pendingEffect = pendingEffect;
+  }
   if (Array.isArray(snapshot.mutations)) {
     snapshot.mutations = snapshot.mutations.map((entry) => {
       const mutation = { ...(entry as Record<string, unknown>) };

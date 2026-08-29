@@ -341,6 +341,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ].includes(snapshot.state)
       )
         continue;
+      if (snapshot.pendingEffect) {
+        outcomes.push({
+          invocationId,
+          state: "effect_outcome_unresolved",
+        });
+        continue;
+      }
       if (
         snapshot.state === "cleanup_blocked" &&
         !snapshot.backendBinding &&
@@ -704,8 +711,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     let detail = blocked.detail;
     try {
       const reconciliation = parseProcessReconciliation(
-        await this.fencedEffect(record.invocationId, (fence) =>
-          selected.backend.reconcile(binding, fence),
+        await this.fencedEffect(
+          record.invocationId,
+          (fence) => selected.backend.reconcile(binding, fence),
+          { family: "backend_reconcile", resolution: "settle" },
         ),
       );
       const verification = parseProcessEmptyVerification(
@@ -740,12 +749,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       let disposition: ProcessOutputDisposition[];
       try {
         disposition = outputDisposition(
-          await this.fencedEffect(record.invocationId, (fence) =>
-            output.finalize(fence),
+          await this.fencedEffect(
+            record.invocationId,
+            (fence) => output.finalize(fence),
+            { family: "output_finalize", resolution: "commit" },
           ),
         );
       } catch {
-        await this.cleanupOutput(record, output).catch(() => undefined);
         const failed = this.applyFailure(
           record,
           "cleanup_blocked",
@@ -759,6 +769,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         );
         return resultFromFailure(failed);
       }
+      record = this.current(record.invocationId);
       record = this.mutate({
         type: "begin_verify",
         invocationId: record.invocationId,
@@ -854,8 +865,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         reattestProcessBackend(this.options.registry, binding, fence),
       );
       parseProcessReleaseResult(
-        await this.fencedEffect(record.invocationId, (fence) =>
-          fresh.backend.release(binding, fence),
+        await this.fencedEffect(
+          record.invocationId,
+          (fence) => fresh.backend.release(binding, fence),
+          { family: "backend_release", resolution: "commit" },
         ),
       );
     } catch {
@@ -880,6 +893,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ? { proofArtifactId: verification.proofArtifactId }
         : {}),
     };
+    record = this.current(record.invocationId);
     record = this.mutate({
       type: "complete",
       invocationId: record.invocationId,
@@ -958,8 +972,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           ),
         );
         outcome = parseProcessSignalResult(
-          await this.fencedEffect(record.invocationId, (fence) =>
-            selected.backend.signal(record.backendBinding!, action, fence),
+          await this.fencedEffect(
+            record.invocationId,
+            (fence) =>
+              selected.backend.signal(record.backendBinding!, action, fence),
+            { family: "backend_signal", resolution: "commit" },
           ),
         ).state;
       } catch (error) {
@@ -1118,8 +1135,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     const activeBinding = record.backendBinding!;
     const reconciliation = parseProcessReconciliation(
-      await this.fencedEffect(record.invocationId, (fence) =>
-        selected.backend.reconcile(activeBinding, fence),
+      await this.fencedEffect(
+        record.invocationId,
+        (fence) => selected.backend.reconcile(activeBinding, fence),
+        { family: "backend_reconcile", resolution: "settle" },
       ),
     );
     if (reconciliation.state === "identity_mismatch") {
@@ -1223,8 +1242,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       binding = requiredBinding(record);
     }
     let reconciliation = parseProcessReconciliation(
-      await this.fencedEffect(record.invocationId, (fence) =>
-        selected.backend.reconcile(binding, fence),
+      await this.fencedEffect(
+        record.invocationId,
+        (fence) => selected.backend.reconcile(binding, fence),
+        { family: "backend_reconcile", resolution: "settle" },
       ),
     );
     if (reconciliation.state === "running" && record.stopIntent) {
@@ -1236,8 +1257,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         reattestProcessBackend(this.options.registry, binding, fence),
       );
       reconciliation = parseProcessReconciliation(
-        await this.fencedEffect(record.invocationId, (fence) =>
-          selected.backend.reconcile(binding, fence),
+        await this.fencedEffect(
+          record.invocationId,
+          (fence) => selected.backend.reconcile(binding, fence),
+          { family: "backend_reconcile", resolution: "settle" },
         ),
       );
     }
@@ -1310,6 +1333,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     snapshot: DurableSubprocessRecord,
   ): DurableSubprocessRecord | undefined {
     let record = this.current(snapshot.invocationId);
+    if (record.pendingEffect) return undefined;
     const leaseIsLive =
       Date.parse(record.leaseExpiresAt) > this.options.clock.now().getTime();
     if (leaseIsLive && record.ownerId !== this.ownerId) return undefined;
@@ -1529,9 +1553,26 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
   private async fencedEffect<T>(
     invocationId: string,
     effect: (fence: ProcessEffectFence) => Promise<T>,
+    durable?: {
+      readonly family: string;
+      readonly resolution: "settle" | "commit";
+    },
   ): Promise<T> {
     const fence = this.fence(invocationId);
     this.assertFence(invocationId, fence);
+    const effectId = durable ? safeOwnerId(`effect-${randomUUID()}`) : undefined;
+    if (durable && effectId) {
+      const current = this.current(invocationId);
+      this.mutate({
+        type: "begin_effect",
+        invocationId,
+        expectedRevision: current.revision,
+        at: this.now(),
+        effectId,
+        family: durable.family,
+        resolution: durable.resolution,
+      });
+    }
     const heartbeat = this.startHeartbeat(invocationId, fence);
     let result: T | undefined;
     let failure: unknown;
@@ -1541,8 +1582,19 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       failure = error;
     }
     const heartbeatFailure = await heartbeat.stop();
+    if (durable && effectId) {
+      const current = this.current(invocationId);
+      this.mutate({
+        type: durable.resolution === "commit" ? "complete_effect" : "settle_effect",
+        invocationId,
+        expectedRevision: current.revision,
+        at: this.now(),
+        effectId,
+        leaseExpiresAt: this.leaseExpiry(),
+      });
+    }
     this.assertFence(invocationId, fence);
-    if (heartbeatFailure) throw heartbeatFailure;
+    if (heartbeatFailure && !durable) throw heartbeatFailure;
     if (failure) throw failure;
     return result as T;
   }

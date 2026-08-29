@@ -72,6 +72,7 @@ class Outputs implements ProcessOutputFactory {
   failReopenFor = new Set<string>();
   prepareGate?: Promise<void>;
   finalizeGate?: Promise<void>;
+  onFinalize?: () => void;
   failPrepare = false;
   failCleanupFor = new Set<string>();
   readonly fences: unknown[] = [];
@@ -102,6 +103,7 @@ class Outputs implements ProcessOutputFactory {
       finalize: async (fence?: unknown) => {
         this.calls.push(`finalize:${ownerId}`);
         this.fences.push(fence);
+        this.onFinalize?.();
         await this.finalizeGate;
         if (this.failFinalizeFor.has(ownerId))
           throw new Error("finalize failed");
@@ -179,6 +181,7 @@ class Backend implements ProcessBackend {
   verifyGate?: Promise<void>;
   reconcileGate?: Promise<void>;
   signalGate?: Promise<void>;
+  releaseGate?: Promise<void>;
   onSignal?: (action: string) => void;
   onReconcile?: () => void;
   onRelease?: () => void;
@@ -235,6 +238,7 @@ class Backend implements ProcessBackend {
     this.calls.push("release");
     this.fences.push(fence);
     this.onRelease?.();
+    await this.releaseGate;
     return this.releaseValue;
   };
 }
@@ -256,6 +260,13 @@ function deferred() {
     resolve = done;
   });
   return { promise, resolve };
+}
+function pendingEffectOf(record: unknown):
+  | { family: string; phase: string; fencingToken: number }
+  | undefined {
+  return (record as {
+    pendingEffect?: { family: string; phase: string; fencingToken: number };
+  }).pendingEffect;
 }
 function fixture(id = "invoke-1") {
   const stateKey = new Uint8Array(32).fill(9);
@@ -746,7 +757,12 @@ test("expired same-owner retry advances its durable fence before effects and hea
     assert.equal(active.ownerId, expired.ownerId);
     assert.equal(active.fencingToken, expired.fencingToken + 1);
     assert.ok(Date.parse(active.leaseExpiresAt) > f.clock.now().getTime());
-    assert.equal(active.mutations.at(-1)?.kind, "takeover_lease");
+    assert.equal(
+      active.mutations.find(
+        (mutation) => mutation.fencingToken === active.fencingToken,
+      )?.kind,
+      "takeover_lease",
+    );
     assert.ok(f.outputs.fences.length > outputFenceStart);
     assert.ok(f.backend.fences.length > backendFenceStart);
     assert.ok(
@@ -774,7 +790,7 @@ test("expired same-owner retry advances its durable fence before effects and hea
       { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
     );
     assert.deepEqual(await contender.runtime.reconcileStartup(), [
-      { invocationId: "invoke-1", state: "leased" },
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
     ]);
     assert.deepEqual(contenderBackend.calls, []);
     assert.deepEqual(contenderOutputs.calls, []);
@@ -856,7 +872,7 @@ test("expired same-owner cancellation advances its durable fence before a blocke
       { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
     );
     assert.deepEqual(await contender.runtime.reconcileStartup(), [
-      { invocationId: "invoke-1", state: "leased" },
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
     ]);
     assert.deepEqual(contenderBackend.calls, []);
     assert.deepEqual(contenderOutputs.calls, []);
@@ -883,7 +899,7 @@ test("expired same-owner cancellation advances its durable fence before a blocke
   contender?.readOnlyStore.close();
 });
 
-test("recovery heartbeat failure permits takeover but stale same-owner recovery cannot commit after its effect", async (t) => {
+test("durable in-flight reconciliation blocks takeover effects after heartbeat authority loss", async (t) => {
   const f = await durableLaunchBlocker(t, "same-owner-fence-loss", {
     leaseDurationMs: 40,
     leaseHeartbeatMs: 10,
@@ -923,32 +939,49 @@ test("recovery heartbeat failure permits takeover but stale same-owner recovery 
     { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
   );
   assert.deepEqual(await takeover.runtime.reconcileStartup(), [
-    { invocationId: "invoke-1", state: "cleaned" },
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
   ]);
-  const cleaned = takeover.readOnlyStore.readByInvocation("invoke-1")!;
-  assert.equal(cleaned.fencingToken, active.fencingToken + 1);
-  assert.notEqual(cleaned.ownerId, active.ownerId);
-  const committedRevision = cleaned.revision;
+  const blocked = takeover.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(blocked.fencingToken, active.fencingToken);
+  assert.equal(blocked.ownerId, active.ownerId);
+  const pendingEffect = (blocked as unknown as {
+    pendingEffect?: { family: string; phase: string; fencingToken: number };
+  }).pendingEffect;
+  assert.equal(pendingEffect?.family, "backend_reconcile");
+  assert.equal(pendingEffect?.phase, "started");
+  assert.equal(pendingEffect?.fencingToken, active.fencingToken);
+  assert.deepEqual(takeoverBackend.calls, []);
+  assert.deepEqual(takeoverOutputs.calls, []);
+  assert.equal(await takeover.runtime.cancel("invoke-1"), false);
+  assert.equal(
+    (
+      await takeover.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+      })
+    ).outcome,
+    "cleanup_failed",
+  );
+  assert.deepEqual(await takeover.runtime.reconcileStartup(), [
+    { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+  ]);
+  assert.deepEqual(takeoverBackend.calls, []);
+  assert.deepEqual(takeoverOutputs.calls, []);
+  const committedRevision = blocked.revision;
 
   gate.resolve();
   await assert.rejects(stale, /owner|fenc|stale|database|closed/i);
   const afterStale = takeover.readOnlyStore.readByInvocation("invoke-1")!;
   assert.equal(afterStale.revision, committedRevision);
-  assert.equal(afterStale.state, "cleaned");
+  assert.equal(afterStale.state, "cleanup_blocked");
   assert.equal(f.backend.calls.filter((call) => call === "release").length, 0);
   assert.equal(
     f.outputs.calls.filter((call) => call.startsWith("finalize:")).length,
     0,
   );
-  assert.equal(
-    takeoverBackend.calls.filter((call) => call === "release").length,
-    1,
-  );
-  assert.equal(
-    takeoverOutputs.calls.filter((call) => call.startsWith("finalize:"))
-      .length,
-    1,
-  );
+  assert.deepEqual(takeoverBackend.calls, []);
+  assert.deepEqual(takeoverOutputs.calls, []);
   assert.equal(
     [...f.outputs.calls, ...takeoverOutputs.calls].filter((call) =>
       call.startsWith("cleanup:"),
@@ -956,6 +989,171 @@ test("recovery heartbeat failure permits takeover but stale same-owner recovery 
     0,
   );
   takeover.readOnlyStore.close();
+});
+
+test("durable in-flight signal blocks takeover effects after heartbeat authority loss", async (t) => {
+  const f = await durableLaunchBlocker(t, "signal-fence-loss", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "running" };
+  f.backend.signalValues = [{ state: "exited" }];
+  const gate = deferred();
+  const started = deferred();
+  f.backend.signalGate = gate.promise;
+  f.backend.onSignal = () => started.resolve();
+  const cancellation = f.first.runtime.cancel("invoke-1");
+  await started.promise;
+  const active = f.first.readOnlyStore.readByInvocation("invoke-1")!;
+  f.first.readOnlyStore.close();
+  f.clock.current = new Date(f.clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const backend = new Backend();
+  const outputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path: f.path },
+    f.stateKey,
+    backend,
+    f.clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    const blocked = contender.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(blocked.ownerId, active.ownerId);
+    assert.equal(blocked.fencingToken, active.fencingToken);
+    assert.equal(pendingEffectOf(blocked)?.family, "backend_signal");
+    assert.equal(pendingEffectOf(blocked)?.phase, "started");
+    assert.deepEqual(backend.calls, []);
+    assert.deepEqual(outputs.calls, []);
+  } finally {
+    gate.resolve();
+  }
+  assert.equal(await cancellation, false);
+  const after = contender.readOnlyStore.readByInvocation("invoke-1")!;
+  assert.equal(after.revision, active.revision);
+  assert.equal(pendingEffectOf(after)?.phase, "started");
+  assert.deepEqual(backend.calls, []);
+  assert.deepEqual(outputs.calls, []);
+  contender.readOnlyStore.close();
+});
+
+test("durable in-flight output finalization blocks takeover and duplicate release", async (t) => {
+  const f = await durableLaunchBlocker(t, "finalize-fence-loss", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  f.backend.verifyValue = { empty: true, proofArtifactId: "finalize-proof" };
+  const gate = deferred();
+  const started = deferred();
+  f.outputs.finalizeGate = gate.promise;
+  f.outputs.onFinalize = started.resolve;
+  const retry = f.first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  const retryOutcome = retry.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started.promise;
+  f.first.readOnlyStore.close();
+  f.clock.current = new Date(f.clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const backend = new Backend();
+  backend.reconcileValue = { state: "exited", exitCode: 0 };
+  const outputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path: f.path },
+    f.stateKey,
+    backend,
+    f.clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    const blocked = contender.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(pendingEffectOf(blocked)?.family, "output_finalize");
+    assert.equal(pendingEffectOf(blocked)?.phase, "started");
+    assert.deepEqual(backend.calls, []);
+    assert.deepEqual(outputs.calls, []);
+  } finally {
+    gate.resolve();
+  }
+  assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
+  assert.equal(f.outputs.calls.filter((call) => call.startsWith("finalize:")).length, 1);
+  assert.equal(f.backend.calls.filter((call) => call === "release").length, 0);
+  assert.deepEqual(backend.calls, []);
+  assert.deepEqual(outputs.calls, []);
+  contender.readOnlyStore.close();
+});
+
+test("durable in-flight backend release blocks takeover and duplicate release", async (t) => {
+  const f = await durableLaunchBlocker(t, "release-fence-loss", {
+    leaseDurationMs: 40,
+    leaseHeartbeatMs: 10,
+  });
+  f.clock.current = new Date(f.clock.current.getTime() + 41);
+  f.backend.reconcileValue = { state: "exited", exitCode: 0 };
+  f.backend.verifyValue = { empty: true, proofArtifactId: "release-proof" };
+  const gate = deferred();
+  const started = deferred();
+  f.backend.releaseGate = gate.promise;
+  f.backend.onRelease = started.resolve;
+  const retry = f.first.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+  const retryOutcome = retry.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started.promise;
+  f.first.readOnlyStore.close();
+  f.clock.current = new Date(f.clock.current.getTime() + 50);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const backend = new Backend();
+  backend.reconcileValue = { state: "exited", exitCode: 0 };
+  const outputs = new Outputs();
+  const contender = runtimeFor(
+    { kind: "sqlite", path: f.path },
+    f.stateKey,
+    backend,
+    f.clock,
+    outputs,
+    { leaseDurationMs: 40, leaseHeartbeatMs: 10 },
+  );
+  try {
+    assert.deepEqual(await contender.runtime.reconcileStartup(), [
+      { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+    ]);
+    const blocked = contender.readOnlyStore.readByInvocation("invoke-1")!;
+    assert.equal(pendingEffectOf(blocked)?.family, "backend_release");
+    assert.equal(pendingEffectOf(blocked)?.phase, "started");
+    assert.deepEqual(backend.calls, []);
+    assert.deepEqual(outputs.calls, []);
+  } finally {
+    gate.resolve();
+  }
+  assert.match(String(await retryOutcome), /owner|fenc|stale|database|closed/i);
+  assert.equal(f.backend.calls.filter((call) => call === "release").length, 1);
+  assert.deepEqual(backend.calls, []);
+  assert.deepEqual(outputs.calls, []);
+  contender.readOnlyStore.close();
 });
 
 test("restart closes a launch blocker only after natural exit and verified release", async (t) => {
@@ -1900,7 +2098,7 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
   for (const [state, want] of [
     ["prepared", "launch_not_proven"],
     ["launching", "orphaned"],
-    ["exited", "cleaned"],
+    ["exited", "exited"],
     ["verifying_empty", "cleaned"],
   ] as const) {
     const f = fixture();
@@ -1912,7 +2110,11 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
     f.backend.verifyGate = undefined;
     if (state === "launching")
       f.clock.current = new Date(f.clock.current.getTime() + 301_000);
-    await f.runtime.reconcileStartup();
+    const startup = await f.runtime.reconcileStartup();
+    if (state === "exited")
+      assert.deepEqual(startup, [
+        { invocationId: "invoke-1", state: "effect_outcome_unresolved" },
+      ]);
     assert.equal(f.store.readByInvocation("invoke-1")?.state, want, `${state}`);
   }
   const outcomes = [

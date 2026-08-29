@@ -300,6 +300,174 @@ test("monotonic fencing rejects a stale owner even after it rereads the new revi
   );
 });
 
+test("effect journal rejects takeover, stale settlement, and replay until semantic commit", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  let record = writer.claim(prepared()).record;
+  record = writer.apply({
+    type: "begin_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:01.000Z",
+    effectId: "effect-read",
+    family: "backend_reconcile",
+    resolution: "settle",
+  });
+  assert.throws(
+    () =>
+      writer.apply({
+        type: "settle_effect",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: "2026-01-01T00:00:02.000Z",
+        effectId: "effect-forged",
+        leaseExpiresAt: "2026-01-01T00:10:00.000Z",
+      }),
+    /stale|replayed/i,
+  );
+  assert.throws(
+    () =>
+      writer.apply({
+        type: "settle_effect",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        ownerId: "owner-forged",
+        fencingToken: record.fencingToken,
+        at: "2026-01-01T00:00:02.000Z",
+        effectId: "effect-read",
+        leaseExpiresAt: "2026-01-01T00:10:00.000Z",
+      }),
+    /owner|fencing|stale/i,
+  );
+  record = writer.apply({
+    type: "settle_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:02.000Z",
+    effectId: "effect-read",
+    leaseExpiresAt: "2026-01-01T00:10:00.000Z",
+  });
+  assert.equal(record.pendingEffect, undefined);
+  assert.throws(
+    () =>
+      writer.apply({
+        type: "settle_effect",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        at: "2026-01-01T00:00:03.000Z",
+        effectId: "effect-read",
+        leaseExpiresAt: "2026-01-01T00:10:00.000Z",
+      }),
+    /no matching|settlement/i,
+  );
+
+  record = writer.apply({
+    type: "begin_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:04.000Z",
+    effectId: "effect-write",
+    family: "output_finalize",
+    resolution: "commit",
+  });
+  record = writer.apply({
+    type: "complete_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:05.000Z",
+    effectId: "effect-write",
+    leaseExpiresAt: "2026-01-01T00:10:00.000Z",
+  });
+  assert.equal(record.pendingEffect?.phase, "completed");
+  assert.throws(
+    () =>
+      writer.apply({
+        type: "takeover_lease",
+        invocationId: record.invocationId,
+        expectedRevision: record.revision,
+        ownerId: "owner-2",
+        fencingToken: record.fencingToken + 1,
+        at: "2026-01-01T00:20:00.000Z",
+        leaseExpiresAt: "2026-01-01T00:25:00.000Z",
+      }),
+    /effect outcome.*unresolved/i,
+  );
+  record = writer.apply({
+    type: "mark_output_prepared",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:06.000Z",
+  });
+  assert.equal(record.pendingEffect, undefined);
+  assert.equal(record.outputPrepared, true);
+});
+
+test("completed effect marker survives SQLite restart and tampering fails integrity", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-effect-journal-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "process.sqlite");
+  const first = openSqliteDurableProcessKernel(path, stateKey);
+  const writer = writerFor(first);
+  let record = writer.claim(prepared()).record;
+  record = writer.apply({
+    type: "begin_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:01.000Z",
+    effectId: "effect-release",
+    family: "backend_release",
+    resolution: "commit",
+  });
+  record = writer.apply({
+    type: "complete_effect",
+    invocationId: record.invocationId,
+    expectedRevision: record.revision,
+    at: "2026-01-01T00:00:02.000Z",
+    effectId: "effect-release",
+    leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+  });
+  assert.equal(record.pendingEffect?.phase, "completed");
+  first.store.close();
+
+  const reopened = openSqliteDurableProcessKernel(path, stateKey);
+  const persisted = reopened.store.readByInvocation("invoke-1")!;
+  assert.equal(persisted.pendingEffect?.family, "backend_release");
+  assert.equal(persisted.pendingEffect?.phase, "completed");
+  assert.throws(
+    () =>
+      writerFor(reopened).apply({
+        type: "takeover_lease",
+        invocationId: persisted.invocationId,
+        expectedRevision: persisted.revision,
+        ownerId: "owner-2",
+        fencingToken: persisted.fencingToken + 1,
+        at: "2026-01-01T00:10:00.000Z",
+        leaseExpiresAt: "2026-01-01T00:15:00.000Z",
+      }),
+    /effect outcome.*unresolved/i,
+  );
+  reopened.store.close();
+
+  const raw = new DatabaseSync(path);
+  const row = raw
+    .prepare("SELECT record_json FROM durable_processes WHERE invocation_id = ?")
+    .get("invoke-1") as { record_json: string };
+  const forged = JSON.parse(row.record_json) as {
+    pendingEffect: { family: string };
+  };
+  forged.pendingEffect.family = "backend_reconcile";
+  raw
+    .prepare("UPDATE durable_processes SET record_json = ? WHERE invocation_id = ?")
+    .run(JSON.stringify(forged), "invoke-1");
+  raw.close();
+  const corrupted = openSqliteDurableProcessKernel(path, stateKey);
+  assert.throws(
+    () => corrupted.store.readByInvocation("invoke-1"),
+    /corrupt|integrity/i,
+  );
+  corrupted.store.close();
+});
+
 test("blocked-exit recovery mutation is authenticated and scoped only to bound cleanup blockers", () => {
   const kernel = createInMemoryDurableProcessKernel(stateKey);
   const writer = writerFor(kernel);
