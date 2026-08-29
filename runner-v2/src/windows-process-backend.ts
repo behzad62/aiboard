@@ -15,7 +15,7 @@ export interface WindowsProcessBackendOptions {
 }
 export type WindowsJobProcessService = Pick<
   ManagedProcessService,
-  "start" | "signal" | "reconcileOwnership" | "readOutputSince" | "probeJobObjectAvailability"
+  "start" | "signal" | "reconcileOwnership" | "releaseOwnership" | "readOutputSince" | "probeJobObjectAvailability"
 >;
 
 export class WindowsProcessBackend extends NativeOwnedProcessBackend {
@@ -46,7 +46,7 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
 export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
   private readonly controls = new Map<string, JobControlLane>();
-  private readonly releasedProcesses = new Set<string>();
+  private readonly activations = new Map<string, Promise<JobControlLane>>();
   constructor(private readonly service: WindowsJobProcessService) {}
   async probe(): Promise<unknown> {
     if (!(await this.service.probeJobObjectAvailability()))
@@ -78,6 +78,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       actor: { role: "worker", id: sessionId },
     }, request.intent.workingDirectory);
     const identity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt };
+    this.registerLane(identity);
     return {
       opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
       birthFingerprint: {
@@ -91,15 +92,18 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   async observe(binding: ProcessBackendBinding, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>, _fence: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
     for (;;) {
-      const offsets = this.offsets.get(identity.processId) ?? { stdout: 0, stderr: 0 };
-      const unread = this.service.readOutputSince(identity.processId, jobContext(identity), offsets);
-      for (const stream of ["stdout", "stderr"] as const) {
-        if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
-      }
-      this.offsets.set(identity.processId, { ...unread.next });
-      const snapshot = await this.control(identity.processId, async () =>
-        await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
-      const deliveredOutput = unread.stdout.byteLength > 0 || unread.stderr.byteLength > 0;
+      const { snapshot, deliveredOutput } = await this.control(identity, async () => {
+        const offsets = this.offsets.get(identity.processId) ?? { stdout: 0, stderr: 0 };
+        const unread = this.service.readOutputSince(identity.processId, jobContext(identity), offsets);
+        for (const stream of ["stdout", "stderr"] as const) {
+          if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
+        }
+        this.offsets.set(identity.processId, { ...unread.next });
+        return {
+          snapshot: await this.service.reconcileOwnership(identity.processId, jobContext(identity)),
+          deliveredOutput: unread.stdout.byteLength > 0 || unread.stderr.byteLength > 0,
+        };
+      });
       if (snapshot.status === "stopped" && !deliveredOutput)
         return { state: "exited", ...(snapshot.exitCode === null ? {} : { exitCode: snapshot.exitCode }), ...(snapshot.signal ? { signal: snapshot.signal } : {}) };
       if (snapshot.status === "exited_unknown" && snapshot.ownershipReleased)
@@ -109,13 +113,13 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   }
   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction): Promise<unknown> {
     const identity = jobIdentity(binding);
-    const snapshot = await this.control(identity.processId, async () =>
+    const snapshot = await this.control(identity, async () =>
       await this.service.signal(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobContext(identity)));
     return { state: snapshot.status === "stopped" ? "exited" : "running" };
   }
   async verifyEmpty(binding: ProcessBackendBinding): Promise<unknown> {
     const identity = jobIdentity(binding);
-    const snapshot = await this.control(identity.processId, async () =>
+    const snapshot = await this.control(identity, async () =>
       await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
   }
@@ -125,7 +129,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       return { state: error instanceof JobIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
     }
     try {
-      const snapshot = await this.control(identity.processId, async () =>
+      const snapshot = await this.control(identity, async () =>
         await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
       if (snapshot.startedAt !== identity.startedAt) return { state: "identity_mismatch" };
       if (snapshot.status === "running") return { state: "running" };
@@ -135,52 +139,82 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     } catch { return { state: "outcome_unknown" }; }
   }
   async release(binding: ProcessBackendBinding): Promise<unknown> {
-    const processId = jobIdentity(binding).processId;
-    const lane = this.controls.get(processId);
-    if (!lane) {
-      this.rememberReleased(processId);
-      this.offsets.delete(processId);
-      return { released: true };
-    }
+    const identity = jobIdentity(binding);
+    const processId = identity.processId;
+    let lane = this.controls.get(processId);
+    const activation = this.activations.get(processId);
+    if (!lane && activation) lane = await activation;
+    if (!lane) lane = this.registerLane(identity);
+    this.assertLaneIdentity(lane, identity);
     if (!lane.release) {
       lane.releaseRequested = true;
-      const release = lane.tail.catch(() => undefined).then(() => {
-        this.offsets.delete(processId);
-        this.rememberReleased(processId);
-        if (this.controls.get(processId) === lane) this.controls.delete(processId);
-      });
+      const release = lane.tail.catch(() => undefined)
+        .then(async () => {
+          await this.service.releaseOwnership(processId, jobContext(identity), identity.startedAt);
+          this.offsets.delete(processId);
+          if (this.controls.get(processId) === lane) this.controls.delete(processId);
+        });
       lane.release = release;
     }
-    await lane.release;
+    const release = lane.release;
+    try {
+      await release;
+    } catch (error) {
+      if (lane.release === release) lane.release = undefined;
+      throw error;
+    }
     return { released: true };
   }
 
-  private async control<T>(processId: string, action: () => Promise<T>): Promise<T> {
-    if (this.releasedProcesses.has(processId)) throw new Error("Windows Job control was requested after release.");
-    let lane = this.controls.get(processId);
-    if (!lane) {
-      lane = { tail: Promise.resolve(), releaseRequested: false };
-      this.controls.set(processId, lane);
-    }
+  private async control<T>(identity: JobIdentity, action: () => Promise<T>): Promise<T> {
+    const lane = await this.ensureLane(identity);
     if (lane.releaseRequested) throw new Error("Windows Job control was requested while release is pending.");
     const result = lane.tail.catch(() => undefined).then(action);
     lane.tail = result.then(() => undefined, () => undefined);
     return await result;
   }
 
-  private rememberReleased(processId: string): void {
-    this.releasedProcesses.add(processId);
-    while (this.releasedProcesses.size > 4_096) {
-      const oldest = this.releasedProcesses.values().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.releasedProcesses.delete(oldest);
+  private async ensureLane(identity: JobIdentity): Promise<JobControlLane> {
+    const existing = this.controls.get(identity.processId);
+    if (existing) {
+      this.assertLaneIdentity(existing, identity);
+      return existing;
     }
+    let activation = this.activations.get(identity.processId);
+    if (!activation) {
+      activation = (async () => {
+        const snapshot = await this.service.reconcileOwnership(identity.processId, jobContext(identity));
+        if (snapshot.startedAt !== identity.startedAt) throw new JobIdentityMismatchError("Windows Job startedAt identity mismatch.");
+        return this.registerLane(identity);
+      })();
+      this.activations.set(identity.processId, activation);
+      void activation.finally(() => {
+        if (this.activations.get(identity.processId) === activation) this.activations.delete(identity.processId);
+      }).catch(() => undefined);
+    }
+    return await activation;
+  }
+
+  private registerLane(identity: JobIdentity): JobControlLane {
+    const existing = this.controls.get(identity.processId);
+    if (existing) {
+      this.assertLaneIdentity(existing, identity);
+      return existing;
+    }
+    const lane: JobControlLane = { tail: Promise.resolve(), releaseRequested: false, startedAt: identity.startedAt };
+    this.controls.set(identity.processId, lane);
+    return lane;
+  }
+
+  private assertLaneIdentity(lane: JobControlLane, identity: JobIdentity): void {
+    if (lane.startedAt !== identity.startedAt) throw new JobIdentityMismatchError("Windows Job startedAt identity mismatch.");
   }
 }
 
 interface JobControlLane {
   tail: Promise<void>;
   releaseRequested: boolean;
+  startedAt: string;
   release?: Promise<void>;
 }
 

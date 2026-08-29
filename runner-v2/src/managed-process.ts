@@ -51,6 +51,8 @@ export interface ManagedProcessRecord {
   stdoutPath: string;
   stderrPath: string;
   supervisor?: ManagedProcessSupervisorRecord;
+  /** Durable terminal authority for the backend adapter; absent for ordinary managed-process use. */
+  backendOwnershipReleasedAt?: string;
 }
 
 interface SupervisorStatus {
@@ -369,6 +371,7 @@ export class ManagedProcessService {
     context: ToolExecutionContext
   ): Promise<ManagedProcessSnapshot> {
     const record = this.ownedRecord(processId, context);
+    this.assertBackendOwnershipActive(record);
     await this.signalRecord(record, signal);
     return this.snapshot(record);
   }
@@ -525,6 +528,7 @@ export class ManagedProcessService {
     context: ToolExecutionContext
   ): Promise<ManagedProcessOwnershipSnapshot> {
     const record = this.ownedRecord(processId, context);
+    this.assertBackendOwnershipActive(record);
     if (!validSupervisorIdentity(record.supervisor)) {
       throw new ManagedProcessError(
         "process_control_unavailable",
@@ -557,6 +561,45 @@ export class ManagedProcessService {
     return { ...this.snapshot(record), ownershipReleased: status.ownershipReleased };
   }
 
+  /**
+   * Permanently terminalizes one exact backend-owned identity. The marker is
+   * persisted with the managed-process record so a restarted adapter cannot
+   * reactivate a stale binding after dropping its bounded in-memory lane.
+   */
+  async releaseOwnership(
+    processId: string,
+    context: ToolExecutionContext,
+    expectedStartedAt: string,
+  ): Promise<ManagedProcessOwnershipSnapshot> {
+    const record = this.ownedRecord(processId, context);
+    if (record.startedAt !== expectedStartedAt) {
+      throw new ManagedProcessError(
+        "process_identity_mismatch",
+        `Managed process ${processId} startedAt identity mismatch.`,
+      );
+    }
+    if (record.backendOwnershipReleasedAt) {
+      return { ...this.snapshot(record), ownershipReleased: true };
+    }
+    const snapshot = await this.reconcileOwnership(processId, context);
+    if (snapshot.startedAt !== expectedStartedAt) {
+      throw new ManagedProcessError(
+        "process_identity_mismatch",
+        `Managed process ${processId} startedAt identity mismatch.`,
+      );
+    }
+    if (snapshot.status !== "stopped" || !snapshot.ownershipReleased) {
+      throw new ManagedProcessError(
+        "process_control_unavailable",
+        `Managed process ${processId} cannot release backend ownership before verified terminal ownership.`,
+      );
+    }
+    record.backendOwnershipReleasedAt = this.clock();
+    record.updatedAt = record.backendOwnershipReleasedAt;
+    this.persist(record);
+    return { ...this.snapshot(record), ownershipReleased: true };
+  }
+
   async probeJobObjectAvailability(): Promise<boolean> {
     if (this.platform !== "win32" || process.platform !== "win32") return false;
     const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
@@ -587,6 +630,7 @@ export class ManagedProcessService {
     offsets: { readonly stdout: number; readonly stderr: number },
   ): ManagedProcessOutputRead {
     const record = this.ownedRecord(processId, context);
+    this.assertBackendOwnershipActive(record);
     const stdout = unreadBytes(record.stdoutPath, offsets.stdout, this.maxPollBytes);
     const stderr = unreadBytes(record.stderrPath, offsets.stderr, this.maxPollBytes);
     return {
@@ -604,6 +648,14 @@ export class ManagedProcessService {
     const temporary = `${destination}.${randomUUID()}.tmp`;
     writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 });
     renameSync(temporary, destination);
+  }
+
+  private assertBackendOwnershipActive(record: ManagedProcessRecord): void {
+    if (!record.backendOwnershipReleasedAt) return;
+    throw new ManagedProcessError(
+      "process_backend_ownership_released",
+      `Managed process ${record.processId} backend ownership was already released.`,
+    );
   }
 
   private readRecord(processId: string): ManagedProcessRecord | null {
@@ -669,7 +721,8 @@ function isHistoricalManagedProcessRecord(value: unknown): value is ManagedProce
     (typeof record.exitCode === "number" || record.exitCode === null) &&
     (typeof record.signal === "string" || record.signal === null) &&
     typeof record.stdoutPath === "string" &&
-    typeof record.stderrPath === "string"
+    typeof record.stderrPath === "string" &&
+    (record.backendOwnershipReleasedAt === undefined || typeof record.backendOwnershipReleasedAt === "string")
   );
 }
 

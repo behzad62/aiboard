@@ -454,6 +454,7 @@ test("Windows Job observation advances absolute offsets across incremental durab
     probeJobObjectAvailability: async () => true,
     start: async () => { throw new Error("fixture does not launch"); },
     signal: async () => { throw new Error("fixture does not signal"); },
+    releaseOwnership: async (processId) => stoppedJobSnapshot(processId),
     readOutputSince: (_processId, _context, offsets) => {
       requestedOffsets.push(offsets.stdout);
       if (requestedOffsets.length > 4) throw new Error("absolute output offset did not advance");
@@ -535,6 +536,7 @@ test("Windows Job serializes ownership observation with cancellation control", a
       running = false;
       return snapshot();
     },
+    releaseOwnership: async () => snapshot(),
   };
   const backend = new WindowsJobObjectProcessBackend(service);
   const binding = jobBinding("job-control-serialization");
@@ -550,43 +552,89 @@ test("Windows Job serializes ownership observation with cancellation control", a
   assert.deepEqual(parseProcessReconciliation(await observation), { state: "exited", exitCode: 143, signal: "SIGTERM" });
 });
 
-test("Windows Job release atomically closes its control lane against late operations", async () => {
-  let releaseObservation!: () => void;
-  const barrier = new Promise<void>((resolve) => { releaseObservation = resolve; });
-  let reconciliationActive = false;
+test("Windows Job release waits for active output delivery and closes later observation", async () => {
+  let releaseOutput!: () => void;
+  const barrier = new Promise<void>((resolve) => { releaseOutput = resolve; });
+  let outputActive = false;
+  let reads = 0;
+  let released = false;
   const service: WindowsJobProcessService = {
     probeJobObjectAvailability: async () => true,
     start: async () => { throw new Error("fixture does not launch"); },
-    readOutputSince: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+    readOutputSince: (_processId, _context, offsets) => ++reads === 1
+      ? { stdout: Buffer.from("held output"), stderr: new Uint8Array(), next: { stdout: 11, stderr: offsets.stderr } }
+      : { stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets },
     reconcileOwnership: async () => {
-      reconciliationActive = true;
-      await barrier;
-      reconciliationActive = false;
+      if (released) throw new Error("backend ownership was released");
       return stoppedJobSnapshot("job-release-lane");
     },
     signal: async () => stoppedJobSnapshot("job-release-lane"),
+    releaseOwnership: async () => { released = true; return stoppedJobSnapshot("job-release-lane"); },
   };
   const backend = new WindowsJobObjectProcessBackend(service);
   const binding = jobBinding("job-release-lane");
-  const observation = backend.observe(binding, async () => undefined, fence);
-  while (!reconciliationActive) await new Promise((resolve) => setImmediate(resolve));
+  const observation = backend.observe(binding, async () => {
+    outputActive = true;
+    await barrier;
+    outputActive = false;
+  }, fence);
+  while (!outputActive) await new Promise((resolve) => setImmediate(resolve));
 
+  let releaseSettled = false;
   const firstRelease = backend.release(binding);
+  void firstRelease.then(() => { releaseSettled = true; });
   const concurrentRelease = backend.release(binding);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(releaseSettled, false, "release must queue behind active output delivery");
   await assert.rejects(backend.verifyEmpty(binding), /release is pending/i);
   await assert.rejects(backend.signal(binding, "terminate"), /release is pending/i);
-  releaseObservation();
-  await observation;
+  releaseOutput();
   assert.deepEqual(await Promise.all([firstRelease, concurrentRelease]), [{ released: true }, { released: true }]);
-  await assert.rejects(backend.reconcile(binding).then((result) => {
-    if ((result as { state?: string }).state === "outcome_unknown") throw new Error("control requested after release");
-    return result;
-  }), /after release/i);
+  await assert.rejects(observation, /released/i);
+  assert.equal((backend as unknown as { offsets: Map<string, unknown> }).offsets.has("job-release-lane"), false);
+});
+
+test("Windows Job release drains callback and reconcile errors without retaining offsets", async (t) => {
+  for (const mode of ["callback", "reconcile"] as const) {
+    await t.test(mode, async () => {
+      let entered!: () => void;
+      let resume!: () => void;
+      const active = new Promise<void>((resolve) => { entered = resolve; });
+      const barrier = new Promise<void>((resolve) => { resume = resolve; });
+      const processId = `job-release-${mode}-error`;
+      let reconciliations = 0;
+      const service: WindowsJobProcessService = {
+        probeJobObjectAvailability: async () => true,
+        start: async () => { throw new Error("fixture does not launch"); },
+        readOutputSince: (_processId, _context, offsets) => ({
+          stdout: Buffer.from("fault output"), stderr: new Uint8Array(), next: { stdout: 12, stderr: offsets.stderr },
+        }),
+        reconcileOwnership: async () => {
+          reconciliations += 1;
+          if (mode === "reconcile" && reconciliations > 1) { entered(); await barrier; throw new Error("injected reconcile failure"); }
+          return stoppedJobSnapshot(processId);
+        },
+        signal: async () => stoppedJobSnapshot(processId),
+        releaseOwnership: async () => stoppedJobSnapshot(processId),
+      };
+      const backend = new WindowsJobObjectProcessBackend(service);
+      const observation = backend.observe(jobBinding(processId), async () => {
+        if (mode === "callback") { entered(); await barrier; throw new Error("injected callback failure"); }
+      }, fence);
+      await active;
+      const releasing = backend.release(jobBinding(processId));
+      resume();
+      await assert.rejects(observation, new RegExp(`injected ${mode} failure`));
+      assert.deepEqual(await releasing, { released: true });
+      assert.equal((backend as unknown as { offsets: Map<string, unknown> }).offsets.has(processId), false);
+    });
+  }
 });
 
 test("Windows Job control lane advances after an operation error and still releases", async () => {
   let fail = true;
   let signalCalls = 0;
+  let releaseCalls = 0;
   const service: WindowsJobProcessService = {
     probeJobObjectAvailability: async () => true,
     start: async () => { throw new Error("fixture does not launch"); },
@@ -596,13 +644,80 @@ test("Windows Job control lane advances after an operation error and still relea
       return stoppedJobSnapshot("job-release-error");
     },
     signal: async () => { signalCalls += 1; return stoppedJobSnapshot("job-release-error"); },
+    releaseOwnership: async () => {
+      releaseCalls += 1;
+      if (releaseCalls === 1) throw new Error("injected durable release failure");
+      return stoppedJobSnapshot("job-release-error");
+    },
   };
   const backend = new WindowsJobObjectProcessBackend(service);
   const binding = jobBinding("job-release-error");
   await assert.rejects(backend.observe(binding, async () => undefined, fence), /injected ownership failure/);
   assert.equal(parseProcessSignalResult(await backend.signal(binding, "terminate")).state, "exited");
   assert.equal(signalCalls, 1);
+  await assert.rejects(backend.release(binding), /injected durable release failure/);
+  await assert.rejects(backend.verifyEmpty(binding), /release is pending/i);
   assert.deepEqual(await backend.release(binding), { released: true });
+  assert.equal(releaseCalls, 2);
+});
+
+test("Windows Job durable release authority rejects stale identities beyond prior cache capacity", async () => {
+  const released = new Map<string, string>();
+  let releasedReattestations = 0;
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    signal: async () => { throw new Error("released identity reached signal"); },
+    readOutputSince: () => { throw new Error("released identity reached output"); },
+    reconcileOwnership: async (processId, _context) => {
+      if (released.has(processId)) {
+        releasedReattestations += 1;
+        throw new Error("durable backend ownership was released");
+      }
+      return stoppedJobSnapshot(processId);
+    },
+    releaseOwnership: async (processId, _context, expectedStartedAt) => {
+      assert.equal(expectedStartedAt, "2026-01-01T00:00:00.000Z");
+      released.set(processId, expectedStartedAt);
+      return stoppedJobSnapshot(processId);
+    },
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const first = jobBinding("job-release-churn-0");
+  for (let index = 0; index < 4_097; index += 1) {
+    await backend.release(jobBinding(`job-release-churn-${index}`));
+  }
+
+  await assert.rejects(backend.verifyEmpty({ ...first }), /released/i);
+  assert.equal(releasedReattestations, 1, "stale clone must fail during exact durable re-attestation");
+  assert.equal((backend as unknown as { controls: Map<string, unknown> }).controls.size, 0);
+});
+
+test("Windows Job durable release rejects a stale clone after adapter restart and startedAt mismatch", async () => {
+  const released = new Map<string, string>();
+  const service: WindowsJobProcessService = {
+    probeJobObjectAvailability: async () => true,
+    start: async () => { throw new Error("fixture does not launch"); },
+    signal: async () => { throw new Error("fixture does not signal"); },
+    readOutputSince: () => { throw new Error("fixture does not read"); },
+    reconcileOwnership: async (processId) => {
+      if (released.has(processId)) throw new Error("durable backend ownership was released");
+      return stoppedJobSnapshot(processId);
+    },
+    releaseOwnership: async (processId, _context, expectedStartedAt) => {
+      if (expectedStartedAt !== "2026-01-01T00:00:00.000Z") throw new Error("exact startedAt mismatch");
+      released.set(processId, expectedStartedAt);
+      return stoppedJobSnapshot(processId);
+    },
+  };
+  const binding = jobBinding("job-release-restart");
+  const first = new WindowsJobObjectProcessBackend(service);
+  assert.deepEqual(await Promise.all([first.release(binding), first.release({ ...binding })]), [{ released: true }, { released: true }]);
+
+  const restarted = new WindowsJobObjectProcessBackend(service);
+  await assert.rejects(restarted.verifyEmpty({ ...binding }), /released/i);
+  const wrongStartedAt = jobBindingAt("job-release-restart", "2026-01-02T00:00:00.000Z");
+  await assert.rejects(restarted.release(wrongStartedAt), /startedAt mismatch/i);
 });
 
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
@@ -711,7 +826,10 @@ function writePortableState(
 }
 
 function jobBinding(processId: string) {
-  const startedAt = "2026-01-01T00:00:00.000Z";
+  return jobBindingAt(processId, "2026-01-01T00:00:00.000Z");
+}
+
+function jobBindingAt(processId: string, startedAt: string) {
   const identity = { processId, runId: "run", sessionId: "session", startedAt };
   return {
     ...bindingFor({

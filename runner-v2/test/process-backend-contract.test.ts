@@ -383,6 +383,7 @@ function jobService(available: boolean): WindowsJobProcessService {
     start: unavailable,
     signal: unavailable,
     reconcileOwnership: unavailable,
+    releaseOwnership: unavailable,
     readOutputSince: () => { throw new Error("fixture operation is unavailable"); },
   };
 }

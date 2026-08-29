@@ -171,6 +171,52 @@ test("background process output and ownership survive service restart", async ()
   }
 });
 
+test("backend ownership release is exact, durable across service restart, and idempotent", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Authenticated Job supervisor fixture requires Windows.");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-managed-release-authority-"));
+  const workspace = join(root, "workspace");
+  const state = join(root, "state");
+  mkdirSync(workspace);
+  const context = {
+    runId: "run_release",
+    sessionId: "session_release",
+    actor: { role: "worker" as const, id: "session_release" },
+  };
+  const first = new ManagedProcessService({ stateDirectory: state, idFactory: () => "process_release" });
+  try {
+    const started = await first.start({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] }, context, workspace);
+    await first.signal(started.processId, "SIGTERM", context);
+    let terminal: Awaited<ReturnType<ManagedProcessService["reconcileOwnership"]>> | undefined;
+    await waitFor(async () => {
+      const snapshot = await first.reconcileOwnership(started.processId, context);
+      if (snapshot.status === "stopped" && snapshot.ownershipReleased) terminal = snapshot;
+      return terminal !== undefined;
+    });
+    assert.equal(terminal?.startedAt, started.startedAt);
+    await assert.rejects(
+      first.releaseOwnership(started.processId, context, "2026-01-01T00:00:00.000Z"),
+      /startedAt|identity/i,
+    );
+    assert.equal((await first.releaseOwnership(started.processId, context, started.startedAt)).ownershipReleased, true);
+    assert.equal((await first.releaseOwnership(started.processId, context, started.startedAt)).ownershipReleased, true);
+    first.close();
+
+    const recovered = new ManagedProcessService({ stateDirectory: state });
+    try {
+      await assert.rejects(recovered.reconcileOwnership(started.processId, context), /backend ownership.*released/i);
+      assert.equal((await recovered.releaseOwnership(started.processId, context, started.startedAt)).ownershipReleased, true);
+    } finally {
+      recovered.close();
+    }
+  } finally {
+    first.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  }
+});
+
 test("restart hydrates a port-zero durable handshake record before authenticated stop", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-managed-process-handshake-crash-"));
   const workspace = join(root, "workspace");
