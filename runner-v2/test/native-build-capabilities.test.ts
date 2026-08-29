@@ -91,6 +91,11 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
       ],
     );
     assert.deepEqual(snapshot.capabilities?.languageRoutes, []);
+    assert.deepEqual(snapshot.capabilities?.executionEnforcement, {
+      version: 1,
+      boundary: "provider_specific_not_universal_security_boundary",
+      records: [],
+    });
 
     await handle.close();
     handle = undefined;

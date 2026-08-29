@@ -51,6 +51,7 @@ export interface ExecutionGrantIssueRequest extends ExecutionGrantBinding {
   readonly externalApproved: boolean;
   readonly destructiveApproved: boolean;
   readonly networkApproved: boolean;
+  readonly signal?: AbortSignal;
 }
 
 export interface ConsumedExecutionGrantClaims extends ExecutionGrantBinding {
@@ -86,6 +87,8 @@ export interface ExecutionGrantSnapshot extends ConsumedExecutionGrantClaims {
 export interface ExecutionGrantAuthorityOptions {
   readonly clock?: () => Date;
   readonly ttlMs?: number;
+  /** Deterministic scheduling seam; production leaves this unset. */
+  readonly beforeIssueCommit?: () => Promise<void>;
 }
 
 export interface ExecutionGrantAuthority {
@@ -94,8 +97,8 @@ export interface ExecutionGrantAuthority {
     grant: OpaqueExecutionGrant,
     expected: ExecutionGrantBinding,
   ): ConsumedExecutionGrantClaims;
-  revoke(grant: OpaqueExecutionGrant, reason: ExecutionGrantRevocationReason): boolean;
-  revokeAll(reason: ExecutionGrantRevocationReason): void;
+  revoke(grant: OpaqueExecutionGrant, reason: ExecutionGrantRevocationReason): Promise<boolean>;
+  revokeAll(reason: ExecutionGrantRevocationReason): Promise<void>;
   activeSnapshots(): readonly ExecutionGrantSnapshot[];
 }
 
@@ -103,9 +106,12 @@ interface GrantRecord {
   readonly claims: ConsumedExecutionGrantClaims;
   state: "issued" | "consumed" | "revoked";
   revocationReason?: ExecutionGrantRevocationReason;
+  isolationReserved: boolean;
+  readonly revokers: Set<() => Promise<void>>;
 }
 
 const GRANTS = new WeakMap<object, GrantRecord>();
+const CONSUMED_CLAIMS = new WeakMap<object, GrantRecord>();
 
 export function createExecutionGrantAuthority(
   options: ExecutionGrantAuthorityOptions = {},
@@ -116,9 +122,12 @@ export function createExecutionGrantAuthority(
     throw new Error("Execution grant ttlMs must be an integer from 1 to 3600000.");
   }
   const owned = new Set<object>();
+  let issuanceEpoch = 0;
 
   return Object.freeze({
     async issue(request: ExecutionGrantIssueRequest): Promise<OpaqueExecutionGrant> {
+      const epoch = issuanceEpoch;
+      if (request.signal?.aborted) throw grantError("grant_revoked");
       const binding = cloneBinding(request);
       const workspacePath = await canonicalExistingDirectory(request.workspacePath);
       const access = await canonicalizeAccess(
@@ -126,6 +135,8 @@ export function createExecutionGrantAuthority(
         request.access,
         request.externalApproved,
       );
+      await options.beforeIssueCommit?.();
+      if (request.signal?.aborted || epoch !== issuanceEpoch) throw grantError("grant_revoked");
       const issued = clock();
       const expires = new Date(issued.getTime() + ttlMs);
       const claims = deepFreeze({
@@ -143,7 +154,7 @@ export function createExecutionGrantAuthority(
       const grant = {} as OpaqueExecutionGrant;
       Object.defineProperty(grant, RUNNER_OPAQUE_GRANT, { value: true });
       Object.freeze(grant);
-      GRANTS.set(grant, { claims, state: "issued" });
+      GRANTS.set(grant, { claims, state: "issued", isolationReserved: false, revokers: new Set() });
       owned.add(grant);
       return grant;
     },
@@ -168,44 +179,84 @@ export function createExecutionGrantAuthority(
         throw grantError("grant_mismatch");
       }
       record.state = "consumed";
-      owned.delete(grant as object);
       const consumed = cloneClaims(record.claims, true);
+      CONSUMED_CLAIMS.set(consumed, record);
       return consumed;
     },
 
-    revoke(grant: OpaqueExecutionGrant, reason: ExecutionGrantRevocationReason): boolean {
+    async revoke(grant: OpaqueExecutionGrant, reason: ExecutionGrantRevocationReason): Promise<boolean> {
       const record = trustedRecord(grant, owned, false);
-      if (!record || record.state !== "issued") return false;
+      if (!record || record.state === "revoked") return false;
       record.state = "revoked";
       record.revocationReason = reason;
       owned.delete(grant as object);
+      await runRevokers(record.revokers);
       return true;
     },
 
-    revokeAll(reason: ExecutionGrantRevocationReason): void {
+    async revokeAll(reason: ExecutionGrantRevocationReason): Promise<void> {
+      issuanceEpoch += 1;
+      const revokers: (() => Promise<void>)[] = [];
       for (const grant of owned) {
         const record = GRANTS.get(grant);
-        if (record?.state === "issued") {
+        if (record && record.state !== "revoked") {
           record.state = "revoked";
           record.revocationReason = reason;
+          revokers.push(...record.revokers);
         }
       }
       owned.clear();
+      await runRevokers(revokers);
     },
 
     activeSnapshots(): readonly ExecutionGrantSnapshot[] {
       return [...owned]
         .map((grant) => GRANTS.get(grant))
-        .filter((record): record is GrantRecord => record?.state === "issued")
+        .filter((record): record is GrantRecord => record !== undefined && record.state !== "revoked")
         .map((record) => deepFreeze({ ...cloneClaims(record.claims), state: record.state }));
     },
   });
 }
 
+async function runRevokers(revokers: Iterable<() => Promise<void>>): Promise<void> {
+  const settled = await Promise.allSettled([...revokers].map((revoke) => revoke()));
+  const failures = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Execution grant revocation failed closed with an active cleanup blocker.");
+  }
+}
+
+/** Reserves the globally consumed grant for exactly one isolation acquisition. */
+export function reserveConsumedExecutionGrantForIsolation(
+  claims: ConsumedExecutionGrantClaims,
+): void {
+  assertRunnerConsumedExecutionGrantClaims(claims);
+  const record = CONSUMED_CLAIMS.get(claims as object)!;
+  if (record.state === "revoked" || record.isolationReserved) throw grantError("grant_consumed");
+  record.isolationReserved = true;
+}
+
+/** Registers provider cleanup with the issuing authority, closing revoke/acquire races. */
+export async function registerConsumedExecutionGrantRevoker(
+  claims: ConsumedExecutionGrantClaims,
+  revoker: () => Promise<void>,
+): Promise<boolean> {
+  assertRunnerConsumedExecutionGrantClaims(claims);
+  const record = CONSUMED_CLAIMS.get(claims as object)!;
+  if (record.state === "revoked") {
+    await revoker();
+    return false;
+  }
+  record.revokers.add(revoker);
+  return true;
+}
+
 export function assertRunnerConsumedExecutionGrantClaims(
   value: ConsumedExecutionGrantClaims,
 ): ConsumedExecutionGrantClaims {
-  if (!value || typeof value !== "object" || value[RUNNER_CONSUMED_GRANT] !== true) {
+  if (!value || typeof value !== "object" || value[RUNNER_CONSUMED_GRANT] !== true ||
+      !CONSUMED_CLAIMS.has(value as object)) {
     throw grantError("grant_forged");
   }
   return value;
@@ -221,6 +272,7 @@ async function canonicalizeAccess(
   }
   const result: { canonicalPath: string; mode: ExactPathAccessMode }[] = [];
   const seen = new Set<string>();
+  const modes = new Map<string, ExactPathAccessMode>();
   for (const request of requests) {
     if (!request || !["read", "write", "create"].includes(request.mode)) {
       throw new ExecutionGrantError("grant_invalid_path", "Execution grant access is invalid.");
@@ -236,6 +288,12 @@ async function canonicalizeAccess(
       );
     }
     const key = `${normalizePath(canonicalPath)}\0${request.mode}`;
+    const destination = normalizePath(canonicalPath);
+    const previous = modes.get(destination);
+    if (previous && previous !== request.mode) {
+      throw new ExecutionGrantError("grant_escalation", "Execution grant has conflicting access modes for one canonical root.");
+    }
+    modes.set(destination, request.mode);
     if (!seen.has(key)) {
       seen.add(key);
       result.push(Object.freeze({ canonicalPath, mode: request.mode }));

@@ -38,6 +38,7 @@ const RUN_LABEL = "ai-board.runner-v2.run";
 const INVOCATION_LABEL = "ai-board.runner-v2.invocation";
 const GRANT_LABEL = "ai-board.runner-v2.grant";
 const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
+const STATE_LOCK_TIMEOUT_MS = 10_000;
 
 export type OciExecutionIsolationErrorCode =
   | "oci_configuration_invalid"
@@ -139,7 +140,7 @@ export async function createConfiguredOciIsolationSelector(
             : {}),
         }),
       })),
-  ));
+  ), { statePath: join(root, "execution-enforcement-state.json") });
 }
 
 export function createOciExecutionIsolationProvider(
@@ -159,7 +160,6 @@ export function createOciExecutionIsolationProvider(
   const clock = options.clock ?? (() => new Date());
   let cliPath: string | undefined;
   let cliDigest: string | undefined;
-  let imageId: string | undefined;
 
   const runCli = async (args: readonly string[]): Promise<OciCliResult> => {
     if (!cliPath) throw ociError("oci_attestation_failed", "OCI provider is not attested.");
@@ -190,18 +190,7 @@ export function createOciExecutionIsolationProvider(
           "Configured OCI CLI differs from the active Build capability contract.",
         );
       }
-      const inspected = await runCli(["image", "inspect", "--format", "{{.Id}}", image]);
-      if (inspected.exitCode !== 0) {
-        throw ociError(
-          "oci_image_unavailable",
-          `Configured OCI image is unavailable: ${bounded(inspected.stderr)}.`,
-        );
-      }
-      const immutableId = inspected.stdout.trim();
-      if (!/^sha256:[a-f0-9]{64}$/.test(immutableId)) {
-        throw ociError("oci_attestation_failed", "OCI image did not resolve to an immutable id.");
-      }
-      imageId = immutableId;
+      const immutableId = await attestImage(runCli, image);
       return deepFreeze({
         attestationVersion: 1 as const,
         providerId,
@@ -221,7 +210,7 @@ export function createOciExecutionIsolationProvider(
     },
 
     async acquire(request: ExecutionIsolationAcquireRequest) {
-      if (!cliPath || !cliDigest || !imageId) {
+      if (!cliPath || !cliDigest) {
         throw ociError("oci_attestation_failed", "OCI provider must be attested before acquire.");
       }
       if (request.providerId !== providerId ||
@@ -230,6 +219,7 @@ export function createOciExecutionIsolationProvider(
         throw ociError("oci_grant_unrepresentable", "OCI request does not match its exact grant.");
       }
       const representation = await representGrant(request);
+      const acquisitionImageId = await attestImage(runCli, image);
       const leaseId = `oci-lease-${randomUUID()}`;
       const containerName = `aiboard-${createHash("sha256")
         .update(`${providerId}\0${request.intent.runId}\0${request.intent.invocationId}\0${leaseId}`)
@@ -246,7 +236,7 @@ export function createOciExecutionIsolationProvider(
       args.push("--network", request.grant.networkApproved && options.allowNetwork === true
         ? "bridge" : "none");
       for (const mount of representation.mounts) args.push("--mount", mount);
-      args.push("--workdir", representation.cwd, imageId, representation.executable);
+      args.push("--workdir", representation.cwd, acquisitionImageId, representation.executable);
       args.push(...representation.arguments);
       assertSafeOciArguments(args);
       const created = await runCli(args);
@@ -268,10 +258,12 @@ export function createOciExecutionIsolationProvider(
         state: "active" as const,
         providerIdentity: request.implementationDigest,
       });
-      const leases = await readLeaseState(statePath);
-      leases.push({ lease, containerId, containerName, runId: request.intent.runId });
       try {
-        await writeLeaseState(statePath, leases);
+        await withStateLock(statePath, async () => {
+          const leases = await readLeaseState(statePath);
+          leases.push({ lease, containerId, containerName, runId: request.intent.runId });
+          await writeLeaseState(statePath, leases);
+        });
       } catch (error) {
         const cleanup = await runCli(["rm", "--force", containerId]);
         throw new AggregateError(
@@ -283,22 +275,21 @@ export function createOciExecutionIsolationProvider(
     },
 
     async release(lease: ExecutionIsolationLease): Promise<void> {
-      const leases = await readLeaseState(statePath);
-      const owned = leases.find((entry) => entry.lease.leaseId === lease.leaseId);
-      if (!owned || owned.lease.providerId !== providerId ||
-          owned.lease.grantId !== lease.grantId ||
-          owned.lease.invocationId !== lease.invocationId) {
-        throw ociError("oci_release_failed", "OCI lease is not durably owned by this provider.");
-      }
-      const identity = await inspectOwnedLabels(runCli, owned.containerId);
-      if (!matchesOwnedScope(identity, providerId, owned)) {
-        throw ociError("oci_release_failed", "OCI container identity no longer matches its durable lease.");
-      }
-      const removed = await runCli(["rm", "--force", owned.containerId]);
-      if (removed.exitCode !== 0) {
-        throw ociError("oci_release_failed", `OCI container release failed: ${bounded(removed.stderr)}.`);
-      }
-      await writeLeaseState(statePath, leases.filter((entry) => entry !== owned));
+      await withStateLock(statePath, async () => {
+        const leases = await readLeaseState(statePath);
+        const owned = leases.find((entry) => entry.lease.leaseId === lease.leaseId);
+        if (!owned || owned.lease.providerId !== providerId ||
+            owned.lease.grantId !== lease.grantId || owned.lease.invocationId !== lease.invocationId) {
+          throw ociError("oci_release_failed", "OCI lease is not durably owned by this provider.");
+        }
+        const identity = await inspectOwnedLabels(runCli, owned.containerId);
+        if (!matchesOwnedScope(identity, providerId, owned)) {
+          throw ociError("oci_release_failed", "OCI container identity no longer matches its durable lease.");
+        }
+        const removed = await runCli(["rm", "--force", owned.containerId]);
+        if (removed.exitCode !== 0) throw ociError("oci_release_failed", `OCI container release failed: ${bounded(removed.stderr)}.`);
+        await writeLeaseState(statePath, leases.filter((entry) => entry !== owned));
+      });
     },
 
     async recoverOwned(): Promise<ExecutionIsolationRecoveryResult> {
@@ -312,10 +303,12 @@ export function createOciExecutionIsolationProvider(
           "Configured OCI CLI differs from the active Build capability contract.",
         );
       }
+      return await withStateLock(statePath, async () => {
       const leases = await readLeaseState(statePath);
       const byContainer = new Map(leases.map((entry) => [entry.containerId, entry]));
       const listed = await runCli([
         "ps", "--all",
+        "--no-trunc",
         "--filter", `label=${OWNED_LABEL}=true`,
         "--filter", `label=${PROVIDER_LABEL}=${providerId}`,
         "--format", "{{.ID}}",
@@ -361,6 +354,7 @@ export function createOciExecutionIsolationProvider(
       }
       await writeLeaseState(statePath, [...remaining]);
       return { cleaned, blockers };
+      });
     },
   });
 }
@@ -487,6 +481,42 @@ async function attestExecutable(input: string): Promise<string> {
   }
 }
 
+async function attestImage(
+  runCli: (args: readonly string[]) => Promise<OciCliResult>,
+  image: string,
+): Promise<string> {
+  const inspected = await runCli(["image", "inspect", "--format", "{{.Id}}", image]);
+  if (inspected.exitCode !== 0) {
+    throw ociError("oci_image_unavailable", `Configured OCI image is unavailable: ${bounded(inspected.stderr)}.`);
+  }
+  const immutableId = inspected.stdout.trim();
+  if (!/^sha256:[a-f0-9]{64}$/.test(immutableId)) {
+    throw ociError("oci_attestation_failed", "OCI image did not resolve to an immutable id.");
+  }
+  return immutableId;
+}
+
+async function withStateLock<T>(statePath: string, action: () => Promise<T>): Promise<T> {
+  const lockPath = `${statePath}.lock`;
+  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      await mkdir(lockPath);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) {
+        throw ociError("oci_recovery_blocked", "OCI durable lease state lock is unavailable.", error);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    return await action();
+  } finally {
+    await rm(lockPath, { recursive: true, force: true });
+  }
+}
+
 async function realDirectory(input: string, label: string): Promise<string> {
   await assertNoSymbolicPathComponents(input);
   const metadata = await lstat(input);
@@ -560,11 +590,16 @@ async function writeLeaseState(path: string, leases: readonly DurableOciLease[])
   }
 }
 
-function createNativeOciCli(): OciCli {
+export function createNativeOciCli(options: {
+  readonly spawnProcess?: typeof spawn;
+  readonly terminationGraceMs?: number;
+} = {}): OciCli {
+  const spawnProcess = options.spawnProcess ?? spawn;
+  const terminationGraceMs = options.terminationGraceMs ?? 1_000;
   return Object.freeze({
     async run(invocation: OciCliInvocation): Promise<OciCliResult> {
       return await new Promise((resolvePromise, reject) => {
-        const child = spawn(invocation.executable, [...invocation.args], {
+        const child = spawnProcess(invocation.executable, [...invocation.args], {
           env: { ...invocation.environment },
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
@@ -573,11 +608,26 @@ function createNativeOciCli(): OciCli {
         const stderr: Buffer[] = [];
         let stdoutBytes = 0;
         let stderrBytes = 0;
+        let settled = false;
+        let grace: NodeJS.Timeout | undefined;
+        const settle = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (grace) clearTimeout(grace);
+          child.removeAllListeners();
+          child.stdout?.removeAllListeners();
+          child.stderr?.removeAllListeners();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.unref();
+          action();
+        };
         const append = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
           const next = (stream === "stdout" ? stdoutBytes : stderrBytes) + chunk.byteLength;
           if (next > MAX_CLI_OUTPUT_BYTES) {
-            child.kill("SIGKILL");
-            reject(ociError("oci_attestation_failed", "OCI CLI output exceeded its bound."));
+            try { child.kill("SIGKILL"); } catch { /* settle still closes local handles */ }
+            settle(() => reject(ociError("oci_attestation_failed", "OCI CLI output exceeded its bound.")));
             return;
           }
           if (stream === "stdout") stdoutBytes = next; else stderrBytes = next;
@@ -585,15 +635,20 @@ function createNativeOciCli(): OciCli {
         };
         child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk, "stdout"));
         child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk, "stderr"));
-        child.once("error", reject);
-        const timer = setTimeout(() => child.kill("SIGKILL"), invocation.timeoutMs);
+        child.once("error", (error) => settle(() => reject(error)));
+        const timer = setTimeout(() => {
+          try { child.kill("SIGKILL"); } catch { /* bounded grace still settles */ }
+          grace = setTimeout(() => settle(() => reject(ociError(
+            "oci_attestation_failed",
+            "OCI CLI exceeded its bounded timeout and termination grace.",
+          ))), terminationGraceMs);
+        }, invocation.timeoutMs);
         child.once("close", (code) => {
-          clearTimeout(timer);
-          resolvePromise({
+          settle(() => resolvePromise({
             exitCode: code ?? 1,
             stdout: Buffer.concat(stdout).toString("utf8"),
             stderr: Buffer.concat(stderr).toString("utf8"),
-          });
+          }));
         });
       });
     },

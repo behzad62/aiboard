@@ -74,6 +74,7 @@ import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
 import { createConfiguredOciIsolationSelector } from "./oci-execution-isolation-provider.js";
+import { readExecutionEnforcementState } from "./execution-isolation-provider.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type {
@@ -896,6 +897,7 @@ export class NativeBuildFactory {
             extensions: runCapabilities.registry.manifests(),
             languageProviders: runCapabilities.language.providerMetadata(),
             languageRoutes: runCapabilities.language.auditRecords(),
+            executionEnforcement: await executionIsolation.enforcementState(),
           },
           finalVerification: projectFinalVerificationObservability(
             schedulerProjection,
@@ -1323,6 +1325,10 @@ export class NativeBuildFactory {
                     languageProviders: [],
                     languageRoutes: [],
                     historicalContract: cloneRunnerCapabilityContract(spec.capabilityContract),
+                    executionEnforcement: await readExecutionEnforcementState(join(
+                      this.options.stateDirectory, "builds", safeSegment(spec.runId),
+                      "execution-isolation", "execution-enforcement-state.json",
+                    )),
                   },
                 }
               : {}),

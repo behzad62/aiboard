@@ -1,17 +1,44 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse } from "node:path";
 import test from "node:test";
+import { PassThrough } from "node:stream";
 
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import {
   OciExecutionIsolationError,
+  createNativeOciCli,
   createOciExecutionIsolationProvider,
   type OciCliInvocation,
 } from "../src/oci-execution-isolation-provider.js";
+
+test("native OCI CLI timeout settles after bounded grace when termination never closes", async () => {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough; stderr: PassThrough; kill: () => boolean; unref: () => void;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => false;
+  let unrefed = false;
+  child.unref = () => { unrefed = true; };
+  const cli = createNativeOciCli({
+    spawnProcess: (() => child) as never,
+    terminationGraceMs: 10,
+  });
+  const started = Date.now();
+  await assert.rejects(
+    cli.run({ executable: "fixture", args: [], environment: {}, timeoutMs: 10 }),
+    (error) => error instanceof OciExecutionIsolationError && error.code === "oci_attestation_failed",
+  );
+  assert.ok(Date.now() - started < 200);
+  assert.equal(unrefed, true);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.destroyed, true);
+});
 
 test("OCI provider attests explicit identities and creates exact labelled mounts with network denied", async () => {
   const fixture = await ociFixture();
@@ -177,6 +204,8 @@ test("OCI restart recovery validates durable labelled ownership and reports unkn
     assert.match(recovered.blockers[0]!, /unknown-container/);
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("container-fixture-1")), true);
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("unknown-container")), false);
+    const listing = calls.find((call) => call.args[0] === "ps");
+    assert.ok(listing?.args.includes("--no-trunc"), "recovery must compare canonical full container ids");
   } finally {
     await fixture.close();
   }
@@ -214,6 +243,37 @@ test("OCI restart recovery clears a durable lease only after confirming its cont
   }
 });
 
+test("overlapping OCI provider instances preserve both durable leases without orphaning", async () => {
+  const first = await ociFixture();
+  const second = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const cli = fakeCli(calls);
+    cli.imageIds.push(...["1", "2", "3", "4"].map((digit) => `sha256:${digit.repeat(64)}`));
+    const options = {
+      providerId: "oci-concurrent", cliPath: first.cli, image: "fixture/image:configured",
+      stateDirectory: first.state, cli,
+    };
+    const left = createOciExecutionIsolationProvider(options);
+    const right = createOciExecutionIsolationProvider(options);
+    await Promise.all([left.attest(), right.attest()]);
+    const [leftLease, rightLease] = await Promise.all([
+      left.acquire({ providerId: "oci-concurrent", implementationDigest: "a".repeat(64), intent: first.intent, grant: first.claims }),
+      right.acquire({ providerId: "oci-concurrent", implementationDigest: "a".repeat(64), intent: { ...second.intent, invocationId: "invocation-2" }, grant: second.claims }),
+    ]);
+    assert.equal(durableLeaseCount(first.state, "oci-concurrent"), 2);
+    assert.equal(calls.filter((call) => call.args[0] === "create").length, 2);
+    const usedImages = calls.filter((call) => call.args[0] === "create")
+      .flatMap((call) => call.args.filter((argument) => /^sha256:/.test(argument))).sort();
+    assert.deepEqual(usedImages, [`sha256:${"3".repeat(64)}`, `sha256:${"4".repeat(64)}`]);
+    await Promise.all([left.release(leftLease as never), right.release(rightLease as never)]);
+    assert.equal(durableLeaseCount(first.state, "oci-concurrent"), 0);
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
 test("real Docker fixture denies outside writes, symlink escalation, network, and cleans a live child", async (t) => {
   const docker = availableDockerFixture();
   if (!docker) {
@@ -221,6 +281,7 @@ test("real Docker fixture denies outside writes, symlink escalation, network, an
     return;
   }
   const fixture = await ociFixture();
+  const trackedContainers = new Set<string>();
   try {
     const deniedOutside = join(fixture.external, "outside-write");
     const networkSentinel = join(fixture.workspace, "network-available");
@@ -243,21 +304,29 @@ test("real Docker fixture denies outside writes, symlink escalation, network, an
         "wget -q -T 2 -O /dev/null http://1.1.1.1 && touch /runner/workspace/network-available || true",
       ].join("; ")],
     };
-    const lease = await provider.acquire({
+    await provider.acquire({
       providerId: "oci-real",
       implementationDigest: "a".repeat(64),
       intent,
       grant: fixture.claims,
     });
     const containerId = durableContainerId(fixture.state, "oci-real");
+    trackedContainers.add(containerId);
     const start = await execFileResult(docker, ["start", "--attach", containerId]);
     assert.equal(start.code, 0, start.stderr);
     assert.equal(existsSync(insideSentinel), true);
     assert.equal(existsSync(deniedOutside), false);
     assert.equal(existsSync(join(fixture.external, "symlink-write")), false);
     assert.equal(existsSync(networkSentinel), false);
-    await provider.release(lease as never);
+    const restartedProvider = createOciExecutionIsolationProvider({
+      providerId: "oci-real", cliPath: docker, image: "alpine:latest", stateDirectory: fixture.state,
+    });
+    await restartedProvider.attest();
+    assert.deepEqual(await restartedProvider.recoverOwned(), { cleaned: 1, blockers: [] });
+    trackedContainers.delete(containerId);
     assert.equal((await execFileResult(docker, ["inspect", containerId])).code, 1);
+    assert.equal(durableLeaseCount(fixture.state, "oci-real"), 0);
+    assert.equal((await execFileResult(docker, ["ps", "-aq", "--filter", "label=ai-board.runner-v2.provider=oci-real"])).stdout.trim(), "");
 
     const liveFixture = await ociFixture();
     try {
@@ -279,21 +348,53 @@ test("real Docker fixture denies outside writes, symlink escalation, network, an
         grant: liveFixture.claims,
       });
       const liveId = durableContainerId(liveFixture.state, "oci-real-live");
+      trackedContainers.add(liveId);
       assert.equal((await execFileResult(docker, ["start", liveId])).code, 0);
       await liveProvider.release(liveLease as never);
+      trackedContainers.delete(liveId);
       assert.equal((await execFileResult(docker, ["inspect", liveId])).code, 1);
     } finally {
       await liveFixture.close();
     }
   } finally {
+    for (const containerId of trackedContainers) {
+      await execFileResult(docker, ["rm", "--force", containerId]);
+    }
     await fixture.close();
   }
 });
 
+test("real Docker fixture force-cleans a labelled live child after a forced assertion path", async (t) => {
+  const docker = availableDockerFixture();
+  if (!docker) return t.skip("Docker unavailable; no installation attempted.");
+  const fixture = await ociFixture();
+  let containerId: string | undefined;
+  try {
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-real-forced-cleanup", cliPath: docker, image: "alpine:latest", stateDirectory: fixture.state,
+    });
+    await provider.attest();
+    await provider.acquire({
+      providerId: "oci-real-forced-cleanup", implementationDigest: "c".repeat(64),
+      intent: { ...fixture.intent, executable: "sh", arguments: ["-c", "sleep 300 & wait"] },
+      grant: fixture.claims,
+    });
+    containerId = durableContainerId(fixture.state, "oci-real-forced-cleanup");
+    assert.equal((await execFileResult(docker, ["start", containerId])).code, 0);
+    await assert.rejects(async () => { throw new Error("forced fixture assertion path"); }, /forced fixture/);
+  } finally {
+    if (containerId) await execFileResult(docker, ["rm", "--force", containerId]);
+    await fixture.close();
+  }
+  assert.equal((await execFileResult(docker, ["inspect", containerId!])).code, 1);
+});
+
 function fakeCli(calls: OciCliInvocation[]) {
   const labelsByContainer = new Map<string, Record<string, string>>();
+  let createdCount = 0;
   const runner = {
     psOutput: "",
+    imageIds: [] as string[],
     removeExternally(containerId: string) {
       labelsByContainer.delete(containerId);
     },
@@ -301,16 +402,18 @@ function fakeCli(calls: OciCliInvocation[]) {
       calls.push(structuredClone(invocation));
       const [command] = invocation.args;
       if (command === "image") {
-        return { exitCode: 0, stdout: "sha256:" + "1".repeat(64) + "\n", stderr: "" };
+        return { exitCode: 0, stdout: (runner.imageIds.shift() ?? "sha256:" + "1".repeat(64)) + "\n", stderr: "" };
       }
       if (command === "create") {
-        labelsByContainer.set("container-fixture-1", Object.fromEntries(
+        createdCount += 1;
+        const containerId = `container-fixture-${createdCount}`;
+        labelsByContainer.set(containerId, Object.fromEntries(
           optionValues(invocation.args, "--label").map((label) => {
             const separator = label.indexOf("=");
             return [label.slice(0, separator), label.slice(separator + 1)];
           }),
         ));
-        return { exitCode: 0, stdout: "container-fixture-1\n", stderr: "" };
+        return { exitCode: 0, stdout: `${containerId}\n`, stderr: "" };
       }
       if (command === "ps") {
         return { exitCode: 0, stdout: runner.psOutput, stderr: "" };

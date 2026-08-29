@@ -17,6 +17,7 @@ import type {
 import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { RunnerExtensionManifest } from "./runner-extension.js";
 import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
+import type { ExecutionEnforcementState } from "./execution-isolation-provider.js";
 import type { SkillMetadata } from "./skill-catalog.js";
 import type {
   FinalVerificationGenerationProjection,
@@ -156,6 +157,8 @@ export interface BuildCapabilitiesObservation {
    * historical handles expose this without loading extension or server code.
    */
   historicalContract?: RunnerCapabilityContract;
+  /** Durable, redacted Task 6 enforcement outcomes; not a claim that Task 7 routing is active. */
+  executionEnforcement?: ExecutionEnforcementState;
 }
 
 export type BuildTranscriptPage = AgentTranscriptPage;

@@ -129,3 +129,40 @@ Fresh final/affected results:
 ## Residual risk / next-phase boundary
 
 Task 6 deliberately establishes authorization, selection, attestation, lease, configuration, and lifecycle seams. Task 7 must route each generated process family through these seams and persist per-invocation selection/disclosure evidence. Until Task 7, existing process launch families are unchanged; nothing in this task claims that all Runner subprocesses are already confined. This is the expected canonical phase boundary, not a Task 6 control weakening.
+
+## Governed Fix Round 1/5 — review 1
+
+Reviewed `task-6-review-1.md` under the receiving-review discipline. All nine findings reproduced against the canonical Task 6 contract; no finding required technical pushback.
+
+### Repairs and exact RED → GREEN evidence
+
+1. **Global grant lifecycle.** RED: consumed claims could be submitted to two fresh selectors, and `revoke()` returned ineffective after authority consumption. The authority now retains consumed lifecycle state globally, reserves isolation use atomically across every selector, and registers async lease revokers. `revoke`/`revokeAll` await active cleanup; failed cleanup remains blocked/visible. ToolBroker awaits revocation on completion, cancellation, timeout, and thrown execution. GREEN: two microtask-concurrent authority consumes have exactly one winner; another authority cannot consume the grant; two concurrent fresh selectors produce one acquire; consumed authority revoke produces one release and zero active leases; broker terminal-path tests leave zero active snapshots.
+2. **Issue/restart race.** RED: an issue paused before commit survived `revokeAll("restart")`. An authority epoch plus abort-aware commit barrier now invalidates in-flight issue. GREEN: deterministic delayed issue rejects `grant_revoked` after restart; pre-aborted issue also rejects.
+3. **Full Docker identity.** RED evidence: Docker `create` persisted a 64-character ID while recovery's default format returned a truncated ID. Recovery now requests `ps --no-trunc`; fake argv asserts it. GREEN: a newly instantiated real provider discovers the exact full ID, removes only the owned container, clears its lease, and leaves zero provider labels.
+4. **OCI concurrency and immutable acquisition identity.** RED model: provider-wide mutable image state and unlocked read/modify/write could cross-bind a changed tag and lose one of two leases. Acquire now reattests the immutable image into a local value immediately before create. A portable atomic directory lock serializes every lease RMW across provider instances; atomic replace remains used. GREEN: two overlapping providers share one state directory, use distinct reattested image IDs, preserve both exact leases/labels, release both, and leave no orphan.
+5. **Durable user-visible state.** RED: selection and enforcement existed only in memory. The selector now atomically persists a bounded redacted projection of Full/strict/active/revoked/blocked/cleaned outcomes, provider/implementation identity, OCI immutable image, exact access summary, grant/lease ids, and the explicit non-universal-boundary statement. It persists neither opaque objects nor nonces/secrets. Live and historical NativeBuildFactory observability expose it at `capabilities.executionEnforcement`. GREEN: a fresh selector reopens strict active→revoked→cleaned plus exact `unconfined_explicit_full`, including OCI image identity; two OS processes concurrently persist 40 outcomes without loss; forged/unknown durable fields fail closed; native observability focused test reads the projection surface.
+6. **Bounded CLI timeout.** RED: timeout called kill and awaited `close` forever. The native CLI now settles at timeout plus bounded grace, removes listeners, destroys streams, and unreferences the child even if kill fails and close never comes. GREEN: injected never-close/kill-false child rejects typed within the wall-clock bound with no listeners/stream handles.
+7. **Fixture cleanup.** RED risk: real assertion failure bypassed release. Every real acquired ID is now tracked immediately and force-removed in `finally`. GREEN: a deliberate forced error after starting a labelled sleeping child still removes the exact container; inspect returns absent.
+8. **Conflicting modes.** RED: canonical aliases could emit the same destination as both read and write. Grant canonicalization now rejects a destination-mode conflict before issuance/OCI. GREEN covers `workspace` and `workspace/.`; no create occurs.
+9. **Native-as-confined prove-red.** A distinct hostile provider attests `local-native-execution` as enforced/exact. Before the guard and under a deliberate temporary guard-removal mutation, exact test RED was `Missing expected rejection`. Mutation reverted. GREEN rejects with typed capability-unavailable and acquisition count zero.
+
+### Adversarial audit
+
+- Issue/consume/revoke transitions are synchronous at their authority boundary; duplicate concurrent reservation has one winner.
+- Consumed grants remain restart-revocable; registration closes revoke-during-acquire by immediately releasing when authority is already terminal.
+- Multiple authorities cannot redeem each other's opaque grant; consumed claims remain runtime-branded and WeakMap-bound.
+- OCI acquisition cleans a created container if durable ownership persistence fails. Release/recovery validate durable identity and every exact label before removal; unknown and mismatched containers remain blockers and are never removed.
+- OCI lease and enforcement projection writes use portable lock directories plus atomic file replacement. Crash-left locks fail typed rather than assuming ownership.
+- No Task 7 process-family route was added and the durable projection explicitly avoids claiming that routing exists.
+
+### Fix-round validation
+
+- Final focused Task 6 gate: 39/39 pass, including both real-Docker fixtures, cross-process projection locking, and forged durable-state rejection.
+- Affected CLI/native factory/capability gate: 51/51 pass.
+- Inherited Task 1–5 seam: one unrelated bounded-spool identity-swap fault was flaky in the 192-test run (190 pass, 1 fail, 1 expected host skip); its exact failed check immediately reran GREEN 1/1. Task 6 does not touch that surface.
+- Runner V2 typecheck and targeted ESLint: exit 0.
+- Native-as-confined temporary mutation: RED, reverted, GREEN.
+- Real Docker: outside write, symlink escalation, network denial, full-ID restart recovery, live-child cleanup, and forced-failure cleanup all GREEN.
+- Final residue audit at the validation boundary: zero Runner-owned labelled containers, Task 6 temp directories, OCI/enforcement lock directories, or fixture processes.
+
+Residual boundary remains Task 7 routing only. Task 6 now durably exposes enforcement outcomes but does not claim existing generated process families consume them.

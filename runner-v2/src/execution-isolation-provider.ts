@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute } from "node:path";
 
 import type { PermissionProfile } from "./contracts.js";
 import type {
@@ -7,6 +9,8 @@ import type {
 } from "./execution-safety-contracts.js";
 import {
   assertRunnerConsumedExecutionGrantClaims,
+  registerConsumedExecutionGrantRevoker,
+  reserveConsumedExecutionGrantForIsolation,
   type ConsumedExecutionGrantClaims,
 } from "./execution-grants.js";
 
@@ -118,6 +122,29 @@ export interface ExecutionIsolationSelector {
     blockers: readonly string[];
   }[]>;
   activeLeases(): readonly ExecutionIsolationLease[];
+  enforcementState(): Promise<ExecutionEnforcementState>;
+}
+
+export interface ExecutionEnforcementRecord {
+  readonly occurredAt: string;
+  readonly runId: string;
+  readonly invocationId: string;
+  readonly grantId: string;
+  readonly status: "active" | "revoked" | "blocked" | "unconfined_explicit_full" | "cleaned";
+  readonly enforcement: "unconfined_explicit_full" | "write_confinement_exact_grant";
+  readonly disclosure: "unconfined_explicit_full" | "provider_specific_not_universal_boundary";
+  readonly providerId?: string;
+  readonly implementationDigest?: string;
+  readonly immutableImageId?: string;
+  readonly leaseId?: string;
+  readonly access: ConsumedExecutionGrantClaims["access"];
+  readonly blocker?: string;
+}
+
+export interface ExecutionEnforcementState {
+  readonly version: 1;
+  readonly boundary: "provider_specific_not_universal_security_boundary";
+  readonly records: readonly ExecutionEnforcementRecord[];
 }
 
 interface TrustedProvider {
@@ -177,18 +204,23 @@ export function createExecutionIsolationRegistry(
 
 export function createExecutionIsolationSelector(
   registry: ExecutionIsolationRegistry,
-  options: { readonly clock?: () => Date } = {},
+  options: { readonly clock?: () => Date; readonly statePath?: string } = {},
 ): ExecutionIsolationSelector {
   if (!registry || !REGISTRIES.has(registry)) {
     throw new Error("Execution isolation registry authority is invalid.");
   }
   const providers = REGISTRY_VALUES.get(registry)!;
   const clock = options.clock ?? (() => new Date());
+  if (options.statePath && !isAbsolute(options.statePath)) throw new Error("Enforcement state path must be absolute.");
+  const persist = async (record: ExecutionEnforcementRecord) => {
+    if (!options.statePath) return;
+    await appendEnforcementRecord(options.statePath, record);
+  };
   const active = new Map<string, {
     provider: TrustedProvider;
     selection: Extract<ExecutionIsolationSelection, { lease: unknown }>;
+    runId: string;
   }>();
-  const usedGrantIds = new Set<string>();
 
   return Object.freeze({
     async acquire(input: {
@@ -197,15 +229,15 @@ export function createExecutionIsolationSelector(
       grant: ConsumedExecutionGrantClaims;
     }): Promise<ExecutionIsolationSelection> {
       assertRunnerConsumedExecutionGrantClaims(input.grant);
-      if (usedGrantIds.has(input.grant.grantId)) {
-        throw new ExecutionIsolationError(
-          "isolation_grant_mismatch",
-          "Isolation grant has already been used for one provider selection.",
-        );
-      }
-      usedGrantIds.add(input.grant.grantId);
       assertGrantMatches(input.intent, input.grant, input.permissionProfile, clock());
       if (input.permissionProfile === "full") {
+        reserveGrant(input.grant);
+        await persist({
+          occurredAt: clock().toISOString(), runId: input.intent.runId,
+          invocationId: input.intent.invocationId, grantId: input.grant.grantId,
+          status: "unconfined_explicit_full", enforcement: "unconfined_explicit_full",
+          disclosure: "unconfined_explicit_full", access: input.grant.access,
+        });
         return Object.freeze({
           enforcement: "unconfined_explicit_full" as const,
           disclosure: "unconfined_explicit_full" as const,
@@ -219,6 +251,7 @@ export function createExecutionIsolationSelector(
           continue;
         }
         if (!qualifies(attestation, provider, clock())) continue;
+        reserveGrant(input.grant);
         let lease: ExecutionIsolationLease;
         try {
           lease = parseAndValidateLease(
@@ -247,9 +280,47 @@ export function createExecutionIsolationSelector(
           attestation: { ...attestation, providerId: provider.providerId },
           lease,
         });
-        active.set(lease.leaseId, { provider, selection });
+        active.set(lease.leaseId, { provider, selection, runId: input.intent.runId });
+        const registered = await registerConsumedExecutionGrantRevoker(input.grant, async () => {
+          const owned = active.get(lease.leaseId);
+          if (!owned) return;
+          try {
+            await owned.provider.provider.release(owned.selection.lease);
+            active.delete(lease.leaseId);
+            await persist(enforcementRecord(owned.selection, owned.runId, "revoked", clock()));
+          } catch (error) {
+            const failed = deepFreeze({ ...owned.selection.lease, state: "revocation_failed" as const });
+            owned.selection = deepFreeze({ ...owned.selection, lease: failed });
+            await persist({ ...enforcementRecord(owned.selection, owned.runId, "blocked", clock()), blocker: "Authority revocation could not release the isolation lease." });
+            throw error;
+          }
+        });
+        if (!registered) {
+          throw new ExecutionIsolationError("isolation_grant_mismatch", "Isolation grant was revoked during provider acquisition.");
+        }
+        try {
+          await persist({
+            occurredAt: clock().toISOString(), runId: input.intent.runId,
+            invocationId: input.intent.invocationId, grantId: input.grant.grantId,
+            status: "active", enforcement: "write_confinement_exact_grant",
+            disclosure: "provider_specific_not_universal_boundary", providerId: provider.providerId,
+            implementationDigest: provider.implementationDigest,
+            ...(attestation.imageIdentity ? { immutableImageId: attestation.imageIdentity.immutableId } : {}),
+            leaseId: lease.leaseId, access: input.grant.access,
+          });
+        } catch (error) {
+          await provider.provider.release(lease);
+          active.delete(lease.leaseId);
+          throw error;
+        }
         return selection;
       }
+      await persist({
+        occurredAt: clock().toISOString(), runId: input.intent.runId, invocationId: input.intent.invocationId,
+        grantId: input.grant.grantId, status: "blocked", enforcement: "write_confinement_exact_grant",
+        disclosure: "provider_specific_not_universal_boundary", access: input.grant.access,
+        blocker: "No verified provider enforces exact-grant write confinement.",
+      });
       throw unavailable();
     },
 
@@ -265,9 +336,11 @@ export function createExecutionIsolationSelector(
       try {
         await owned.provider.provider.release(selection.lease);
         active.delete(selection.lease.leaseId);
+        await persist(enforcementRecord(selection, owned.runId, "revoked", clock()));
       } catch (error) {
         const failed = deepFreeze({ ...selection.lease, state: "revocation_failed" as const });
         owned.selection = deepFreeze({ ...selection, lease: failed });
+        await persist({ ...enforcementRecord(owned.selection, owned.runId, "blocked", clock()), blocker: "Isolation lease revocation failed." });
         throw new ExecutionIsolationError(
           "isolation_revocation_failed",
           "Isolation lease revocation failed.",
@@ -283,6 +356,7 @@ export function createExecutionIsolationSelector(
           const result = await provider.provider.recoverOwned();
           const blockers = Object.freeze([...result.blockers]);
           results.push(Object.freeze({ providerId: provider.providerId, cleaned: result.cleaned, blockers }));
+          await persistRecovery(options.statePath, provider.providerId, result.cleaned, blockers, clock());
           if (blockers.length === 0) {
             for (const [leaseId, value] of active) {
               if (value.provider.providerId === provider.providerId) active.delete(leaseId);
@@ -303,6 +377,115 @@ export function createExecutionIsolationSelector(
       return Object.freeze([...active.values()].map(({ selection }) =>
         deepFreeze({ ...selection.lease, grantedAccess: selection.lease.grantedAccess.map((x) => ({ ...x })) })));
     },
+
+    async enforcementState(): Promise<ExecutionEnforcementState> {
+      return options.statePath ? await readExecutionEnforcementState(options.statePath) : emptyEnforcementState();
+    },
+  });
+}
+
+const STATE_WRITES = new Map<string, Promise<void>>();
+
+export async function readExecutionEnforcementState(path: string): Promise<ExecutionEnforcementState> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    return parseEnforcementState(value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyEnforcementState();
+    throw new ExecutionIsolationError("isolation_recovery_blocked", "Durable enforcement state is unreadable.", { cause: error });
+  }
+}
+
+function parseEnforcementState(value: unknown): ExecutionEnforcementState {
+  const object = exactObject(value, new Set(["version", "boundary", "records"]));
+  if (object.version !== 1 || object.boundary !== "provider_specific_not_universal_security_boundary" || !Array.isArray(object.records)) throw new Error();
+  const statuses = new Set(["active", "revoked", "blocked", "unconfined_explicit_full", "cleaned"]);
+  const enforcement = new Set(["unconfined_explicit_full", "write_confinement_exact_grant"]);
+  const disclosure = new Set(["unconfined_explicit_full", "provider_specific_not_universal_boundary"]);
+  const records = object.records.map((entry) => {
+    const record = exactObject(entry, new Set([
+      "occurredAt", "runId", "invocationId", "grantId", "status", "enforcement", "disclosure",
+      "providerId", "implementationDigest", "immutableImageId", "leaseId", "access", "blocker",
+    ]));
+    if (!statuses.has(record.status as string) || !enforcement.has(record.enforcement as string) ||
+        !disclosure.has(record.disclosure as string) || !Array.isArray(record.access)) throw new Error();
+    for (const key of ["occurredAt", "runId", "invocationId", "grantId"] as const) safeText(record[key]);
+    if (!Number.isFinite(Date.parse(record.occurredAt as string))) throw new Error();
+    for (const key of ["providerId", "implementationDigest", "immutableImageId", "leaseId", "blocker"] as const) {
+      if (record[key] !== undefined) safeText(record[key]);
+    }
+    const access = record.access.map((item) => {
+      const accessEntry = exactObject(item, new Set(["canonicalPath", "mode"]));
+      if (!["read", "write", "create"].includes(accessEntry.mode as string)) throw new Error();
+      return { canonicalPath: safeText(accessEntry.canonicalPath), mode: accessEntry.mode as "read" | "write" | "create" };
+    });
+    return { ...record, access } as unknown as ExecutionEnforcementRecord;
+  });
+  return deepFreeze({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records });
+}
+
+function emptyEnforcementState(): ExecutionEnforcementState {
+  return deepFreeze({ version: 1 as const, boundary: "provider_specific_not_universal_security_boundary" as const, records: [] });
+}
+
+async function appendEnforcementRecord(path: string, record: ExecutionEnforcementRecord): Promise<void> {
+  const previous = STATE_WRITES.get(path) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    await withProjectionLock(path, async () => {
+      const state = await readExecutionEnforcementState(path);
+      const updated = { ...state, records: [...state.records, structuredClone(record)].slice(-1_000) };
+      await mkdir(dirname(path), { recursive: true });
+      const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+      try { await writeFile(temporary, JSON.stringify(updated), { flag: "wx", mode: 0o600 }); await rename(temporary, path); }
+      finally { await rm(temporary, { force: true }); }
+    });
+  });
+  STATE_WRITES.set(path, next.catch(() => undefined));
+  await next;
+}
+
+async function withProjectionLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+  await mkdir(dirname(path), { recursive: true });
+  const lockPath = `${path}.lock`;
+  const deadline = Date.now() + 10_000;
+  while (true) {
+    try { await mkdir(lockPath); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) {
+        throw new ExecutionIsolationError("isolation_recovery_blocked", "Enforcement state lock is unavailable.", { cause: error });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try { return await action(); }
+  finally { await rm(lockPath, { recursive: true, force: true }); }
+}
+
+function enforcementRecord(
+  selection: Extract<ExecutionIsolationSelection, { lease: unknown }>,
+  runId: string,
+  status: ExecutionEnforcementRecord["status"],
+  now: Date,
+): ExecutionEnforcementRecord {
+  return {
+    occurredAt: now.toISOString(), runId,
+    invocationId: selection.lease.invocationId, grantId: selection.lease.grantId,
+    status, enforcement: selection.enforcement, disclosure: selection.disclosure,
+    providerId: selection.providerId, implementationDigest: selection.implementationDigest,
+    ...(selection.attestation.imageIdentity ? { immutableImageId: selection.attestation.imageIdentity.immutableId } : {}),
+    leaseId: selection.lease.leaseId, access: selection.lease.grantedAccess,
+  };
+}
+
+async function persistRecovery(
+  statePath: string | undefined, providerId: string, cleaned: number, blockers: readonly string[], now: Date,
+): Promise<void> {
+  if (!statePath || (blockers.length === 0 && cleaned === 0)) return;
+  await appendEnforcementRecord(statePath, {
+    occurredAt: now.toISOString(), runId: "recovery", invocationId: "recovery", grantId: "recovery",
+    status: blockers.length > 0 ? "blocked" : "cleaned", enforcement: "write_confinement_exact_grant",
+    disclosure: "provider_specific_not_universal_boundary", providerId, access: [],
+    ...(blockers.length > 0 ? { blocker: blockers.join("; ").slice(0, 512) } : {}),
   });
 }
 
@@ -343,6 +526,7 @@ function qualifies(
   provider: TrustedProvider,
   now: Date,
 ): boolean {
+  if (/^(?:local-)?native(?:-execution)?$/i.test(attestation.mechanism)) return false;
   const ociIdentity = attestation.mechanism !== "docker-compatible-oci" ||
     (attestation.executableIdentity !== undefined && attestation.imageIdentity !== undefined);
   return attestation.verified === true &&
@@ -448,6 +632,18 @@ function unavailable(): ExecutionIsolationError {
     "isolation_capability_unavailable",
     "No verified isolation provider enforces exact-grant write confinement; execution is paused before launch.",
   );
+}
+
+function reserveGrant(grant: ConsumedExecutionGrantClaims): void {
+  try {
+    reserveConsumedExecutionGrantForIsolation(grant);
+  } catch (error) {
+    throw new ExecutionIsolationError(
+      "isolation_grant_mismatch",
+      "Isolation grant is unavailable or already used.",
+      { cause: error },
+    );
+  }
 }
 
 function boundedError(error: unknown): string {

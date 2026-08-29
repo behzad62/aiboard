@@ -404,6 +404,7 @@ export class ToolBroker implements AgentToolRuntime {
           access.network === true &&
           (this.permissionProfile === "full" ||
             this.decisions.get(callId)?.decision === "approved"),
+        signal,
       });
       const execution = tool.execute(input, { ...toolContext, signal, executionGrant });
       const timeoutResult = new Promise<never>((_resolve, reject) => {
@@ -442,7 +443,7 @@ export class ToolBroker implements AgentToolRuntime {
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
-      if (executionGrant) this.executionGrants.revoke(executionGrant, grantDisposition);
+      if (executionGrant) await this.executionGrants.revoke(executionGrant, grantDisposition);
     }
   }
 

@@ -37,21 +37,31 @@ test("issues a canonical opaque grant and consumes it for exactly its bound call
 
     assert.deepEqual(Object.keys(grant), []);
     assert.equal(JSON.stringify(grant), "{}");
-    const consumed = authority.consume(grant, {
+    const binding = {
       runId: "run-1",
       sessionId: "session-1",
       actor: { role: "worker", id: "worker-1" },
       toolName: "process.run",
       callId: "call-1",
       permissionProfile: "project",
-    });
+    } as const;
+    assert.throws(
+      () => createExecutionGrantAuthority().consume(grant, binding),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_forged",
+    );
+    const attempts = await Promise.allSettled([
+      Promise.resolve().then(() => authority.consume(grant, binding)),
+      Promise.resolve().then(() => authority.consume(grant, binding)),
+    ]);
+    assert.equal(attempts.filter((attempt) => attempt.status === "fulfilled").length, 1);
+    const consumed = attempts.find((attempt) => attempt.status === "fulfilled")!.value;
     assert.equal(consumed.workspacePath, await import("node:fs/promises").then((fs) => fs.realpath(workspace)));
     assert.deepEqual(consumed.access.map((entry) => entry.mode), ["write", "read"]);
     assert.equal(consumed.externalApproved, true);
     assert.equal(consumed.destructiveApproved, false);
     assert.match(consumed.nonce, /^[a-f0-9]{32}$/);
     assert.throws(
-      () => authority.consume(grant, consumed),
+      () => authority.consume(grant, binding),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_consumed",
     );
   } finally {
@@ -110,13 +120,13 @@ test("denies forged, mismatched, escalated, expired, revoked, and restarted gran
     );
     now = new Date("2026-08-28T10:00:00.000Z");
     const revoked = await issue();
-    assert.equal(authority.revoke(revoked, "cancelled"), true);
+    assert.equal(await authority.revoke(revoked, "cancelled"), true);
     assert.throws(
       () => authority.consume(revoked, binding),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked",
     );
     const beforeRestart = await issue();
-    authority.revokeAll("restart");
+    await authority.revokeAll("restart");
     assert.throws(
       () => authority.consume(beforeRestart, binding),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked",
@@ -148,6 +158,47 @@ test("rejects access escalation and symbolic canonical roots before issuance", a
         networkApproved: false,
       }),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_escalation",
+    );
+    await assert.rejects(
+      authority.issue({
+        runId: "run", sessionId: "session", actor: { role: "worker", id: "worker" },
+        toolName: "process.run", callId: "conflict", permissionProfile: "project",
+        workspacePath: workspace,
+        access: [{ path: workspace, mode: "read" }, { path: join(workspace, "."), mode: "write" }],
+        externalApproved: false, destructiveApproved: false, networkApproved: false,
+      }),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_escalation",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("restart and cancellation close an asynchronous issuance barrier", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-race-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const authority = createExecutionGrantAuthority({ beforeIssueCommit: () => barrier });
+    const request = {
+      runId: "run", sessionId: "session", actor: { role: "worker" as const, id: "worker" },
+      toolName: "process.run", callId: "call", permissionProfile: "project" as const,
+      workspacePath: workspace, access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false, destructiveApproved: false, networkApproved: false,
+    };
+    const issuing = authority.issue(request);
+    await new Promise((resolve) => setImmediate(resolve));
+    await authority.revokeAll("restart");
+    release();
+    await assert.rejects(issuing, (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked");
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(
+      authority.issue({ ...request, signal: cancelled.signal }),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked",
     );
   } finally {
     await rm(root, { recursive: true, force: true });
