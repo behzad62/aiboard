@@ -465,6 +465,105 @@ test("recovery replays durable cleaned evidence until projection and acknowledge
   }
 });
 
+test("recovery never acknowledges a newly appended operation whose complete evidence exceeds projection capacity", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const access = Array.from({ length: 256 }, (_, index) => ({
+      canonicalPath: join(fixture.root, `bounded-root-${index}-${"x".repeat(3_980)}`),
+      mode: "write" as const,
+    }));
+    const provider = fakeProvider("fixture-protected-capacity", {
+      recoveryTransitions: [{
+        status: "cleaned", runId: "run", invocationId: "capacity-invocation", grantId: "capacity-grant",
+        leaseId: "capacity-lease", providerId: "fixture-protected-capacity", implementationDigest: registeredImplementationDigest("fixture-protected-capacity"),
+        access, cleanupToken: "capacity-cleanup", cleanedAt: "2026-08-28T10:00:00.000Z",
+      }],
+    });
+    const statePath = join(fixture.root, "protected-capacity.json");
+    const prior = Buffer.from(JSON.stringify({
+      version: 1,
+      boundary: "provider_specific_not_universal_security_boundary",
+      records: [{
+        occurredAt: "2026-08-27T10:00:00.000Z", runId: "old-run", invocationId: "old-invocation", grantId: "old-grant",
+        status: "unconfined_explicit_full", enforcement: "unconfined_explicit_full", disclosure: "unconfined_explicit_full", access: [],
+      }],
+    }));
+    await writeFile(statePath, prior);
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({ stableProviderId: "fixture-protected-capacity", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+    ]), { ...fixture.selectorOptions, statePath });
+
+    const recovery = await selector.recoverOwnedLeases();
+
+    assert.equal(recovery[0]?.cleaned, 0);
+    assert.equal(provider.acknowledgements, 0);
+    assert.deepEqual(await import("node:fs/promises").then((fs) => fs.readFile(statePath)), prior);
+    assert.equal((await readExecutionEnforcementState(statePath)).records.length, 1);
+  } finally { await fixture.close(); }
+});
+
+test("recovery evicts an older complete group but never the newly appended group by timestamp or sort order", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const recoveryTransitions: import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [
+      capacityTransition("fixture-protected-rolling", "old-lease", "2026-08-28T10:00:00.000Z", boundedAccess(fixture.root, "old")),
+    ];
+    const provider = fakeProvider("fixture-protected-rolling", { recoveryTransitions });
+    const statePath = join(fixture.root, "protected-rolling.json");
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({ stableProviderId: "fixture-protected-rolling", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+    ]), { ...fixture.selectorOptions, statePath });
+
+    const firstRecovery = await selector.recoverOwnedLeases();
+    assert.equal(firstRecovery[0]?.cleaned, 1, JSON.stringify(firstRecovery));
+    recoveryTransitions.splice(0, 1,
+      capacityTransition("fixture-protected-rolling", "new-lease", "2020-01-01T00:00:00.000Z", boundedAccess(fixture.root, "new")),
+    );
+    assert.equal((await selector.recoverOwnedLeases())[0]?.cleaned, 1);
+
+    const state = await readExecutionEnforcementState(statePath);
+    assert.deepEqual(state.records.filter((record) => record.status === "cleaned").map((record) => record.leaseId), ["new-lease"]);
+    assert.deepEqual(state.recoverySummaries?.map((summary) => summary.leaseIds), [["new-lease"]]);
+    assert.equal(state.records[0]?.occurredAt, "2020-01-01T00:00:00.000Z");
+    assert.equal(provider.acknowledgements, 2);
+  } finally { await fixture.close(); }
+});
+
+test("capacity-blocked recovery retains its tombstone and later persists the identical group once capacity is available", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const providerId = "fixture-protected-retry";
+    const transition = capacityTransition(providerId, "retry-lease", "2026-08-28T10:00:00.000Z", []);
+    const provider = fakeProvider(providerId, { recoveryTransitions: [transition] });
+    const statePath = join(fixture.root, "protected-retry.json");
+    const priorRecords = Array.from({ length: 1_000 }, (_, index) => activeProjectionRecord(index));
+    await writeFile(statePath, JSON.stringify({
+      version: 1, boundary: "provider_specific_not_universal_security_boundary", records: priorRecords,
+    }));
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({ stableProviderId: providerId, codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+    ]), { ...fixture.selectorOptions, statePath });
+
+    assert.equal((await selector.recoverOwnedLeases())[0]?.cleaned, 0);
+    assert.equal(provider.acknowledgements, 0);
+    assert.equal((await readExecutionEnforcementState(statePath)).records.length, 1_000);
+
+    await writeFile(statePath, JSON.stringify({
+      version: 1, boundary: "provider_specific_not_universal_security_boundary", records: priorRecords.slice(1),
+    }));
+    assert.equal((await selector.recoverOwnedLeases())[0]?.cleaned, 1);
+    const recovered = await readExecutionEnforcementState(statePath);
+    const terminal = recovered.records.filter((record) => record.status === "cleaned");
+    assert.equal(provider.acknowledgements, 1);
+    assert.equal(provider.releases, 0, "projection retry must not invoke local release cleanup");
+    assert.deepEqual(terminal.map((record) => ({ leaseId: record.leaseId, recoveryOperationId: record.recoveryOperationId })), [{
+      leaseId: transition.leaseId,
+      recoveryOperationId: recovered.recoverySummaries?.[0]?.operationId,
+    }]);
+    assert.deepEqual(recovered.recoverySummaries?.[0]?.leaseIds, [transition.leaseId]);
+  } finally { await fixture.close(); }
+});
+
 test("dishonest recovery counts, duplicates, identities, and contradictory transitions fail closed", async () => {
   const fixture = await isolationFixture();
   try {
@@ -540,10 +639,12 @@ function fakeProvider(providerId: string, mutation: {
   partialRecovery?: boolean;
   releaseGate?: Promise<void>;
   acknowledgementFails?: boolean;
+  recoveryTransitions?: import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[];
 } = {}): ExecutionIsolationProvider & {
   acquisitions: number;
   releases: number;
   recoveries: number;
+  acknowledgements: number;
   releaseFails: boolean;
   acknowledgementFails: boolean;
 } {
@@ -552,6 +653,7 @@ function fakeProvider(providerId: string, mutation: {
     acquisitions: 0,
     releases: 0,
     recoveries: 0,
+    acknowledgements: 0,
     releaseFails: mutation.releaseFails ?? false,
     acknowledgementFails: mutation.acknowledgementFails ?? false,
     async attest() {
@@ -603,7 +705,7 @@ function fakeProvider(providerId: string, mutation: {
     },
     async recoverOwned() {
       provider.recoveries += 1;
-      const transitions = cleanupTransitions.map((transition, index) => {
+      const transitions = (mutation.recoveryTransitions ?? cleanupTransitions).map((transition, index) => {
         if (!mutation.partialRecovery || index !== 1) return transition;
         const { cleanupToken: _cleanupToken, cleanedAt: _cleanedAt, ...blocked } = transition;
         return { ...blocked, status: "blocked" as const, blocker: "fixture partial cleanup blocker" };
@@ -612,12 +714,45 @@ function fakeProvider(providerId: string, mutation: {
       return { cleaned: transitions.filter((transition) => transition.status === "cleaned").length, blockers, transitions };
     },
     async acknowledgeRecovery(transitions: readonly import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[]) {
+      provider.acknowledgements += 1;
       if (provider.acknowledgementFails) throw new Error("fixture acknowledgement failed");
       const ids = new Set(transitions.map((transition) => transition.leaseId));
       for (let index = cleanupTransitions.length - 1; index >= 0; index -= 1) if (ids.has(cleanupTransitions[index]!.leaseId)) cleanupTransitions.splice(index, 1);
     },
   };
   return provider;
+}
+
+function boundedAccess(root: string, label: string) {
+  return Array.from({ length: 132 }, (_, index) => ({
+    canonicalPath: join(root, `bounded-${label}-${index}-${"x".repeat(3_950)}`),
+    mode: "write" as const,
+  }));
+}
+
+function capacityTransition(
+  providerId: string,
+  leaseId: string,
+  cleanedAt: string,
+  access: ReturnType<typeof boundedAccess>,
+): import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition {
+  return {
+    status: "cleaned", runId: "run", invocationId: `${leaseId}-invocation`, grantId: `${leaseId}-grant`, leaseId,
+    providerId, implementationDigest: registeredImplementationDigest(providerId), access, cleanupToken: `${leaseId}-cleanup`, cleanedAt,
+  };
+}
+
+function registeredImplementationDigest(providerId: string): string {
+  return createHash("sha256").update(`${providerId}\0${"a".repeat(64)}\0${"b".repeat(64)}`).digest("hex");
+}
+
+function activeProjectionRecord(index: number) {
+  return {
+    occurredAt: "2026-08-27T10:00:00.000Z", runId: `old-run-${index}`, invocationId: `old-invocation-${index}`,
+    grantId: `old-grant-${index}`, status: "active" as const, enforcement: "write_confinement_exact_grant" as const,
+    disclosure: "provider_specific_not_universal_boundary" as const, providerId: "old-provider",
+    implementationDigest: "a".repeat(64), leaseId: `old-lease-${index}`, access: [],
+  };
 }
 
 async function isolationFixture(permissionProfile: "project" | "full" = "project") {

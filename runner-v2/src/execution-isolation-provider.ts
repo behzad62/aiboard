@@ -712,14 +712,18 @@ async function appendRecoveryOperation(
       if (state.recoverySummaries?.some((entry) => entry.operationId === validated.operationId)) return;
       const updated = { ...state, records: [...state.records, ...records.map((record) => structuredClone(record))],
         recoverySummaries: [...(state.recoverySummaries ?? []), structuredClone(validated)] };
-      await writeBoundedEnforcementState(path, updated);
+      await writeBoundedEnforcementState(path, updated, validated.operationId);
     });
   });
   STATE_WRITES.set(path, next.catch(() => undefined));
   await next;
 }
 
-async function writeBoundedEnforcementState(path: string, state: ExecutionEnforcementState): Promise<void> {
+async function writeBoundedEnforcementState(
+  path: string,
+  state: ExecutionEnforcementState,
+  protectedRecoveryOperationId?: string,
+): Promise<void> {
   const records = [...state.records];
   const summaries = [...(state.recoverySummaries ?? [])];
   let serialized = "";
@@ -728,6 +732,15 @@ async function writeBoundedEnforcementState(path: string, state: ExecutionEnforc
       ...(summaries.length > 0 ? { recoverySummaries: summaries } : { recoverySummaries: undefined }) });
     if (records.length <= MAX_ENFORCEMENT_RECORDS && summaries.length <= MAX_RECOVERY_SUMMARIES &&
         Buffer.byteLength(serialized) <= MAX_ENFORCEMENT_STATE_BYTES) break;
+    if (protectedRecoveryOperationId) {
+      if (!evictOlderCompleteRecoveryEvidence(records, summaries, protectedRecoveryOperationId)) {
+        throw new ExecutionIsolationError(
+          "isolation_recovery_blocked",
+          "The complete newly recovered isolation operation exceeds the durable projection capacity.",
+        );
+      }
+      continue;
+    }
     const oldest = records[0];
     const group = oldest?.leaseId ? summaries.find((summary) => summary.occurredAt === oldest.occurredAt &&
       summary.providerId === oldest.providerId && summary.leaseIds?.includes(oldest.leaseId!) &&
@@ -752,6 +765,47 @@ async function writeBoundedEnforcementState(path: string, state: ExecutionEnforc
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   try { await writeFile(temporary, serialized, { flag: "wx", mode: 0o600 }); await rename(temporary, path); }
   finally { await rm(temporary, { force: true }); }
+}
+
+function evictOlderCompleteRecoveryEvidence(
+  records: ExecutionEnforcementRecord[],
+  summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
+  protectedRecoveryOperationId: string,
+): boolean {
+  const olderGroup = summaries.find((summary) => summary.operationId !== protectedRecoveryOperationId);
+  if (olderGroup) {
+    removeRecoveryGroup(records, summaries, olderGroup);
+    return true;
+  }
+  const groupedLeaseIds = new Set<string>();
+  for (const summary of summaries) {
+    for (const leaseId of summary.leaseIds ?? []) groupedLeaseIds.add(leaseId);
+  }
+  const independent = records.findIndex((record) =>
+    record.recoveryOperationId !== protectedRecoveryOperationId &&
+    !groupedLeaseIds.has(record.leaseId ?? "") &&
+    record.status !== "active",
+  );
+  if (independent < 0) return false;
+  records.splice(independent, 1);
+  return true;
+}
+
+function removeRecoveryGroup(
+  records: ExecutionEnforcementRecord[],
+  summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
+  summary: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number],
+): void {
+  const leaseIds = new Set(summary.leaseIds);
+  summaries.splice(summaries.indexOf(summary), 1);
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!;
+    if (record.occurredAt === summary.occurredAt && record.providerId === summary.providerId &&
+        record.leaseId && leaseIds.has(record.leaseId) &&
+        (summary.operationId ? record.recoveryOperationId === summary.operationId : record.recoveryOperationId === undefined)) {
+      records.splice(index, 1);
+    }
+  }
 }
 
 function parseAttestation(value: unknown): ExecutionIsolationAttestation {
