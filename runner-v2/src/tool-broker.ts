@@ -16,6 +16,11 @@ import type {
   ToolResult,
 } from "./agent-contracts.js";
 import type { PermissionProfile } from "./contracts.js";
+import {
+  createExecutionGrantAuthority,
+  type ExecutionGrantAuthority,
+  type OpaqueExecutionGrant,
+} from "./execution-grants.js";
 import { PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES } from "./runner-extension.js";
 import {
   ToolRegistry,
@@ -67,6 +72,7 @@ export interface ToolBrokerOptions {
   ledger?: ToolInvocationLedger;
   budget?: BudgetLedger;
   budgetScopeId?: string;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 interface InvocationCacheEntry {
@@ -94,6 +100,7 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly ledger?: ToolInvocationLedger;
   private readonly budget?: BudgetLedger;
   private readonly budgetScopeId?: string;
+  private readonly executionGrants: ExecutionGrantAuthority;
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
@@ -110,6 +117,7 @@ export class ToolBroker implements AgentToolRuntime {
     this.ledger = options.ledger;
     this.budget = options.budget;
     this.budgetScopeId = options.budgetScopeId;
+    this.executionGrants = options.executionGrants ?? createExecutionGrantAuthority();
     if (Boolean(this.budget) !== Boolean(this.budgetScopeId)) {
       throw new Error("Tool budget and budgetScopeId must be configured together.");
     }
@@ -249,6 +257,8 @@ export class ToolBroker implements AgentToolRuntime {
       (outsideWorkspace ||
         tool.definition.effect === "external" ||
         access.external === true ||
+        access.destructive === true ||
+        access.network === true ||
         access.credentialChange === true ||
         (this.permissionProfile === "guarded" && tool.definition.effect !== "none"));
 
@@ -362,8 +372,40 @@ export class ToolBroker implements AgentToolRuntime {
       ? AbortSignal.any([context.signal, timeoutController.signal])
       : timeoutController.signal;
     let timeout: NodeJS.Timeout | undefined;
+    let executionGrant: OpaqueExecutionGrant | undefined;
+    let grantDisposition: "completed" | "cancelled" | "timed_out" = "completed";
     try {
-      const execution = tool.execute(input, { ...toolContext, signal });
+      executionGrant = await this.executionGrants.issue({
+        runId: context.runId,
+        sessionId: context.sessionId,
+        actor: context.actor,
+        toolName: tool.definition.name,
+        callId,
+        permissionProfile: this.permissionProfile,
+        workspacePath: this.workspacePath,
+        access: (access.paths?.length
+          ? access.paths.map((entry) => ({
+              path: entry.path,
+              mode: entry.access === "read" ? "read" as const : "write" as const,
+            }))
+          : [{
+              path: this.workspacePath,
+              mode: tool.definition.effect === "none" ? "read" as const : "write" as const,
+            }]),
+        externalApproved:
+          outsideWorkspace &&
+          (this.permissionProfile === "full" ||
+            this.decisions.get(callId)?.decision === "approved"),
+        destructiveApproved:
+          access.destructive === true &&
+          (this.permissionProfile === "full" ||
+            this.decisions.get(callId)?.decision === "approved"),
+        networkApproved:
+          access.network === true &&
+          (this.permissionProfile === "full" ||
+            this.decisions.get(callId)?.decision === "approved"),
+      });
+      const execution = tool.execute(input, { ...toolContext, signal, executionGrant });
       const timeoutResult = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           timeoutController.abort();
@@ -380,6 +422,7 @@ export class ToolBroker implements AgentToolRuntime {
       return output;
     } catch (error) {
       if (error instanceof ToolTimeoutError) {
+        grantDisposition = "timed_out";
         const output = outputFailure(
           "tool_timeout",
           `Tool ${tool.definition.name} exceeded ${this.toolTimeoutMs} ms.`
@@ -389,6 +432,7 @@ export class ToolBroker implements AgentToolRuntime {
         return output;
       }
       if (signal.aborted) {
+        grantDisposition = "cancelled";
         const output = outputFailure("tool_cancelled", "Tool call was cancelled.");
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
         this.settleToolBudget(budgetReservationId);
@@ -398,6 +442,7 @@ export class ToolBroker implements AgentToolRuntime {
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      if (executionGrant) this.executionGrants.revoke(executionGrant, grantDisposition);
     }
   }
 

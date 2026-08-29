@@ -73,6 +73,7 @@ import {
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
+import { createConfiguredOciIsolationSelector } from "./oci-execution-isolation-provider.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type {
@@ -139,6 +140,7 @@ import { VerificationWorkspaceManager } from "./verification-workspace.js";
 
 export type NativeBuildRuntimeResourceStage =
   | "capabilities"
+  | "execution_isolation"
   | "evidence_store"
   | "scheduler_store"
   | "session_store"
@@ -296,6 +298,17 @@ export class NativeBuildFactory {
     );
     let initializationStage: NativeBuildRuntimeInitializationStage = "capabilities";
     try {
+    initializationStage = "execution_isolation";
+    const executionIsolation = await createConfiguredOciIsolationSelector(
+      capabilitiesConfig,
+      join(runRoot, "execution-isolation"),
+    );
+    assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
+    constructionResources.add("execution_isolation", async () => {
+      assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
+    }, true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_isolation");
+    initializationStage = "capabilities";
     const runCapabilities = await createNativeRunCapabilities({
       config: {
         ...capabilitiesConfig,
@@ -2480,6 +2493,18 @@ async function loadHistoricalFinalVerificationDiagnostics(input: {
 function boundedErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length <= 512 ? message : `${message.slice(0, 512)}…`;
+}
+
+function assertIsolationRecoveryClear(
+  results: readonly { providerId: string; blockers: readonly string[] }[],
+): void {
+  const blockers = results.flatMap((result) =>
+    result.blockers.map((blocker) => `${result.providerId}: ${blocker}`));
+  if (blockers.length > 0) {
+    throw new Error(
+      `Configured execution-isolation recovery is blocked: ${blockers.join("; ")}`,
+    );
+  }
 }
 
 /** Derives usage identities solely from settled, attributable budget records. */

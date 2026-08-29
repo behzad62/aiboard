@@ -33,6 +33,13 @@ test("capability configuration loads exact allowlisted extensions and bounded la
         maxPendingRequests: 32,
         maxDocumentBytes: 262_144,
       }],
+      isolationProviders: [{
+        id: "docker.fixture",
+        type: "oci",
+        cliPath: process.execPath,
+        image: "fixture/image@sha256:" + "a".repeat(64),
+        allowNetwork: false,
+      }],
     });
 
     const loaded = await loadRunnerCapabilitiesConfig(fixture.path);
@@ -55,6 +62,13 @@ test("capability configuration loads exact allowlisted extensions and bounded la
       maxPendingRequests: 32,
       maxDocumentBytes: 262_144,
     }]);
+    assert.deepEqual(loaded.isolationProviders, [{
+      id: "docker.fixture",
+      type: "oci",
+      cliPath: process.execPath,
+      image: "fixture/image@sha256:" + "a".repeat(64),
+      allowNetwork: false,
+    }]);
   } finally {
     fixture.close();
   }
@@ -72,6 +86,31 @@ test("capability configuration rejects unknown fields, duplicate identities, rel
       }, "duplicate_language_provider"],
       [{ version: 1, extensions: ["relative/plugin"], languageServers: [] }, "invalid_extension_path"],
       [{ version: 2, extensions: [], languageServers: [] }, "unsupported_version"],
+      [{
+        version: 1,
+        extensions: [],
+        languageServers: [],
+        isolationProviders: [{
+          id: "oci.relative",
+          type: "oci",
+          cliPath: "docker",
+          image: "alpine:latest",
+          allowNetwork: false,
+        }],
+      }, "invalid_isolation_provider"],
+      [{
+        version: 1,
+        extensions: [],
+        languageServers: [],
+        isolationProviders: [{
+          id: "oci.unknown",
+          type: "oci",
+          cliPath: process.execPath,
+          image: "alpine:latest",
+          allowNetwork: false,
+          privileged: true,
+        }],
+      }, "unknown_field"],
       [{
         version: 1,
         extensions: [],

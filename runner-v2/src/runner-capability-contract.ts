@@ -87,6 +87,13 @@ export interface RunnerCapabilityLanguageServerContract {
   executable?: LanguageServerExecutableIdentity;
 }
 
+export interface RunnerCapabilityIsolationProviderContract {
+  id: string;
+  type: "oci";
+  configDigest: string;
+  executable: Readonly<{ path: string; digest: string }>;
+}
+
 export interface RunnerCapabilityContract {
   version: typeof RUNNER_CAPABILITY_CONTRACT_VERSION;
   /** Historical contracts remain readable but cannot recover an active Build. */
@@ -104,6 +111,8 @@ export interface RunnerCapabilityContract {
   };
   extensions: RunnerCapabilityExtensionContract[];
   languageServers: RunnerCapabilityLanguageServerContract[];
+  /** Current contracts bind configured providers; older historical contracts omit it. */
+  isolationProviders?: RunnerCapabilityIsolationProviderContract[];
   digest: string;
 }
 
@@ -326,6 +335,9 @@ export function assertRunnerCapabilityContract(
     });
   }
   assertUnique(serverIds, "language server");
+  const isolationProviders = value.isolationProviders === undefined
+    ? undefined
+    : parseIsolationProviderContracts(value.isolationProviders);
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
     ...(hasExecutionSafetyVersion
@@ -341,6 +353,7 @@ export function assertRunnerCapabilityContract(
     },
     extensions,
     languageServers,
+    ...(isolationProviders === undefined ? {} : { isolationProviders }),
   };
   if (digest(payload) !== value.digest) {
     throw invalidContract("Runner capability contract digest does not match its entries.");
@@ -373,6 +386,12 @@ export function cloneRunnerCapabilityContract(
         ? { executable: cloneLanguageServerExecutableIdentity(server.executable) }
         : {}),
     })),
+    ...(contract.isolationProviders === undefined
+      ? {}
+      : { isolationProviders: contract.isolationProviders.map((provider) => ({
+          ...provider,
+          executable: { ...provider.executable },
+        })) }),
     digest: contract.digest,
   };
 }
@@ -398,6 +417,24 @@ async function captureRunnerCapabilities(
     .sort((left, right) => left.id.localeCompare(right.id));
   assertUnique(languageServers.map((server) => server.id), "language server");
 
+  const isolationProviders = await Promise.all((config.isolationProviders ?? [])
+    .map(async (provider) => {
+      const executable = await attestConfiguredOciExecutable(provider.cliPath);
+      return {
+        id: provider.id,
+        type: provider.type,
+        configDigest: digest({
+          id: provider.id,
+          type: provider.type,
+          cliPath: executable.path,
+          image: provider.image,
+          allowNetwork: provider.allowNetwork,
+        }),
+        executable,
+      };
+    }));
+  isolationProviders.sort((left, right) => left.id.localeCompare(right.id));
+
   const payload = {
     version: RUNNER_CAPABILITY_CONTRACT_VERSION,
     executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION,
@@ -409,6 +446,7 @@ async function captureRunnerCapabilities(
     },
     extensions: extensionContracts,
     languageServers,
+    isolationProviders,
   };
   return {
     contract: {
@@ -447,6 +485,9 @@ export async function attestRunnerCapabilitiesLanguageServers(
   return {
     extensions: [...config.extensions],
     languageServers,
+    ...(config.isolationProviders
+      ? { isolationProviders: config.isolationProviders.map((provider) => ({ ...provider })) }
+      : {}),
   };
 }
 
@@ -482,7 +523,77 @@ export function runnerCapabilitiesForContract(
       commandIdentity: cloneLanguageServerExecutableIdentity(expected.executable),
     };
   });
-  return { extensions: [...config.extensions], languageServers };
+  const isolationById = new Map(
+    (contract.isolationProviders ?? []).map((provider) => [provider.id, provider]),
+  );
+  return {
+    extensions: [...config.extensions],
+    languageServers,
+    ...(config.isolationProviders
+      ? { isolationProviders: config.isolationProviders.map((provider) => {
+          const expected = isolationById.get(provider.id);
+          if (!expected) {
+            throw new RunnerCapabilityContractError(
+              "capability_contract_mismatch",
+              `Runner capability contract has no configured isolation provider ${provider.id}.`,
+            );
+          }
+          return {
+            ...provider,
+            cliPath: expected.executable.path,
+            cliIdentity: { ...expected.executable },
+          };
+        }) }
+      : {}),
+  };
+}
+
+function parseIsolationProviderContracts(
+  value: unknown,
+): RunnerCapabilityIsolationProviderContract[] {
+  if (!Array.isArray(value)) throw invalidContract("Isolation provider contracts are invalid.");
+  const providers = value.map((provider) => {
+    if (!isObject(provider) || Object.keys(provider).some((key) =>
+      !["id", "type", "configDigest", "executable"].includes(key)) ||
+      typeof provider.id !== "string" || provider.type !== "oci" ||
+      !isDigest(provider.configDigest) || !isConfiguredOciExecutableIdentity(provider.executable)) {
+      throw invalidContract("Isolation provider contract entry is invalid.");
+    }
+    return {
+      id: provider.id,
+      type: "oci" as const,
+      configDigest: provider.configDigest,
+      executable: { ...(provider.executable as { path: string; digest: string }) },
+    };
+  });
+  assertUnique(providers.map((provider) => provider.id), "isolation provider");
+  return providers;
+}
+
+function isConfiguredOciExecutableIdentity(
+  value: unknown,
+): value is { path: string; digest: string } {
+  return isObject(value) && Object.keys(value).every((key) =>
+    key === "path" || key === "digest") &&
+    typeof value.path === "string" && isAbsolute(value.path) && isDigest(value.digest);
+}
+
+async function attestConfiguredOciExecutable(
+  input: string,
+): Promise<{ path: string; digest: string }> {
+  if (!isAbsolute(input) || input.includes("\0")) {
+    throw new Error("Configured OCI executable path must be absolute.");
+  }
+  const candidate = resolve(input);
+  const metadata = await lstat(candidate);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("Configured OCI executable must be a real file.");
+  }
+  const actual = resolve(await realpath(candidate));
+  if (normalizePath(actual) !== normalizePath(candidate)) {
+    throw new Error("Configured OCI executable resolves through a symbolic path.");
+  }
+  return { path: actual, digest: digest(await readFile(actual)) };
 }
 
 async function verifiedConfiguredLanguageServerIdentity(

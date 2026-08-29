@@ -1,3 +1,5 @@
+import type { OpaqueExecutionGrant } from "./execution-grants.js";
+
 export type AgentRole = "architect" | "worker" | "subagent" | "verifier";
 
 export interface AgentActor {
@@ -121,6 +123,8 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   callId?: string;
   toolName?: string;
+  /** Runner-created after authorization. Model input can never populate this field. */
+  executionGrant?: OpaqueExecutionGrant;
 }
 
 export type ToolPathAccessMode = "read" | "write" | "delete";
@@ -135,6 +139,7 @@ export interface ToolAccessRequest {
   paths?: ToolPathAccess[];
   external?: boolean;
   destructive?: boolean;
+  network?: boolean;
   credentialChange?: boolean;
 }
 

@@ -38,6 +38,49 @@ test("current capability snapshots bind the execution-safety contract version in
   assert.notEqual(contract.digest, fixtureDigest(withoutExecutionSafety));
 });
 
+test("capability contracts bind optional OCI configuration without probing or discovering Docker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "runner-capability-oci-"));
+  const cli = join(root, process.platform === "win32" ? "configured.exe" : "configured");
+  writeFileSync(cli, "not executed by capability projection");
+  try {
+    const config: RunnerCapabilitiesConfig = {
+      extensions: [],
+      languageServers: [],
+      isolationProviders: [{
+        id: "oci.configured",
+        type: "oci",
+        cliPath: cli,
+        image: "configured/image:only",
+        allowNetwork: false,
+      }],
+    };
+    const contract = await createRunnerCapabilityContract(config);
+    assert.equal(contract.isolationProviders?.length, 1);
+    assert.equal(contract.isolationProviders?.[0]?.id, "oci.configured");
+    assert.match(contract.isolationProviders?.[0]?.configDigest ?? "", /^[a-f0-9]{64}$/);
+    const changed = await createRunnerCapabilityContract({
+      ...config,
+      isolationProviders: [{ ...config.isolationProviders![0]!, allowNetwork: true }],
+    });
+    assert.notEqual(changed.digest, contract.digest);
+    const boundProviders = runnerCapabilitiesForContract(config, contract).isolationProviders;
+    assert.deepEqual(boundProviders?.map(({ cliIdentity: _identity, ...provider }) => provider),
+      config.isolationProviders);
+    assert.deepEqual(boundProviders?.[0]?.cliIdentity, contract.isolationProviders?.[0]?.executable);
+    assert.notEqual(
+      runnerCapabilitiesForContract(config, contract).isolationProviders,
+      config.isolationProviders,
+    );
+    writeFileSync(cli, "replacement executable bytes");
+    await assert.rejects(
+      validateRunnerCapabilityContract(contract, config),
+      (error: unknown) => (error as { code?: unknown }).code === "capability_contract_mismatch",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("historical capability contracts remain readable but cannot recover an active Build", async () => {
   const current = await createRunnerCapabilityContract({ extensions: [], languageServers: [] });
   const historicalPayload = {

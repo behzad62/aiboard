@@ -11,7 +11,13 @@ const CONFIG_VERSION = 1;
 const MAX_CONFIG_BYTES = 256 * 1024;
 const MAX_EXTENSIONS = 64;
 const MAX_LANGUAGE_SERVERS = 32;
-const TOP_LEVEL_KEYS = new Set(["version", "extensions", "languageServers"]);
+const MAX_ISOLATION_PROVIDERS = 8;
+const TOP_LEVEL_KEYS = new Set([
+  "version", "extensions", "languageServers", "isolationProviders",
+]);
+const ISOLATION_PROVIDER_KEYS = new Set([
+  "id", "type", "cliPath", "image", "allowNetwork",
+]);
 const LANGUAGE_SERVER_KEYS = new Set([
   "id",
   "displayName",
@@ -41,7 +47,9 @@ export type RunnerCapabilitiesConfigErrorCode =
   | "invalid_extension_path"
   | "duplicate_extension_path"
   | "invalid_language_server"
-  | "duplicate_language_provider";
+  | "duplicate_language_provider"
+  | "invalid_isolation_provider"
+  | "duplicate_isolation_provider";
 
 export class RunnerCapabilitiesConfigError extends Error {
   constructor(
@@ -72,6 +80,17 @@ export interface ConfiguredLanguageServer {
 export interface RunnerCapabilitiesConfig {
   extensions: string[];
   languageServers: ConfiguredLanguageServer[];
+  isolationProviders?: ConfiguredOciIsolationProvider[];
+}
+
+export interface ConfiguredOciIsolationProvider {
+  id: string;
+  type: "oci";
+  cliPath: string;
+  image: string;
+  allowNetwork: boolean;
+  /** Runner-owned executable identity; configuration JSON cannot provide this field. */
+  cliIdentity?: Readonly<{ path: string; digest: string }>;
 }
 
 export function emptyRunnerCapabilitiesConfig(): RunnerCapabilitiesConfig {
@@ -187,7 +206,56 @@ export function parseRunnerCapabilitiesConfig(input: unknown): RunnerCapabilitie
     ids.add(server.descriptor.id);
     languageServers.push(server);
   }
-  return { extensions, languageServers };
+  const isolationProviders = parseIsolationProviders(value.isolationProviders);
+  return {
+    extensions,
+    languageServers,
+    ...(value.isolationProviders === undefined ? {} : { isolationProviders }),
+  };
+}
+
+function parseIsolationProviders(input: unknown): ConfiguredOciIsolationProvider[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input) || input.length > MAX_ISOLATION_PROVIDERS) {
+    throw invalidIsolationProvider(
+      `isolationProviders must be an array of at most ${MAX_ISOLATION_PROVIDERS} entries.`,
+    );
+  }
+  const ids = new Set<string>();
+  return input.map((entry) => {
+    const value = exactObject(entry, ISOLATION_PROVIDER_KEYS, "isolation provider");
+    if (value.type !== "oci") {
+      throw invalidIsolationProvider("Isolation provider type must be oci.");
+    }
+    const id = typeof value.id === "string" &&
+      /^[a-z][a-z0-9.-]{0,63}$/.test(value.id) ? value.id : undefined;
+    if (!id) throw invalidIsolationProvider("Isolation provider id is invalid.");
+    if (ids.has(id)) {
+      throw new RunnerCapabilitiesConfigError(
+        "duplicate_isolation_provider",
+        `Duplicate isolation provider ${id}.`,
+      );
+    }
+    ids.add(id);
+    if (typeof value.cliPath !== "string" || !isAbsolute(value.cliPath) ||
+        value.cliPath.includes("\0")) {
+      throw invalidIsolationProvider(`${id} cliPath must be explicit and absolute.`);
+    }
+    if (typeof value.image !== "string" || !value.image.trim() ||
+        value.image.includes("\0") || Buffer.byteLength(value.image) > 1024) {
+      throw invalidIsolationProvider(`${id} image is invalid.`);
+    }
+    if (typeof value.allowNetwork !== "boolean") {
+      throw invalidIsolationProvider(`${id} allowNetwork must be boolean.`);
+    }
+    return {
+      id,
+      type: "oci" as const,
+      cliPath: resolve(value.cliPath),
+      image: value.image,
+      allowNetwork: value.allowNetwork,
+    };
+  });
 }
 
 function parseLanguageServer(input: unknown): ConfiguredLanguageServer {
@@ -286,6 +354,10 @@ function invalidShape(message: string): RunnerCapabilitiesConfigError {
 
 function invalidLanguageServer(message: string): RunnerCapabilitiesConfigError {
   return new RunnerCapabilitiesConfigError("invalid_language_server", message);
+}
+
+function invalidIsolationProvider(message: string): RunnerCapabilitiesConfigError {
+  return new RunnerCapabilitiesConfigError("invalid_isolation_provider", message);
 }
 
 function normalizePath(path: string): string {

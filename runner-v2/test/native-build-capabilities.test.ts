@@ -762,6 +762,7 @@ test("NativeBuildFactory reserves built-in tool names before any extension start
 
 test("NativeBuildFactory reverses every acquired runtime resource after construction faults", async () => {
   const stages = [
+    "execution_isolation",
     "capabilities",
     "evidence_store",
     "scheduler_store",
@@ -891,6 +892,7 @@ test("NativeBuildFactory handle close releases owned stores while retaining reco
       "scheduler_store",
       "evidence_store",
       "capabilities",
+      "execution_isolation",
     ]);
     const root = runRoot(fixture.state, runId);
     for (const database of [
@@ -970,10 +972,12 @@ test("NativeBuildFactory retains the primary construction error while retrying e
       });
       return true;
     });
-    assert.deepEqual(acquired, ["capabilities", "evidence_store", "scheduler_store"]);
+    assert.deepEqual(acquired, [
+      "execution_isolation", "capabilities", "evidence_store", "scheduler_store",
+    ]);
     assert.deepEqual(
       cleanupAttempts,
-      ["scheduler_store", "evidence_store", "capabilities"],
+      ["scheduler_store", "evidence_store", "capabilities", "execution_isolation"],
       "a cleanup failure must not stop reverse-order unwinding",
     );
 
@@ -983,6 +987,7 @@ test("NativeBuildFactory retains the primary construction error while retrying e
       "scheduler_store",
       "evidence_store",
       "capabilities",
+      "execution_isolation",
       "evidence_store",
     ]);
     assertReleasedRunnerDatabase(join(runRoot(fixture.state, runId), "evidence.sqlite"));
@@ -1198,6 +1203,7 @@ test("NativeBuildFactory serves a terminal legacy Build from read-only durable s
       builtin: prepared.capabilityContract!.builtin,
       extensions: prepared.capabilityContract!.extensions,
       languageServers: prepared.capabilityContract!.languageServers,
+      isolationProviders: prepared.capabilityContract!.isolationProviders,
     });
     assert.deepEqual(await handle.transcript(), {
       turns: [],

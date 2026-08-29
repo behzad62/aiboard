@@ -15,6 +15,7 @@ import type {
   ToolCallBlock,
   ToolExecutionContext,
 } from "../src/agent-contracts.js";
+import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 
@@ -305,6 +306,82 @@ test("large outputs become artifacts and timeouts abort the tool", async () => {
     assert.equal(observedAbort, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("authorization attaches one Runner-created call-bound grant and revokes leftovers", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-broker-grant-"));
+  const authority = createExecutionGrantAuthority({ ttlMs: 5_000 });
+  const broker = new ToolBroker({
+    permissionProfile: "project",
+    workspacePath: workspace,
+    executionGrants: authority,
+    toolTimeoutMs: 20,
+  });
+  let canonicalPath = "";
+  broker.register({
+    definition: {
+      name: "process.run",
+      description: "Run",
+      inputSchema: { type: "object" },
+      readOnly: false,
+      effect: "workspace",
+    },
+    validate: () => ({ ok: true, value: {} }),
+    assessAccess: () => ({
+      capability: "process.run",
+      paths: [{ path: "generated", access: "write" }],
+    }),
+    execute: async (_input, toolContext) => {
+      assert.ok(toolContext.executionGrant);
+      const claims = authority.consume(toolContext.executionGrant, {
+        runId: toolContext.runId,
+        sessionId: toolContext.sessionId,
+        actor: toolContext.actor,
+        toolName: "process.run",
+        callId: toolContext.callId!,
+        permissionProfile: "project",
+      });
+      canonicalPath = claims.access[0]!.canonicalPath;
+      return { content: [], isError: false };
+    },
+  });
+  broker.register({
+    definition: {
+      name: "fixture.ignore_grant",
+      description: "Ignore the issued grant until timeout",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: () => ({ ok: true, value: {} }),
+    execute: async (_input, toolContext) => {
+      assert.ok(toolContext.executionGrant);
+      await new Promise<void>(() => undefined);
+      return { content: [], isError: false };
+    },
+  });
+  try {
+    const output = await broker.invoke({
+      type: "tool_call",
+      callId: "grant-call",
+      name: "process.run",
+      arguments: {},
+    }, context());
+    assert.equal(output.isError, false);
+    assert.equal(canonicalPath, join(workspace, "generated"));
+    assert.equal(authority.activeSnapshots().length, 0);
+
+    const timedOut = await broker.invoke({
+      type: "tool_call",
+      callId: "ignored-grant",
+      name: "fixture.ignore_grant",
+      arguments: {},
+    }, context());
+    assert.equal(timedOut.error?.code, "tool_timeout");
+    assert.equal(authority.activeSnapshots().length, 0);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
   }
 });
 

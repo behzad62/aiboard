@@ -192,12 +192,21 @@ test("CLI accepts a valid external capability configuration before listening", a
   const project = join(root, "project");
   const state = join(root, "state");
   const config = join(root, "runner-capabilities.json");
+  const configuredOciCli = join(root, "configured-docker-compatible.exe");
   mkdirSync(project);
   mkdirSync(state);
+  writeFileSync(configuredOciCli, "must not execute during CLI readiness");
   writeFileSync(config, JSON.stringify({
     version: 1,
     extensions: [],
     languageServers: [],
+    isolationProviders: [{
+      id: "oci.configured",
+      type: "oci",
+      cliPath: configuredOciCli,
+      image: "configured/image:only",
+      allowNetwork: false,
+    }],
   }));
   let runner: TrackedCliChild | undefined;
   let readinessSucceeded = false;
