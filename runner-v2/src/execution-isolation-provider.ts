@@ -616,9 +616,10 @@ async function appendEnforcementRecord(path: string, record: ExecutionEnforcemen
   const next = previous.then(async () => {
     await withProjectionLock(path, async () => {
       const state = await readExecutionEnforcementState(path);
-      const updated = { ...state, records: [...state.records, structuredClone(validated)] };
+      const appended = structuredClone(validated);
+      const updated = { ...state, records: [...state.records, appended] };
       await mkdir(dirname(path), { recursive: true });
-      await writeBoundedEnforcementState(path, updated, [validated]);
+      await writeBoundedEnforcementState(path, updated, [appended]);
     });
   });
   STATE_WRITES.set(path, next.catch(() => undefined));
@@ -710,9 +711,10 @@ async function appendRecoveryOperation(
     await withProjectionLock(path, async () => {
       const state = await readExecutionEnforcementState(path);
       if (state.recoverySummaries?.some((entry) => entry.operationId === validated.operationId)) return;
-      const updated = { ...state, records: [...state.records, ...records.map((record) => structuredClone(record))],
+      const appended = records.map((record) => structuredClone(record));
+      const updated = { ...state, records: [...state.records, ...appended],
         recoverySummaries: [...(state.recoverySummaries ?? []), structuredClone(validated)] };
-      await writeBoundedEnforcementState(path, updated, records);
+      await writeBoundedEnforcementState(path, updated, appended);
     });
   });
   STATE_WRITES.set(path, next.catch(() => undefined));
@@ -726,14 +728,14 @@ async function writeBoundedEnforcementState(
 ): Promise<void> {
   const records = [...state.records];
   const summaries = [...(state.recoverySummaries ?? [])];
-  const appendedRecordKeys = new Set(appendedRecords.map((record) => JSON.stringify(record)));
+  const appendedRecordInstances = new Set(appendedRecords);
   let serialized = "";
   while (true) {
     serialized = JSON.stringify({ ...state, records,
       ...(summaries.length > 0 ? { recoverySummaries: summaries } : { recoverySummaries: undefined }) });
     if (records.length <= MAX_ENFORCEMENT_RECORDS && summaries.length <= MAX_RECOVERY_SUMMARIES &&
         Buffer.byteLength(serialized) <= MAX_ENFORCEMENT_STATE_BYTES) break;
-    if (!evictSafeIndependentEnforcementRecord(records, summaries, appendedRecordKeys)) {
+    if (!evictSafeIndependentEnforcementRecord(records, summaries, appendedRecordInstances)) {
       throw new ExecutionIsolationError(
         "isolation_recovery_blocked",
         "Durable enforcement projection capacity cannot retain the complete recovery audit history.",
@@ -749,11 +751,11 @@ async function writeBoundedEnforcementState(
 function evictSafeIndependentEnforcementRecord(
   records: ExecutionEnforcementRecord[],
   summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
-  appendedRecordKeys: ReadonlySet<string>,
+  appendedRecordInstances: ReadonlySet<ExecutionEnforcementRecord>,
 ): boolean {
   const independent = records.findIndex((record) =>
     !isRecoveryAuditTransition(record, summaries) &&
-    !appendedRecordKeys.has(JSON.stringify(record)) &&
+    !appendedRecordInstances.has(record) &&
     record.status !== "active",
   );
   if (independent < 0) return false;

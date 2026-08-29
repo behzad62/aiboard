@@ -666,6 +666,30 @@ test("ordinary append never shifts an oldest active record or a recovery group w
   }
 });
 
+test("ordinary append compacts an older byte-identical independent terminal record by candidate instance", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const statePath = join(fixture.root, "identical-independent.json");
+    const record = selectionBlockedRecord(fixture);
+    await writeFile(statePath, JSON.stringify({
+      version: 1, boundary: "provider_specific_not_universal_security_boundary", records: Array.from({ length: 1_000 }, () => record),
+    }));
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([]), {
+      ...fixture.selectorOptions,
+      statePath,
+    });
+
+    await assert.rejects(
+      selector.acquire({ permissionProfile: "project", intent: fixture.intent, grant: fixture.claims }),
+      (error) => error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable",
+    );
+
+    const state = await readExecutionEnforcementState(statePath);
+    assert.equal(state.records.length, 1_000);
+    assert.equal(state.records.every((entry) => JSON.stringify(entry) === JSON.stringify(record)), true);
+  } finally { await fixture.close(); }
+});
+
 test("capacity-blocked recovery retains its tombstone and later persists the identical group once capacity is available", async () => {
   const fixture = await isolationFixture();
   try {
@@ -900,6 +924,17 @@ function independentProjectionRecord(root: string, index: number) {
     grantId: `independent-grant-${index}`, status: "unconfined_explicit_full" as const,
     enforcement: "unconfined_explicit_full" as const, disclosure: "unconfined_explicit_full" as const,
     access: [{ canonicalPath: join(root, `independent-${index}-${"x".repeat(3_000)}`), mode: "read" as const }],
+  };
+}
+
+function selectionBlockedRecord(fixture: Awaited<ReturnType<typeof isolationFixture>>) {
+  return {
+    occurredAt: "2026-08-28T10:00:00.000Z", runId: fixture.intent.runId, invocationId: fixture.intent.invocationId,
+    grantId: fixture.claims.grantId, status: "selection_blocked" as const,
+    enforcement: "write_confinement_exact_grant" as const,
+    disclosure: "provider_specific_not_universal_boundary" as const,
+    access: fixture.claims.access,
+    blocker: "No verified provider enforces exact-grant write confinement.",
   };
 }
 
