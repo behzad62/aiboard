@@ -290,6 +290,6 @@ Each behavior below was added test-first. RED commands were run before the liste
 
 ### Fix Round 3 commits and concerns
 
-- Production/tests plus this force-added report: pending commit.
+- Production/tests plus this force-added report: `88f6059d` (`fix(runner): fence recovered cleanup effects`).
 - Report-hash follow-up: committed immediately after the production hash is recorded.
 - No unresolved implementation or validation concern is known. The independent 8.0A re-review exit gate remains required.
