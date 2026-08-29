@@ -502,7 +502,7 @@ test("recovery never acknowledges a newly appended operation whose complete evid
   } finally { await fixture.close(); }
 });
 
-test("recovery evicts an older complete group but never the newly appended group by timestamp or sort order", async () => {
+test("recovery groups alone at capacity fail typed without evicting an older group by timestamp or sort order", async () => {
   const fixture = await isolationFixture();
   try {
     const recoveryTransitions: import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[] = [
@@ -516,16 +516,75 @@ test("recovery evicts an older complete group but never the newly appended group
 
     const firstRecovery = await selector.recoverOwnedLeases();
     assert.equal(firstRecovery[0]?.cleaned, 1, JSON.stringify(firstRecovery));
+    const beforeRetry = await import("node:fs/promises").then((fs) => fs.readFile(statePath));
     recoveryTransitions.splice(0, 1,
       capacityTransition("fixture-protected-rolling", "new-lease", "2020-01-01T00:00:00.000Z", boundedAccess(fixture.root, "new")),
     );
-    assert.equal((await selector.recoverOwnedLeases())[0]?.cleaned, 1);
+    assert.equal((await selector.recoverOwnedLeases())[0]?.cleaned, 0);
 
     const state = await readExecutionEnforcementState(statePath);
-    assert.deepEqual(state.records.filter((record) => record.status === "cleaned").map((record) => record.leaseId), ["new-lease"]);
-    assert.deepEqual(state.recoverySummaries?.map((summary) => summary.leaseIds), [["new-lease"]]);
-    assert.equal(state.records[0]?.occurredAt, "2020-01-01T00:00:00.000Z");
-    assert.equal(provider.acknowledgements, 2);
+    assert.deepEqual(await import("node:fs/promises").then((fs) => fs.readFile(statePath)), beforeRetry);
+    assert.deepEqual(state.records.filter((record) => record.status === "cleaned").map((record) => record.leaseId), ["old-lease"]);
+    assert.deepEqual(state.recoverySummaries?.map((summary) => summary.leaseIds), [["old-lease"]]);
+    assert.equal(state.records[0]?.occurredAt, "2026-08-28T10:00:00.000Z");
+    assert.equal(provider.acknowledgements, 1);
+  } finally { await fixture.close(); }
+});
+
+test("near-capacity recovery evicts only complete independent records before acknowledging its exact group", async () => {
+  const fixture = await isolationFixture();
+  try {
+    const providerId = "fixture-protected-independent";
+    const provider = fakeProvider(providerId, {
+      recoveryTransitions: [capacityTransition(providerId, "independent-lease", "2026-08-28T10:00:00.000Z", boundedAccess(fixture.root, "independent"))],
+    });
+    const statePath = join(fixture.root, "protected-independent.json");
+    const independent = Array.from({ length: 200 }, (_, index) => independentProjectionRecord(fixture.root, index));
+    await writeFile(statePath, JSON.stringify({
+      version: 1, boundary: "provider_specific_not_universal_security_boundary", records: independent,
+    }));
+    const selector = selectorFor(providerId, provider, statePath, fixture.selectorOptions);
+
+    assert.equal((await selector.recoverOwnedLeases())[0]?.cleaned, 1);
+    const state = await readExecutionEnforcementState(statePath);
+    assert.equal(provider.acknowledgements, 1);
+    assert.equal(state.records.some((record) => record.leaseId === "independent-lease" && record.status === "cleaned"), true);
+    assert.equal(state.recoverySummaries?.some((summary) => summary.leaseIds?.includes("independent-lease")), true);
+    assert.ok(state.records.length < independent.length + 1, "at least one complete independent record must be retained-evicted");
+  } finally { await fixture.close(); }
+});
+
+test("a concurrent recovery cannot evict an acknowledged-or-pending recovery audit group", async () => {
+  const fixture = await isolationFixture();
+  try {
+    let releaseAcknowledgement!: () => void;
+    const acknowledgementGate = new Promise<void>((resolve) => { releaseAcknowledgement = resolve; });
+    const providerA = fakeProvider("fixture-recovery-race-a", {
+      recoveryTransitions: [capacityTransition("fixture-recovery-race-a", "race-a", "2026-08-28T10:00:00.000Z", boundedAccess(fixture.root, "race-a"))],
+      acknowledgementGate,
+    });
+    const providerB = fakeProvider("fixture-recovery-race-b", {
+      recoveryTransitions: [capacityTransition("fixture-recovery-race-b", "race-b", "2020-01-01T00:00:00.000Z", boundedAccess(fixture.root, "race-b"))],
+    });
+    const statePath = join(fixture.root, "protected-race.json");
+    const selectorA = selectorFor("fixture-recovery-race-a", providerA, statePath, fixture.selectorOptions);
+    const selectorB = selectorFor("fixture-recovery-race-b", providerB, statePath, fixture.selectorOptions);
+
+    const recoveryA = selectorA.recoverOwnedLeases();
+    while (providerA.acknowledgements === 0) await new Promise((resolve) => setImmediate(resolve));
+    const beforeB = await readExecutionEnforcementState(statePath);
+    const recoveryB = await selectorB.recoverOwnedLeases();
+    const afterB = await readExecutionEnforcementState(statePath);
+    releaseAcknowledgement();
+    await recoveryA;
+    const final = await readExecutionEnforcementState(statePath);
+
+    for (const state of [beforeB, afterB, final]) {
+      assert.equal(state.records.some((record) => record.providerId === "fixture-recovery-race-a" && record.status === "cleaned"), true);
+      assert.equal(state.recoverySummaries?.some((summary) => summary.providerId === "fixture-recovery-race-a"), true);
+    }
+    assert.equal(recoveryB[0]?.cleaned, 0);
+    assert.equal(providerB.acknowledgements, 0);
   } finally { await fixture.close(); }
 });
 
@@ -639,6 +698,7 @@ function fakeProvider(providerId: string, mutation: {
   partialRecovery?: boolean;
   releaseGate?: Promise<void>;
   acknowledgementFails?: boolean;
+  acknowledgementGate?: Promise<void>;
   recoveryTransitions?: import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[];
 } = {}): ExecutionIsolationProvider & {
   acquisitions: number;
@@ -716,6 +776,7 @@ function fakeProvider(providerId: string, mutation: {
     async acknowledgeRecovery(transitions: readonly import("../src/execution-isolation-provider.js").ExecutionIsolationCleanupTransition[]) {
       provider.acknowledgements += 1;
       if (provider.acknowledgementFails) throw new Error("fixture acknowledgement failed");
+      if (mutation.acknowledgementGate) await mutation.acknowledgementGate;
       const ids = new Set(transitions.map((transition) => transition.leaseId));
       for (let index = cleanupTransitions.length - 1; index >= 0; index -= 1) if (ids.has(cleanupTransitions[index]!.leaseId)) cleanupTransitions.splice(index, 1);
     },
@@ -753,6 +814,26 @@ function activeProjectionRecord(index: number) {
     disclosure: "provider_specific_not_universal_boundary" as const, providerId: "old-provider",
     implementationDigest: "a".repeat(64), leaseId: `old-lease-${index}`, access: [],
   };
+}
+
+function independentProjectionRecord(root: string, index: number) {
+  return {
+    occurredAt: "2026-08-27T10:00:00.000Z", runId: `independent-run-${index}`, invocationId: `independent-invocation-${index}`,
+    grantId: `independent-grant-${index}`, status: "unconfined_explicit_full" as const,
+    enforcement: "unconfined_explicit_full" as const, disclosure: "unconfined_explicit_full" as const,
+    access: [{ canonicalPath: join(root, `independent-${index}-${"x".repeat(3_000)}`), mode: "read" as const }],
+  };
+}
+
+function selectorFor(
+  providerId: string,
+  provider: ExecutionIsolationProvider,
+  statePath: string,
+  selectorOptions: { readonly clock: () => Date },
+) {
+  return createExecutionIsolationSelector(createExecutionIsolationRegistry([
+    createExecutionIsolationProviderRegistration({ stableProviderId: providerId, codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+  ]), { ...selectorOptions, statePath });
 }
 
 async function isolationFixture(permissionProfile: "project" | "full" = "project") {

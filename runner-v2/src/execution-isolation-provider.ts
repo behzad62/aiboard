@@ -733,7 +733,7 @@ async function writeBoundedEnforcementState(
     if (records.length <= MAX_ENFORCEMENT_RECORDS && summaries.length <= MAX_RECOVERY_SUMMARIES &&
         Buffer.byteLength(serialized) <= MAX_ENFORCEMENT_STATE_BYTES) break;
     if (protectedRecoveryOperationId) {
-      if (!evictOlderCompleteRecoveryEvidence(records, summaries, protectedRecoveryOperationId)) {
+      if (!evictSafeIndependentEnforcementRecord(records, summaries, protectedRecoveryOperationId)) {
         throw new ExecutionIsolationError(
           "isolation_recovery_blocked",
           "The complete newly recovered isolation operation exceeds the durable projection capacity.",
@@ -767,16 +767,11 @@ async function writeBoundedEnforcementState(
   finally { await rm(temporary, { force: true }); }
 }
 
-function evictOlderCompleteRecoveryEvidence(
+function evictSafeIndependentEnforcementRecord(
   records: ExecutionEnforcementRecord[],
   summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
   protectedRecoveryOperationId: string,
 ): boolean {
-  const olderGroup = summaries.find((summary) => summary.operationId !== protectedRecoveryOperationId);
-  if (olderGroup) {
-    removeRecoveryGroup(records, summaries, olderGroup);
-    return true;
-  }
   const groupedLeaseIds = new Set<string>();
   for (const summary of summaries) {
     for (const leaseId of summary.leaseIds ?? []) groupedLeaseIds.add(leaseId);
@@ -789,23 +784,6 @@ function evictOlderCompleteRecoveryEvidence(
   if (independent < 0) return false;
   records.splice(independent, 1);
   return true;
-}
-
-function removeRecoveryGroup(
-  records: ExecutionEnforcementRecord[],
-  summaries: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number][],
-  summary: NonNullable<ExecutionEnforcementState["recoverySummaries"]>[number],
-): void {
-  const leaseIds = new Set(summary.leaseIds);
-  summaries.splice(summaries.indexOf(summary), 1);
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index]!;
-    if (record.occurredAt === summary.occurredAt && record.providerId === summary.providerId &&
-        record.leaseId && leaseIds.has(record.leaseId) &&
-        (summary.operationId ? record.recoveryOperationId === summary.operationId : record.recoveryOperationId === undefined)) {
-      records.splice(index, 1);
-    }
-  }
 }
 
 function parseAttestation(value: unknown): ExecutionIsolationAttestation {
