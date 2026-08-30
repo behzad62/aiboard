@@ -10,7 +10,7 @@ const child = spawn(config.executable, config.arguments, {
   cwd: config.workingDirectory,
   env: config.environment,
   windowsHide: true,
-  stdio: ["ignore", "inherit", "inherit"],
+  stdio: ["inherit", "inherit", "inherit"],
 });
 child.once("error", (error) => {
   publish({ status: "error", error: error.message });

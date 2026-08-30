@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,18 @@ const stdoutPath = join(config.directory, "stdout.log");
 const stderrPath = join(config.directory, "stderr.log");
 const childGoPath = join(config.directory, "child-go");
 const childStatusPath = join(config.directory, "child-status.json");
+const channelDirectory = join(config.directory, "channel");
+const channelOutputDirectory = join(channelDirectory, "output");
+const channelInputDirectory = join(channelDirectory, "input");
+const channelAckDirectory = join(channelDirectory, "ack");
+for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
+const replayCapacityChunks = config.replayCapacityChunks ?? 16;
+const replayCapacityBytes = config.replayCapacityBytes ?? 256 * 1024;
+const outputSequences = { stdout: 0, stderr: 0 };
+const outputOffsets = { stdout: 0, stderr: 0 };
+const retained = new Map();
+let retainedBytes = 0;
+let handledInput = 0;
 let revision = 0;
 let handledControl = 0;
 let targetExited = false;
@@ -35,13 +48,13 @@ const child = config.platform === "windows"
       cwd: config.workingDirectory,
       env: config.environment,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     })
   : spawn(config.executable, config.arguments, {
   cwd: config.workingDirectory,
   env: config.environment,
   windowsHide: true,
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: ["pipe", "pipe", "pipe"],
   });
 if (!child.pid) {
   launchEffect = "not_started";
@@ -64,8 +77,8 @@ if (config.platform === "windows") {
     launchEffect = "unknown";
   }
 }
-child.stdout.on("data", (chunk) => appendFileSync(stdoutPath, chunk));
-child.stderr.on("data", (chunk) => appendFileSync(stderrPath, chunk));
+installOutput("stdout", child.stdout, stdoutPath);
+installOutput("stderr", child.stderr, stderrPath);
 child.once("error", (error) => fail(error.message));
 child.once("exit", (code, signal) => {
   targetExited = true;
@@ -86,6 +99,10 @@ function tick() {
       publish("outcome_unknown", "Initial Windows process identity was not captured before discovery.");
       return;
     }
+    handleChannelAcks();
+    handleChannelInput();
+    drainOutput("stdout", child.stdout, stdoutPath);
+    drainOutput("stderr", child.stderr, stderrPath);
     if (config.platform === "windows") refreshWindowsTree();
     if (ownershipInspectionUnknown) {
       publish("outcome_unknown", `Owned Windows process inspection is unavailable: ${ownershipInspectionDetail}`);
@@ -110,6 +127,85 @@ function tick() {
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
+}
+
+function installOutput(stream, readable, evidencePath) {
+  readable.on("readable", () => drainOutput(stream, readable, evidencePath));
+}
+
+function drainOutput(stream, readable, evidencePath) {
+  while (retained.size < replayCapacityChunks && retainedBytes < replayCapacityBytes) {
+    const maximum = Math.min(16 * 1024, replayCapacityBytes - retainedBytes);
+    if (maximum < 1) break;
+    const bytes = readable.read(maximum);
+    if (!bytes) break;
+    appendFileSync(evidencePath, bytes);
+    const sequence = ++outputSequences[stream];
+    const startOffset = outputOffsets[stream];
+    const endOffset = startOffset + bytes.byteLength;
+    outputOffsets[stream] = endOffset;
+    const metadata = {
+      stream,
+      sequence,
+      startOffset,
+      endOffset,
+      byteLength: bytes.byteLength,
+      digest: createHash("sha256").update(bytes).digest("hex"),
+    };
+    const name = `${stream}-${String(sequence).padStart(12, "0")}`;
+    writeAtomic(join(channelOutputDirectory, `${name}.json`), JSON.stringify({ nonce: config.nonce, metadata, bytes: Buffer.from(bytes).toString("base64") }));
+    retained.set(name, metadata);
+    retainedBytes += bytes.byteLength;
+  }
+}
+
+function handleChannelAcks() {
+  for (const name of readdirSync(channelAckDirectory).filter((entry) => entry.endsWith(".json"))) {
+    let ack;
+    try { ack = JSON.parse(readFileSync(join(channelAckDirectory, name), "utf8")); } catch { continue; }
+    const key = name.slice(0, -5);
+    const expected = retained.get(key);
+    if (!expected || ack.nonce !== config.nonce || JSON.stringify(ack.metadata) !== JSON.stringify(expected)) continue;
+    try { unlinkSync(join(channelOutputDirectory, `${key}.json`)); } catch {}
+    try { unlinkSync(join(channelAckDirectory, name)); } catch {}
+    retained.delete(key);
+    retainedBytes -= expected.byteLength;
+  }
+}
+
+function handleChannelInput() {
+  const expectedName = `input-${String(handledInput + 1).padStart(12, "0")}.json`;
+  const path = join(channelInputDirectory, expectedName);
+  if (!existsSync(path)) return;
+  let command;
+  try { command = JSON.parse(readFileSync(path, "utf8")); } catch { return; }
+  if (command.nonce !== config.nonce || command.ownerId !== config.fence?.ownerId || command.fencingToken !== config.fence?.fencingToken || command.sequence !== handledInput + 1) return;
+  if (command.type === "write") {
+    const bytes = Buffer.from(command.bytes, "base64");
+    if (bytes.byteLength !== command.byteLength || createHash("sha256").update(bytes).digest("hex") !== command.digest) return;
+    if (child.stdin.destroyed || !child.stdin.writable) publishChannelInputAck(command.sequence, "failed");
+    else {
+      child.stdin.write(bytes);
+      publishChannelInputAck(command.sequence, "acknowledged");
+    }
+  } else if (command.type === "close_input") {
+    child.stdin.end(() => publishChannelInputAck(command.sequence, "acknowledged"));
+  } else if (command.type === "graceful_stop") {
+    writeAtomic(controlPath, JSON.stringify({ nonce: config.nonce, sequence: handledControl + 1, action: "terminate" }));
+    publishChannelInputAck(command.sequence, "acknowledged");
+  } else return;
+  handledInput = command.sequence;
+  try { unlinkSync(path); } catch {}
+}
+
+function publishChannelInputAck(sequence, status) {
+  writeAtomic(join(channelAckDirectory, `input-${String(sequence).padStart(12, "0")}.json`), JSON.stringify({ nonce: config.nonce, sequence, status }));
+}
+
+function writeAtomic(destination, value) {
+  const temporary = `${destination}.${process.pid}.tmp`;
+  writeFileSync(temporary, value);
+  replaceState(temporary, destination);
 }
 
 function waitForChildStartup(timeoutMs) {

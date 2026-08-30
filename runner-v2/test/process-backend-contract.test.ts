@@ -379,11 +379,11 @@ test("portable Windows baseline is available without Job Objects but strict guar
 function jobService(available: boolean): WindowsJobProcessService {
   const unavailable = async (): Promise<never> => { throw new Error("fixture operation is unavailable"); };
   return {
-    probeJobObjectAvailability: async () => available,
-    start: unavailable,
-    signal: unavailable,
-    reconcileOwnership: unavailable,
-    releaseOwnership: unavailable,
-    readOutputSince: () => { throw new Error("fixture operation is unavailable"); },
+    probeActiveJobCreateClose: async () => available,
+    launchOwned: unavailable,
+    signalOwned: unavailable,
+    reconcileOwned: unavailable,
+    releaseOwned: unavailable,
+    readOwnedOutput: () => { throw new Error("fixture operation is unavailable"); },
   };
 }

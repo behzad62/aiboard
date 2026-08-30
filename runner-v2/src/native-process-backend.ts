@@ -12,6 +12,7 @@ import type {
   ProcessLaunchRequest,
 } from "./process-backend.js";
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
+import { createPortableProcessChannelProvider } from "./portable-process-channel.js";
 
 export interface NativeOwnedProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -20,6 +21,8 @@ export interface NativeOwnedProcessBackendOptions {
   readonly backendId: string;
   readonly capabilities: ExecutionSafetyCapabilities;
   readonly operations?: NativeProcessOperations;
+  readonly replayCapacityChunks?: number;
+  readonly replayCapacityBytes?: number;
 }
 export interface NativeProcessOperations {
   inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
@@ -55,6 +58,7 @@ interface Identity {
   readonly directory: string;
   readonly supervisorPid: number;
   readonly supervisorBirth: string;
+  readonly fence?: ProcessEffectFence;
 }
 interface SupervisorState {
   readonly protocol: "aiboard-portable-process/v1";
@@ -112,6 +116,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       environment: { ...request.environment },
       platform: this.options.platform,
       pollIntervalMs: this.pollIntervalMs,
+      replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
+      replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
+      fence: { ...request.fence },
     })).toString("base64url");
     const child = spawn(process.execPath, [supervisor, encoded], {
       detached: true,
@@ -131,6 +138,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         directory,
         supervisorPid: child.pid,
         supervisorBirth,
+        fence: Object.freeze({ ...request.fence }),
       };
       const state = await this.waitForState(directory, nonce, child.pid, 5_000);
       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
@@ -175,12 +183,35 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
   }
 
+  backpressuredChannelProvider() {
+    return createPortableProcessChannelProvider({
+      replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
+      replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
+      pollIntervalMs: this.pollIntervalMs,
+      authority: (binding) => {
+        const identity = this.identity(binding);
+        if (!identity.fence) throw new Error("Portable channel writer/fence identity is unavailable.");
+        return {
+          directory: identity.directory,
+          nonce: identity.nonce,
+          fence: identity.fence,
+          reattest: () => {
+            const state = this.validate(identity);
+            if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
+            return state === "live" ? "live" : "exited";
+          },
+        };
+      },
+    });
+  }
+
   async observe(
     binding: ProcessBackendBinding,
     output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>,
     _fence: ProcessEffectFence,
   ): Promise<unknown> {
     const identity = this.identity(binding);
+    this.assertFence(identity, _fence);
     for (;;) {
       await this.flushOutput(identity, output);
       const reconciled = await this.reconcile(binding, _fence) as { state: string; exitCode?: number; signal?: string };
@@ -195,6 +226,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
+    this.assertFence(identity, _fence);
     const validation = this.validate(identity);
     if (validation === "mismatch") throw new Error("Owned process identity mismatch.");
     if (validation === "unknown") throw new Error("Owned process identity inspection is unavailable.");
@@ -216,6 +248,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async verifyEmpty(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
+    this.assertFence(identity, _fence);
     const validation = this.validate(identity);
     if (validation === "mismatch")
       return { empty: false, detail: "Owned process identity changed before quiescence verification." };
@@ -238,6 +271,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     try { identity = this.identity(binding); } catch (error) {
       return { state: error instanceof OwnedProcessIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
     }
+    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
     const validation = this.validate(identity);
     if (validation === "mismatch") return { state: "identity_mismatch" };
     if (validation === "unknown") return { state: "outcome_unknown" };
@@ -259,6 +293,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
+    this.assertFence(identity, _fence);
     const emptiness = await this.emptiness(identity);
     if (emptiness !== "empty")
       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
@@ -275,10 +310,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as Identity;
     if (value.version !== 1 || value.backendId !== this.options.backendId || !value.nonce || !value.directory || !Number.isSafeInteger(value.supervisorPid) || !value.supervisorBirth)
       throw new Error("Owned process opaque identity is invalid.");
-    const expected = createHash("sha256").update(`${value.nonce}\0${value.supervisorBirth}`).digest("hex");
+    const expected = birthDiscriminator(value);
     if (binding.birthFingerprint.discriminator !== expected || binding.rootPid !== value.supervisorPid)
       throw new OwnedProcessIdentityMismatchError("Owned process birth fingerprint is invalid.");
     return value;
+  }
+  private assertFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
+    if (!identity.fence) return;
+    if (!fence || fence.ownerId !== identity.fence.ownerId || fence.fencingToken !== identity.fence.fencingToken)
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale.");
   }
   private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
     const inspection = this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
@@ -499,11 +539,15 @@ function launchResult(identity: Identity, startedAt: string) {
     opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
     birthFingerprint: {
       observedAt: startedAt,
-      discriminator: createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex"),
+      discriminator: birthDiscriminator(identity),
     },
     rootPid: identity.supervisorPid,
     startedAt,
   };
+}
+function birthDiscriminator(identity: Pick<Identity, "nonce" | "supervisorBirth" | "fence">): string {
+  const fence = identity.fence ? `\0${identity.fence.ownerId}\0${identity.fence.fencingToken}` : "";
+  return createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}${fence}`).digest("hex");
 }
 function launchBlocker(identity: Identity, message: string): NativeProcessLaunchBlockedError {
   const state = readState(identity.directory);

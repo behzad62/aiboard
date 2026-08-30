@@ -18,6 +18,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
+import type {
+  WindowsJobLaunchRequest,
+  WindowsJobOwnershipKey,
+  WindowsJobProcessHost,
+} from "./windows-job-process-host.js";
+import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
 
 const SUPERVISOR_PROTOCOL = "aiboard-managed-process/v1";
 const DEFAULT_START_DEADLINE_MS = 5_000;
@@ -174,7 +180,7 @@ export class ManagedProcessError extends Error {
   }
 }
 
-export class ManagedProcessService {
+export class ManagedProcessService implements WindowsJobProcessHost {
   private readonly stateDirectory: string;
   private readonly idFactory: () => string;
   private readonly clock: () => string;
@@ -185,6 +191,7 @@ export class ManagedProcessService {
   private readonly supervisorScriptPath: string;
   private readonly records = new Map<string, ManagedProcessRecord>();
   private readonly launchers = new Set<ChildProcess>();
+  private readonly windowsJobHost: WindowsJobProcessHost;
 
   constructor(options: ManagedProcessServiceOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
@@ -206,6 +213,14 @@ export class ManagedProcessService {
       ) as ManagedProcessRecord;
       this.records.set(record.processId, record);
     }
+    this.windowsJobHost = createWindowsJobProcessHost({
+      launchOwned: (input) => this.launchOwnedMechanics(input),
+      signalOwned: (processId, signal, owner) => this.signalOwnedMechanics(processId, signal, owner),
+      reconcileOwned: (processId, owner) => this.reconcileOwnedMechanics(processId, owner),
+      releaseOwned: (processId, owner, expectedStartedAt) => this.releaseOwnedMechanics(processId, owner, expectedStartedAt),
+      readOwnedOutput: (processId, owner, offsets) => this.readOwnedOutputMechanics(processId, owner, offsets),
+      probeActiveJobCreateClose: () => this.probeActiveJobCreateCloseMechanics(),
+    });
   }
 
   async start(
@@ -522,6 +537,91 @@ export class ManagedProcessService {
     };
   }
 
+  /** Backend-private actor-free ownership seam used by the Windows Job adapter. */
+  async launchOwned(input: WindowsJobLaunchRequest): Promise<ManagedProcessSnapshot> {
+    return await this.windowsJobHost.launchOwned(input);
+  }
+
+  private async launchOwnedMechanics(input: WindowsJobLaunchRequest): Promise<ManagedProcessSnapshot> {
+    return await this.start({
+      command: input.command,
+      args: [...input.args],
+      cwd: ".",
+      env: { ...input.environment },
+      inheritEnvironment: false,
+    }, internalOwnershipContext(input), input.workingDirectory);
+  }
+
+  async signalOwned(
+    processId: string,
+    signal: "SIGTERM" | "SIGINT" | "SIGKILL",
+    owner: WindowsJobOwnershipKey,
+  ): Promise<ManagedProcessSnapshot> {
+    return await this.windowsJobHost.signalOwned(processId, signal, owner);
+  }
+
+  private async signalOwnedMechanics(
+    processId: string,
+    signal: "SIGTERM" | "SIGINT" | "SIGKILL",
+    owner: WindowsJobOwnershipKey,
+  ): Promise<ManagedProcessSnapshot> {
+    return await this.signal(processId, signal, internalOwnershipContext(owner));
+  }
+
+  async reconcileOwned(
+    processId: string,
+    owner: WindowsJobOwnershipKey,
+  ): Promise<ManagedProcessOwnershipSnapshot> {
+    return await this.windowsJobHost.reconcileOwned(processId, owner);
+  }
+
+  private async reconcileOwnedMechanics(
+    processId: string,
+    owner: WindowsJobOwnershipKey,
+  ): Promise<ManagedProcessOwnershipSnapshot> {
+    return await this.reconcileOwnership(processId, internalOwnershipContext(owner));
+  }
+
+  async releaseOwned(
+    processId: string,
+    owner: WindowsJobOwnershipKey,
+    expectedStartedAt: string,
+  ): Promise<ManagedProcessOwnershipSnapshot> {
+    return await this.windowsJobHost.releaseOwned(processId, owner, expectedStartedAt);
+  }
+
+  private async releaseOwnedMechanics(
+    processId: string,
+    owner: WindowsJobOwnershipKey,
+    expectedStartedAt: string,
+  ): Promise<ManagedProcessOwnershipSnapshot> {
+    return await this.releaseOwnership(processId, internalOwnershipContext(owner), expectedStartedAt);
+  }
+
+  readOwnedOutput(
+    processId: string,
+    owner: WindowsJobOwnershipKey,
+    offsets: { readonly stdout: number; readonly stderr: number },
+  ): ManagedProcessOutputRead {
+    return this.windowsJobHost.readOwnedOutput(processId, owner, offsets);
+  }
+
+  private readOwnedOutputMechanics(
+    processId: string,
+    owner: WindowsJobOwnershipKey,
+    offsets: { readonly stdout: number; readonly stderr: number },
+  ): ManagedProcessOutputRead {
+    return this.readOutputSince(processId, internalOwnershipContext(owner), offsets);
+  }
+
+  async probeActiveJobCreateClose(): Promise<boolean> {
+    return await this.windowsJobHost.probeActiveJobCreateClose();
+  }
+
+  private async probeActiveJobCreateCloseMechanics(): Promise<boolean> {
+    return await this.probeJobObjectAvailability();
+  }
+
   /** Authenticated ownership view used by the durable Windows backend adapter. */
   async reconcileOwnership(
     processId: string,
@@ -673,6 +773,14 @@ export class ManagedProcessService {
       throw error;
     }
   }
+}
+
+function internalOwnershipContext(owner: WindowsJobOwnershipKey): ToolExecutionContext {
+  return {
+    runId: owner.runId,
+    sessionId: owner.sessionId,
+    actor: { role: "worker", id: `internal:${owner.sessionId}` },
+  };
 }
 
 function unreadBytes(path: string, offset: number, maximum: number): Uint8Array {

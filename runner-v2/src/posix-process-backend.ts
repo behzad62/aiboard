@@ -5,6 +5,8 @@ export interface PosixProcessBackendOptions {
   readonly stateDirectory?: string;
   readonly pollIntervalMs?: number;
   readonly operations?: NativeProcessOperations;
+  readonly replayCapacityChunks?: number;
+  readonly replayCapacityBytes?: number;
 }
 
 export class PosixProcessBackend extends NativeOwnedProcessBackend {
