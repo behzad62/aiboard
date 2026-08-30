@@ -152,6 +152,29 @@ overlap is expected.
   zero Critical/Important ambiguity; its two Minor terminology clarifications
   were folded into the brief. Internal packet 8.0B1 is unlocked; production
   adapters, CLI construction, and child families remain unchanged.
+- Task 8.0B1 initial implementation (`127403fe`, `b947aaeb`) was not approved:
+  review found one Critical and six Important authority, state, recovery,
+  evidence and test defects.
+- Task 8.0B1 fix round 1/5 (`f8238b8b`, `86304fdb`) closed output ordering,
+  staged authority and strict host-state groups, but re-review retained one
+  Critical cross-kernel operation-authorization replay and four Important
+  recovery/evidence/cancellation findings.
+- Task 8.0B1 fix round 2/5 (`fb3050a4`) closed the Critical issuer boundary,
+  atomic non-1 re-fence and spool evidence, but re-review retained late-channel
+  cleanup and known-resource cancellation races.
+- Task 8.0B1 fix round 3/5 (`ac6b8035`) closed caller-bound cleanup races but
+  re-review found double-clean and false-release accounting paths.
+- Task 8.0B1 fix round 4/5 (`55892af3`) separated settlement and cleanup errors,
+  but re-review found channel-only retry ownership could bypass checkpoint or
+  lease cleanup.
+- Task 8.0B1 fix round 5/5 (`b7ee53f0`) added per-resource durable cleanup
+  facts and passed 70/70 B1, 89/89 8.0A, 173/173 Task 7/spool, typecheck, lint,
+  diff and cleanup gates. Final independent review nevertheless found two
+  Important kernel bypasses: incomplete cleanup-duty subsets can reach released
+  with lease/backend obligations present, and arbitrary provider error text can
+  persist secrets. Governed repair budget is exhausted. Task 8.0B1 is NOT
+  approved, 8.0B2 remains locked, and explicit owner authority is required to
+  extend/reset the repair budget or choose rollback/redesign.
 
 ## Breaker rulings
 
