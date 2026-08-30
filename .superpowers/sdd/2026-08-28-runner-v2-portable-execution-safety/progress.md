@@ -175,6 +175,13 @@ overlap is expected.
   persist secrets. Governed repair budget is exhausted. Task 8.0B1 is NOT
   approved, 8.0B2 remains locked, and explicit owner authority is required to
   extend/reset the repair budget or choose rollback/redesign.
+- Task 8.0B1 exceptional repair round 6: the owner explicitly authorized one
+  additional round after the governed 5/5 breaker. Scope is limited to the two
+  final findings in `task-8.0b1-rereview-5.md`: kernel-derived complete cleanup
+  obligations and closed secret-safe durable cleanup failures. This authorization
+  does not reset or create an open-ended repair budget. Packet 8.0B2 remains
+  locked until a fresh independent re-review and controller verification both
+  report zero Critical/Important findings.
 
 ## Breaker rulings
 
