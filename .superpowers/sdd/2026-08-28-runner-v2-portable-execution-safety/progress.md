@@ -24,7 +24,7 @@
 | 5 | P6.4c adapters | verified complete after carried prerequisite | `4d53078a` | `task-5-implementer-report.md`, `task-6a-prerequisite-report.md` | approved after breaker residuals closed at Task 6 entry | 5 + 3 carried fixes | `e57c2a1f`, `e29d5b8f`, `4f940cb3`, `16fca6d2`, `dfcb6a33`, `f8c1ad06`, carried `5307d1b7`, `18b97fc9`, `9c59feec`, `b997aade` | fresh re-review approved: all seven blocking effect families durably journaled, exact consumers enforced, malformed/ambiguous effects retained, authority loss fail-closed |
 | 6 | P6.4d isolation/grants | verified complete after carried Task 7 entry prerequisite | `b997aade` | `task-6-implementer-report.md`, `task-7a-prerequisite-report.md` | breaker residual independently approved at Task 7 entry | 5 + 3 carried prerequisite fixes | initial `88266699`, fixes through `6be10f70`, carried `b1ea2f92`, `74e7aec3`, `04f00723`, `8eb593f0` | exact grants, truthful provider/Full selection, configured OCI, two-phase cleanup evidence, bounded durable projection, concurrency/capacity safety, real Docker and zero residue approved |
 | 7 | P6.4e one-shot/evidence/verification | verified complete | `8eb593f0` | `task-7-brief.md`, `task-7-implementer-report.md`, review/fix reports through `task-7-review-round-5.md` | final governed round 5 approved; zero Critical/Important findings | 5 feature review rounds | initial `560a061f`, fixes through `30e8b8ff` | independent 130/130 + 49/49 + 8/8, type/lint/diff/residue green; no Task 8 scope or Node pin |
-| 8 | P6.4e remaining child families | 8.0A verified complete; 8.0B next eligible | `a0b3fb7a` | `task-8-brief.md`, `task-8.0a-brief.md`, `task-8.0a-implementer-report.md` | specification gate approved; implementation approved after governed fix round 5 | 5 | through `5106dcb8` | fresh controller: 89/89 focused, 107/107 Task 7, typecheck/lint/diff/residue/scope green; zero residual Critical/Important findings |
+| 8 | P6.4e remaining child families | 8.0A verified complete; 8.0B1 blocked after exceptional round 6 | `a0b3fb7a` | `task-8-brief.md`, `task-8.0a-brief.md`, `task-8.0b1-report.md` | B1 exceptional re-review not approved; two Important residuals independently reproduced | 6 (one owner-authorized exception after 5/5) | through `ac7d837f` | B1 implementation gates green, but semantic exit gate red: ambiguous legacy bound rows can omit a possible channel duty and provider-crafted typed errors can expose raw secret-bearing message/cause; B2 locked |
 | 9 | P6.4f Git hardening | blocked by 8 | — | — | — | 0 | — | — |
 | 10 | P6.4g filesystem fence | blocked by 9 (serial doctrine) | — | — | — | 0 | — | — |
 | 11 | P6.4h recovery/disclosure | blocked by 10 | — | — | — | 0 | — | — |
@@ -95,6 +95,8 @@ overlap is expected.
 |---|---|---|---|
 | Three uniquely named `runner-v2-launch-orphan-*` system-temp roots from Task 4 prove-red runs could not be removed because host policy rejected both safe cleanup attempts; each was inspected and contains only its owned `state.sqlite`. | Low | 12 | Deferred cleanup/residue audit; do not broaden Task 5 |
 | One inert Task 5 evidence directory for stopped supervisor PID 41160 remains under the task-owned temp namespace because both recursive and exact file deletion were denied by host policy; all three associated exact fixture processes were revalidated and stopped. | Low | 12 | Deferred cleanup/residue audit; no live process remains |
+| A valid schema-v1 active `bound` host row without the new channel/checkpoint markers is ambiguous with a pre-fix crash after channel acquisition; the derived ledger omits `channel` and can release while retaining the backend binding. | Important | 8.0B1 | Open after owner-authorized exceptional round 6; B2 locked |
+| A provider can throw the exported `StreamingProcessSessionError` with an arbitrary secret-bearing message/cause; `open()` rethrows that instance unchanged to the caller. | Important | 8.0B1 | Open after owner-authorized exceptional round 6; B2 locked |
 
 ## Task 8 specification gate
 
@@ -182,6 +184,23 @@ overlap is expected.
   does not reset or create an open-ended repair budget. Packet 8.0B2 remains
   locked until a fresh independent re-review and controller verification both
   report zero Critical/Important findings.
+- Task 8.0B1 exceptional repair round 6 implementation (`ac7d837f`) added
+  kernel-derived cleanup facts, current-owner fencing, atomic host/checkpoint
+  markers, and closed failure codes/messages. Its implementation evidence was
+  green: B1 79/79, 8.0A 89/89, Task 7 plus Task 3 173/173, typecheck, targeted
+  lint, diff, mutation, scope, and residue checks.
+- Task 8.0B1 exceptional repair round 6 re-review is NOT APPROVED. The fresh
+  reviewer found two Important residuals, and the controller reran both exact
+  read-only reproductions at `ac7d837f`: (1) a schema-v1 `bound` row without the
+  optional new markers derived only `host` and `isolation_lease`, then reached
+  `released`/owner `none` while retaining its backend binding; (2) a provider-
+  constructed exported `StreamingProcessSessionError` returned the exact
+  `credential=B1_R6_TYPED_PROVIDER_SENTINEL` message and nested payload-bearing
+  cause to the caller. See `task-8.0b1-exceptional-round-6-review.md`.
+- Task 8.0B1 remains blocked. The one owner-authorized exceptional round is
+  consumed, no seventh repair round is authorized, and Packet 8.0B2 remains
+  locked. Broader controller suites were not rerun after the failed semantic
+  gate because they cannot prove either reproduced safety requirement.
 
 ## Breaker rulings
 
