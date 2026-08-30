@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     mkdirSync(directory, { recursive: false, mode: 0o700 });
     writeFileSync(join(directory, "stdout.log"), "", { mode: 0o600 });
     writeFileSync(join(directory, "stderr.log"), "", { mode: 0o600 });
+    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...request.fence }), { mode: 0o600 });
     const supervisor = join(dirname(fileURLToPath(import.meta.url)), "portable-process-supervisor.mjs");
     const encoded = Buffer.from(JSON.stringify({
       nonce,
@@ -188,14 +189,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
       replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
       pollIntervalMs: this.pollIntervalMs,
-      authority: (binding) => {
+      authority: (binding, fence) => {
         const identity = this.identity(binding);
-        if (!identity.fence) throw new Error("Portable channel writer/fence identity is unavailable.");
+        this.assertFence(identity, fence);
         return {
           directory: identity.directory,
           nonce: identity.nonce,
-          fence: identity.fence,
+          fence,
           reattest: () => {
+            this.assertFence(identity, fence);
             const state = this.validate(identity);
             if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
             return state === "live" ? "live" : "exited";
@@ -212,15 +214,16 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   ): Promise<unknown> {
     const identity = this.identity(binding);
     this.assertFence(identity, _fence);
-    for (;;) {
-      await this.flushOutput(identity, output);
-      const reconciled = await this.reconcile(binding, _fence) as { state: string; exitCode?: number; signal?: string };
-      if (reconciled.state === "exited") {
-        await this.flushOutput(identity, output);
-        return reconciled;
-      }
-      if (reconciled.state !== "running") throw new Error(`Owned process observation failed: ${reconciled.state}.`);
-      await delay(this.pollIntervalMs);
+    const channel = await this.backpressuredChannelProvider().acquire(binding, _fence);
+    const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
+      await output(metadata.stream, bytes);
+      return metadata;
+    });
+    try {
+      return await channel.waitForTerminal();
+    } finally {
+      unsubscribe();
+      await channel.detach();
     }
   }
 
@@ -235,7 +238,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const signal = action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM";
       this.operations.signal(-identity.supervisorPid, signal);
     } else {
-      const beforeSignal = await this.emptiness(identity);
+      const beforeSignal = await this.waitForKnownEmptiness(identity);
       if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
       if (beforeSignal === "outcome_unknown") throw new Error("Owned descendant identity is unavailable.");
       const state = readState(identity.directory);
@@ -243,7 +246,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action }), { mode: 0o600 });
     }
     await delay(action === "force_terminate" ? 250 : 75);
-    return this.signalState(await this.emptiness(identity));
+    return this.signalState(await this.waitForKnownEmptiness(identity));
   }
 
   async verifyEmpty(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
@@ -294,9 +297,16 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
     this.assertFence(identity, _fence);
+    const validation = this.validate(identity);
+    if (validation === "mismatch" || validation === "unknown") throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
     const emptiness = await this.emptiness(identity);
     if (emptiness !== "empty")
       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
+    const stableValidation = this.validate(identity);
+    if (stableValidation === "mismatch" || stableValidation === "unknown") throw new Error("Cannot release ownership after supervisor birth changed.");
+    const stableEmptiness = await this.emptiness(identity);
+    if (stableEmptiness !== "empty") throw new Error("Cannot release ownership without stable verified emptiness.");
+    assertPortableOutputSettled(identity);
     this.outputOffsets.delete(identity.nonce);
     rmSync(identity.directory, { recursive: true, force: true });
     return { released: true };
@@ -316,15 +326,17 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     return value;
   }
   private assertFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
-    if (!identity.fence) return;
-    if (!fence || fence.ownerId !== identity.fence.ownerId || fence.fencingToken !== identity.fence.fencingToken)
-      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale.");
+    if (!fence) {
+      if (!identity.fence) return;
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
+    }
+    claimOwnedFence(identity, fence);
   }
   private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
     const inspection = this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
     if (inspection.state === "unknown") return "unknown";
     if (inspection.state === "absent") return "exited";
-    return inspection.fingerprint === identity.supervisorBirth ? "live" : "mismatch";
+    return sameProcessBirth(inspection.fingerprint, identity.supervisorBirth) ? "live" : "mismatch";
   }
   private async emptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
     if (this.options.platform === "posix") {
@@ -347,7 +359,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const inspection = this.operations.inspectProcessBirth(process.pid, "windows");
       if (inspection.state === "unknown") return "outcome_unknown";
       if (inspection.state === "absent") continue;
-      if (inspection.fingerprint !== process.birth) return "identity_mismatch";
+      if (!sameProcessBirth(inspection.fingerprint, process.birth)) return "identity_mismatch";
       live = true;
     }
     return live ? "nonempty" : "empty";
@@ -356,6 +368,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (emptiness === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
     if (emptiness === "outcome_unknown") throw new Error("Owned process membership could not be verified after signal.");
     return { state: emptiness === "empty" ? "exited" : "running" };
+  }
+  private async waitForKnownEmptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+    const deadline = Date.now() + Math.max(500, this.pollIntervalMs * 100);
+    let result = await this.emptiness(identity);
+    while (result === "outcome_unknown" && Date.now() < deadline) {
+      await delay(this.pollIntervalMs);
+      result = await this.emptiness(identity);
+    }
+    return result;
   }
   private async cleanupFailedLaunch(identity: Identity): Promise<void> {
     const deadline = Date.now() + 3_000;
@@ -486,11 +507,11 @@ function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirt
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `$ErrorActionPreference='Stop';$p=Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\";if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.CreationDate.ToUniversalTime().ToString('o')}`,
+        `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
       ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
       if (result === "ABSENT") return { state: "absent" };
       if (result.startsWith("PRESENT:") && result.length > "PRESENT:".length)
-        return { state: "present", fingerprint: result.slice("PRESENT:".length) };
+        return { state: "present", fingerprint: normalizeProcessBirth(result.slice("PRESENT:".length)) };
       return { state: "unknown" };
     }
     if (process.platform === "linux") {
@@ -534,6 +555,12 @@ function validKnownProcess(value: unknown): value is { readonly pid: number; rea
     typeof (value as { birth?: unknown }).birth === "string" &&
     (value as { birth: string }).birth.length > 0;
 }
+function normalizeProcessBirth(value: string): string {
+  return value.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
+}
+function sameProcessBirth(left: string, right: string): boolean {
+  return normalizeProcessBirth(left) === normalizeProcessBirth(right);
+}
 function launchResult(identity: Identity, startedAt: string) {
   return {
     opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
@@ -546,8 +573,65 @@ function launchResult(identity: Identity, startedAt: string) {
   };
 }
 function birthDiscriminator(identity: Pick<Identity, "nonce" | "supervisorBirth" | "fence">): string {
-  const fence = identity.fence ? `\0${identity.fence.ownerId}\0${identity.fence.fencingToken}` : "";
-  return createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}${fence}`).digest("hex");
+  return createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex");
+}
+
+function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): void {
+  if (!candidate.ownerId || !Number.isSafeInteger(candidate.fencingToken) || candidate.fencingToken < 1)
+    throw new OwnedProcessIdentityMismatchError("Owned process writer fence is invalid.");
+  const path = join(identity.directory, "fence.json");
+  const lock = `${path}.lock`;
+  const deadline = Date.now() + 2_000;
+  let descriptor: number | undefined;
+  while (descriptor === undefined) {
+    try { descriptor = openSync(lock, "wx", 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline)
+        throw new OwnedProcessIdentityMismatchError("Owned process writer fence claim is unavailable.");
+    }
+  }
+  try {
+    if (!existsSync(path) && !identity.fence) {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
+      renameSync(temporary, path);
+      return;
+    }
+    const current = readOwnedFence(path, identity);
+    if (candidate.fencingToken < current.fencingToken ||
+        (candidate.fencingToken === current.fencingToken && candidate.ownerId !== current.ownerId))
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale.");
+    if (candidate.fencingToken > current.fencingToken) {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
+      renameSync(temporary, path);
+    }
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    try { unlinkSync(lock); } catch {}
+  }
+}
+function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (value.nonce !== identity.nonce || typeof value.ownerId !== "string" || !Number.isSafeInteger(value.fencingToken)) throw new Error();
+    return { ownerId: value.ownerId, fencingToken: value.fencingToken };
+  } catch {
+    if (!existsSync(path) && identity.fence) return identity.fence;
+    throw new OwnedProcessIdentityMismatchError("Owned process writer fence evidence is invalid.");
+  }
+}
+function assertPortableOutputSettled(identity: Identity): void {
+  for (const relative of [join("channel", "output"), join("channel", "ack")]) {
+    const directory = join(identity.directory, relative);
+    let entries: string[];
+    try { entries = readdirSync(directory); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error("Portable output ownership could not be inspected before release.");
+    }
+    if (entries.some((name) => relative.endsWith("output") || /^(stdout|stderr)-/.test(name)))
+      throw new Error("Portable output ownership is unsettled; release is refused.");
+  }
 }
 function launchBlocker(identity: Identity, message: string): NativeProcessLaunchBlockedError {
   const state = readState(identity.directory);

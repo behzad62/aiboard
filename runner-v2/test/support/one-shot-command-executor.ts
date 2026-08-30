@@ -61,9 +61,7 @@ export function createProductionOneShotCommandFixture(
   const managed = process.platform === "win32"
     ? new ManagedProcessService({
       stateDirectory: join(root, "managed"),
-      ...(options.managedProcessStartDeadlineMs
-        ? { startDeadlineMs: options.managedProcessStartDeadlineMs }
-        : {}),
+      startDeadlineMs: options.managedProcessStartDeadlineMs ?? 15_000,
     })
     : undefined;
   const nativeBackend = options.backend ?? (process.platform === "win32"

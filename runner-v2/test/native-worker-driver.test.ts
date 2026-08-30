@@ -36,6 +36,7 @@ import {
   steeringReassignedWorkerId,
   workerSessionId,
 } from "../src/worker-identity.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -146,7 +147,7 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
   assert.doesNotMatch(String(resumed[1].content), /request_guidance/);
 });
 
-test("native worker fails over with the same session, context, tools, and evidence", async () => {
+test("native worker fails over with the same session, context, tools, and evidence", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -276,6 +277,7 @@ test("native worker fails over with the same session, context, tools, and eviden
       projectId: "project_1",
       projectRoot: project,
       capabilityRegistry,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
       providerRetryRuntime: {
         now: () => 0,
         random: () => 0.5,

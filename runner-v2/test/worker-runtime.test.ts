@@ -23,6 +23,7 @@ import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { ManagedProcessService } from "../src/managed-process.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -217,7 +218,7 @@ test("worker runtime routes code tools through the supplied shared language rout
   }
 });
 
-test("worker inspects, edits, tests, diffs, restarts, and submits a typed change set", async () => {
+test("worker inspects, edits, tests, diffs, restarts, and submits a typed change set", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-worker-runtime-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -243,6 +244,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
     });
     const workspace = await workspaces.createTaskWorkspace("task_worker");
     const artifacts = new ArtifactStore(join(state, "artifacts"));
+    const execution = createTestOneShotCommandExecutor(t, { artifacts });
     evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
     const staleStdout = await artifacts.put(
       Buffer.from("stale prior-attempt output"),
@@ -312,6 +314,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       ledger: firstLedger,
       sessions: firstSessions,
       evidenceStore,
+      execution,
       initialMessages: messages,
     });
     assert.equal(first.loop.status, "suspended");
@@ -356,6 +359,7 @@ test("worker inspects, edits, tests, diffs, restarts, and submits a typed change
       ledger: recoveredLedger,
       sessions: recoveredSessions,
       evidenceStore,
+      execution,
       initialMessages: messages,
     });
     assert.equal(finished.loop.status, "submitted");
@@ -499,7 +503,7 @@ test("worker submits automatically recorded browser facts as durable review evid
   }
 });
 
-test("worker can submit an evidence-backed inspection task without fabricating a commit", async () => {
+test("worker can submit an evidence-backed inspection task without fabricating a commit", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-worker-no-change-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -550,6 +554,7 @@ test("worker can submit an evidence-backed inspection task without fabricating a
       ledger,
       sessions,
       evidenceStore,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
       initialMessages: [
         { id: "system", role: "system", content: "Inspect and submit evidence." },
         { id: "user", role: "user", content: "Report whether changes are needed." },
@@ -573,7 +578,7 @@ test("worker can submit an evidence-backed inspection task without fabricating a
   }
 });
 
-test("worker subagent edits the shared task workspace and returns without parent lifecycle authority", async () => {
+test("worker subagent edits the shared task workspace and returns without parent lifecycle authority", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-worker-subagent-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -674,6 +679,7 @@ test("worker subagent edits the shared task workspace and returns without parent
       evidenceStore,
       managedProcesses,
       language,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
       initialMessages: [
         { id: "system", role: "system", content: "Delegate, verify, and submit." },
       ],

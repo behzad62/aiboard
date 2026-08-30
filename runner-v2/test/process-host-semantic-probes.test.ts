@@ -6,6 +6,10 @@ import {
   probeProcessHostSemantics,
   type ProcessHostSemanticProbeSource,
 } from "../src/process-host-semantic-probes.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 
 function source(
@@ -56,6 +60,16 @@ test("Job verification requires the active create-and-close probe result", async
   assert.equal(facts.jobContainment, "unavailable");
 });
 
+test("live Windows construction consumes semantic facts and keeps portable fallback after active Job failure", () => {
+  const factory = readFileSync(new URL("../src/native-build-factory.ts", import.meta.url), "utf8");
+  assert.match(factory, /probeProcessHostSemantics\(/);
+  assert.match(factory, /activeJobCreateClose:\s*async\s*\(\)\s*=>\s*await managedProcesses\.probeActiveJobCreateClose\(\)/);
+  assert.match(factory, /windowsFacts\?\.jobContainment\s*===\s*["']verified["']/);
+  const portable = factory.indexOf('stableAdapterId: "runner-windows-portable-adapter-v1"');
+  const gatedJob = factory.indexOf("windowsFacts?.jobContainment");
+  assert.ok(portable > gatedJob, "portable registration must remain outside the optional Job fact gate");
+});
+
 test("Windows Job backend source cannot depend on managed facade or agent/model contracts", () => {
   const sourceText = readFileSync(
     new URL("../src/windows-process-backend.ts", import.meta.url),
@@ -65,23 +79,29 @@ test("Windows Job backend source cannot depend on managed facade or agent/model 
   assert.doesNotMatch(sourceText, /agent-contracts|AgentActor|role:\s*["']worker["']/);
 });
 
-test("extracted Windows Job host exposes only the actor-free low-level contract", async () => {
-  const calls: string[] = [];
-  const host = createWindowsJobProcessHost({
-    launchOwned: async (request) => { calls.push(`launch:${request.sessionId}`); return hostSnapshot(); },
-    signalOwned: async (_id, _signal, owner) => { calls.push(`signal:${owner.sessionId}`); return hostSnapshot(); },
-    reconcileOwned: async () => ({ ...hostSnapshot(), ownershipReleased: false }),
-    releaseOwned: async () => ({ ...hostSnapshot(), ownershipReleased: true }),
-    readOwnedOutput: () => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: { stdout: 0, stderr: 0 } }),
-    probeActiveJobCreateClose: async () => true,
-  });
-  await host.launchOwned({ runId: "run", sessionId: "session", command: "tool", args: [], workingDirectory: ".", environment: {} });
-  await host.signalOwned("process", "SIGTERM", { runId: "run", sessionId: "session" });
-  assert.deepEqual(calls, ["launch:session", "signal:session"]);
-  assert.equal(Object.isFrozen(host), true);
-  assert.deepEqual(Object.keys(host).sort(), ["launchOwned", "probeActiveJobCreateClose", "readOwnedOutput", "reconcileOwned", "releaseOwned", "signalOwned"]);
+test("extracted Windows Job host is concrete and the transitive backend path is actor-free", () => {
+  const backend = readFileSync(new URL("../src/windows-process-backend.ts", import.meta.url), "utf8");
+  const host = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
+  const managed = readFileSync(new URL("../src/managed-process.ts", import.meta.url), "utf8");
+
+  assert.match(host, /class AuthenticatedWindowsJobProcessHost/);
+  assert.match(host, /spawn\(/);
+  assert.match(host, /private readonly records/);
+  assert.doesNotMatch(host, /from\s+["'][^"']*managed-process(?:\.js)?["']|agent-contracts|AgentActor|ToolExecutionContext|role:\s*["']worker["']/);
+  assert.doesNotMatch(managed, /implements WindowsJobProcessHost|internalOwnershipContext|launchOwnedMechanics|signalOwnedMechanics|reconcileOwnedMechanics|releaseOwnedMechanics|readOwnedOutputMechanics/);
+  assert.match(managed, /createWindowsJobProcessHost\(/);
+  assert.match(backend, /WindowsJobProcessHost/);
 });
 
-function hostSnapshot() {
-  return { processId: "process", pid: 1, status: "running" as const, exitCode: null, signal: null, startedAt: "now", updatedAt: "now", stdout: "", stderr: "" };
-}
+test("concrete Windows Job host rejects launch before spawning off Windows", async () => {
+  const stateDirectory = mkdtempSync(join(tmpdir(), "runner-job-host-"));
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory, platform: "linux" });
+    await assert.rejects(
+      host.launchOwned({ runId: "run", sessionId: "session", command: "tool", args: [], workingDirectory: ".", environment: {} }),
+      /containment is unavailable/i,
+    );
+  } finally {
+    rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});

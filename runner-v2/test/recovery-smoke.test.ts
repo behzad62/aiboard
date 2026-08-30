@@ -98,7 +98,7 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
   } finally {
     if (first) await stopProcess(first);
     if (second) await stopProcess(second);
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
 

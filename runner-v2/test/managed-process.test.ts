@@ -22,6 +22,7 @@ import {
 } from "../src/managed-process.js";
 import { createManagedProcessTools } from "../src/managed-process-tools.js";
 import { ToolBroker } from "../src/tool-broker.js";
+import { AuthenticatedWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 
 test("historical process observation reads persisted records without reconciliation writes", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-managed-process-historical-"));
@@ -882,6 +883,94 @@ test("supervisor request timeout follows the configured stop deadline", async ()
     await new Promise<void>((resolve, reject) =>
       server.close((error) => error ? reject(error) : resolve())
     );
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("signal accepts durable stopped proof after the supervisor closes the response", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-managed-process-close-race-"));
+  const workspace = join(root, "workspace");
+  const state = join(root, "state");
+  mkdirSync(workspace); mkdirSync(state);
+  const token = "b".repeat(64);
+  const statusPath = join(state, "fake-supervisor.jsonl");
+  const terminalStatus: Record<string, unknown> = {};
+  const server = createServer((request) => {
+    writeFileSync(statusPath, `${JSON.stringify(terminalStatus)}\n`, { flag: "a" });
+    request.socket.destroy();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const baseStatus = {
+    protocol: "aiboard-managed-process/v1", processId: "close-race", supervisorPid: process.pid,
+    childPid: 123, port: address.port, exitCode: 7, signal: null, error: null,
+    ownershipReleased: false, updatedAt: new Date().toISOString(),
+  };
+  Object.assign(terminalStatus, { ...baseStatus, status: "stopped", ownershipReleased: true });
+  writeFileSync(statusPath, `${JSON.stringify({ ...baseStatus, status: "running" })}\n`);
+  writeFileSync(join(state, "close-race.json"), JSON.stringify({
+    processId: "close-race", pid: 123, runId: "run_1", sessionId: "session_owner",
+    actor: { role: "worker", id: "session_owner" }, command: "fixture", args: [], cwd: workspace,
+    environmentKeys: [], startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    status: "running", exitCode: null, signal: null, stdoutPath: join(state, "fake.stdout"),
+    stderrPath: join(state, "fake.stderr"), supervisor: {
+      protocol: "aiboard-managed-process/v1", token, statusPath,
+      supervisorPid: process.pid, port: address.port,
+    },
+  }));
+  const service = new ManagedProcessService({ stateDirectory: state, stopDeadlineMs: 250 });
+  try {
+    assert.equal((await service.signal("close-race", "SIGTERM", context("session_owner"))).status, "stopped");
+  } finally {
+    service.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows Job reconciliation accepts exact durable stopped proof after a reset response", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-close-race-"));
+  const state = join(root, "state");
+  mkdirSync(state);
+  const token = "c".repeat(64);
+  const processId = "job-close-race";
+  const startedAt = new Date().toISOString();
+  const statusPath = join(state, "fake-supervisor.jsonl");
+  const terminalStatus: Record<string, unknown> = {};
+  const server = createServer((request) => {
+    writeFileSync(statusPath, `${JSON.stringify(terminalStatus)}\n`, { flag: "a" });
+    request.socket.destroy();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const baseStatus = {
+    protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid,
+    childPid: 123, port: address.port, exitCode: 7, signal: null, error: null,
+    ownershipReleased: false, updatedAt: new Date().toISOString(),
+  };
+  Object.assign(terminalStatus, { ...baseStatus, status: "stopped", ownershipReleased: true });
+  writeFileSync(statusPath, `${JSON.stringify({ ...baseStatus, status: "running" })}\n`);
+  writeFileSync(join(state, `${processId}.json`), JSON.stringify({
+    processId, pid: 123, runId: "run_1", sessionId: "session_owner", command: "fixture",
+    args: [], cwd: root, environmentKeys: [], startedAt, updatedAt: startedAt,
+    status: "running", exitCode: null, signal: null,
+    stdoutPath: join(state, "fake.stdout"), stderrPath: join(state, "fake.stderr"),
+    supervisor: { protocol: "aiboard-managed-process/v1", token, statusPath, supervisorPid: process.pid, port: address.port },
+  }));
+  const host = new AuthenticatedWindowsJobProcessHost({ stateDirectory: state, platform: "win32", stopDeadlineMs: 250 });
+  try {
+    const snapshot = await host.reconcileOwned(processId, { runId: "run_1", sessionId: "session_owner" });
+    assert.equal(snapshot.status, "stopped");
+    assert.equal(snapshot.ownershipReleased, true);
+    Object.assign(terminalStatus, { ...baseStatus, status: "running", ownershipReleased: false });
+    writeFileSync(statusPath, `${JSON.stringify(terminalStatus)}\n`, { flag: "a" });
+    await assert.rejects(
+      host.reconcileOwned(processId, { runId: "run_1", sessionId: "session_owner" }),
+      /socket hang up|ECONNRESET/i,
+      "a reset response must remain a failure without exact durable terminal proof",
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(root, { recursive: true, force: true });
   }
 });

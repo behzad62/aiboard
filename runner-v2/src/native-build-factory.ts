@@ -145,7 +145,8 @@ import {
   createProcessBackendRegistry,
 } from "./process-backend.js";
 import { createPosixProcessBackend } from "./posix-process-backend.js";
-import { createWindowsProcessBackend } from "./windows-process-backend.js";
+import { probeProcessHostSemantics } from "./process-host-semantic-probes.js";
+import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
 import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
 import {
   createBoundedProcessOutputFactory,
@@ -533,29 +534,55 @@ export class NativeBuildFactory {
         },
       },
     });
-    const processBackend = process.platform === "win32"
-      ? createWindowsProcessBackend({ jobObjects: { service: managedProcesses } })
-      : createPosixProcessBackend({ stateDirectory: join(runRoot, "process-backend") });
+    const windowsPortableBackend = process.platform === "win32"
+      ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable" })
+      : undefined;
+    const windowsFacts = process.platform === "win32" && windowsPortableBackend
+      ? await probeProcessHostSemantics({
+          portableDuplex: async () => typeof (windowsPortableBackend as { backpressuredChannelProvider?: unknown }).backpressuredChannelProvider === "function",
+          windowsBatchArgv: async () => {
+            try { return statSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")).isFile(); }
+            catch { return false; }
+          },
+          exactTreeBirth: async () => "partial",
+          activeJobCreateClose: async () => await managedProcesses.probeActiveJobCreateClose(),
+        })
+      : undefined;
+    const processBackends = process.platform === "win32"
+      ? [
+          ...(windowsFacts?.jobContainment === "verified" ? [{
+            stableAdapterId: "runner-windows-job-adapter-v1",
+            backendId: "runner-windows-job-v1",
+            codeIdentity: "runner-v2/windows-job-process-backend@1",
+            backend: new WindowsJobObjectProcessBackend(managedProcesses),
+          }] : []),
+          {
+            stableAdapterId: "runner-windows-portable-adapter-v1",
+            backendId: "runner-windows-supervisor-v1",
+            codeIdentity: "runner-v2/windows-portable-process-backend@1",
+            backend: windowsPortableBackend!,
+          },
+        ]
+      : [{
+          stableAdapterId: "runner-posix-process-group-adapter-v1",
+          backendId: "runner-posix-process-group-v1",
+          codeIdentity: "runner-v2/posix-process-backend@1",
+          backend: createPosixProcessBackend({ stateDirectory: join(runRoot, "process-backend") }),
+        }];
     const subprocessKernel = createSubprocessRuntimeKernel({
-      registry: createProcessBackendRegistry([
+      registry: createProcessBackendRegistry(processBackends.map((processBackend) =>
         createProcessBackendRegistration({
-          stableAdapterId: process.platform === "win32"
-            ? "runner-windows-job-adapter-v1"
-            : "runner-posix-process-group-adapter-v1",
-          backendId: process.platform === "win32"
-            ? "runner-windows-job-v1"
-            : "runner-posix-process-group-v1",
+          stableAdapterId: processBackend.stableAdapterId,
+          backendId: processBackend.backendId,
           codeDigest: createHash("sha256")
-            .update(process.platform === "win32"
-              ? "runner-v2/windows-job-process-backend@1"
-              : "runner-v2/posix-process-backend@1")
+            .update(processBackend.codeIdentity)
             .digest("hex"),
           configDigest: createHash("sha256")
             .update("runner-v2/native-one-shot-process-backend@1")
             .digest("hex"),
-          backend: processBackend,
+          backend: processBackend.backend,
         }),
-      ]),
+      )),
       state: { kind: "sqlite", path: join(runRoot, "subprocess-runtime.sqlite") },
       stateKey: await loadOrCreateProcessStateKey(join(runRoot, "subprocess-runtime.key")),
       clock: {

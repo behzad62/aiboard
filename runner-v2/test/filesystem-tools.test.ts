@@ -491,7 +491,7 @@ test("benchmark filesystem policy hides oracle files and protects verifier asset
   writeFileSync(join(workspace, "visible.txt"), "public\n");
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile: "full",
     workspacePath: workspace,
     artifacts,
   });
@@ -543,7 +543,7 @@ function brokerWithFilesystem(
   diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">,
 ): ToolBroker {
   const broker = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile: "full",
     workspacePath: workspace,
     artifacts,
   });

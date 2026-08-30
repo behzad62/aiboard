@@ -22,22 +22,25 @@ export interface PortableProcessChannelProviderOptions {
   readonly replayCapacityChunks: number;
   readonly replayCapacityBytes: number;
   readonly pollIntervalMs: number;
-  authority(binding: ProcessBackendBinding): PortableChannelAuthority;
+  authority(binding: ProcessBackendBinding, fence: ProcessEffectFence): PortableChannelAuthority;
 }
 
 export function createPortableProcessChannelProvider(options: PortableProcessChannelProviderOptions) {
   const replayCapacityChunks = positive(options.replayCapacityChunks);
   const replayCapacityBytes = positive(options.replayCapacityBytes);
   const pollIntervalMs = positive(options.pollIntervalMs);
-  const acquire = async (binding: ProcessBackendBinding) =>
-    new PortableProcessChannel(options.authority(binding), pollIntervalMs);
+  const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
+    const channel = new PortableProcessChannel(options.authority(binding, fence), pollIntervalMs);
+    channel.validateForAttach();
+    return channel;
+  };
   return Object.freeze({
     version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
     replayCapacityChunks,
     replayCapacityBytes,
     acquire,
-    async reattach(binding: ProcessBackendBinding) {
-      const channel = await acquire(binding);
+    async reattach(binding: ProcessBackendBinding, fence: ProcessEffectFence) {
+      const channel = await acquire(binding, fence);
       return {
         version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
         binding,
@@ -123,6 +126,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     if (this.outputSink) throw new Error("Portable channel output already has a consumer.");
     this.outputSink = sink;
     this.outputTimer = setInterval(() => this.scheduleOutput(), this.pollIntervalMs);
+    this.outputTimer.unref?.();
     this.scheduleOutput();
     return () => {
       this.outputSink = undefined;
@@ -157,6 +161,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (this.terminalTimer) clearInterval(this.terminalTimer);
       this.terminalTimer = undefined;
     }, this.pollIntervalMs);
+    this.terminalTimer.unref?.();
     return () => this.terminalSinks.delete(sink);
   }
 
@@ -178,6 +183,10 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
   nextWriteSequence(): number { return this.nextWrite; }
   isInputClosed(): boolean { return this.inputClosed; }
+  validateForAttach(): void {
+    this.reattest(false);
+    this.outputFiles();
+  }
 
   private scheduleOutput(): void {
     this.outputTail = this.outputTail.then(async () => {
@@ -205,15 +214,24 @@ class PortableProcessChannel implements InteractiveProcessChannel {
 
   private outputFiles(): Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> {
     let names: string[];
-    try { names = readdirSync(this.outputDirectory).filter((name) => name.endsWith(".json")).sort(); }
+    try { names = readdirSync(this.outputDirectory).sort(); }
     catch { return []; }
-    const entries = [];
+    const entries: Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> = [];
+    const checkpoint = this.outputCheckpoint();
+    const expected = new Map<"stdout" | "stderr", { sequence: number; offset: number }>([["stdout", { sequence: checkpoint.stdout.sequence + 1, offset: checkpoint.stdout.endOffset }], ["stderr", { sequence: checkpoint.stderr.sequence + 1, offset: checkpoint.stderr.endOffset }]]);
     for (const name of names) {
+      const filename = /^(stdout|stderr)-(\d{12})\.json$/.exec(name);
+      if (!filename) throw new Error("Portable output filename is invalid.");
       try {
         const value = JSON.parse(readFileSync(join(this.outputDirectory, name), "utf8"));
-        if (value.nonce !== this.authority.nonce) continue;
+        if (value.nonce !== this.authority.nonce) throw new Error("Portable output nonce is invalid.");
         const bytes = Buffer.from(value.bytes, "base64");
-        if (!validMetadata(value.metadata, bytes)) continue;
+        if (!validMetadata(value.metadata, bytes)) throw new Error("Portable output metadata or payload is invalid.");
+        if (value.metadata.stream !== filename[1] || value.metadata.sequence !== Number(filename[2])) throw new Error("Portable output filename metadata is inconsistent.");
+        const cursor = expected.get(value.metadata.stream)!;
+        if (value.metadata.sequence !== cursor.sequence || value.metadata.startOffset !== cursor.offset) throw new Error("Portable output retained suffix is not contiguous.");
+        cursor.sequence += 1;
+        cursor.offset = value.metadata.endOffset;
         entries.push({ name, metadata: value.metadata, bytes: new Uint8Array(bytes) });
       } catch (error) {
         throw new Error("Portable output chunk is invalid.", { cause: error });
@@ -256,6 +274,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private terminal(): unknown | undefined {
     if (this.channelFailure) return { state: "outcome_unknown" };
     try {
+      this.reattest(false);
       const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
       if (state.nonce !== this.authority.nonce) throw new Error("Portable channel identity mismatch.");
       return state.status === "stopped"
@@ -273,14 +292,30 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private restoreInputState(): void {
     try {
       const value = JSON.parse(readFileSync(this.statePath(), "utf8"));
-      if (value.nonce !== this.authority.nonce || value.ownerId !== this.authority.fence.ownerId || value.fencingToken !== this.authority.fence.fencingToken) throw new Error("Portable channel writer/fence mismatch.");
+      if (value.nonce !== this.authority.nonce || !Number.isSafeInteger(value.fencingToken) ||
+          value.fencingToken > this.authority.fence.fencingToken ||
+          (value.fencingToken === this.authority.fence.fencingToken && value.ownerId !== this.authority.fence.ownerId)) throw new Error("Portable channel writer/fence mismatch.");
       this.nextCommand = positive(value.nextCommand);
       this.nextWrite = positive(value.nextWrite);
       this.inputClosed = value.inputClosed === true;
+      if (value.fencingToken < this.authority.fence.fencingToken) this.persistInputState();
     } catch (error) {
       if (existsSync(this.statePath())) throw error;
       this.persistInputState();
     }
+  }
+  private outputCheckpoint(): { stdout: { sequence: number; endOffset: number }; stderr: { sequence: number; endOffset: number } } {
+    const path = join(this.channelDirectory, "output-checkpoint.json");
+    if (!existsSync(path)) return { stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } };
+    try {
+      const value = JSON.parse(readFileSync(path, "utf8"));
+      if (value.nonce !== this.authority.nonce) throw new Error();
+      for (const stream of ["stdout", "stderr"] as const) {
+        if (!Number.isSafeInteger(value[stream]?.sequence) || value[stream].sequence < 0 ||
+            !Number.isSafeInteger(value[stream]?.endOffset) || value[stream].endOffset < 0) throw new Error();
+      }
+      return value;
+    } catch { throw new Error("Portable output checkpoint is invalid."); }
   }
   private persistInputState(): void {
     writeAtomic(this.statePath(), JSON.stringify({ nonce: this.authority.nonce, ownerId: this.authority.fence.ownerId, fencingToken: this.authority.fence.fencingToken, nextCommand: this.nextCommand, nextWrite: this.nextWrite, inputClosed: this.inputClosed }));

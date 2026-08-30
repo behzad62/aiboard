@@ -266,7 +266,12 @@ test("runs build and test commands in the pinned workspace and records immutable
       commands,
     });
 
-    assert.equal(run.green, true);
+    assert.equal(run.green, true, JSON.stringify(run.checks.map((check) => ({
+      category: check.category,
+      green: check.green,
+      issues: check.issues,
+      facts: check.facts,
+    }))));
     assert.equal(run.targetRevision, fixture.integration.revision);
     assert.equal(run.checks.length, 4);
     assert.deepEqual(
@@ -462,7 +467,7 @@ test("nonzero, timeout, and cancellation outcomes are mechanically non-green", a
       label: "timed build",
       executable: process.execPath,
       args: ["-e", "setTimeout(() => {}, 5000)"],
-      timeoutMs: 100,
+      timeoutMs: 1_000,
     }] };
     const timedOut = await runtime.run({
       plan: buildOnlyPlan(),

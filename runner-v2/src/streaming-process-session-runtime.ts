@@ -44,8 +44,8 @@ export interface StreamingRuntimeOptions {
   readonly host: { launch(input: { launchId: string; claims: ConsumedExecutionGrantClaims; lease: StreamingSessionLease }): Promise<StreamingSessionBackendBinding>; reconcile(input: { launchId: string; record: unknown }): Promise<"cleaned" | "blocked" | "outcome_unknown"> };
   readonly channel: {
     readonly version: number; readonly replayCapacityChunks?: number; readonly replayCapacityBytes?: number;
-    acquire(binding: StreamingSessionBackendBinding): Promise<FakeStreamingChannel>;
-    reattach?(binding: StreamingSessionBackendBinding): Promise<ReattachedFakeChannel>;
+    acquire(binding: StreamingSessionBackendBinding, fence: Readonly<{ ownerId: string; fencingToken: number }>): Promise<FakeStreamingChannel>;
+    reattach?(binding: StreamingSessionBackendBinding, fence: Readonly<{ ownerId: string; fencingToken: number }>): Promise<ReattachedFakeChannel>;
   };
   readonly handshake: { verify(channel: FakeStreamingChannel): Promise<string> };
   readonly output: {
@@ -282,7 +282,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         host = writer.transitionLaunch({ type: "bind_backend", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, backendBinding: exactBackendBinding, at: clock().toISOString() });
         assertV2(); host = writer.transitionLaunch({ type: "begin_channel", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, at: clock().toISOString() });
         channel = await effect("channel", async () => {
-          const acquired = await options.channel.acquire(exactBackendBinding);
+          const acquired = await options.channel.acquire(exactBackendBinding, { ownerId: host.ownerId, fencingToken: host.fencingToken });
           channel = acquired;
           const cleanupCapability: HostCleanupChannelCapability = { sessionId: request.sessionId, identity: channelCleanupIdentity(request.sessionId, exactBackendBinding), channel: acquired, detached: false };
           hostCleanupChannels.set(request.launchId, cleanupCapability);
@@ -375,7 +375,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         let reattached: ReattachedFakeChannel;
         try {
           const waitMs = remainingTime();
-          const provider = Promise.resolve().then(() => options.channel.reattach!(session.backendBinding));
+          const provider = Promise.resolve().then(() => options.channel.reattach!(session.backendBinding, { ownerId: session.ownerId, fencingToken: session.fencingToken }));
           reattached = await boundedLateResource(provider, waitMs, input.signal, async (late) => {
             let lateAttachment: PrivateAttachment | undefined;
             let settlementFailure: unknown; let cleanupFailure: unknown;

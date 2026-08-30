@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { ProcessBackend, ProcessBackendBinding, ProcessEffectFence, ProcessLaunchRequest } from "./process-backend.js";
 import type { ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import type { WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { createWindowsJobProcessChannelProvider } from "./windows-job-process-channel.js";
 
 export interface WindowsProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -48,6 +49,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
   private readonly controls = new Map<string, JobControlLane>();
   private readonly activations = new Map<string, Promise<JobControlLane>>();
+  private readonly writerFences = new Map<string, ProcessEffectFence>();
   constructor(private readonly service: WindowsJobProcessService) {}
   async probe(): Promise<unknown> {
     if (!(await this.service.probeActiveJobCreateClose()))
@@ -74,10 +76,13 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       args: [...request.intent.arguments],
       workingDirectory: request.intent.workingDirectory,
       environment: { ...request.environment },
+      interactive: true,
+      fence: { ...request.fence },
     });
     const opaqueIdentity: JobOpaqueIdentity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt, fence: { ...request.fence } };
     const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
     const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
+    this.writerFences.set(identity.processId, { ...request.fence });
     this.registerLane(identity);
     return {
       opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
@@ -91,39 +96,62 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   }
   async observe(binding: ProcessBackendBinding, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>, _fence: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
-    assertJobFence(identity, _fence);
-    for (;;) {
-      const { snapshot, deliveredOutput } = await this.control(identity, async () => {
-        const offsets = this.offsets.get(identity.processId) ?? { stdout: 0, stderr: 0 };
-        const unread = this.service.readOwnedOutput(identity.processId, jobOwner(identity), offsets);
-        for (const stream of ["stdout", "stderr"] as const) {
-          if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
-        }
-        this.offsets.set(identity.processId, { ...unread.next });
-        return {
-          snapshot: await this.service.reconcileOwned(identity.processId, jobOwner(identity)),
-          deliveredOutput: unread.stdout.byteLength > 0 || unread.stderr.byteLength > 0,
-        };
-      });
-      if (snapshot.status === "stopped" && !deliveredOutput)
-        return { state: "exited", ...(snapshot.exitCode === null ? {} : { exitCode: snapshot.exitCode }), ...(snapshot.signal ? { signal: snapshot.signal } : {}) };
-      if (snapshot.status === "exited_unknown" && snapshot.ownershipReleased)
-        throw new Error("Windows Job supervisor outcome is unknown.");
-      await new Promise((resolve) => setTimeout(resolve, 25));
+    await this.claimFence(identity, _fence);
+    if (!this.service.attachOwnedChannel || !this.service.writeOwnedInput || !this.service.closeOwnedInput || !this.service.acknowledgeOwnedOutput || !this.service.claimOwnedFence) {
+      for (;;) {
+        const { snapshot, deliveredOutput } = await this.control(identity, async () => {
+          await this.claimFence(identity, _fence);
+          const offsets = this.offsets.get(identity.processId) ?? { stdout: 0, stderr: 0 };
+          const unread = this.service.readOwnedOutput(identity.processId, jobOwner(identity), offsets, _fence);
+          for (const stream of ["stdout", "stderr"] as const) {
+            if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
+          }
+          this.offsets.set(identity.processId, { ...unread.next });
+          return {
+            snapshot: await this.service.reconcileOwned(identity.processId, jobOwner(identity), _fence),
+            deliveredOutput: unread.stdout.byteLength > 0 || unread.stderr.byteLength > 0,
+          };
+        });
+        if (snapshot.status === "stopped" && !deliveredOutput)
+          return { state: "exited", ...(snapshot.exitCode === null ? {} : { exitCode: snapshot.exitCode }), ...(snapshot.signal ? { signal: snapshot.signal } : {}) };
+        if (snapshot.status === "exited_unknown" && snapshot.ownershipReleased)
+          throw new Error("Windows Job supervisor outcome is unknown.");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    const channel = await this.backpressuredChannelProvider().acquire(binding, _fence);
+    const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
+      await output(metadata.stream, bytes);
+      return metadata;
+    });
+    try {
+      await channel.waitForTerminal();
+      await this.claimFence(identity, _fence);
+      const terminal = await this.service.reconcileOwned(identity.processId, jobOwner(identity), _fence);
+      if (terminal.startedAt !== identity.startedAt || terminal.status !== "stopped" || !terminal.ownershipReleased)
+        throw new Error("Windows Job terminal state could not be re-attested.");
+      return {
+        state: "exited",
+        ...(terminal.exitCode === null ? {} : { exitCode: terminal.exitCode }),
+        ...(terminal.signal ? { signal: terminal.signal } : {}),
+      };
+    } finally {
+      unsubscribe();
+      await channel.detach();
     }
   }
   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, fence?: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
-    assertJobFence(identity, fence);
+    await this.claimFence(identity, fence);
     const snapshot = await this.control(identity, async () =>
-      await this.service.signalOwned(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobOwner(identity)));
+      await this.service.signalOwned(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobOwner(identity), fence));
     return { state: snapshot.status === "stopped" ? "exited" : "running" };
   }
   async verifyEmpty(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
-    assertJobFence(identity, fence);
+    await this.claimFence(identity, fence);
     const snapshot = await this.control(identity, async () =>
-      await this.service.reconcileOwned(identity.processId, jobOwner(identity)));
+      await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence));
     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
   }
   async reconcile(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
@@ -131,10 +159,10 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     try { identity = jobIdentity(binding); } catch (error) {
       return { state: error instanceof JobIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
     }
-    try { assertJobFence(identity, fence); } catch { return { state: "identity_mismatch" }; }
+    try { await this.claimFence(identity, fence); } catch { return { state: "identity_mismatch" }; }
     try {
       const snapshot = await this.control(identity, async () =>
-        await this.service.reconcileOwned(identity.processId, jobOwner(identity)));
+        await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence));
       if (snapshot.startedAt !== identity.startedAt) return { state: "identity_mismatch" };
       if (snapshot.status === "running") return { state: "running" };
       if (snapshot.status === "exited_unknown")
@@ -144,7 +172,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   }
   async release(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
-    assertJobFence(identity, fence);
+    await this.claimFence(identity, fence);
     const processId = identity.processId;
     let lane = this.controls.get(processId);
     const activation = this.activations.get(processId);
@@ -155,7 +183,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       lane.releaseRequested = true;
       const release = lane.tail.catch(() => undefined)
         .then(async () => {
-          await this.service.releaseOwned(processId, jobOwner(identity), identity.startedAt);
+          await this.service.releaseOwned(processId, jobOwner(identity), identity.startedAt, fence);
           this.offsets.delete(processId);
           if (this.controls.get(processId) === lane) this.controls.delete(processId);
         });
@@ -169,6 +197,47 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       throw error;
     }
     return { released: true };
+  }
+
+  backpressuredChannelProvider() {
+    if (!this.service.attachOwnedChannel || !this.service.writeOwnedInput || !this.service.closeOwnedInput || !this.service.acknowledgeOwnedOutput || !this.service.claimOwnedFence) {
+      throw new Error("Windows Job duplex channel is unavailable.");
+    }
+    const duplexService = this.service as WindowsJobProcessService & Required<Pick<WindowsJobProcessService, "attachOwnedChannel" | "writeOwnedInput" | "closeOwnedInput" | "acknowledgeOwnedOutput" | "claimOwnedFence">>;
+    return createWindowsJobProcessChannelProvider({
+      replayCapacityChunks: 16,
+      replayCapacityBytes: 256 * 1024,
+      pollIntervalMs: 25,
+      authority: (binding, fence) => {
+        const identity = jobIdentity(binding);
+        assertJobFence(identity, fence);
+        return {
+          processId: identity.processId,
+          owner: jobOwner(identity),
+          fence,
+          service: duplexService,
+          reattest: async () => {
+            await this.claimFence(identity, fence);
+            const snapshot = await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence);
+            if (snapshot.startedAt !== identity.startedAt) throw new JobIdentityMismatchError("Windows Job startedAt identity mismatch.");
+            if (snapshot.status === "stopped") return "exited" as const;
+            if (snapshot.status === "exited_unknown" && snapshot.ownershipReleased)
+              throw new Error("Windows Job supervisor outcome is unknown.");
+            return "live" as const;
+          },
+        };
+      },
+    });
+  }
+
+  private async claimFence(identity: JobIdentity, fence: ProcessEffectFence | undefined): Promise<void> {
+    assertJobFence(identity, fence);
+    if (!fence) return;
+    const exact = fence!;
+    const current = this.writerFences.get(identity.processId);
+    if (current && (exact.fencingToken < current.fencingToken || (exact.fencingToken === current.fencingToken && exact.ownerId !== current.ownerId))) throw new JobIdentityMismatchError("Windows Job writer fence is stale.");
+    await this.service.claimOwnedFence?.(identity.processId, jobOwner(identity), exact);
+    this.writerFences.set(identity.processId, { ...exact });
   }
 
   private async control<T>(identity: JobIdentity, action: () => Promise<T>): Promise<T> {
@@ -247,13 +316,12 @@ function jobIdentity(binding: ProcessBackendBinding): JobIdentity {
   return { ...value, birthDiscriminator: discriminator };
 }
 function jobBirthDiscriminator(identity: JobOpaqueIdentity): string {
-  const fence = identity.fence ? `\0${identity.fence.ownerId}\0${identity.fence.fencingToken}` : "";
-  return createHash("sha256").update(`${identity.processId}\0${identity.startedAt}${fence}`).digest("hex");
+  return createHash("sha256").update(`${identity.processId}\0${identity.startedAt}`).digest("hex");
 }
 function assertJobFence(identity: JobIdentity, fence: ProcessEffectFence | undefined): void {
-  if (!identity.fence) return;
-  if (!fence || identity.fence.ownerId !== fence.ownerId || identity.fence.fencingToken !== fence.fencingToken)
-    throw new JobIdentityMismatchError("Windows Job writer fence is stale.");
+  if (!identity.fence && !fence) return;
+  if (!fence || !fence.ownerId || !Number.isSafeInteger(fence.fencingToken) || fence.fencingToken < 1)
+    throw new JobIdentityMismatchError("Windows Job writer fence is invalid.");
 }
 function jobOwner(identity: JobIdentity) {
   return { runId: identity.runId, sessionId: identity.sessionId };

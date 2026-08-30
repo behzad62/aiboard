@@ -107,6 +107,30 @@ const server = createServer(async (request, response) => {
     json(response, 200, status);
     return;
   }
+  if (request.method === "POST" && request.url === "/write") {
+    try {
+      const body = await readJson(request);
+      if (!config.interactive || !backendInput || backendInput.destroyed || typeof body.payload !== "string") {
+        json(response, 409, { error: "input_unavailable" });
+        return;
+      }
+      const payload = Buffer.from(body.payload, "base64");
+      await new Promise((resolve, reject) => backendInput.write(payload, (error) => error ? reject(error) : resolve()));
+      json(response, 200, { acknowledged: true, sequence: body.sequence });
+    } catch (error) {
+      json(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+  if (request.method === "POST" && request.url === "/close-input") {
+    if (!config.interactive || !backendInput || backendInput.destroyed) {
+      json(response, 409, { error: "input_unavailable" });
+      return;
+    }
+    backendInput.end();
+    json(response, 200, { acknowledged: true });
+    return;
+  }
   if (request.method !== "POST" || request.url !== "/signal") {
     json(response, 404, { error: "not_found" });
     return;
@@ -160,13 +184,28 @@ function launchWindowsJob() {
   const script = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
   backend = spawn(
     "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, ...(config.interactive ? ["--aiboard-lsp-pipe"] : [])],
     { windowsHide: true, shell: false, stdio: ["pipe", "pipe", "pipe"] }
   );
   backendInput = backend.stdin;
-  backend.stderr.on("data", (chunk) => appendFileSync(config.stderrPath, chunk));
-  const lines = createInterface({ input: backend.stdout });
-  lines.on("line", (line) => handleJobEvent(line));
+  if (config.interactive) {
+    backend.stdout.on("data", (chunk) => appendFileSync(config.stdoutPath, chunk));
+    const events = createInterface({ input: backend.stderr });
+    events.on("line", (line) => {
+      const prefix = "@aiboard-lsp-job-host:";
+      const eventOffset = line.lastIndexOf(prefix);
+      if (eventOffset < 0) {
+        appendFileSync(config.stderrPath, `${line}\n`);
+        return;
+      }
+      if (eventOffset > 0) appendFileSync(config.stderrPath, line.slice(0, eventOffset));
+      handleJobEvent(line.slice(eventOffset + prefix.length));
+    });
+  } else {
+    backend.stderr.on("data", (chunk) => appendFileSync(config.stderrPath, chunk));
+    const lines = createInterface({ input: backend.stdout });
+    lines.on("line", (line) => handleJobEvent(line));
+  }
   backend.once("error", (error) => startupFailed(error));
   backend.once("close", (exitCode) => {
     backendInput = undefined;
@@ -182,14 +221,17 @@ function launchWindowsJob() {
     status.exitCode = exitCode;
     markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
   });
-  backendInput.write(`${JSON.stringify({
+  const jobConfiguration = {
     command: config.command,
     args: config.args,
     cwd: config.cwd,
     env: config.env,
     stdoutPath: config.stdoutPath,
     stderrPath: config.stderrPath,
-  })}\n`);
+  };
+  backendInput.write(config.interactive
+    ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
+    : `${JSON.stringify(jobConfiguration)}\n`);
 }
 
 function handleJobEvent(line) {
@@ -264,6 +306,15 @@ async function stopOwnedTree(signal, requestedDeadline) {
   if (status.status === "stopped") return;
   stopping = true;
   const deadlineMs = Math.max(250, Math.min(30_000, requestedDeadline || 5_000));
+  if (config.interactive) {
+    // The interactive host dedicates its stdin to the child. Closing the host
+    // closes the authenticated Job handle, whose KILL_ON_JOB_CLOSE guarantee
+    // terminates every member; the close event below is therefore empty proof.
+    jobEmptyProof = true;
+    backend.kill(signal === "SIGKILL" ? "SIGKILL" : "SIGTERM");
+    if (!(await waitForExit(deadlineMs))) throw new Error("Interactive Windows Job did not close before the deadline.");
+    return;
+  }
   if (!backendInput || backendInput.destroyed) {
     throw new Error("Windows Job Object control pipe is unavailable.");
   }

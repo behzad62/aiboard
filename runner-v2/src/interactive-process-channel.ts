@@ -23,12 +23,12 @@ export interface BackpressuredInteractiveProcessChannelProvider {
   readonly version: typeof BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION;
   readonly replayCapacityChunks: number;
   readonly replayCapacityBytes: number;
-  acquire(binding: ProcessBackendBinding): Promise<InteractiveProcessChannel & Readonly<{
+  acquire(binding: ProcessBackendBinding, fence: ProcessEffectFence): Promise<InteractiveProcessChannel & Readonly<{
     subscribeBackpressuredOutput(
       sink: (metadata: BackpressuredOutputMetadata, ownedBytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>,
     ): () => void;
   }>>;
-  reattach?(binding: ProcessBackendBinding): Promise<InteractiveProcessReattachResult>;
+  reattach?(binding: ProcessBackendBinding, fence: ProcessEffectFence): Promise<InteractiveProcessReattachResult>;
 }
 
 /** Closed set of family-facing actions that must carry a current authority token. */

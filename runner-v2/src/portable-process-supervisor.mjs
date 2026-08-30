@@ -11,13 +11,18 @@ const stdoutPath = join(config.directory, "stdout.log");
 const stderrPath = join(config.directory, "stderr.log");
 const childGoPath = join(config.directory, "child-go");
 const childStatusPath = join(config.directory, "child-status.json");
+const fencePath = join(config.directory, "fence.json");
 const channelDirectory = join(config.directory, "channel");
 const channelOutputDirectory = join(channelDirectory, "output");
 const channelInputDirectory = join(channelDirectory, "input");
 const channelAckDirectory = join(channelDirectory, "ack");
+const outputCheckpointPath = join(channelDirectory, "output-checkpoint.json");
 for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
+if (!existsSync(outputCheckpointPath)) writeAtomic(outputCheckpointPath, JSON.stringify({ nonce: config.nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
 const replayCapacityChunks = config.replayCapacityChunks ?? 16;
 const replayCapacityBytes = config.replayCapacityBytes ?? 256 * 1024;
+const WINDOWS_TREE_FAILURE_LIMIT = 3;
+const WINDOWS_TREE_REFRESH_INTERVAL_MS = 250;
 const outputSequences = { stdout: 0, stderr: 0 };
 const outputOffsets = { stdout: 0, stderr: 0 };
 const retained = new Map();
@@ -32,6 +37,12 @@ const knownProcesses = new Map();
 let ownershipMismatch = false;
 let ownershipInspectionUnknown = false;
 let ownershipInspectionDetail = "";
+let lastWindowsProcesses;
+let windowsTreeRefreshInFlight = false;
+let lastWindowsTreeRefreshFinishedAt = Number.NEGATIVE_INFINITY;
+let windowsTreeRefreshCount = 0;
+let windowsTreeRefreshMinimumGapMs = null;
+let windowsTreeFailures = 0;
 let launchEffect = config.platform === "windows" ? "prepared" : "started";
 let rootProcess = null;
 
@@ -103,22 +114,24 @@ function tick() {
     handleChannelInput();
     drainOutput("stdout", child.stdout, stdoutPath);
     drainOutput("stderr", child.stderr, stderrPath);
-    if (config.platform === "windows") refreshWindowsTree();
+    if (config.platform === "windows") requestWindowsTreeRefresh();
     if (ownershipInspectionUnknown) {
-      publish("outcome_unknown", `Owned Windows process inspection is unavailable: ${ownershipInspectionDetail}`);
+      if (windowsTreeFailures >= WINDOWS_TREE_FAILURE_LIMIT)
+        publish("outcome_unknown", `Owned Windows process inspection is unavailable: ${ownershipInspectionDetail}`);
       return;
     }
     if (ownershipMismatch) {
       publish("outcome_unknown", "Owned Windows descendant birth identity changed.");
       return;
     }
+    if (config.platform === "windows" && !lastWindowsProcesses && windowsTreeRefreshInFlight) return;
     handleControl();
     const active = activeOwnedPids();
     if (active === undefined) {
       publish("outcome_unknown", "Owned process membership inspection is unavailable.");
       return;
     }
-    if (targetExited && active.length === 0) {
+    if (targetExited && active.length === 0 && retained.size === 0) {
       publish("stopped");
       clearInterval(timer);
       process.exit(0);
@@ -166,7 +179,14 @@ function handleChannelAcks() {
     const key = name.slice(0, -5);
     const expected = retained.get(key);
     if (!expected || ack.nonce !== config.nonce || JSON.stringify(ack.metadata) !== JSON.stringify(expected)) continue;
-    try { unlinkSync(join(channelOutputDirectory, `${key}.json`)); } catch {}
+    unlinkSync(join(channelOutputDirectory, `${key}.json`));
+    if (existsSync(join(channelOutputDirectory, `${key}.json`))) throw new Error("Acknowledged portable output could not be deleted.");
+    const checkpoint = JSON.parse(readFileSync(outputCheckpointPath, "utf8"));
+    const current = checkpoint[expected.stream];
+    if (checkpoint.nonce !== config.nonce || current.sequence + 1 !== expected.sequence || current.endOffset !== expected.startOffset)
+      throw new Error("Portable output deletion checkpoint is not contiguous.");
+    checkpoint[expected.stream] = { sequence: expected.sequence, endOffset: expected.endOffset };
+    writeAtomic(outputCheckpointPath, JSON.stringify(checkpoint));
     try { unlinkSync(join(channelAckDirectory, name)); } catch {}
     retained.delete(key);
     retainedBytes -= expected.byteLength;
@@ -179,7 +199,8 @@ function handleChannelInput() {
   if (!existsSync(path)) return;
   let command;
   try { command = JSON.parse(readFileSync(path, "utf8")); } catch { return; }
-  if (command.nonce !== config.nonce || command.ownerId !== config.fence?.ownerId || command.fencingToken !== config.fence?.fencingToken || command.sequence !== handledInput + 1) return;
+  const fence = readCurrentFence();
+  if (!fence || command.nonce !== config.nonce || command.ownerId !== fence.ownerId || command.fencingToken !== fence.fencingToken || command.sequence !== handledInput + 1) return;
   if (command.type === "write") {
     const bytes = Buffer.from(command.bytes, "base64");
     if (bytes.byteLength !== command.byteLength || createHash("sha256").update(bytes).digest("hex") !== command.digest) return;
@@ -196,6 +217,14 @@ function handleChannelInput() {
   } else return;
   handledInput = command.sequence;
   try { unlinkSync(path); } catch {}
+}
+
+function readCurrentFence() {
+  try {
+    const value = JSON.parse(readFileSync(fencePath, "utf8"));
+    return value.nonce === config.nonce && typeof value.ownerId === "string" && Number.isSafeInteger(value.fencingToken)
+      ? value : undefined;
+  } catch { return undefined; }
 }
 
 function publishChannelInputAck(sequence, status) {
@@ -236,7 +265,7 @@ function handleControl() {
         publish("outcome_unknown", "Refused to signal because Windows process inspection is unavailable.");
         return;
       }
-      if (inspection.state === "present" && inspection.fingerprint === birth) roots.push(pid);
+      if (inspection.state === "present" && sameBirth(inspection.fingerprint, birth)) roots.push(pid);
     }
     for (const pid of roots) {
       spawnSync("taskkill.exe", ["/PID", String(pid), "/T", ...(request.action === "force_terminate" ? ["/F"] : [])], {
@@ -249,21 +278,51 @@ function handleControl() {
   publish(active === undefined ? "outcome_unknown" : active.length === 0 ? "stopped" : "running");
 }
 
+const WINDOWS_TREE_SCRIPT = "$ErrorActionPreference='SilentlyContinue';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"}";
+
+function requestWindowsTreeRefresh() {
+  if (windowsTreeRefreshInFlight) return;
+  const now = Date.now();
+  const gap = now - lastWindowsTreeRefreshFinishedAt;
+  if (gap < WINDOWS_TREE_REFRESH_INTERVAL_MS) return;
+  if (Number.isFinite(gap)) windowsTreeRefreshMinimumGapMs = windowsTreeRefreshMinimumGapMs === null ? gap : Math.min(windowsTreeRefreshMinimumGapMs, gap);
+  windowsTreeRefreshCount += 1;
+  windowsTreeRefreshInFlight = true;
+  const inspector = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TREE_SCRIPT], {
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout = [];
+  let inspectionError;
+  inspector.stdout.on("data", (bytes) => stdout.push(Buffer.from(bytes)));
+  inspector.once("error", (error) => { inspectionError = error; });
+  inspector.once("close", (code) => {
+    windowsTreeRefreshInFlight = false;
+    acceptWindowsTreeResult(code, inspectionError, Buffer.concat(stdout).toString("utf8"));
+    lastWindowsTreeRefreshFinishedAt = Date.now();
+  });
+}
+
 function refreshWindowsTree() {
-  const script = "$ErrorActionPreference='SilentlyContinue';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"}";
-  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TREE_SCRIPT], {
     encoding: "utf8",
     windowsHide: true,
   });
-  if (result.status !== 0 || result.error) {
+  acceptWindowsTreeResult(result.status, result.error, String(result.stdout));
+}
+
+function acceptWindowsTreeResult(status, error, stdout) {
+  if (status !== 0 || error) {
+    windowsTreeFailures += 1;
     ownershipInspectionUnknown = true;
-    ownershipInspectionDetail = result.error?.message ?? `PowerShell exited ${result.status}`;
+    ownershipInspectionDetail = error?.message ?? `PowerShell exited ${status}`;
     return;
   }
-  const lines = String(result.stdout).split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const lines = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
   const rows = lines.map((line) => {
     const [pid, parent, birth] = line.split(",");
-    return { pid: Number(pid), parent: Number(parent), birth };
+    return { pid: Number(pid), parent: Number(parent), birth: normalizeBirth(birth) };
   });
   if (rows.some(({ pid, parent, birth }) => !(pid >= 0 && parent >= 0 && birth))) {
     ownershipInspectionUnknown = true;
@@ -275,10 +334,12 @@ function refreshWindowsTree() {
   }
   ownershipInspectionUnknown = false;
   ownershipInspectionDetail = "";
+  windowsTreeFailures = 0;
   const current = new Map(rows.map(({ pid, birth }) => [pid, birth]));
+  lastWindowsProcesses = current;
   for (const [pid, birth] of knownProcesses) {
     const observed = current.get(pid);
-    if (observed && observed !== birth) ownershipMismatch = true;
+    if (observed && !sameBirth(observed, birth)) ownershipMismatch = true;
   }
   const owned = new Set(knownProcesses.keys());
   let changed = true;
@@ -307,24 +368,32 @@ function activeOwnedPids() {
       .map(([pid]) => pid)
       .filter((pid) => pid > 0 && pid !== process.pid && isAlive(pid));
   }
+  if (!lastWindowsProcesses) return undefined;
   const active = [];
   for (const [pid, birth] of knownProcesses) {
-    const inspection = inspectWindowsBirth(pid);
-    if (inspection.state === "unknown") return undefined;
-    if (inspection.state === "present" && inspection.fingerprint === birth) active.push(pid);
+    const observed = lastWindowsProcesses.get(pid);
+    if (observed && sameBirth(observed, birth)) active.push(pid);
   }
   return active;
 }
 
 function inspectWindowsBirth(pid) {
-  const script = `$ErrorActionPreference='Stop';$p=Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}";if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.CreationDate.ToUniversalTime().ToString('o')}`;
+  const script = `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`;
   const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 2000 });
   if (result.status !== 0 || result.error) return { state: "unknown" };
   const value = String(result.stdout).trim();
   if (value === "ABSENT") return { state: "absent" };
   if (value.startsWith("PRESENT:") && value.length > "PRESENT:".length)
-    return { state: "present", fingerprint: value.slice("PRESENT:".length) };
+    return { state: "present", fingerprint: normalizeBirth(value.slice("PRESENT:".length)) };
   return { state: "unknown" };
+}
+
+function normalizeBirth(value) {
+  return String(value).replace(/(\.\d{6})\d+(Z)$/, "$1$2");
+}
+
+function sameBirth(left, right) {
+  return normalizeBirth(left) === normalizeBirth(right);
 }
 
 function isAlive(pid) {
@@ -344,6 +413,8 @@ function publish(status, error = null) {
     exitCode: targetExitCode,
     signal: targetSignal,
     knownProcesses: [...knownProcesses].map(([pid, birth]) => ({ pid, birth })),
+    windowsTreeRefreshCount,
+    windowsTreeRefreshMinimumGapMs,
     error,
     updatedAt: new Date().toISOString(),
   };
