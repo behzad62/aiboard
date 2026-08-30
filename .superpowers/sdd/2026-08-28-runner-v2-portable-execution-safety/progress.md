@@ -246,6 +246,17 @@ overlap is expected.
   tree/Job probes, current-host lifecycle faults, compatibility, mutations, and
   residue gates. OCI, CLI construction, and all production family routing remain
   excluded until their owning packets.
+- Task 8.0B2 implementation (`7100c5de`, evidence `35f05ec5`) reported 403 pass,
+  0 fail, 1 explicit POSIX-native Windows-host skip, with typecheck, lint,
+  mutations, static and residue gates green.
+- Task 8.0B2 independent review 1: NOT APPROVED, zero Critical and six Important
+  findings. The Job host is a callback wrapper that still routes through the
+  managed facade and fabricates an actor; Job has no duplex channel; independent
+  facts are not consumed and no Job-unavailable portable/batch fallback exists;
+  launch-bound fences reject legitimate recovery; attach/terminal/release omit
+  required identity re-attestation; and corrupt/unsettled output can be skipped
+  or released fail-open. Governed repair round 1 is authorized automatically
+  because all findings are within the approved B2 scope. B3 remains locked.
 
 ## Breaker rulings
 
