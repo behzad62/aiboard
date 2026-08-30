@@ -201,6 +201,12 @@ overlap is expected.
   consumed, no seventh repair round is authorized, and Packet 8.0B2 remains
   locked. Broader controller suites were not rerun after the failed semantic
   gate because they cannot prove either reproduced safety requirement.
+- Task 8.0B1 repair round 7: after reviewing the distinction between the prior
+  defects and the two residual paths, the owner explicitly authorized fixing
+  both and continuing. Round 7 is limited to the ambiguous pre-marker active
+  host schema and forgeable provider error-provenance paths recorded in
+  `task-8.0b1-exceptional-round-6-review.md`. Packet 8.0B2 remains locked until
+  a fresh independent re-review and controller verification are both green.
 
 ## Breaker rulings
 
