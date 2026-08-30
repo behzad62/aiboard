@@ -95,8 +95,8 @@ overlap is expected.
 |---|---|---|---|
 | Three uniquely named `runner-v2-launch-orphan-*` system-temp roots from Task 4 prove-red runs could not be removed because host policy rejected both safe cleanup attempts; each was inspected and contains only its owned `state.sqlite`. | Low | 12 | Deferred cleanup/residue audit; do not broaden Task 5 |
 | One inert Task 5 evidence directory for stopped supervisor PID 41160 remains under the task-owned temp namespace because both recursive and exact file deletion were denied by host policy; all three associated exact fixture processes were revalidated and stopped. | Low | 12 | Deferred cleanup/residue audit; no live process remains |
-| A valid schema-v1 active `bound` host row without the new channel/checkpoint markers is ambiguous with a pre-fix crash after channel acquisition; the derived ledger omits `channel` and can release while retaining the backend binding. | Important | 8.0B1 | Open after owner-authorized exceptional round 6; B2 locked |
-| A provider can throw the exported `StreamingProcessSessionError` with an arbitrary secret-bearing message/cause; `open()` rethrows that instance unchanged to the caller. | Important | 8.0B1 | Open after owner-authorized exceptional round 6; B2 locked |
+| A valid schema-v1 active `bound` host row without the new channel/checkpoint markers is ambiguous with a pre-fix crash after channel acquisition; the derived ledger omits `channel` and can release while retaining the backend binding. | Important | 8.0B1 | Closed and independently approved in round 7: active legacy generation is typed refused and byte-preserved |
+| A provider can throw or replay an exported `StreamingProcessSessionError` with arbitrary secret-bearing mutable fields. | Important | 8.0B1 | Closed and independently approved in round 7: foreign instances are sanitized and genuine replay is freshly reminted from immutable private claims |
 
 ## Task 8 specification gate
 
@@ -233,6 +233,13 @@ overlap is expected.
   across launch, cancellation, delivery, channel/output, cleanup/retry, bounded
   provider, and late-resource boundaries. Packet 8.0B2 remains locked pending
   current controller verification.
+- Task 8.0B1 controller gate: VERIFIED 100% COMPLETE. Exact formerly failing
+  safety checks are green; current affected gates are B1 89/89, 8.0A 89/89,
+  Task 7 plus Task 3 173/173, Runner typecheck, targeted lint, scoped diff,
+  source-scope, worktree, and residue audits green. Independent semantic review
+  reports zero Critical/Important findings. Packet 8.0B2 is unlocked; production
+  child-family routing and OCI construction remain deferred to their owning
+  packets. See `task-8.0b1-controller-evidence.md`.
 
 ## Breaker rulings
 
