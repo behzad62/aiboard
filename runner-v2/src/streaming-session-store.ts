@@ -263,6 +263,7 @@ export interface StreamingSessionKernelWriter extends StreamingSessionStoreWrite
   claimOutputCheckpoint(record: unknown): Readonly<{ record: Readonly<OutputCheckpointRecord>; won: boolean }>;
   applyOutputCheckpoint(command: unknown): Readonly<OutputCheckpointRecord>;
   deleteOutputCheckpoint(command: unknown): void;
+  takeoverAdoptedWithOutput(command: unknown): Readonly<{ session: Readonly<StreamingSessionRecord>; output: Readonly<OutputCheckpointRecord> }>;
 }
 export interface StreamingSessionAdoptionInput {
   readonly launchId: string;
@@ -1695,6 +1696,19 @@ function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>,
 
 function cloneOutputCheckpoint(record: Readonly<OutputCheckpointRecord>): Readonly<OutputCheckpointRecord> { return deepFreeze(structuredClone(record)); }
 
+function refencedOutputCheckpoint(current: Readonly<OutputCheckpointRecord>, input: Record<string, unknown>): Readonly<OutputCheckpointRecord> {
+  if (current.sessionId !== requiredText(input.sessionId, "sessionId") || current.ownerId !== requiredText(input.ownerId, "ownerId") || current.fencingToken !== requiredPositiveInteger(input.fencingToken, "fencingToken")) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
+  if (current.revision !== requiredNonNegativeInteger(input.outputExpectedRevision, "outputExpectedRevision")) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+  if (current.outcome !== "active" || current.streams.some((stream) => stream.consumingIntent)) throw new StreamingSessionStoreError("invalid_state", "Ambiguous or terminal output cannot be re-fenced.");
+  return parseOutputCheckpointRecord({ ...current, revision: current.revision + 1, ownerId: requiredText(input.newOwnerId, "newOwnerId"), fencingToken: requiredPositiveInteger(input.newFencingToken, "newFencingToken") });
+}
+
+function adoptedTakeoverCommand(command: unknown): Record<string, unknown> {
+  const input = commandRecord(command, "adopted output takeover");
+  assertExactKeys(input, new Set(["sessionId", "ownerId", "fencingToken", "expectedRevision", "outputExpectedRevision", "newOwnerId", "newFencingToken", "leaseExpiresAt", "at"]), "adopted output takeover");
+  return input;
+}
+
 function readSqliteOutputCheckpoint(database: DatabaseSync, integrityKey: Uint8Array, sessionId: string): Readonly<OutputCheckpointRecord> | undefined {
   const row = database.prepare("SELECT record_json, integrity, revision FROM streaming_output_checkpoints WHERE session_id = ?").get(sessionId) as { record_json: string; integrity: string; revision: number } | undefined;
   if (!row) return undefined;
@@ -1785,6 +1799,14 @@ function createHostLaunchWriter(
       if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
       if (requiredNonNegativeInteger(input.expectedRevision, "expectedRevision") !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
       outputCheckpoints.delete(sessionId);
+    },
+    takeoverAdoptedWithOutput(command: unknown) {
+      const input = adoptedTakeoverCommand(command); const sessionId = requiredText(input.sessionId, "sessionId");
+      const currentOutput = outputCheckpoints.get(sessionId); if (!currentOutput) throw new StreamingSessionStoreError("invalid_record", "Output checkpoint is missing.");
+      const output = refencedOutputCheckpoint(currentOutput, input);
+      const session = sessionWriter.apply({ type: "takeover", sessionId, ownerId: input.ownerId, fencingToken: input.fencingToken, expectedRevision: input.expectedRevision, newOwnerId: input.newOwnerId, newFencingToken: input.newFencingToken, leaseExpiresAt: input.leaseExpiresAt, at: input.at });
+      outputCheckpoints.set(sessionId, output);
+      return Object.freeze({ session, output: cloneOutputCheckpoint(output) });
     },
   });
 }
@@ -1910,6 +1932,20 @@ function createSqliteHostLaunchWriter(
       const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
       const result = database.prepare("DELETE FROM streaming_output_checkpoints WHERE session_id = ? AND revision = ?").run(sessionId, expectedRevision) as { changes?: number };
       if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+    },
+    takeoverAdoptedWithOutput(command: unknown) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      const input = adoptedTakeoverCommand(command); const sessionId = requiredText(input.sessionId, "sessionId");
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const currentOutput = readSqliteOutputCheckpoint(database, integrityKey, sessionId); if (!currentOutput) throw new StreamingSessionStoreError("invalid_record", "Output checkpoint is missing.");
+        const output = refencedOutputCheckpoint(currentOutput, input);
+        const session = sessionWriter.apply({ type: "takeover", sessionId, ownerId: input.ownerId, fencingToken: input.fencingToken, expectedRevision: input.expectedRevision, newOwnerId: input.newOwnerId, newFencingToken: input.newFencingToken, leaseExpiresAt: input.leaseExpiresAt, at: input.at });
+        const json = JSON.stringify(output); const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
+        const result = database.prepare("UPDATE streaming_output_checkpoints SET record_json = ?, integrity = ?, revision = ? WHERE session_id = ? AND revision = ?").run(json, integrity, output.revision, sessionId, currentOutput.revision) as { changes?: number };
+        if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+        database.exec("COMMIT"); return Object.freeze({ session, output: cloneOutputCheckpoint(output) });
+      } catch (error) { try { database.exec("ROLLBACK"); } catch {} throw error; }
     },
   });
 }

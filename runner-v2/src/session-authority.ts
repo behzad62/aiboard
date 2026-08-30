@@ -196,7 +196,6 @@ interface AuthorizationRecord {
   readonly claims: ConsumedExecutionGrantClaims;
 }
 
-const AUTHORIZATIONS = new WeakMap<object, AuthorizationRecord>();
 
 export interface SessionAuthority {
   stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization;
@@ -236,6 +235,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
   const kernelWriter = getStreamingSessionKernelWriter(options.sessions);
   const clock = options.clock ?? (() => new Date());
   const retainedClaims = new Map<string, ConsumedExecutionGrantClaims>();
+  const authorizations = new WeakMap<object, AuthorizationRecord>();
   const launchAuthorizationUsed = new Set<string>();
   const grantIdsByCall = new Map<string, string>();
   const stagedLaunches = new WeakMap<object, StagedLaunchRecord>();
@@ -436,7 +436,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         );
       }
       assertOperationAccessWithinClaims(input, claims);
-      const authorization = issueAuthorization(record, input, claims);
+      const authorization = issueAuthorization(authorizations, record, input, claims);
       launchAuthorizationUsed.add(input.sessionId);
       return authorization;
     },
@@ -464,14 +464,14 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       assertCurrentClaims(claims);
       assertOperationAccessWithinEnvelope(input, record.envelope);
       assertOperationAccessWithinClaims(input, claims);
-      const authorization = issueAuthorization(record, input, claims);
+      const authorization = issueAuthorization(authorizations, record, input, claims);
       return authorization;
     },
     assertOperationAuthorization(
       authorization: SessionOperationAuthorization,
       expected: OperationAuthorizationAssertion,
     ): void {
-      const details = AUTHORIZATIONS.get(authorization as object);
+      const details = authorizations.get(authorization as object);
       if (!details) {
         throw new SessionAuthorityError("authorization_forged", "Session operation authorization is not Runner-issued.");
       }
@@ -771,6 +771,7 @@ function assertOperationAccessWithinClaims(
 }
 
 function issueAuthorization(
+  authorizations: WeakMap<object, AuthorizationRecord>,
   record: Readonly<StreamingSessionRecord>,
   request: LaunchOperationAuthorizationRequest,
   claims: ConsumedExecutionGrantClaims,
@@ -781,7 +782,7 @@ function issueAuthorization(
   const authorization = {} as SessionOperationAuthorization;
   Object.defineProperty(authorization, RUNNER_SESSION_OPERATION_AUTHORIZATION, { value: true });
   Object.freeze(authorization);
-  AUTHORIZATIONS.set(authorization as object, {
+  authorizations.set(authorization as object, {
     sessionId: record.sessionId as string,
     ownerId: record.ownerId as string,
     fencingToken: record.fencingToken as number,

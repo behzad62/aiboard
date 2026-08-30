@@ -174,6 +174,12 @@ test("finalizeLaunch atomically hands host ownership to one active session and c
   assert.equal(result.record.state, "active");
   assert.equal(kernel.store.readHostLaunch("launch-1")?.state, "handed_off");
   assert.throws(() => authority.finalizeLaunch({ staged, launchId: "launch-1", sessionId: "stream-1", ownerId: verified.ownerId, fencingToken: verified.fencingToken, expectedRevision: verified.revision, lease: result.record.lease, backendBinding: backendBinding(), handshakeDigest: "b".repeat(64), envelope: result.record.envelope }), (error) => error instanceof SessionAuthorityError && error.code === "launch_call_consumed");
+  const operation = { sessionId: "stream-1", operation: "request" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const authorization = authority.authorizeLaunchOperation(operation);
+  const copiedKernel = createInMemoryStreamingSessionStore(); getStreamingSessionKernelWriter(copiedKernel).claim(result.record);
+  const foreign = createSessionAuthority({ grants, sessions: copiedKernel, clock: () => new Date(now) });
+  assert.throws(() => foreign.assertOperationAuthorization(authorization, { ...operation, binding }),
+    (error) => error instanceof SessionAuthorityError && error.code === "authorization_forged");
 });
 
 test("host cleanup is fenced through pending, blocked, expired-owner takeover, and released", () => {
@@ -212,6 +218,30 @@ test("expired pending cleanup supports consecutive fenced takeovers without life
     assert.equal(record.state, "cleanup_pending"); assert.equal(record.fencingToken, fence);
   }
   assert.equal(record.effects.find((effect) => effect.kind === "cleanup")!.takeovers!.length, 2);
+});
+
+test("adopted takeover atomically re-fences the exact output checkpoint", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.claim(activeSessionRecord("stream-1"));
+  writer.claimOutputCheckpoint({ recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 4, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] });
+  const taken = writer.takeoverAdoptedWithOutput({ sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 1, outputExpectedRevision: 0, newOwnerId: "recovery-owner", newFencingToken: 2, leaseExpiresAt: "2026-08-30T00:03:00.000Z", at: "2026-08-30T00:02:00.000Z" });
+  assert.equal(taken.session.fencingToken, 2); assert.equal(taken.output.fencingToken, 2); assert.equal(taken.output.ownerId, "recovery-owner");
+  assert.throws(() => writer.applyOutputCheckpoint({ type: "mark_outcome_unknown", sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 1, metadata: { stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: "a".repeat(64) } }), (error) => error instanceof StreamingSessionStoreError && error.code === "stale_fence");
+});
+
+test("SQLite adopted takeover commits both fences or rolls back both", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-adopted-takeover-")); const path = join(root, "sessions.sqlite");
+  let kernel = openSqliteStreamingSessionStore(path, Buffer.alloc(32, 5));
+  try {
+    let writer = getStreamingSessionKernelWriter(kernel); writer.claim(activeSessionRecord("stream-1"));
+    writer.claimOutputCheckpoint({ recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 4, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] });
+    const command = { sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, expectedRevision: 1, outputExpectedRevision: 0, newOwnerId: "recovery-owner", newFencingToken: 2, leaseExpiresAt: "2026-08-30T00:03:00.000Z", at: "2026-08-30T00:02:00.000Z" };
+    assert.throws(() => writer.takeoverAdoptedWithOutput({ ...command, outputExpectedRevision: 99 }), /revision/i);
+    assert.equal(kernel.store.readBySession("stream-1")?.fencingToken, 1); assert.equal(kernel.store.readOutputCheckpoint("stream-1")?.fencingToken, 1);
+    writer.takeoverAdoptedWithOutput(command); kernel.store.close();
+    kernel = openSqliteStreamingSessionStore(path, Buffer.alloc(32, 5)); writer = getStreamingSessionKernelWriter(kernel);
+    assert.equal(kernel.store.readBySession("stream-1")?.fencingToken, 2); assert.equal(kernel.store.readOutputCheckpoint("stream-1")?.fencingToken, 2); void writer;
+  } finally { try { kernel.store.close(); } catch {} await rm(root, { recursive: true, force: true }); }
 });
 
 test("SQLite host journal reopens with HMAC integrity and tamper fails closed", async () => {

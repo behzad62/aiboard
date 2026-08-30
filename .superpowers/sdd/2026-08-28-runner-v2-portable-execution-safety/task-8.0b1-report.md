@@ -263,3 +263,81 @@ This is a fake-provider implementation and review-fix evidence, not independent
 approval or a production portability claim. All real adapters/family wiring
 remain excluded. The controller must independently re-review this fix before
 unlocking B2; neither this report nor a green command substitutes for that gate.
+
+## Governed fix round 2 — response to re-review 1
+
+Base: `86304fdb`. Authority: `task-8.0b1-rereview-1.md`. This section supersedes
+round-1 claims only for the five reopened findings. B2 remains locked.
+
+### Exact initial RED reproductions
+
+1. Cross-kernel capability: the finalization regression copied the same active
+   durable record to a second kernel/SessionAuthority. The foreign authority
+   accepted the original token, producing `Missing expected exception` RED.
+2. One-deadline/count recovery: a terminal host row failed to consume the bound
+   and a pending row was reconciled (`actual pending-a`, expected no outcomes).
+3. Late reattach: after a 10 ms recovery timeout, resolving the provider channel
+   left detach count 0 vs 1.
+4. Non-1 fence: a valid active session/checkpoint at fence 2 failed controller
+   construction with `Output controller capacity and ownership must exactly
+   match` because the attachment used fence 1.
+5. Final evidence: authorized stop returned no evidence (`Cannot read properties
+   of undefined (reading 'result')`).
+6. Never-settling isolation: caller timed out at 1,000 ms because failure cleanup
+   unconditionally awaited the provider effect.
+
+The combined exact command was:
+`npx tsx --test --test-name-pattern "startup recovery spends|late reattach|non-one owner|authorized stop surfaces|abort returns promptly" runner-v2/test/streaming-process-session-runtime.test.ts`.
+It reported 0/5 passing (four failed, one cancelled by timeout). The cross-kernel
+test was separately RED 0/1.
+
+### Corrections and GREEN evidence
+
+- Operation authorizations now live in the issuing SessionAuthority's private
+  WeakMap. Matching copied durable state in another kernel cannot validate or
+  replay the capability. Existing forged, stale, revoked and expired checks are
+  unchanged. Direct cross-kernel test GREEN 1/1.
+- Startup reconciliation uses one absolute wall-clock deadline. Every inspected
+  terminal/nonterminal host or session consumes the shared count; each await
+  receives only remaining time. A late reattach value enters a supervised path
+  that creates exact private ownership, detaches/finalizes, settles host+lease
+  cleanup, and retains any blocked proof. Total deadline/count and late-channel
+  tests are GREEN.
+- Attachment construction receives the exact checkpoint owner/fence. Expired
+  adopted recovery uses one hidden kernel transaction to re-fence both the
+  session and output checkpoint or neither. In-memory exact stale-fence and
+  SQLite rollback/reopen tests are GREEN; active fence 2 and expired fence 1→2
+  recovery both reattach GREEN.
+- Runtime retains the complete tee finalization result by session and authorized
+  stop returns `{ record, evidence }`, including loss reasons and artifact ID.
+  Finalize error is retained, cleanup still runs, the durable session becomes
+  cleanup-blocked, and stop throws rather than claiming proof. GREEN covers a
+  full BoundedOutputSpoolResult and injected finalize failure.
+- Cancellation no longer awaits a noncooperative effect. It durably blocks the
+  exact host owner, returns promptly, and supervises the eventual result; late
+  lease/channel resources use the normal fenced cleanup path. Isolation, launch,
+  channel and handshake promises that never settle all return within the caller
+  bound and retain cleanup_blocked authority. A late isolation lease is released.
+- The four-phase noncooperative guard was mutation-proven: disabling the bounded
+  cancellation branch made the exact test RED by its 2,000 ms timeout; the
+  mutation was reverted and the same test was GREEN in 73 ms.
+- The atomic adopted takeover test was first RED with
+  `takeoverAdoptedWithOutput is not a function`, then GREEN in memory and SQLite.
+
+### Round-2 final validation
+
+- B1 focused: 61/61 GREEN, zero skips/cancellations/failures.
+- Task 8.0A: 89/89 GREEN.
+- Task 7 plus Task 3 spool: 173/173 GREEN (127 + 46).
+- `npm run typecheck:runner-v2`: GREEN after the final test typing repair.
+- Targeted ESLint over all changed B1 source/tests: GREEN after the final repair.
+- `git diff --check 86304fdb`: GREEN; scope/static/residue results recorded at
+  commit handoff.
+
+### Round-2 scope and handoff
+
+Only SessionAuthority, the existing streaming-session kernel, fake streaming
+runtime, focused tests and this evidence changed. No real adapter, CLI/factory,
+family, raw process/shell/environment path, second database, OS branch, or Node
+policy changed. This is ready only for independent re-review; it does not claim
+approval or unlock B2.
