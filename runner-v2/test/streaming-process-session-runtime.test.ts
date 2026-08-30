@@ -207,6 +207,37 @@ test("late reattach channel after recovery timeout is deterministically detached
   assert.equal(fixture.kernel.store.readBySession("stream-1")?.state, "cleanup_blocked");
 });
 
+test("late reattach racing durable blocked and released states always detaches exactly once", async () => {
+  for (const durableOutcome of ["blocked", "cleaned"] as const) {
+    const fixture = await makeFixture(); await fixture.runtime.open(fixture.request);
+    let resolveLate!: () => void; let lateDetach = 0;
+    fixture.setReattach(async (binding) => await new Promise((resolve) => { resolveLate = () => resolve({ version: 2, binding, replayCapacityChunks: 4, replayCapacityBytes: 16, retainedWindow: [], channel: { subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { lateDetach++; } } }); }));
+    const recovery = fixture.createRecoveryRuntime();
+    const result = await recovery.reconcileStartup({ maxRecords: 4, timeoutMs: 10 });
+    assert.equal(result.sessionOutcomes[0]?.disposition, "input_unavailable");
+    const current = fixture.kernel.store.readBySession("stream-1")!;
+    fixture.authority.recoverAdopted({ sessionId: "stream-1", ownerId: current.ownerId, fencingToken: current.fencingToken, replay: () => durableOutcome });
+    resolveLate(); await waitUntil(() => lateDetach === 1);
+    assert.equal(lateDetach, 1, durableOutcome);
+    assert.equal(fixture.kernel.store.readBySession("stream-1")?.state, durableOutcome === "cleaned" ? "released" : "cleanup_blocked");
+  }
+});
+
+test("failed late reattach cleanup is retained, surfaced, and retried without double successful detach", async () => {
+  const fixture = await makeFixture(); await fixture.runtime.open(fixture.request);
+  let resolveLate!: () => void; let lateDetach = 0;
+  fixture.setReattach(async (binding) => await new Promise((resolve) => { resolveLate = () => resolve({ version: 2, binding, replayCapacityChunks: 4, replayCapacityBytes: 16, retainedWindow: [], channel: { subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { lateDetach++; if (lateDetach === 1) throw new Error("late detach failed"); } } }); }));
+  const recovery = fixture.createRecoveryRuntime(); await recovery.reconcileStartup({ maxRecords: 4, timeoutMs: 10 });
+  const current = fixture.kernel.store.readBySession("stream-1")!;
+  fixture.authority.recoverAdopted({ sessionId: "stream-1", ownerId: current.ownerId, fencingToken: current.fencingToken, replay: () => "cleaned" });
+  resolveLate(); await waitUntil(() => lateDetach === 1); await new Promise((resolve) => setImmediate(resolve));
+  const retried = await recovery.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(retried.lateCleanupFailures.length, 1);
+  assert.equal(retried.lateCleanupFailures[0]?.sessionId, "stream-1");
+  assert.match(retried.lateCleanupFailures[0]?.message ?? "", /late detach failed/);
+  assert.equal(lateDetach, 2, "one failed detach and one successful retry");
+});
+
 test("recovery creates an attachment with the exact current non-one owner fence", async () => {
   const fixture = await makeFixture(); const opened = await fixture.runtime.open(fixture.request); void opened;
   const source = fixture.kernel.store.readBySession("stream-1")!; const checkpoint = fixture.kernel.store.readOutputCheckpoint("stream-1")!;
@@ -261,7 +292,25 @@ test("abort is caller-bounded when every provider phase is permanently noncooper
     if (phase === "handshake") fixture.setHandshake(never);
     const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
     const started = Date.now(); await assert.rejects(opening); assert.ok(Date.now() - started < 200, phase); assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked", phase);
+    if (phase !== "isolate") assert.equal(fixture.releaseCalls, 1, `${phase}: already-known lease must be released immediately`);
+    assert.equal(fixture.calls.filter((call) => call === "reconcile").length, 1, `${phase}: known host state must be reconciled immediately`);
+    if (phase === "handshake") {
+      assert.equal(fixture.detachCalls, 1, "handshake: already-known channel must detach immediately");
+      assert.equal(fixture.kernel.store.readOutputCheckpoint("stream-1"), undefined, "handshake: pre-adoption checkpoint must settle immediately");
+    }
   }
+});
+
+test("late channel after immediate cancellation cleanup is detached without repeating known cleanup", { timeout: 1_000 }, async () => {
+  const fixture = await makeFixture(2, "cleaned"); let resolveChannel!: (channel: import("../src/streaming-process-session-runtime.js").FakeStreamingChannel) => void;
+  fixture.setChannelAcquire(async () => await new Promise((resolve) => { resolveChannel = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening);
+  assert.equal(fixture.releaseCalls, 1); assert.equal(fixture.calls.filter((call) => call === "reconcile").length, 1);
+  resolveChannel({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { fixture.calls.push("late-detach"); } });
+  await waitUntil(() => fixture.calls.includes("late-detach"));
+  assert.equal(fixture.calls.filter((call) => call === "late-detach").length, 1);
+  assert.equal(fixture.releaseCalls, 1); assert.equal(fixture.calls.filter((call) => call === "reconcile").length, 1);
 });
 
 async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blocked" | "outcome_unknown" = "outcome_unknown", handshakeVerify?: () => Promise<string>, retainedWindow: readonly import("../src/streaming-output-controller.js").StreamingOutputMetadata[] = [], replayCapacityChunks = 4, revokeAt?: "isolate" | "launch" | "channel" | "output" | "handshake", reconcileOverride?: () => Promise<"cleaned" | "blocked" | "outcome_unknown">, onPhase?: (phase: string) => void) {

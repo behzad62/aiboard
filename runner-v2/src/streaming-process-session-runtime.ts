@@ -46,12 +46,13 @@ export interface StreamingOpenRequest { readonly sessionId: string; readonly lau
 
 type OutputController = ReturnType<typeof createStreamingOutputController>;
 type FinalizedEvidence = Awaited<ReturnType<ReturnType<typeof createProtocolEvidenceTee>["finalize"]>>;
-interface PrivateAttachment { readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly tee: ReturnType<typeof createProtocolEvidenceTee>; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; closing?: Promise<FinalizedEvidence>; settling?: Promise<void>; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
+interface PrivateAttachment { readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly tee: ReturnType<typeof createProtocolEvidenceTee>; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; detached: boolean; closing?: Promise<FinalizedEvidence>; settling?: Promise<void>; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
 
 export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOptions) {
   const clock = options.clock ?? (() => new Date());
   const writer = getStreamingSessionKernelWriter(options.kernel);
   const attachments = new Map<string, PrivateAttachment>();
+  const lateCleanupChannels = new Map<string, { channel: FakeStreamingChannel; failure: unknown }>();
 
   const assertV2 = (chunks = options.channel.replayCapacityChunks, bytes = options.channel.replayCapacityBytes) => {
     if (options.channel.version !== BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION || chunks !== options.output.maxAcceptedChunks || !Number.isSafeInteger(bytes) || bytes! < options.output.maxQueueBytes) throw new StreamingProcessSessionError("lossless_output_unavailable", "Selected channel does not attest the exact aggregate lossless output v2 window.");
@@ -66,7 +67,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       assertAuthorization: (authorization, expected) => options.sessions.assertOperationAuthorization(authorization, expected),
       deliver: options.output.deliver,
     });
-    const attachment: PrivateAttachment = { channel, output, tee, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, closed: false };
+    const attachment: PrivateAttachment = { channel, output, tee, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, closed: false, detached: false };
     return attachment;
   };
   const startAttachment = (sessionId: string, attachment: PrivateAttachment) => {
@@ -97,7 +98,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       const evidence = await attachment.tee.finalize(); attachment.finalizedEvidence = evidence; finalizedEvidence.set(sessionId, evidence);
       if ("error" in evidence) { errors.push(evidence.error); try { await attachment.tee.cleanup(); } catch (error) { errors.push(error); } }
     } catch (error) { errors.push(error); }
-    try { await attachment.channel.detach(); } catch (error) { errors.push(error); }
+    if (!attachment.detached) try { await attachment.channel.detach(); attachment.detached = true; } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, "Streaming attachment cleanup failed.");
     attachment.closed = true; attachments.delete(sessionId);
     return attachment.finalizedEvidence!;
@@ -137,30 +138,50 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       const claims = options.sessions.validateStagedLaunch(staged, request);
       const at = clock().toISOString(); const ownerId = `host:${claims.runId}`;
       writer.prepareLaunch({ recordKind: "runner.host-launch", schemaVersion: 1, revision: 0, launchId: request.launchId, sessionId: request.sessionId, runId: claims.runId, agentSessionId: claims.sessionId, actor: { role: claims.actor.role, id: claims.actor.id }, toolName: claims.toolName, callId: claims.callId, ownerId, fencingToken: 1, ownerExpiresAt: new Date(clock().getTime() + 60_000).toISOString(), state: "prepared", cleanupOwner: "host_control", history: [{ state: "prepared", at }], effects: [{ effectId: `isolate:${request.launchId}`, kind: "isolate", status: "pending", ownerId, fencingToken: 1, createdAt: at }] });
-      let lease: StreamingSessionLease | undefined; let channel: FakeStreamingChannel | undefined; let attachment: PrivateAttachment | undefined; let leaseReleased = false; let activeEffect: Promise<void> = Promise.resolve(); let effectPending = false; let cleanupPromise: Promise<void> | undefined;
+      let lease: StreamingSessionLease | undefined; let channel: FakeStreamingChannel | undefined; let attachment: PrivateAttachment | undefined; let leaseReleased = false; let activeEffect: Promise<void> = Promise.resolve(); let effectPending = false; let activeEffectKind: "isolate" | "launch" | "channel" | "handshake" | undefined; let cancelledEffectKind: typeof activeEffectKind; let cleanupPromise: Promise<void> | undefined; let hostDisposition: "cleaned" | "blocked" | "outcome_unknown" | undefined; let hostReconcile: Promise<void> | undefined; let leaseRelease: Promise<void> | undefined;
+      const channelDetaches = new WeakMap<FakeStreamingChannel, Promise<void>>();
+      const releaseKnownLease = () => {
+        if (!lease || leaseReleased) return undefined;
+        return leaseRelease ??= (async () => { await options.isolation.release(lease!); leaseReleased = true; })();
+      };
       const settleCleanup = () => cleanupPromise ??= (async () => {
         await activeEffect;
         let record = options.kernel.store.readHostLaunch(request.launchId);
         if (!record || record.state === "handed_off" || record.state === "released") return;
         if (Date.parse(record.ownerExpiresAt) <= clock().getTime()) record = writer.transitionLaunch({ type: "takeover_cleanup", launchId: request.launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, newOwnerId: `late-cleanup:${request.launchId}`, newFencingToken: record.fencingToken + 1, ownerExpiresAt: new Date(clock().getTime() + 60_000).toISOString(), at: clock().toISOString() });
         if (record.state !== "cleanup_pending") record = writer.transitionLaunch({ type: "begin_cleanup", launchId: request.launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, at: clock().toISOString() });
-        let disposition: "cleaned" | "blocked" | "outcome_unknown" = "blocked";
-        try { disposition = await options.host.reconcile({ launchId: request.launchId, record }); } catch { disposition = "blocked"; }
-        if (lease && !leaseReleased) { try { await options.isolation.release(lease); leaseReleased = true; } catch { disposition = "blocked"; } }
+        let disposition = hostDisposition ?? "blocked";
+        if (hostDisposition === undefined || cancelledEffectKind === "launch") try { disposition = await options.host.reconcile({ launchId: request.launchId, record }); } catch { disposition = "blocked"; }
+        try { await releaseKnownLease(); } catch { disposition = "blocked"; }
         record = options.kernel.store.readHostLaunch(request.launchId)!;
         if (disposition === "cleaned") writer.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: request.launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, at: clock().toISOString() });
         else writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: request.launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, blocker: disposition === "outcome_unknown" ? "host launch outcome unknown" : "host cleanup blocked", at: clock().toISOString() });
       })();
       const revoker = await registerConsumedExecutionGrantRevoker(claims, settleCleanup);
-      const effect = <T>(operation: () => Promise<T>) => { effectPending = true; const promise = Promise.resolve().then(() => { options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal); return operation(); }); activeEffect = promise.then(() => { effectPending = false; }, () => { effectPending = false; }); return abortable(promise, request.signal); };
+      const effect = <T>(kind: NonNullable<typeof activeEffectKind>, operation: () => Promise<T>) => { effectPending = true; activeEffectKind = kind; const promise = Promise.resolve().then(() => { options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal); return operation(); }); activeEffect = promise.then(() => { effectPending = false; }, () => { effectPending = false; }); return abortable(promise, request.signal); };
+      const cleanupKnownResources = async () => {
+          const currentAttachment = attachment; const currentChannel = channel;
+          const resourceCleanup = (async () => {
+            if (currentAttachment) await closeAttachment(request.sessionId, currentAttachment);
+            else if (currentChannel) {
+              let detaching = channelDetaches.get(currentChannel);
+              if (!detaching) { detaching = currentChannel.detach(); channelDetaches.set(currentChannel, detaching); }
+              await detaching;
+            }
+            if (!options.kernel.store.readBySession(request.sessionId)) {
+            const checkpoint = options.kernel.store.readOutputCheckpoint(request.sessionId);
+              if (checkpoint) writer.deleteOutputCheckpoint({ sessionId: request.sessionId, ownerId: checkpoint.ownerId, fencingToken: checkpoint.fencingToken, expectedRevision: checkpoint.revision });
+            }
+          })();
+          if (!hostReconcile) hostReconcile = (async () => { try { hostDisposition = await options.host.reconcile({ launchId: request.launchId, record: options.kernel.store.readHostLaunch(request.launchId) }); } catch (error) { hostDisposition = "blocked"; throw error; } })();
+          releaseKnownLease();
+          const results = await Promise.allSettled([resourceCleanup, hostReconcile, ...(leaseRelease ? [leaseRelease] : [])]);
+          const cleanupErrors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => result.reason);
+          if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Known streaming launch cleanup failed.");
+      };
       const cleanupOpenResources = async () => {
         const cleanupErrors: unknown[] = [];
-        if (attachment) { try { await closeAttachment(request.sessionId, attachment); } catch (failure) { cleanupErrors.push(failure); } }
-        else if (channel) { try { await channel.detach(); } catch (failure) { cleanupErrors.push(failure); } }
-        if (!options.kernel.store.readBySession(request.sessionId)) {
-          const checkpoint = options.kernel.store.readOutputCheckpoint(request.sessionId);
-          if (checkpoint) { try { writer.deleteOutputCheckpoint({ sessionId: request.sessionId, ownerId: checkpoint.ownerId, fencingToken: checkpoint.fencingToken, expectedRevision: checkpoint.revision }); } catch (failure) { cleanupErrors.push(failure); } }
-        }
+        try { await cleanupKnownResources(); } catch (failure) { cleanupErrors.push(failure); }
         try { await settleCleanup(); } catch (failure) { cleanupErrors.push(failure); }
         if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Late streaming launch cleanup failed.");
       };
@@ -172,19 +193,19 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         if (record.state === "cleanup_pending") writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: request.launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, blocker: "provider effect unresolved after cancellation", at: clock().toISOString() });
       };
       try {
-        lease = await effect(async () => lease = await options.isolation.acquire({ launchId: request.launchId, claims }));
+        lease = await effect("isolate", async () => lease = await options.isolation.acquire({ launchId: request.launchId, claims }));
         options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
         let host = writer.transitionLaunch({ type: "bind_isolation", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: 0, lease, at: clock().toISOString() });
         host = writer.transitionLaunch({ type: "begin_launch", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, at: clock().toISOString() });
-        const backendBinding = await effect(() => options.host.launch({ launchId: request.launchId, claims, lease: lease! }));
+        const backendBinding = await effect("launch", () => options.host.launch({ launchId: request.launchId, claims, lease: lease! }));
         options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
         host = writer.transitionLaunch({ type: "bind_backend", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, backendBinding, at: clock().toISOString() });
-        assertV2(); channel = await effect(async () => channel = await options.channel.acquire(backendBinding)); options.sessions.validateStagedLaunch(staged, request);
+        assertV2(); channel = await effect("channel", async () => channel = await options.channel.acquire(backendBinding)); options.sessions.validateStagedLaunch(staged, request);
         const sessionOwnerId = `session-authority:${claims.runId}:${claims.grantId}`;
         writer.claimOutputCheckpoint({ recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: request.sessionId, ownerId: sessionOwnerId, fencingToken: 1, capacity: options.output.maxAcceptedChunks, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }, { stream: "stderr", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] });
         attachment = createAttachment(request.sessionId, sessionOwnerId, 1, channel, async () => await settleCleanup()); startAttachment(request.sessionId, attachment);
         options.sessions.validateStagedLaunch(staged, request);
-        const handshakeDigest = await effect(() => options.handshake.verify(channel!)); options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
+        const handshakeDigest = await effect("handshake", () => options.handshake.verify(channel!)); options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
         host = writer.transitionLaunch({ type: "verify_handshake", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, handshakeDigest, at: clock().toISOString() });
         const adopted = options.sessions.finalizeLaunch({ staged, launchId: request.launchId, sessionId: request.sessionId, ownerId, fencingToken: 1, expectedRevision: host.revision, lease, backendBinding, handshakeDigest, envelope: request.envelope });
         attachments.set(request.sessionId, attachment); revoker.dispose();
@@ -197,8 +218,11 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         });
       } catch (error) {
         if (request.signal?.aborted && effectPending) {
+          cancelledEffectKind = activeEffectKind;
           blockUnresolvedEffect();
+          const immediateCleanup = cleanupKnownResources();
           void activeEffect.then(cleanupOpenResources).catch((failure) => { if (attachment) attachment.failure = failure; });
+          try { await bounded(immediateCleanup, 100); } catch (failure) { if (attachment) attachment.failure = failure; }
           revoker.dispose();
           throw error instanceof StreamingProcessSessionError ? error : new StreamingProcessSessionError("cancelled", "Streaming launch was cancelled.", { cause: error });
         }
@@ -217,6 +241,12 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       const deadline = Date.now() + timeoutMs;
       const remainingTime = () => { const remaining = deadline - Date.now(); if (remaining <= 0) throw new StreamingProcessSessionError("launch_failed", "Streaming recovery exhausted its total deadline."); return remaining; };
       let inspected = 0;
+      const surfacedLateCleanupFailures = new Map([...lateCleanupChannels].map(([sessionId, pending]) => [sessionId, failureMessage(pending.failure)]));
+      for (const [sessionId, pending] of lateCleanupChannels) {
+        throwIfAborted(input.signal); if (inspected >= input.maxRecords) break; inspected++;
+        try { await bounded(pending.channel.detach(), remainingTime(), input.signal); lateCleanupChannels.delete(sessionId); }
+        catch (failure) { lateCleanupChannels.set(sessionId, { channel: pending.channel, failure }); }
+      }
       const outcomes: Array<{ launchId: string; disposition: "cleaned" | "blocked" | "outcome_unknown" }> = [];
       for (const launchId of options.kernel.store.listHostLaunchIds()) {
         throwIfAborted(input.signal);
@@ -250,13 +280,15 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           const provider = Promise.resolve().then(() => options.channel.reattach!(session.backendBinding));
           reattached = await boundedLateResource(provider, waitMs, input.signal, async (late) => {
             let lateAttachment: PrivateAttachment | undefined;
+            const cleanupErrors: unknown[] = [];
             try { lateAttachment = createAttachment(sessionId, checkpoint.ownerId, checkpoint.fencingToken, late.channel); await settleAdoptedAttachment(sessionId, lateAttachment, "backend_unavailable"); }
-            catch (error) {
-              if (!lateAttachment) try { await late.channel.detach(); } catch {}
-              const current = options.kernel.store.readBySession(sessionId);
-              if (current && current.state !== "released" && current.state !== "cleanup_blocked") try { options.sessions.recoverAdopted({ sessionId, ownerId: current.ownerId, fencingToken: current.fencingToken, replay: () => "blocked" }); } catch {}
-              if (lateAttachment) lateAttachment.failure = error;
-            }
+            catch (error) { cleanupErrors.push(error); }
+            finally { try { if (lateAttachment) await closeAttachment(sessionId, lateAttachment); else await late.channel.detach(); } catch (error) { cleanupErrors.push(error); } }
+            if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Late reattach cleanup failed.");
+          }, (late, failure) => {
+            lateCleanupChannels.set(sessionId, { channel: late.channel, failure });
+            const current = options.kernel.store.readBySession(sessionId);
+            if (current && current.state !== "released" && current.state !== "cleanup_blocked") try { options.sessions.recoverAdopted({ sessionId, ownerId: current.ownerId, fencingToken: current.fencingToken, replay: () => "blocked" }); } catch {}
           });
         }
         catch { options.sessions.recordDisposition({ sessionId, ownerId: session.ownerId, fencingToken: session.fencingToken, expectedRevision: session.revision, disposition: "input_unavailable" }); sessionOutcomes.push({ sessionId, disposition: "input_unavailable" }); continue; }
@@ -277,7 +309,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         startAttachment(sessionId, attachment);
         attachments.set(sessionId, attachment); sessionOutcomes.push({ sessionId, disposition: "reattached" });
       }
-      return Object.freeze({ processed: inspected, outcomes: Object.freeze(outcomes), sessionOutcomes: Object.freeze(sessionOutcomes) });
+      for (const [sessionId, pending] of lateCleanupChannels) surfacedLateCleanupFailures.set(sessionId, failureMessage(pending.failure));
+      const lateCleanupFailures = Object.freeze([...surfacedLateCleanupFailures].map(([sessionId, message]) => Object.freeze({ sessionId, message })));
+      return Object.freeze({ processed: inspected, outcomes: Object.freeze(outcomes), sessionOutcomes: Object.freeze(sessionOutcomes), lateCleanupFailures });
     },
   });
 }
@@ -294,7 +328,7 @@ function bounded<T>(promise: Promise<T>, timeoutMs?: number, signal?: AbortSigna
     promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
   });
 }
-function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: AbortSignal | undefined, cleanup: (late: T) => Promise<void>): Promise<T> {
+function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: AbortSignal | undefined, cleanup: (late: T) => Promise<void>, onCleanupFailure: (late: T, error: unknown) => void): Promise<T> {
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
     let finished = false;
@@ -302,7 +336,11 @@ function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: 
     const abort = () => finish(() => reject(new StreamingProcessSessionError("cancelled", "Streaming operation was cancelled.")));
     const finish = (complete: () => void) => { if (finished) return false; finished = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); complete(); return true; };
     signal?.addEventListener("abort", abort, { once: true });
-    promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch(() => undefined); }, (error) => { finish(() => reject(error)); });
+    promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch((error) => onCleanupFailure(value, error)); }, (error) => { finish(() => reject(error)); });
   });
 }
 function same(left: unknown, right: unknown): boolean { return JSON.stringify(left) === JSON.stringify(right); }
+function failureMessage(error: unknown): string {
+  if (error instanceof AggregateError) return [error.message, ...error.errors.map(failureMessage)].join(": ");
+  return error instanceof Error ? error.message : "Late cleanup failed.";
+}

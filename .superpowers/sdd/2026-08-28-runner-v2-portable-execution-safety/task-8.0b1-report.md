@@ -341,3 +341,68 @@ runtime, focused tests and this evidence changed. No real adapter, CLI/factory,
 family, raw process/shell/environment path, second database, OS branch, or Node
 policy changed. This is ready only for independent re-review; it does not claim
 approval or unlock B2.
+
+## Governed fix round 3 — response to re-review 2
+
+Base: `fb3050a4`. Authority: `task-8.0b1-rereview-2.md`. This section is
+limited to the two linked cleanup races and their direct evidence. B2 remains
+locked pending independent re-review.
+
+### Exact RED and GREEN evidence
+
+The direct command was:
+
+`npx tsx --test --test-name-pattern="late reattach racing|failed late reattach cleanup|permanently noncooperative|late channel after immediate" runner-v2/test/streaming-process-session-runtime.test.ts`
+
+Before the production repair it reported 0/4 passing. The intended failures
+were: blocked late reattach detached 0 vs 1; no observable retained late-cleanup
+failure; permanently hung isolation had host reconcile 0 vs 1; and cancelled
+late channel cleanup had lease release 0 vs 1. With the scoped repair in place,
+the exact same command reports 4/4 GREEN, zero skips/cancellations/failures, in
+445 ms. These are real current-code regressions added before implementation;
+no mutation guard remains in the tree.
+
+### Corrections
+
+- A late reattach channel is never treated as retained attachment ownership
+  until adopted settlement succeeds. Its attachment cleanup now runs in
+  `finally`, including when another recovery has already made the durable state
+  `cleanup_blocked` or `released`. Attachment detach is idempotently tracked, so
+  successful settlement plus the final guard cannot double-detach.
+- A failed late detach is retained in a bounded runtime cleanup map, consumes a
+  recovery record/count/deadline on retry, and is surfaced by the next recovery
+  result with its exact nested failure message. The direct failure test proves
+  one failed detach, one successful retry, and no extra successful detach.
+- Cancellation first durably blocks the unresolved provider effect, then
+  immediately starts independent cleanup for every resource already known:
+  attachment/channel and checkpoint, host reconciliation, and the exact lease.
+  Those families run concurrently so one noncooperative cleanup cannot prevent
+  another known resource from being cleaned. The caller waits only a 100 ms
+  bound; timeout is never treated as cleanup proof.
+- The unresolved provider effect is supervised separately. A late channel is
+  detached even after immediate host/lease cleanup, while exact shared promises
+  prevent duplicate lease release or channel detach. A permanently unresolved
+  isolate/launch/channel/handshake retains the exact host journal as
+  `cleanup_blocked`; it is never claimed empty or released.
+
+### Round-3 validation
+
+- Direct race command above: 4/4 GREEN.
+- Full B1 focused command (staged kernel, output checkpoint, output v2, runtime):
+  64/64 GREEN, zero skips/cancellations/failures.
+- Task 8.0A command (streaming store, SessionAuthority, channel, grants): 89/89
+  GREEN, zero skips/cancellations/failures.
+- Task 7 plus Task 3 spool command: 173/173 GREEN (127 + 46), zero
+  skips/cancellations/failures.
+- `npm run typecheck:runner-v2`, targeted ESLint, and `git diff --check
+  fb3050a4`: GREEN (line-ending notices only).
+
+### Scope, cleanup, and handoff
+
+Only the fake streaming runtime, its focused test, this report, and the
+controller-authored re-review evidence changed. No real adapter, CLI/factory,
+family, raw process/shell/environment path, database, OS branch, or Node policy
+changed. The full fix diff was self-reviewed; recovery remains count/time/cancel
+bounded and no timer/listener/process/spill residue was created. Cleanup failures
+retain blocked/observable truth rather than being suppressed. This report does
+not claim independent approval or unlock B2.
