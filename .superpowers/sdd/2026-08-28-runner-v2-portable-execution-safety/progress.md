@@ -240,6 +240,12 @@ overlap is expected.
   reports zero Critical/Important findings. Packet 8.0B2 is unlocked; production
   child-family routing and OCI construction remain deferred to their owning
   packets. See `task-8.0b1-controller-evidence.md`.
+- Task 8.0B2 entered at clean head `cb597496`. The focused execution brief owns
+  real portable native/POSIX/Windows host and bounded duplex channel adapters,
+  mandatory low-level Windows Job host extraction, independent portable/batch/
+  tree/Job probes, current-host lifecycle faults, compatibility, mutations, and
+  residue gates. OCI, CLI construction, and all production family routing remain
+  excluded until their owning packets.
 
 ## Breaker rulings
 
