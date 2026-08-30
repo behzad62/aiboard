@@ -10,12 +10,16 @@ import { BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, type BackpressuredOu
 
 export type StreamingProcessSessionErrorCode = "lossless_output_unavailable" | "launch_failed" | "handshake_refused" | "cleanup_blocked" | "cancelled";
 export class StreamingProcessSessionError extends Error { constructor(readonly code: StreamingProcessSessionErrorCode, message: string, options?: ErrorOptions) { super(message, options); this.name = "StreamingProcessSessionError"; } }
-const RUNNER_SESSION_ERRORS = new WeakSet<StreamingProcessSessionError>();
+type RunnerSessionErrorClaims = Readonly<{ code: StreamingProcessSessionErrorCode; message: string }>;
+const RUNNER_SESSION_ERROR_CLAIMS = new WeakMap<StreamingProcessSessionError, RunnerSessionErrorClaims>();
 function runnerSessionError(code: StreamingProcessSessionErrorCode, message: string): StreamingProcessSessionError {
-  const error = new StreamingProcessSessionError(code, message); RUNNER_SESSION_ERRORS.add(error); return error;
+  const error = new StreamingProcessSessionError(code, message); RUNNER_SESSION_ERROR_CLAIMS.set(error, Object.freeze({ code, message })); return error;
 }
-function isRunnerSessionError(error: unknown): error is StreamingProcessSessionError {
-  return typeof error === "object" && error !== null && RUNNER_SESSION_ERRORS.has(error as StreamingProcessSessionError);
+function runnerSessionErrorClaims(error: unknown): RunnerSessionErrorClaims | undefined {
+  return typeof error === "object" && error !== null ? RUNNER_SESSION_ERROR_CLAIMS.get(error as StreamingProcessSessionError) : undefined;
+}
+function remintRunnerSessionError(error: unknown): StreamingProcessSessionError | undefined {
+  const claims = runnerSessionErrorClaims(error); return claims ? runnerSessionError(claims.code, claims.message) : undefined;
 }
 class CleanupClassificationError extends Error { constructor(readonly failureCode: HostCleanupFailureCode) { super(HOST_CLEANUP_FAILURE_MESSAGES[failureCode]); } }
 
@@ -136,12 +140,12 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     if (!record.backendBinding || resource.identity !== channelCleanupIdentity(record.sessionId, record.backendBinding) || !capability || capability.identity !== resource.identity) throw runnerSessionError("cleanup_blocked", "Exact channel cleanup capability is unavailable.");
     if (capability.detached) return;
     if (resource.status === "failed" && capability.failed) { capability.detaching = undefined; capability.failed = false; }
-    capability.detaching ??= Promise.resolve(capability.cleanup ? capability.cleanup() : capability.channel.detach()).then(() => { capability.detached = true; }, (error) => { capability.failed = true; throw error; });
+    capability.detaching ??= Promise.resolve(capability.cleanup ? capability.cleanup() : capability.channel.detach()).then(() => { capability.detached = true; }, (error) => { capability.failed = true; throw remintRunnerSessionError(error) ?? error; });
     await capability.detaching;
   };
   const runCleanupResource = (record: Readonly<HostLaunchRecord>, resource: Readonly<HostCleanupResourceFact>) => {
     const key = `${record.launchId}\0${resource.resource}\0${resource.identity}`; const existing = cleanupResourceRuns.get(key); if (existing) return existing;
-    const running = cleanupResource(record, resource).catch((error) => { if (cleanupResourceRuns.get(key) === running) cleanupResourceRuns.delete(key); throw error; });
+    const running = cleanupResource(record, resource).catch((error) => { if (cleanupResourceRuns.get(key) === running) cleanupResourceRuns.delete(key); throw remintRunnerSessionError(error) ?? error; });
     cleanupResourceRuns.set(key, running); return running;
   };
 
@@ -172,7 +176,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         const session = options.kernel.store.readBySession(sessionId);
         if (session?.state === "active") await settleAdoptedAttachment(sessionId, attachment, "outcome_unknown", error);
         else await attachment.onPreAdoptionFailure?.(error);
-        throw error;
+        throw remintRunnerSessionError(error) ?? error;
       }
     });
     attachment.unobserve = channel.observeTerminal?.(() => {
@@ -282,7 +286,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           channel = acquired;
           const cleanupCapability: HostCleanupChannelCapability = { sessionId: request.sessionId, identity: channelCleanupIdentity(request.sessionId, exactBackendBinding), channel: acquired, detached: false };
           hostCleanupChannels.set(request.launchId, cleanupCapability);
-          if (request.signal?.aborted) { cleanupCapability.detaching = acquired.detach().then(() => { cleanupCapability.detached = true; }, (error) => { cleanupCapability.failed = true; throw error; }); void cleanupCapability.detaching.catch(() => undefined); }
+          if (request.signal?.aborted) { cleanupCapability.detaching = acquired.detach().then(() => { cleanupCapability.detached = true; }, (error) => { cleanupCapability.failed = true; throw remintRunnerSessionError(error) ?? error; }); void cleanupCapability.detaching.catch(() => undefined); }
           return acquired;
         }); options.sessions.validateStagedLaunch(staged, request);
         const sessionOwnerId = `session-authority:${claims.runId}:${claims.grantId}`;
@@ -301,7 +305,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           authorizeOperation: (operation: SessionOperationRequest) => options.sessions.authorizeOperation(operation),
           deliverOutput: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => {
             try { return await attachment!.output.deliverNext(authorization, assertion); }
-            catch (error) { if (error instanceof Error && isRunnerSessionError(error.cause)) throw error.cause; throw error; }
+            catch (error) { if (error instanceof Error) { const reminted = remintRunnerSessionError(error.cause); if (reminted) throw reminted; } throw remintRunnerSessionError(error) ?? error; }
           },
           stop: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => { options.sessions.assertOperationAuthorization(authorization, { ...assertion, sessionId: request.sessionId, operation: "stop" }); await settleAdoptedAttachment(request.sessionId, attachment!, "backend_unavailable"); return Object.freeze({ record: options.kernel.store.readBySession(request.sessionId), evidence: finalizedEvidence.get(request.sessionId) }); },
         });
@@ -313,14 +317,14 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           void activeEffect.then(async () => { unresolvedProviderEffects.delete(request.launchId); try { await immediateCleanup; } catch {} bindKnownResults(); cleanupPromise = undefined; if (hostCleanupChannels.get(request.launchId)?.failed) return; await runHostCleanup(request.launchId, 25); }).catch((failure) => { if (attachment) attachment.failure = failure; });
           try { await bounded(immediateCleanup, 75); } catch (failure) { if (attachment) attachment.failure = failure; }
           revoker.dispose();
-          throw isRunnerSessionError(error) ? error : runnerSessionError("cancelled", "Streaming launch was cancelled.");
+          throw remintRunnerSessionError(error) ?? runnerSessionError("cancelled", "Streaming launch was cancelled.");
         }
         await activeEffect;
         let cleanupError: unknown; try { await cleanupOpenResources(); } catch (failure) { cleanupError = failure; }
         revoker.dispose();
         if (cleanupError) throw runnerSessionError("cleanup_blocked", "Streaming launch cleanup failed.");
-        if (request.signal?.aborted && !isRunnerSessionError(error)) throw runnerSessionError("cancelled", "Streaming launch was cancelled.");
-        if (isRunnerSessionError(error)) throw error;
+        if (request.signal?.aborted && !runnerSessionErrorClaims(error)) throw runnerSessionError("cancelled", "Streaming launch was cancelled.");
+        const reminted = remintRunnerSessionError(error); if (reminted) throw reminted;
         throw runnerSessionError(activeEffectKind === "handshake" ? "handshake_refused" : "launch_failed", activeEffectKind === "handshake" ? "Streaming handshake was refused." : "Streaming provider launch phase failed.");
       }
     },
@@ -341,7 +345,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         throwIfAborted(input.signal); if (inspected >= input.maxRecords) break; inspected++;
         try {
           if (pending.detached) { lateCleanupChannels.delete(sessionId); continue; }
-          if (!pending.detaching) pending.detaching = pending.channel.detach().then(() => { pending.detached = true; }, (error) => { pending.detaching = undefined; throw error; });
+          if (!pending.detaching) pending.detaching = pending.channel.detach().then(() => { pending.detached = true; }, (error) => { pending.detaching = undefined; throw remintRunnerSessionError(error) ?? error; });
           await bounded(pending.detaching, remainingTime(), input.signal); lateCleanupChannels.delete(sessionId);
         }
         catch (failure) { pending.failure = failure; lateCleanupChannels.set(sessionId, pending); }
@@ -425,7 +429,7 @@ function bounded<T>(promise: Promise<T>, timeoutMs?: number, signal?: AbortSigna
     const abort = () => finish(() => reject(runnerSessionError("cancelled", "Streaming operation was cancelled.")));
     signal?.addEventListener("abort", abort, { once: true });
     if (timeoutMs !== undefined) timer = setTimeout(() => finish(() => reject(runnerSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
-    promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
+    promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(remintRunnerSessionError(error) ?? error)));
   });
 }
 function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: AbortSignal | undefined, cleanup: (late: T) => Promise<void>, onCleanupFailure: (late: T, error: unknown) => void): Promise<T> {
@@ -436,14 +440,15 @@ function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: 
     const abort = () => finish(() => reject(runnerSessionError("cancelled", "Streaming operation was cancelled.")));
     const finish = (complete: () => void) => { if (finished) return false; finished = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); complete(); return true; };
     signal?.addEventListener("abort", abort, { once: true });
-    promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch((error) => onCleanupFailure(value, error)); }, (error) => { finish(() => reject(error)); });
+    promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch((error) => onCleanupFailure(value, remintRunnerSessionError(error) ?? error)); }, (error) => { finish(() => reject(remintRunnerSessionError(error) ?? error)); });
   });
 }
 function same(left: unknown, right: unknown): boolean { return JSON.stringify(left) === JSON.stringify(right); }
 function cleanupFailure(code: HostCleanupFailureCode): HostCleanupFailure { return Object.freeze({ code, message: HOST_CLEANUP_FAILURE_MESSAGES[code] }); }
 function classifyCleanupFailure(resource: HostCleanupResourceFact["resource"], error: unknown): HostCleanupFailure {
   if (error instanceof CleanupClassificationError) return cleanupFailure(error.failureCode);
-  if (isRunnerSessionError(error) && (error.code === "cancelled" || error.code === "launch_failed")) return cleanupFailure("cleanup_timeout_or_cancelled");
+  const claims = runnerSessionErrorClaims(error);
+  if (claims?.code === "cancelled" || claims?.code === "launch_failed") return cleanupFailure("cleanup_timeout_or_cancelled");
   const code: Record<HostCleanupResourceFact["resource"], HostCleanupFailureCode> = {
     channel: "channel_detach_failed", output_checkpoint: "output_checkpoint_delete_failed",
     host: "host_reconciliation_failed", isolation_lease: "isolation_lease_release_failed",

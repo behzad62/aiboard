@@ -187,6 +187,61 @@ test("provider-created exported runtime errors are foreign and cannot cross the 
   assert.doesNotMatch(JSON.stringify(errorGraph(thrown)), /B1_R7_TYPED_PROVIDER_SENTINEL|credential=|payload=|cause/);
 });
 
+test("replayed Runner errors are reminted from immutable private claims at every boundary", { timeout: 5_000 }, async () => {
+  const sentinel = "credential=B1_R7_REPLAY";
+  const mintRecoveryBoundError = async () => {
+    const source = await makeFixture(2, "cleaned");
+    const error = await source.runtime.reconcileStartup({ maxRecords: 0 }).then(() => assert.fail("recovery bound must fail"), (failure: unknown) => failure);
+    assert.deepEqual(runtimeErrorFact(error), { code: "launch_failed", message: "Recovery count bound is invalid." });
+    return error as StreamingProcessSessionError;
+  };
+  const mutate = (error: StreamingProcessSessionError) => {
+    Object.defineProperties(error, {
+      code: { configurable: true, value: "cleanup_blocked", writable: true },
+      message: { configurable: true, value: sentinel, writable: true },
+      cause: { configurable: true, value: { payload: sentinel }, writable: true },
+    });
+  };
+  const assertSafeRemint = (actual: unknown, replayed: StreamingProcessSessionError, expected: { readonly code: string; readonly message: string }, label: string) => {
+    assert.notEqual(actual, replayed, `${label} must not return the replayed object`);
+    assert.deepEqual(runtimeErrorFact(actual), expected, label);
+    assert.doesNotMatch(JSON.stringify(errorGraph(actual)), /B1_R7_REPLAY|credential=|payload=/, label);
+  };
+
+  const replayedLaunch = await mintRecoveryBoundError(); mutate(replayedLaunch);
+  const normal = await makeFixture(2, "cleaned"); normal.setHostLaunch(async () => { throw replayedLaunch; });
+  const normalError = await normal.runtime.open(normal.request).then(() => assert.fail("replayed launch must fail"), (error: unknown) => error);
+  assertSafeRemint(normalError, replayedLaunch, { code: "launch_failed", message: "Recovery count bound is invalid." }, "normal");
+
+  const replayedCancellation = await mintRecoveryBoundError(); mutate(replayedCancellation); let providerCancelled = false;
+  const cancellationSignal = {
+    get aborted() { return providerCancelled; }, reason: undefined, onabort: null,
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, throwIfAborted() { if (providerCancelled) throw new Error("cancelled"); },
+  } as AbortSignal;
+  const cancellation = await makeFixture(2, "cleaned"); cancellation.setHostLaunch(async () => { providerCancelled = true; throw replayedCancellation; });
+  const cancellationError = await cancellation.runtime.open({ ...cancellation.request, signal: cancellationSignal }).then(() => assert.fail("replayed cancellation must fail"), (error: unknown) => error);
+  assertSafeRemint(cancellationError, replayedCancellation, { code: "launch_failed", message: "Recovery count bound is invalid." }, "cancellation");
+
+  const replayedDelivery = await mintRecoveryBoundError(); mutate(replayedDelivery);
+  const delivery = await makeFixture(2, "cleaned"); delivery.setDeliver(async () => { throw replayedDelivery; });
+  const facade = await delivery.runtime.open(delivery.request); const bytes = Buffer.from("x");
+  const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: createHash("sha256").update(bytes).digest("hex") };
+  const emitted = delivery.emit({ metadata, bytes, acknowledge: async () => undefined }); emitted.catch(() => undefined); await new Promise((resolve) => setImmediate(resolve));
+  const operation = { sessionId: "stream-1", operation: "family_delivery" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const deliveryError = await facade.deliverOutput(facade.authorizeFirstOperation(operation), { ...operation, binding: delivery.request.binding }).then(() => assert.fail("replayed delivery must fail"), (error: unknown) => error);
+  await assert.rejects(emitted);
+  assertSafeRemint(deliveryError, replayedDelivery, { code: "launch_failed", message: "Streaming output delivery failed." }, "delivery");
+
+  const replayedCleanup = await mintRecoveryBoundError(); mutate(replayedCleanup);
+  const cleanup = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { throw replayedCleanup; });
+  cleanup.setChannelAcquire(async () => { throw new Error("force cleanup"); });
+  const cleanupError = await cleanup.runtime.open(cleanup.request).then(() => assert.fail("cleanup classification must fail"), (error: unknown) => error);
+  const cleanupFacts = cleanup.kernel.store.readHostLaunch("launch-1")?.effects.find((effect) => effect.kind === "cleanup")?.resources ?? [];
+  assert.deepEqual(cleanupFacts.find((fact) => fact.resource === "host")?.failure, { code: "cleanup_timeout_or_cancelled", message: "Cleanup timed out or was cancelled." });
+  assert.deepEqual(runtimeErrorFact(cleanupError), { code: "launch_failed", message: "Streaming provider launch phase failed." });
+  assert.doesNotMatch(JSON.stringify({ caller: errorGraph(cleanupError), durable: durableGraph(cleanup) }), /B1_R7_REPLAY|credential=|payload=/);
+});
+
 test("foreign error shapes are sanitized at every launch provider boundary", { timeout: 5_000 }, async () => {
   const phases = ["isolation", "host", "channel", "handshake", "output_start"] as const;
   for (const phase of phases) for (const [shape, makeForeign] of foreignErrorFactories()) {

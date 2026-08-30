@@ -837,3 +837,102 @@ source/test diff was self-reviewed before commit.
 
 This is implementation evidence for the controller's required fresh independent
 scoped re-review. It is not approval and does not unlock Packet 8.0B2.
+
+## Repair round 7 follow-up — immutable error replay claims
+
+Entry HEAD: `6f1ed963`; reviewed implementation: `392804c4`. Authority:
+`task-8.0b1-round-7-review.md`. This follow-up addresses only the remaining
+same-object replay finding. The independently approved schema-generation
+boundary is unchanged.
+
+### Root cause and correction
+
+The round-7 private `WeakSet` established where an error object was first
+created, but did not preserve what Runner originally claimed. The public
+`StreamingProcessSessionError` object remained mutable after reaching a caller.
+A caller could retain a genuinely enrolled object, replace its public `code`,
+`message`, and `cause`, and return that same object through a provider. Set
+membership survived, so normal and cancellation catches rethrew the object;
+the delivery facade also unwrapped an enrolled cause without changing identity,
+and cleanup classification read the mutated public code.
+
+The exported class remains unchanged as API shape. Module-private provenance is
+now a `WeakMap` from each Runner-minted error to a frozen private claim containing
+its original closed code and fixed message. No trust decision reads public
+fields. A single private remint operation looks up those claims and creates a
+new cause-free Runner error. Normal, cancellation, bounded-provider, output
+facade, channel callback, late-resource, and cleanup retry boundaries remint
+enrolled errors instead of rethrowing or unwrapping their identity. Cleanup
+classification uses only the private claim. Foreign instances and shapes still
+fail membership and retain the existing phase-owned fixed mappings.
+
+### Exact RED/GREEN evidence
+
+The exact real regression was added before production changes and run with:
+
+`npx tsx --test --test-name-pattern="replayed Runner errors" runner-v2/test/streaming-process-session-runtime.test.ts`
+
+It was RED 0/1 at the first normal-launch assertion: the returned value was the
+same retained object and its rendered graph contained
+`credential=B1_R7_REPLAY` plus the injected payload cause. After correction the
+exact command is GREEN 1/1. The test obtains real Runner-minted errors through a
+public recovery-bound failure, mutates all three public fields, and replays them
+through normal launch, cancellation, output delivery, and host-cleanup
+classification. Normal and cancellation return new objects with the original
+`launch_failed` / `Recovery count bound is invalid.` private claim and no cause.
+Delivery returns a new phase-owned `launch_failed` /
+`Streaming output delivery failed.` error. Cleanup retains the original private
+`launch_failed` classification as the fixed durable
+`cleanup_timeout_or_cancelled` fact. Recursive caller and durable graphs contain
+no replay sentinel.
+
+The affected provenance command matching `replayed Runner errors`,
+`provider-created exported runtime errors`, `foreign error shapes`, and
+`internally minted runtime errors` is GREEN 5/5. The complete streaming runtime
+is GREEN 41/41.
+
+### Mutation evidence
+
+Both mutations were made with `apply_patch`, exercised against the exact replay
+test, reverted, and rerun GREEN:
+
+1. Returning the enrolled object itself from the remint helper was RED 0/1 at
+   `normal must not return the replayed object`. Revert was GREEN 1/1.
+2. Retaining membership but reconstructing claims from the public `code` and
+   `message` fields was RED 0/1: the caller received mutated `cleanup_blocked`
+   and `credential=B1_R7_REPLAY` values instead of the original private claim.
+   Revert was GREEN 1/1.
+
+No mutation branch, old `WeakSet`, public-field authority check, or mutation
+marker remains.
+
+### Validation, scope, and residue
+
+All final commands completed with zero failures, skips, or cancellations:
+
+- B1 focused (`staged-launch-kernel`, `streaming-output-checkpoint`,
+  `streaming-output-v2`, `streaming-process-session-runtime`): 89/89 GREEN.
+- Task 8.0A (`streaming-session-store`, `session-authority`,
+  `interactive-process-channel`, `execution-grants`): 89/89 GREEN.
+- Task 7 plus Task 3 spool (`process-backend-contract`,
+  `durable-process-store`, `subprocess-runtime`,
+  `execution-isolation-provider`, `tool-broker`,
+  `bounded-output-spool`): 173/173 GREEN.
+- `npm run typecheck:runner-v2`: GREEN.
+- Targeted ESLint over the changed source and test: GREEN.
+- `git diff --check 6f1ed963`: GREEN (line-ending notices only).
+
+The production and test diff is confined to the existing fake streaming
+runtime and its focused test. The schema store and its approved generation-2
+boundary have no diff in this follow-up. Static added-line scanning found no
+adapter/CLI/factory/family, child-process import, spawn/kill/exec, shell or
+environment access, OS product branch, second database, exact Node patch pin,
+or mutation marker. The replay test uses fake providers only and creates no
+process, port, endpoint, container, database, or temporary root. The broad B1
+tests closed their SQLite stores and final residue scanning found zero matching
+Runner B1 temporary roots. Final diff inspection found no foreign cause/detail
+copy, public-field trust, same-object Runner error return, or schema-boundary
+change.
+
+This is implementation evidence for the controller's required fresh scoped
+re-review. It is not approval and does not unlock Packet 8.0B2.
