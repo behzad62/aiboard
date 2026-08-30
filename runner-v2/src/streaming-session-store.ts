@@ -216,7 +216,7 @@ export interface StreamingSessionStoreOptions {
 }
 
 export const HOST_LAUNCH_RECORD_KIND = "runner.host-launch" as const;
-export const HOST_LAUNCH_RECORD_VERSION = 1 as const;
+export const HOST_LAUNCH_RECORD_VERSION = 2 as const;
 export type HostLaunchState = "prepared" | "isolated" | "launching" | "bound" |
   "handshake_verified" | "handed_off" | "cleanup_pending" | "cleanup_blocked" | "released";
 export type HostCleanupResourceKind = "channel" | "output_checkpoint" | "host" | "isolation_lease";
@@ -540,9 +540,11 @@ export function openSqliteStreamingSessionStore(
       return record;
     },
     listHostLaunchIds() {
-      return Object.freeze((database.prepare(
+      const launchIds = (database.prepare(
         "SELECT launch_id FROM streaming_host_launches ORDER BY launch_id",
-      ).all() as Array<{ launch_id: string }>).map((row) => row.launch_id));
+      ).all() as Array<{ launch_id: string }>).map((row) => row.launch_id);
+      for (const launchId of launchIds) readSqliteHostLaunch(database, integrityKey, launchId);
+      return Object.freeze(launchIds);
     },
     readOutputCheckpoint(sessionId: string) {
       return readSqliteOutputCheckpoint(database, integrityKey, sessionId);
@@ -1523,15 +1525,15 @@ const HOST_LAUNCH_ALLOWED_KEYS = new Set([
 
 export function parseHostLaunchRecord(value: unknown): Readonly<HostLaunchRecord> {
   if (!isObjectRecord(value)) throw new StreamingSessionStoreError("invalid_record", "Host launch record must be an object.");
-  assertNoForbiddenDurableValues(value);
-  assertExactKeys(value, HOST_LAUNCH_ALLOWED_KEYS, "host launch record");
-  assertRequiredKeys(value, HOST_LAUNCH_REQUIRED_KEYS, "host launch record");
   if (value.recordKind !== HOST_LAUNCH_RECORD_KIND || value.schemaVersion !== HOST_LAUNCH_RECORD_VERSION) {
     throw new StreamingSessionStoreError(
       value.state === "released" ? "unsupported_version" : "unsupported_active_version",
       "Host launch record version is unsupported.",
     );
   }
+  assertNoForbiddenDurableValues(value);
+  assertExactKeys(value, HOST_LAUNCH_ALLOWED_KEYS, "host launch record");
+  assertRequiredKeys(value, HOST_LAUNCH_REQUIRED_KEYS, "host launch record");
   const revision = requiredNonNegativeInteger(value.revision, "host launch revision");
   const fencingToken = requiredPositiveInteger(value.fencingToken, "host launch fence");
   const ownerExpiresAt = requiredTimestamp(value.ownerExpiresAt, "ownerExpiresAt");
@@ -1589,17 +1591,18 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   ]);
   if (record.history[0]?.state !== "prepared") throw new StreamingSessionStoreError("invalid_state", "Host launch history must begin prepared.");
   const pendingTakeovers = [...(record.effects.find((effect) => effect.kind === "cleanup")?.takeovers ?? [])];
-  let markerRepeats = 0;
+  const markerRepeatIndexes: number[] = [];
   for (let index = 1; index < record.history.length; index++) {
     const prior = record.history[index - 1]!; const entry = record.history[index]!;
     const takeoverIndex = prior.state === "cleanup_pending" && entry.state === "cleanup_pending" ? pendingTakeovers.findIndex((takeover) => takeover.at === entry.at) : -1;
     const markerRepeat = prior.state === "bound" && entry.state === "bound" &&
       (entry.at === record.channelAcquisitionStartedAt || entry.at === record.outputCheckpointCreatedAt);
-    if (markerRepeat) markerRepeats += 1;
+    if (markerRepeat) markerRepeatIndexes.push(index);
     if ((takeoverIndex < 0 && !markerRepeat && !(allowed.get(prior.state) ?? []).includes(entry.state)) || Date.parse(entry.at) < Date.parse(prior.at)) throw new StreamingSessionStoreError("invalid_state", "Host launch history transition is impossible.");
     if (takeoverIndex >= 0) pendingTakeovers.splice(takeoverIndex, 1);
   }
-  if (markerRepeats !== Number(Boolean(record.channelAcquisitionStartedAt)) + Number(Boolean(record.outputCheckpointCreatedAt))) throw new StreamingSessionStoreError("invalid_state", "Host launch durable marker history is incomplete.");
+  const expectedMarkerTimes = [record.channelAcquisitionStartedAt, record.outputCheckpointCreatedAt].filter((value): value is string => Boolean(value));
+  if (markerRepeatIndexes.length !== expectedMarkerTimes.length || markerRepeatIndexes.some((historyIndex, markerIndex) => record.history[historyIndex]?.at !== expectedMarkerTimes[markerIndex])) throw new StreamingSessionStoreError("invalid_state", "Host launch durable marker history is incomplete or out of order.");
   const byId = new Map<string, HostLaunchEffect>();
   for (const effect of record.effects) {
     if (byId.has(effect.effectId)) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect ids must be unique.");
@@ -1611,6 +1614,7 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
     if (effect.status === "blocked" && (effect.kind !== "cleanup" || !effect.blockedAt || !effect.blocker || effect.acknowledgedAt)) throw new StreamingSessionStoreError("invalid_effect", "Blocked host effect evidence is invalid.");
   }
   const visited = new Set(record.history.map((entry) => entry.state));
+  if (visited.has("handshake_verified") && (!record.channelAcquisitionStartedAt || !record.outputCheckpointCreatedAt)) throw new StreamingSessionStoreError("invalid_state", "Later host launch progress requires exact channel and checkpoint markers.");
   const isolate = byId.get(`isolate:${record.launchId}`);
   if (!isolate || isolate.kind !== "isolate") throw new StreamingSessionStoreError("invalid_effect", "Normative isolation effect is missing.");
   if (isolate.fencingToken > record.fencingToken) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect fence exceeds current ownership.");
@@ -2112,6 +2116,7 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     if (current.state !== "bound" || current.channelAcquisitionStartedAt) throw new StreamingSessionStoreError("invalid_state", "Channel acquisition may be marked exactly once from a bound launch.");
     state = "bound"; additions.channelAcquisitionStartedAt = at;
   } else if (input.type === "verify_handshake") {
+    if (!current.channelAcquisitionStartedAt || !current.outputCheckpointCreatedAt) throw new StreamingSessionStoreError("invalid_state", "Handshake verification requires exact channel and checkpoint markers.");
     state = "handshake_verified";
     additions.handshakeDigest = requiredDigest(input.handshakeDigest, "handshakeDigest");
     ensureTransition(current.state, "bound", input, current, additions);

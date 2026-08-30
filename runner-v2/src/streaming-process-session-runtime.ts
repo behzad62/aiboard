@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { registerConsumedExecutionGrantRevoker, type ConsumedExecutionGrantClaims, type ExecutionGrantBinding, type OpaqueExecutionGrant } from "./execution-grants.js";
 import type { LaunchOperationAuthorizationRequest, OperationAuthorizationAssertion, SessionAuthority, SessionOperationAuthorization, SessionOperationRequest } from "./session-authority.js";
 import type { HostCleanupFailure, HostCleanupFailureCode, HostCleanupResourceFact, HostLaunchRecord, StreamingSessionBackendBinding, StreamingSessionEnvelope, StreamingSessionLease, StreamingSessionStoreKernel } from "./streaming-session-store.js";
-import { HOST_CLEANUP_FAILURE_MESSAGES, getStreamingSessionKernelWriter } from "./streaming-session-store.js";
+import { HOST_CLEANUP_FAILURE_MESSAGES, HOST_LAUNCH_RECORD_VERSION, getStreamingSessionKernelWriter } from "./streaming-session-store.js";
 import { BoundedProtocolQueue } from "./bounded-protocol-queue.js";
 import { createProtocolEvidenceTee, type EvidenceSpoolSink } from "./protocol-evidence-tee.js";
 import { createStreamingOutputController, type StreamingOutputMetadata, type StreamingOutputStream } from "./streaming-output-controller.js";
@@ -10,6 +10,13 @@ import { BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, type BackpressuredOu
 
 export type StreamingProcessSessionErrorCode = "lossless_output_unavailable" | "launch_failed" | "handshake_refused" | "cleanup_blocked" | "cancelled";
 export class StreamingProcessSessionError extends Error { constructor(readonly code: StreamingProcessSessionErrorCode, message: string, options?: ErrorOptions) { super(message, options); this.name = "StreamingProcessSessionError"; } }
+const RUNNER_SESSION_ERRORS = new WeakSet<StreamingProcessSessionError>();
+function runnerSessionError(code: StreamingProcessSessionErrorCode, message: string): StreamingProcessSessionError {
+  const error = new StreamingProcessSessionError(code, message); RUNNER_SESSION_ERRORS.add(error); return error;
+}
+function isRunnerSessionError(error: unknown): error is StreamingProcessSessionError {
+  return typeof error === "object" && error !== null && RUNNER_SESSION_ERRORS.has(error as StreamingProcessSessionError);
+}
 class CleanupClassificationError extends Error { constructor(readonly failureCode: HostCleanupFailureCode) { super(HOST_CLEANUP_FAILURE_MESSAGES[failureCode]); } }
 
 export interface FakeStreamingChannel {
@@ -109,24 +116,24 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
   };
   const cleanupResource = async (record: Readonly<HostLaunchRecord>, resource: Readonly<HostCleanupResourceFact>) => {
     if (resource.resource === "host") {
-      if (resource.identity !== `host:${record.launchId}`) throw new StreamingProcessSessionError("cleanup_blocked", "Exact host cleanup identity is unavailable.");
+      if (resource.identity !== `host:${record.launchId}`) throw runnerSessionError("cleanup_blocked", "Exact host cleanup identity is unavailable.");
       const disposition = await options.host.reconcile({ launchId: record.launchId, record });
       if (disposition === "outcome_unknown") throw new CleanupClassificationError("host_outcome_unknown");
-      if (disposition !== "cleaned") throw new StreamingProcessSessionError("cleanup_blocked", "Exact host cleanup was not verified.");
+      if (disposition !== "cleaned") throw runnerSessionError("cleanup_blocked", "Exact host cleanup was not verified.");
       return;
     }
     if (resource.resource === "isolation_lease") {
-      if (!record.leaseBinding || resource.identity !== leaseCleanupIdentity(record.leaseBinding)) throw new StreamingProcessSessionError("cleanup_blocked", "Exact isolation lease cleanup identity is unavailable.");
+      if (!record.leaseBinding || resource.identity !== leaseCleanupIdentity(record.leaseBinding)) throw runnerSessionError("cleanup_blocked", "Exact isolation lease cleanup identity is unavailable.");
       await options.isolation.release(record.leaseBinding); return;
     }
     if (resource.resource === "output_checkpoint") {
-      if (resource.identity !== `checkpoint:${record.sessionId}`) throw new StreamingProcessSessionError("cleanup_blocked", "Exact output checkpoint cleanup identity is unavailable.");
+      if (resource.identity !== `checkpoint:${record.sessionId}`) throw runnerSessionError("cleanup_blocked", "Exact output checkpoint cleanup identity is unavailable.");
       const checkpoint = options.kernel.store.readOutputCheckpoint(record.sessionId);
       if (checkpoint) writer.deleteOutputCheckpoint({ sessionId: record.sessionId, ownerId: checkpoint.ownerId, fencingToken: checkpoint.fencingToken, expectedRevision: checkpoint.revision });
       return;
     }
     const capability = hostCleanupChannels.get(record.launchId);
-    if (!record.backendBinding || resource.identity !== channelCleanupIdentity(record.sessionId, record.backendBinding) || !capability || capability.identity !== resource.identity) throw new StreamingProcessSessionError("cleanup_blocked", "Exact channel cleanup capability is unavailable.");
+    if (!record.backendBinding || resource.identity !== channelCleanupIdentity(record.sessionId, record.backendBinding) || !capability || capability.identity !== resource.identity) throw runnerSessionError("cleanup_blocked", "Exact channel cleanup capability is unavailable.");
     if (capability.detached) return;
     if (resource.status === "failed" && capability.failed) { capability.detaching = undefined; capability.failed = false; }
     capability.detaching ??= Promise.resolve(capability.cleanup ? capability.cleanup() : capability.channel.detach()).then(() => { capability.detached = true; }, (error) => { capability.failed = true; throw error; });
@@ -139,7 +146,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
   };
 
   const assertV2 = (chunks = options.channel.replayCapacityChunks, bytes = options.channel.replayCapacityBytes) => {
-    if (options.channel.version !== BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION || chunks !== options.output.maxAcceptedChunks || !Number.isSafeInteger(bytes) || bytes! < options.output.maxQueueBytes) throw new StreamingProcessSessionError("lossless_output_unavailable", "Selected channel does not attest the exact aggregate lossless output v2 window.");
+    if (options.channel.version !== BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION || chunks !== options.output.maxAcceptedChunks || !Number.isSafeInteger(bytes) || bytes! < options.output.maxQueueBytes) throw runnerSessionError("lossless_output_unavailable", "Selected channel does not attest the exact aggregate lossless output v2 window.");
   };
   const finalizedEvidence = new Map<string, FinalizedEvidence>();
   const createAttachment = (sessionId: string, ownerId: string, fencingToken: number, channel: FakeStreamingChannel, onPreAdoptionFailure?: (error: unknown) => Promise<void>): PrivateAttachment => {
@@ -149,7 +156,10 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       kernel: options.kernel, sessionId, ownerId, fencingToken, maxAcceptedChunks: options.output.maxAcceptedChunks,
       queue, protocolStreams: options.output.protocolStreams, writeEvidence: tee.writeEvidence,
       assertAuthorization: (authorization, expected) => options.sessions.assertOperationAuthorization(authorization, expected),
-      deliver: options.output.deliver,
+      deliver: async (stream, bytes) => {
+        try { await options.output.deliver(stream, bytes); }
+        catch { throw runnerSessionError("launch_failed", "Streaming output delivery failed."); }
+      },
     });
     const attachment: PrivateAttachment = { channel, output, tee, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, closed: false, detached: false };
     return attachment;
@@ -193,24 +203,24 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     if (attachment.settling) return await attachment.settling;
     attachment.settling = (async () => {
     let record = options.kernel.store.readBySession(sessionId);
-    if (!record) throw new StreamingProcessSessionError("launch_failed", "Adopted session record disappeared during cleanup.");
+    if (!record) throw runnerSessionError("launch_failed", "Adopted session record disappeared during cleanup.");
     if (record.state === "active") record = options.sessions.recordDisposition({ sessionId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, disposition }).record;
     const ownerId = record.ownerId; const fencingToken = record.fencingToken;
     if (record.state !== "cleanup_pending" && record.state !== "cleanup_blocked") record = writer.apply({ type: "begin_cleanup", sessionId, ownerId, fencingToken, expectedRevision: record.revision, effectId: `cleanup:${sessionId}:${fencingToken}`, at: clock().toISOString() });
     const assertCleanupOwner = () => {
       const current = options.kernel.store.readBySession(sessionId);
-      if (!current || current.state !== "cleanup_pending" || current.ownerId !== ownerId || current.fencingToken !== fencingToken || Date.parse(current.leaseExpiresAt) <= clock().getTime()) throw new StreamingProcessSessionError("cleanup_blocked", "Adopted cleanup authority became stale.");
+      if (!current || current.state !== "cleanup_pending" || current.ownerId !== ownerId || current.fencingToken !== fencingToken || Date.parse(current.leaseExpiresAt) <= clock().getTime()) throw runnerSessionError("cleanup_blocked", "Adopted cleanup authority became stale.");
     };
     const cleanupErrors: unknown[] = [];
     try { assertCleanupOwner(); await closeAttachment(sessionId, attachment); } catch (error) { cleanupErrors.push(error); }
     try {
       assertCleanupOwner();
       const launchId = options.kernel.store.listHostLaunchIds().find((id) => options.kernel.store.readHostLaunch(id)?.sessionId === sessionId);
-      if (!launchId || await options.host.reconcile({ launchId, record }) !== "cleaned") throw new StreamingProcessSessionError("cleanup_blocked", "Exact adopted host cleanup was not verified.");
+      if (!launchId || await options.host.reconcile({ launchId, record }) !== "cleaned") throw runnerSessionError("cleanup_blocked", "Exact adopted host cleanup was not verified.");
     } catch (error) { cleanupErrors.push(error); }
     try { assertCleanupOwner(); await options.isolation.release(record.lease); } catch (error) { cleanupErrors.push(error); }
     options.sessions.recoverAdopted({ sessionId, ownerId, fencingToken, replay: () => cleanupErrors.length ? "blocked" : "cleaned" });
-    if (cleanupErrors.length || originalError) throw new StreamingProcessSessionError("cleanup_blocked", "Adopted streaming session cleanup failed.");
+    if (cleanupErrors.length || originalError) throw runnerSessionError("cleanup_blocked", "Adopted streaming session cleanup failed.");
     })();
     return await attachment.settling;
   };
@@ -221,7 +231,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       const staged = options.sessions.stageLaunch({ sessionId: request.sessionId, launchId: request.launchId, grant: request.grant, binding: request.binding });
       const claims = options.sessions.validateStagedLaunch(staged, request);
       const at = clock().toISOString(); const ownerId = `host:${claims.runId}`;
-      writer.prepareLaunch({ recordKind: "runner.host-launch", schemaVersion: 1, revision: 0, launchId: request.launchId, sessionId: request.sessionId, runId: claims.runId, agentSessionId: claims.sessionId, actor: { role: claims.actor.role, id: claims.actor.id }, toolName: claims.toolName, callId: claims.callId, ownerId, fencingToken: 1, ownerExpiresAt: new Date(clock().getTime() + 60_000).toISOString(), state: "prepared", cleanupOwner: "host_control", history: [{ state: "prepared", at }], effects: [{ effectId: `isolate:${request.launchId}`, kind: "isolate", status: "pending", ownerId, fencingToken: 1, createdAt: at }] });
+      writer.prepareLaunch({ recordKind: "runner.host-launch", schemaVersion: HOST_LAUNCH_RECORD_VERSION, revision: 0, launchId: request.launchId, sessionId: request.sessionId, runId: claims.runId, agentSessionId: claims.sessionId, actor: { role: claims.actor.role, id: claims.actor.id }, toolName: claims.toolName, callId: claims.callId, ownerId, fencingToken: 1, ownerExpiresAt: new Date(clock().getTime() + 60_000).toISOString(), state: "prepared", cleanupOwner: "host_control", history: [{ state: "prepared", at }], effects: [{ effectId: `isolate:${request.launchId}`, kind: "isolate", status: "pending", ownerId, fencingToken: 1, createdAt: at }] });
       let lease: StreamingSessionLease | undefined; let backendBinding: StreamingSessionBackendBinding | undefined; let channel: FakeStreamingChannel | undefined; let attachment: PrivateAttachment | undefined; let activeEffect: Promise<void> = Promise.resolve(); let effectPending = false; let activeEffectKind: "isolate" | "launch" | "channel" | "handshake" | undefined; let cleanupPromise: Promise<void> | undefined;
       const bindKnownResults = () => {
         let durable = options.kernel.store.readHostLaunch(request.launchId);
@@ -262,7 +272,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         let host = writer.transitionLaunch({ type: "bind_isolation", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: 0, lease, at: clock().toISOString() });
         host = writer.transitionLaunch({ type: "begin_launch", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, at: clock().toISOString() });
         backendBinding = await effect("launch", async () => backendBinding = await options.host.launch({ launchId: request.launchId, claims, lease: lease! }));
-        if (!backendBinding) throw new StreamingProcessSessionError("launch_failed", "Streaming backend binding is unavailable after launch.");
+        if (!backendBinding) throw runnerSessionError("launch_failed", "Streaming backend binding is unavailable after launch.");
         const exactBackendBinding = backendBinding;
         options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
         host = writer.transitionLaunch({ type: "bind_backend", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, backendBinding: exactBackendBinding, at: clock().toISOString() });
@@ -289,7 +299,10 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           sessionId: request.sessionId, record: adopted.record,
           authorizeFirstOperation: (operation: LaunchOperationAuthorizationRequest) => options.sessions.authorizeLaunchOperation(operation),
           authorizeOperation: (operation: SessionOperationRequest) => options.sessions.authorizeOperation(operation),
-          deliverOutput: (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => attachment!.output.deliverNext(authorization, assertion),
+          deliverOutput: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => {
+            try { return await attachment!.output.deliverNext(authorization, assertion); }
+            catch (error) { if (error instanceof Error && isRunnerSessionError(error.cause)) throw error.cause; throw error; }
+          },
           stop: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => { options.sessions.assertOperationAuthorization(authorization, { ...assertion, sessionId: request.sessionId, operation: "stop" }); await settleAdoptedAttachment(request.sessionId, attachment!, "backend_unavailable"); return Object.freeze({ record: options.kernel.store.readBySession(request.sessionId), evidence: finalizedEvidence.get(request.sessionId) }); },
         });
       } catch (error) {
@@ -300,23 +313,23 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           void activeEffect.then(async () => { unresolvedProviderEffects.delete(request.launchId); try { await immediateCleanup; } catch {} bindKnownResults(); cleanupPromise = undefined; if (hostCleanupChannels.get(request.launchId)?.failed) return; await runHostCleanup(request.launchId, 25); }).catch((failure) => { if (attachment) attachment.failure = failure; });
           try { await bounded(immediateCleanup, 75); } catch (failure) { if (attachment) attachment.failure = failure; }
           revoker.dispose();
-          throw error instanceof StreamingProcessSessionError ? error : new StreamingProcessSessionError("cancelled", "Streaming launch was cancelled.");
+          throw isRunnerSessionError(error) ? error : runnerSessionError("cancelled", "Streaming launch was cancelled.");
         }
         await activeEffect;
         let cleanupError: unknown; try { await cleanupOpenResources(); } catch (failure) { cleanupError = failure; }
         revoker.dispose();
-        if (cleanupError) throw new StreamingProcessSessionError("cleanup_blocked", "Streaming launch cleanup failed.");
-        if (request.signal?.aborted && !(error instanceof StreamingProcessSessionError)) throw new StreamingProcessSessionError("cancelled", "Streaming launch was cancelled.");
-        if (error instanceof StreamingProcessSessionError) throw error;
-        throw new StreamingProcessSessionError(activeEffectKind === "handshake" ? "handshake_refused" : "launch_failed", activeEffectKind === "handshake" ? "Streaming handshake was refused." : "Streaming provider launch phase failed.");
+        if (cleanupError) throw runnerSessionError("cleanup_blocked", "Streaming launch cleanup failed.");
+        if (request.signal?.aborted && !isRunnerSessionError(error)) throw runnerSessionError("cancelled", "Streaming launch was cancelled.");
+        if (isRunnerSessionError(error)) throw error;
+        throw runnerSessionError(activeEffectKind === "handshake" ? "handshake_refused" : "launch_failed", activeEffectKind === "handshake" ? "Streaming handshake was refused." : "Streaming provider launch phase failed.");
       }
     },
     async reconcileStartup(input: { readonly maxRecords: number; readonly timeoutMs?: number; readonly signal?: AbortSignal }) {
-      if (!Number.isSafeInteger(input.maxRecords) || input.maxRecords < 1) throw new StreamingProcessSessionError("launch_failed", "Recovery count bound is invalid.");
-      const timeoutMs = input.timeoutMs ?? 1_000; if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new StreamingProcessSessionError("launch_failed", "Recovery time bound is invalid.");
+      if (!Number.isSafeInteger(input.maxRecords) || input.maxRecords < 1) throw runnerSessionError("launch_failed", "Recovery count bound is invalid.");
+      const timeoutMs = input.timeoutMs ?? 1_000; if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw runnerSessionError("launch_failed", "Recovery time bound is invalid.");
       throwIfAborted(input.signal);
       const deadline = Date.now() + timeoutMs;
-      const remainingTime = () => { const remaining = deadline - Date.now(); if (remaining <= 0) throw new StreamingProcessSessionError("launch_failed", "Streaming recovery exhausted its total deadline."); return remaining; };
+      const remainingTime = () => { const remaining = deadline - Date.now(); if (remaining <= 0) throw runnerSessionError("launch_failed", "Streaming recovery exhausted its total deadline."); return remaining; };
       let inspected = 0;
       const surfacedLateCleanupFailures = new Map([...lateCleanupChannels].map(([sessionId]) => [sessionId, cleanupFailure("channel_detach_failed")]));
       for (const failure of hostCleanupFailures.values()) surfacedLateCleanupFailures.set(failure.sessionId, failure.failure);
@@ -403,15 +416,15 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
   });
 }
 
-function throwIfAborted(signal?: AbortSignal): void { if (signal?.aborted) throw new StreamingProcessSessionError("cancelled", "Streaming operation was cancelled."); }
+function throwIfAborted(signal?: AbortSignal): void { if (signal?.aborted) throw runnerSessionError("cancelled", "Streaming operation was cancelled."); }
 function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> { return bounded(promise, undefined, signal); }
 function bounded<T>(promise: Promise<T>, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
   throwIfAborted(signal); return new Promise<T>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (callback: () => void) => { if (timer) clearTimeout(timer); signal?.removeEventListener("abort", abort); callback(); };
-    const abort = () => finish(() => reject(new StreamingProcessSessionError("cancelled", "Streaming operation was cancelled.")));
+    const abort = () => finish(() => reject(runnerSessionError("cancelled", "Streaming operation was cancelled.")));
     signal?.addEventListener("abort", abort, { once: true });
-    if (timeoutMs !== undefined) timer = setTimeout(() => finish(() => reject(new StreamingProcessSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
+    if (timeoutMs !== undefined) timer = setTimeout(() => finish(() => reject(runnerSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
     promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
   });
 }
@@ -419,8 +432,8 @@ function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: 
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
     let finished = false;
-    const timer = setTimeout(() => finish(() => reject(new StreamingProcessSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
-    const abort = () => finish(() => reject(new StreamingProcessSessionError("cancelled", "Streaming operation was cancelled.")));
+    const timer = setTimeout(() => finish(() => reject(runnerSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
+    const abort = () => finish(() => reject(runnerSessionError("cancelled", "Streaming operation was cancelled.")));
     const finish = (complete: () => void) => { if (finished) return false; finished = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); complete(); return true; };
     signal?.addEventListener("abort", abort, { once: true });
     promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch((error) => onCleanupFailure(value, error)); }, (error) => { finish(() => reject(error)); });
@@ -430,7 +443,7 @@ function same(left: unknown, right: unknown): boolean { return JSON.stringify(le
 function cleanupFailure(code: HostCleanupFailureCode): HostCleanupFailure { return Object.freeze({ code, message: HOST_CLEANUP_FAILURE_MESSAGES[code] }); }
 function classifyCleanupFailure(resource: HostCleanupResourceFact["resource"], error: unknown): HostCleanupFailure {
   if (error instanceof CleanupClassificationError) return cleanupFailure(error.failureCode);
-  if (error instanceof StreamingProcessSessionError && (error.code === "cancelled" || error.code === "launch_failed")) return cleanupFailure("cleanup_timeout_or_cancelled");
+  if (isRunnerSessionError(error) && (error.code === "cancelled" || error.code === "launch_failed")) return cleanupFailure("cleanup_timeout_or_cancelled");
   const code: Record<HostCleanupResourceFact["resource"], HostCleanupFailureCode> = {
     channel: "channel_detach_failed", output_checkpoint: "output_checkpoint_delete_failed",
     host: "host_reconciliation_failed", isolation_lease: "isolation_lease_release_failed",

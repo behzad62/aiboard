@@ -5,12 +5,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { runInNewContext } from "node:vm";
 import type { BoundedOutputSpoolResult } from "../src/bounded-output-spool.js";
 
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import { createSessionAuthority } from "../src/session-authority.js";
 import { createStreamingProcessSessionRuntime, StreamingProcessSessionError, type StreamingRuntimeOptions } from "../src/streaming-process-session-runtime.js";
-import { createInMemoryStreamingSessionStore, getStreamingSessionKernelWriter, openSqliteStreamingSessionStore, StreamingSessionStoreError, type StreamingSessionBackendBinding } from "../src/streaming-session-store.js";
+import { createInMemoryStreamingSessionStore, getStreamingSessionKernelWriter, HOST_LAUNCH_RECORD_VERSION, openSqliteStreamingSessionStore, StreamingSessionStoreError, type StreamingSessionBackendBinding } from "../src/streaming-session-store.js";
 
 const now = "2026-08-30T00:00:00.000Z";
 
@@ -174,6 +175,82 @@ test("adopted cleanup never exposes provider error graphs to its caller", async 
   const inspect = (error: unknown): unknown => error instanceof AggregateError ? { message: error.message, cause: inspect(error.cause), errors: error.errors.map(inspect) } : error instanceof Error ? { message: error.message, cause: inspect(error.cause) } : error;
   assert.doesNotMatch(JSON.stringify(inspect(thrown)), /R6_ADOPTED_CALLER_SENTINEL|credential=|payload=|argv=/);
   assert.equal(thrown instanceof StreamingProcessSessionError && thrown.code, "cleanup_blocked");
+});
+
+test("provider-created exported runtime errors are foreign and cannot cross the launch boundary", async () => {
+  const sentinel = "credential=B1_R7_TYPED_PROVIDER_SENTINEL"; const fixture = await makeFixture(2, "cleaned");
+  fixture.setHostLaunch(async () => { throw new StreamingProcessSessionError("launch_failed", sentinel, { cause: new Error(`payload=${sentinel}`) }); });
+  const thrown = await fixture.runtime.open(fixture.request).then(() => assert.fail("provider launch must fail"), (error: unknown) => error);
+  assert.equal(thrown instanceof StreamingProcessSessionError && thrown.code, "launch_failed");
+  assert.equal(thrown instanceof Error && thrown.message, "Streaming provider launch phase failed.");
+  assert.equal(thrown instanceof Error && thrown.cause, undefined);
+  assert.doesNotMatch(JSON.stringify(errorGraph(thrown)), /B1_R7_TYPED_PROVIDER_SENTINEL|credential=|payload=|cause/);
+});
+
+test("foreign error shapes are sanitized at every launch provider boundary", { timeout: 5_000 }, async () => {
+  const phases = ["isolation", "host", "channel", "handshake", "output_start"] as const;
+  for (const phase of phases) for (const [shape, makeForeign] of foreignErrorFactories()) {
+    const fixture = await makeFixture(2, "cleaned");
+    if (phase === "isolation") fixture.setIsolationAcquire(async () => { throw makeForeign(); });
+    if (phase === "host") fixture.setHostLaunch(async () => { throw makeForeign(); });
+    if (phase === "channel") fixture.setChannelAcquire(async () => { throw makeForeign(); });
+    if (phase === "handshake") fixture.setHandshake(async () => { throw makeForeign(); });
+    if (phase === "output_start") fixture.setEvidenceSpool(() => { throw makeForeign(); });
+    const thrown = await fixture.runtime.open(fixture.request).then(() => assert.fail(`${phase}/${shape} must fail`), (error: unknown) => error);
+    const expectedCode = phase === "handshake" ? "handshake_refused" : "launch_failed";
+    const expectedMessage = phase === "handshake" ? "Streaming handshake was refused." : "Streaming provider launch phase failed.";
+    assert.equal(thrown instanceof StreamingProcessSessionError && thrown.code, expectedCode, `${phase}/${shape}`);
+    assert.equal(thrown instanceof Error && thrown.message, expectedMessage, `${phase}/${shape}`);
+    assert.equal(thrown instanceof Error && thrown.cause, undefined, `${phase}/${shape}`);
+    assertNoForeignSentinel({ caller: errorGraph(thrown), durable: durableGraph(fixture) }, `${phase}/${shape}`);
+  }
+});
+
+test("foreign error shapes are sanitized at output delivery, cleanup, and cancellation boundaries", { timeout: 5_000 }, async () => {
+  for (const [shape, makeForeign] of foreignErrorFactories()) {
+    const delivery = await makeFixture(2, "cleaned"); delivery.setDeliver(async () => { throw makeForeign(); });
+    const facade = await delivery.runtime.open(delivery.request); const bytes = Buffer.from("x");
+    const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: createHash("sha256").update(bytes).digest("hex") };
+    const emitted = delivery.emit({ metadata, bytes, acknowledge: async () => undefined }); emitted.catch(() => undefined); await new Promise((resolve) => setImmediate(resolve));
+    const operation = { sessionId: "stream-1", operation: "family_delivery" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const deliveryError = await facade.deliverOutput(facade.authorizeFirstOperation(operation), { ...operation, binding: delivery.request.binding }).then(() => assert.fail(`delivery/${shape} must fail`), (error: unknown) => error);
+    assert.deepEqual(runtimeErrorFact(deliveryError), { code: "launch_failed", message: "Streaming output delivery failed." }, `delivery/${shape}`);
+    assertNoForeignSentinel({ caller: errorGraph(deliveryError), durable: durableGraph(delivery) }, `delivery/${shape}`);
+
+    const cleanup = await makeFixture(2, "cleaned");
+    cleanup.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { throw makeForeign(); } }));
+    const cleanupFacade = await cleanup.runtime.open(cleanup.request); const stop = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const cleanupError = await cleanupFacade.stop(cleanupFacade.authorizeFirstOperation(stop), { ...stop, binding: cleanup.request.binding }).then(() => assert.fail(`cleanup/${shape} must fail`), (error: unknown) => error);
+    assert.equal(cleanupError instanceof StreamingProcessSessionError && cleanupError.code, "cleanup_blocked", `cleanup/${shape}`);
+    assertNoForeignSentinel({ caller: errorGraph(cleanupError), durable: durableGraph(cleanup) }, `cleanup/${shape}`);
+
+    const cancellation = await makeFixture(2, "cleaned"); let providerCancelled = false;
+    const cancellationSignal = {
+      get aborted() { return providerCancelled; }, reason: undefined, onabort: null,
+      addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, throwIfAborted() { if (providerCancelled) throw new Error("cancelled"); },
+    } as AbortSignal;
+    cancellation.setHostLaunch(async () => { providerCancelled = true; throw makeForeign(); });
+    const cancelled = await cancellation.runtime.open({ ...cancellation.request, signal: cancellationSignal }).then(() => assert.fail(`cancellation/${shape} must fail`), (error: unknown) => error);
+    assert.equal(cancelled instanceof StreamingProcessSessionError && cancelled.code, "cancelled", `cancellation/${shape}`);
+    assert.equal(cancelled instanceof Error && cancelled.message, "Streaming launch was cancelled.", `cancellation/${shape}`);
+    assert.equal(cancelled instanceof Error && cancelled.cause, undefined, `cancellation/${shape}`);
+    assertNoForeignSentinel({ caller: errorGraph(cancelled), durable: durableGraph(cancellation) }, `cancellation/${shape}`);
+  }
+});
+
+test("internally minted runtime errors retain their fixed safe distinctions", async () => {
+  const lossless = await makeFixture(1, "cleaned");
+  const losslessError = await lossless.runtime.open(lossless.request).then(() => assert.fail("lossless refusal expected"), (error: unknown) => error);
+  assert.deepEqual(runtimeErrorFact(losslessError), { code: "lossless_output_unavailable", message: "Selected channel does not attest the exact aggregate lossless output v2 window." });
+  const aborted = await makeFixture(2, "cleaned"); const abort = new AbortController(); abort.abort();
+  const cancelled = await aborted.runtime.open({ ...aborted.request, signal: abort.signal }).then(() => assert.fail("cancellation expected"), (error: unknown) => error);
+  assert.deepEqual(runtimeErrorFact(cancelled), { code: "cancelled", message: "Streaming operation was cancelled." });
+  const handshake = await makeFixture(2, "cleaned"); handshake.setHandshake(async () => { throw new Error("foreign handshake"); });
+  const handshakeError = await handshake.runtime.open(handshake.request).then(() => assert.fail("handshake refusal expected"), (error: unknown) => error);
+  assert.deepEqual(runtimeErrorFact(handshakeError), { code: "handshake_refused", message: "Streaming handshake was refused." });
+  const cleanup = await makeFixture(2, "blocked"); const cleanupFacade = await cleanup.runtime.open(cleanup.request); const stop = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const cleanupError = await cleanupFacade.stop(cleanupFacade.authorizeFirstOperation(stop), { ...stop, binding: cleanup.request.binding }).then(() => assert.fail("cleanup refusal expected"), (error: unknown) => error);
+  assert.deepEqual(runtimeErrorFact(cleanupError), { code: "cleanup_blocked", message: "Adopted streaming session cleanup failed." });
 });
 
 test("live grant revocation at every pre-adoption phase settles one exact cleanup", async () => {
@@ -540,6 +617,7 @@ async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blo
   let hostLaunchOverride: (() => Promise<typeof backendBinding>) | undefined;
   let channelAcquireOverride: (() => Promise<import("../src/streaming-process-session-runtime.js").FakeStreamingChannel>) | undefined;
   let handshakeOverride: (() => Promise<string>) | undefined;
+  let deliverOverride: (() => Promise<void>) | undefined;
   let reattachOverride: ((binding: StreamingSessionBackendBinding) => ReturnType<NonNullable<StreamingRuntimeOptions["channel"]["reattach"]>>) | undefined;
   let evidenceSpoolOverride: (() => { write(stream: "stdout" | "stderr", bytes: Uint8Array): Promise<void>; finalize(): Promise<unknown>; cleanup(): Promise<void> }) | undefined;
   const maybeRevoke = (phase: typeof revokeAt) => { if (phase) onPhase?.(phase); if (revokeAt === phase) void grants.revoke(grant, "cancelled"); };
@@ -550,13 +628,53 @@ async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blo
     host: { launch: async () => { calls.push("launch"); launchCalls++; maybeRevoke("launch"); return hostLaunchOverride ? await hostLaunchOverride() : backendBinding; }, reconcile: async () => { calls.push("reconcile"); return reconcileOverride ? reconcileOverride() : reconcileOutcome; } },
     channel: { version: outputVersion, replayCapacityChunks: outputVersion === 2 ? replayCapacityChunks : undefined, replayCapacityBytes: outputVersion === 2 ? 16 : undefined, acquire: async () => { calls.push("channel"); maybeRevoke("channel"); return channelAcquireOverride ? await channelAcquireOverride() : { subscribeBackpressuredOutput: (sink) => { outputSink = sink; calls.push("output"); maybeRevoke("output"); return () => { outputSink = undefined; }; }, observeTerminal: () => () => undefined, detach: async () => { detachCalls++; } }; }, reattach: async (binding) => reattachOverride ? await reattachOverride(binding) : ({ version: 2 as const, binding, replayCapacityChunks: 4, replayCapacityBytes: 16, channel: { subscribeBackpressuredOutput: (sink) => { outputSink = sink; for (const metadata of retainedWindow) queueMicrotask(() => { void sink(metadata, Buffer.alloc(metadata.byteLength)).catch(() => undefined); }); return () => { outputSink = undefined; }; }, observeTerminal: () => () => undefined, detach: async () => { detachCalls++; } }, retainedWindow }) },
     handshake: { verify: async () => { calls.push("handshake"); maybeRevoke("handshake"); return handshakeOverride ? await handshakeOverride() : handshakeVerify ? handshakeVerify() : "b".repeat(64); } },
-    output: { maxQueueBytes: 16, maxQueueChunks: 4, maxFrameBytes: 16, maxAcceptedChunks: 4, protocolStreams: ["stdout"], createEvidenceSpool: () => evidenceSpoolOverride ? evidenceSpoolOverride() : ({ write: async () => { evidenceWrites++; }, finalize: async () => { finalizeCalls++; return { streams: [] }; }, cleanup: async () => undefined }), deliver: async () => { deliveries++; } },
+    output: { maxQueueBytes: 16, maxQueueChunks: 4, maxFrameBytes: 16, maxAcceptedChunks: 4, protocolStreams: ["stdout"], createEvidenceSpool: () => evidenceSpoolOverride ? evidenceSpoolOverride() : ({ write: async () => { evidenceWrites++; }, finalize: async () => { finalizeCalls++; return { streams: [] }; }, cleanup: async () => undefined }), deliver: async () => { deliveries++; await deliverOverride?.(); } },
   } satisfies Parameters<typeof createStreamingProcessSessionRuntime>[0];
   const runtime = createStreamingProcessSessionRuntime(runtimeOptions);
-  const preparedRecord = (launchId = "launch-1", sessionId = "stream-1") => ({ recordKind: "runner.host-launch" as const, schemaVersion: 1 as const, revision: 0, launchId, sessionId, runId: "run-1", agentSessionId: "agent-1", actor: { role: "worker" as const, id: "worker-1" }, toolName: "process.start", callId: "call-1", ownerId: "host:run-1", fencingToken: 1, ownerExpiresAt: "2026-08-30T00:01:00.000Z", state: "prepared" as const, cleanupOwner: "host_control" as const, history: [{ state: "prepared" as const, at: now }], effects: [{ effectId: `isolate:${launchId}`, kind: "isolate" as const, status: "pending" as const, ownerId: "host:run-1", fencingToken: 1, createdAt: now }] });
+  const preparedRecord = (launchId = "launch-1", sessionId = "stream-1") => ({ recordKind: "runner.host-launch" as const, schemaVersion: HOST_LAUNCH_RECORD_VERSION, revision: 0, launchId, sessionId, runId: "run-1", agentSessionId: "agent-1", actor: { role: "worker" as const, id: "worker-1" }, toolName: "process.start", callId: "call-1", ownerId: "host:run-1", fencingToken: 1, ownerExpiresAt: "2026-08-30T00:01:00.000Z", state: "prepared" as const, cleanupOwner: "host_control" as const, history: [{ state: "prepared" as const, at: now }], effects: [{ effectId: `isolate:${launchId}`, kind: "isolate" as const, status: "pending" as const, ownerId: "host:run-1", fencingToken: 1, createdAt: now }] });
   const request = { sessionId: "stream-1", launchId: "launch-1", grant, binding, envelope: { access: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false }, preparedRecord: preparedRecord() };
-  return { runtimeOptions, grants, runtime, createRecoveryRuntime: () => createStreamingProcessSessionRuntime(runtimeOptions), setIsolationAcquire: (value: typeof isolationAcquireOverride) => { isolationAcquireOverride = value; }, setHostLaunch: (value: typeof hostLaunchOverride) => { hostLaunchOverride = value; }, setChannelAcquire: (value: typeof channelAcquireOverride) => { channelAcquireOverride = value; }, setHandshake: (value: typeof handshakeOverride) => { handshakeOverride = value; }, setReattach: (value: typeof reattachOverride) => { reattachOverride = value; }, setEvidenceSpool: (value: typeof evidenceSpoolOverride) => { evidenceSpoolOverride = value; }, request, calls, kernel, authority, kernelWriter: (await import("../src/streaming-session-store.js")).getStreamingSessionKernelWriter(kernel), preparedRecord, emit: async (chunk: { metadata: import("../src/streaming-output-controller.js").StreamingOutputMetadata; bytes: Uint8Array; acknowledge: (metadata: import("../src/streaming-output-controller.js").StreamingOutputMetadata) => Promise<void> }) => { assert.ok(outputSink); const acknowledgement = await outputSink(chunk.metadata, chunk.bytes); await chunk.acknowledge(acknowledgement); }, get launchCalls() { return launchCalls; }, get waitTerminalCalls() { return waitTerminalCalls; }, get evidenceWrites() { return evidenceWrites; }, get deliveries() { return deliveries; }, get releaseCalls() { return releaseCalls; }, get finalizeCalls() { return finalizeCalls; }, get detachCalls() { return detachCalls; } };
+  return { runtimeOptions, grants, runtime, createRecoveryRuntime: () => createStreamingProcessSessionRuntime(runtimeOptions), setIsolationAcquire: (value: typeof isolationAcquireOverride) => { isolationAcquireOverride = value; }, setHostLaunch: (value: typeof hostLaunchOverride) => { hostLaunchOverride = value; }, setChannelAcquire: (value: typeof channelAcquireOverride) => { channelAcquireOverride = value; }, setHandshake: (value: typeof handshakeOverride) => { handshakeOverride = value; }, setDeliver: (value: typeof deliverOverride) => { deliverOverride = value; }, setReattach: (value: typeof reattachOverride) => { reattachOverride = value; }, setEvidenceSpool: (value: typeof evidenceSpoolOverride) => { evidenceSpoolOverride = value; }, request, calls, kernel, authority, kernelWriter: (await import("../src/streaming-session-store.js")).getStreamingSessionKernelWriter(kernel), preparedRecord, emit: async (chunk: { metadata: import("../src/streaming-output-controller.js").StreamingOutputMetadata; bytes: Uint8Array; acknowledge: (metadata: import("../src/streaming-output-controller.js").StreamingOutputMetadata) => Promise<void> }) => { assert.ok(outputSink); const acknowledgement = await outputSink(chunk.metadata, chunk.bytes); await chunk.acknowledge(acknowledgement); }, get launchCalls() { return launchCalls; }, get waitTerminalCalls() { return waitTerminalCalls; }, get evidenceWrites() { return evidenceWrites; }, get deliveries() { return deliveries; }, get releaseCalls() { return releaseCalls; }, get finalizeCalls() { return finalizeCalls; }, get detachCalls() { return detachCalls; } };
 }
 
 function leaseRecord() { return { leaseId: "lease-1", providerId: "fake", invocationId: "invoke-1", providerIdentity: "a".repeat(64), acquiredAt: now, access: [] }; }
 async function waitUntil(predicate: () => boolean) { for (let index = 0; index < 20 && !predicate(); index++) await new Promise((resolve) => setTimeout(resolve, 5)); }
+function errorGraph(error: unknown): unknown {
+  if (error instanceof AggregateError) return { name: error.name, message: error.message, cause: error.cause === undefined ? undefined : errorGraph(error.cause), errors: error.errors.map(errorGraph) };
+  if (error instanceof Error) return { name: error.name, message: error.message, cause: error.cause === undefined ? undefined : errorGraph(error.cause), ...(error instanceof StreamingProcessSessionError ? { code: error.code } : {}) };
+  if (Object.prototype.toString.call(error) === "[object Error]") {
+    const foreign = error as { name?: unknown; message?: unknown; cause?: unknown };
+    return { name: foreign.name, message: foreign.message, cause: foreign.cause === undefined ? undefined : errorGraph(foreign.cause) };
+  }
+  return error;
+}
+
+function foreignErrorFactories(): ReadonlyArray<readonly [string, () => unknown]> {
+  const sentinel = "credential=B1_R7_FOREIGN_SENTINEL";
+  class ForeignStreamingSubclass extends StreamingProcessSessionError {}
+  return [
+    ["exported", () => new StreamingProcessSessionError("launch_failed", sentinel, { cause: new Error(`payload=${sentinel}`) })],
+    ["subclass", () => new ForeignStreamingSubclass("launch_failed", sentinel, { cause: { token: sentinel } })],
+    ["lookalike", () => ({ name: "StreamingProcessSessionError", code: "launch_failed", message: sentinel, cause: { env: sentinel } })],
+    ["aggregate", () => new AggregateError([new Error(`argv=${sentinel}`)], sentinel, { cause: new Error(`path=C:\\secret\\${sentinel}`) })],
+    ["arbitrary", () => ({ arbitrary: sentinel, payload: [sentinel] })],
+    ["cross_realm", () => runInNewContext(`new Error(${JSON.stringify(sentinel)})`)],
+  ];
+}
+
+function durableGraph(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+  return {
+    hosts: fixture.kernel.store.listHostLaunchIds().map((id) => fixture.kernel.store.readHostLaunch(id)),
+    sessions: fixture.kernel.store.listSessionIds().map((id) => fixture.kernel.store.readBySession(id)),
+    output: fixture.kernel.store.readOutputCheckpoint("stream-1"),
+  };
+}
+
+function assertNoForeignSentinel(value: unknown, label: string) {
+  assert.doesNotMatch(JSON.stringify(value), /B1_R7_FOREIGN_SENTINEL|credential=|payload=|token=|env=|argv=|C:\\secret/, label);
+}
+
+function runtimeErrorFact(error: unknown) {
+  assert.ok(error instanceof StreamingProcessSessionError);
+  assert.equal(error.cause, undefined);
+  return { code: error.code, message: error.message };
+}

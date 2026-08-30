@@ -696,3 +696,144 @@ for caller-defined membership, unsafe text copies, and false release paths.
 This is implementation and self-verification evidence only. The controller
 must dispatch the required fresh independent scoped re-review and rerun current
 gates before any B2 unlock decision.
+
+## Repair round 7 — active-schema boundary and unforgeable errors
+
+Base: `2643cf75`; entry implementation head: `ac7d837f`; authorized entry HEAD:
+`014bda7b`. Authority: `task-8.0b1-round-7-brief.md` and
+`task-8.0b1-exceptional-round-6-review.md`. This repair is limited to the two
+reproduced residual paths and does not claim approval or unlock B2.
+
+### Root cause and correction
+
+R7.1 root cause was a generation ambiguity. Round 6 added optional marker
+fields to host-launch schema 1, so a valid-HMAC schema-1 `bound` row with a
+lease/backend and no markers could represent either a real pre-channel crash or
+an older post-acquisition crash. The reducer treated absence as proof that no
+channel duty existed and could release the row after only host and lease facts.
+
+Host-launch schema 2 is now the explicit marker-aware generation. Every new
+runtime launch and fixture uses the exported current generation. Schema-1
+active rows are rejected as `unsupported_active_version` before parsing,
+cleanup derivation, transition, adoption, or recovery. SQLite list validates
+each row through the same HMAC/version reader; read, list, transition and reopen
+therefore share the refusal boundary. No legacy contents are copied or upgraded.
+The exact raw JSON, revision, HMAC, owner and backend binding remain unchanged
+after every refused operation, including databases with before- and after-write
+fault triggers.
+
+Within schema 2, a pre-channel `bound` row remains valid and owns exactly host
+plus any durable lease. `begin_channel` remains the pre-effect marker. Marker
+history must contain channel then checkpoint repeats in that order; swapped or
+backdated marker identities are rejected. Handshake/later history requires both
+markers, so no later state can omit them. The existing checkpoint/host atomic
+link, HMAC, cleanup ledger and adoption transaction remain the sole durable
+authority.
+
+R7.2 root cause was treating the public exported error class as provenance.
+Providers could construct or subclass it with arbitrary message/cause data and
+both normal and cancellation catches rethrew it unchanged. The class remains
+exported for API compatibility, but only a module-private factory enrolls an
+error in a module-private `WeakSet`. Every internal creation site uses that
+factory; trust checks and cleanup timeout classification require membership.
+Public instances, subclasses, lookalikes, cross-realm errors, aggregates and
+arbitrary thrown values are foreign regardless of their name/code/prototype.
+
+Isolation, launch, channel, handshake, output-start, cleanup, recovery and
+cancellation edges now retain only fixed Runner-owned code/message data.
+Injected output delivery is classified before it reaches the output controller;
+the public facade unwraps only the privately minted fixed error, with no foreign
+cause. Genuine private cancellation, bounded-timeout/launch, handshake,
+lossless-output and cleanup errors retain their prior safe distinctions. The
+round-6 closed durable cleanup code/message mapping is unchanged.
+
+### Exact RED/GREEN evidence
+
+The first exact command was:
+
+`npx tsx --test --test-name-pattern="ambiguous legacy bound host|provider-created exported runtime errors" runner-v2/test/staged-launch-kernel.test.ts runner-v2/test/streaming-process-session-runtime.test.ts`
+
+Before production edits it was RED 0/2. The host reproduction printed exactly
+`{"state":"released","ownerId":"none","backendRetained":true}`. The provider
+reproduction returned message
+`credential=B1_R7_TYPED_PROVIDER_SENTINEL` with its payload-bearing cause.
+After repair, the exact two regressions are GREEN 2/2.
+
+The expanded R7.1 command matched `ambiguous legacy bound host`,
+`marker-relevant active legacy`, `new host generation`, `marker history`, and
+`valid-HMAC legacy rows`. It was RED 0/5: all six marker-relevant old active
+boundaries parsed, markerless handshake advanced, marker order was swappable,
+and HMAC read/list accepted the old row. It is GREEN 5/5. The full staged kernel
+is GREEN 28/28. Coverage includes old bound/no-marker, bound/channel,
+checkpoint-linked, handshake-verified, cleanup-pending and cleanup-blocked rows;
+new pre-channel exact duty derivation; ordered channel/checkpoint progress;
+SQLite valid-HMAC read/list/transition/reopen refusal; byte/HMAC/revision/owner
+preservation; before/after write triggers; adoption faults; and crash/reopen.
+
+The expanded R7.2 command matched `provider-created exported runtime errors`,
+`foreign error shapes`, and `internally minted runtime errors`. Before repair it
+reported 1/4 GREEN: the two foreign-boundary tests and exact exported-instance
+test were RED, while the internal fixed-distinction test was already GREEN.
+After repair it is GREEN 4/4. The matrix injects exported instances, subclasses,
+lookalikes, aggregates, arbitrary objects and cross-realm errors at isolation,
+host launch, channel acquisition, handshake, output start, output delivery,
+cleanup and cancellation. Recursive caller/durable scans contain no credential,
+token, environment, argv, absolute-path, payload, aggregate-child or foreign
+cause sentinel. The full runtime is GREEN 40/40. A follow-up output-boundary
+assertion was RED because the fixed Runner error was nested under
+`StreamingOutputError`; the facade boundary correction made the same exact
+check GREEN with a top-level fixed `launch_failed` error and no cause.
+
+### Mutation evidence
+
+All mutations were made with `apply_patch`, run against the exact guard, reverted,
+and rerun GREEN before broad validation:
+
+1. Allowing schema 1 through the active-version condition made the exact legacy
+   test RED 0/1 and again reached `released`/`none` with the backend retained.
+   Revert was GREEN 1/1.
+2. Removing both the transition and parser later-marker guards made the exact
+   new-generation marker test RED 0/1 (`Missing expected exception`). Revert was
+   GREEN 1/1.
+3. Restoring the normal-catch `instanceof StreamingProcessSessionError` bypass
+   made the exact provider-created test RED 0/1 with its credential message.
+   Revert was GREEN 1/1.
+4. Removing the private `WeakSet.has()` validation guard produced the same exact
+   sentinel RED 0/1. Revert was GREEN 1/1.
+
+No mutation, schema-1 exception, or production sentinel remains.
+
+### Validation, scope, and residue
+
+Required commands completed with zero failures, skips, or cancellations:
+
+- B1 focused (`staged-launch-kernel`, `streaming-output-checkpoint`,
+  `streaming-output-v2`, `streaming-process-session-runtime`): 88/88 GREEN.
+- Task 8.0A (`streaming-session-store`, `session-authority`,
+  `interactive-process-channel`, `execution-grants`): 89/89 GREEN.
+- Task 7 plus Task 3 spool (`process-backend-contract`,
+  `durable-process-store`, `subprocess-runtime`,
+  `execution-isolation-provider`, `tool-broker`, `bounded-output-spool`):
+  173/173 GREEN.
+- `npm run typecheck:runner-v2`: GREEN.
+- Targeted ESLint over both changed source and both changed test files: GREEN
+  after one exact test-only `prefer-const` correction.
+- `git diff --check 2643cf75`: GREEN (line-ending notices only).
+
+The production diff is limited to the existing streaming-session kernel and
+fake streaming runtime. Tests are limited to their two focused files. Static
+added-line scanning found no adapter/CLI/factory/family, child-process import,
+spawn/kill/exec, shell/environment access, OS product branch, second database,
+or exact Node patch pin. The existing SQLite tables remain the only durability
+surface.
+
+All SQLite handles close in `finally`; each test removes only its owned temporary
+root. Final inspection found zero R7 legacy-bound/refusal, host-boundary,
+host-launch or adoption temp roots. The fake-only tests create no real child,
+port, endpoint, container or supervisor. Existing bounded timers/listeners,
+queues, channel detach and output-spool cleanup checks remain green; no active
+mutation, spill or retained provider sentinel remains. The complete fix-only
+source/test diff was self-reviewed before commit.
+
+This is implementation evidence for the controller's required fresh independent
+scoped re-review. It is not approval and does not unlock Packet 8.0B2.
