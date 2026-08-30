@@ -220,6 +220,9 @@ test("late reattach racing durable blocked and released states always detaches e
     resolveLate(); await waitUntil(() => lateDetach === 1);
     assert.equal(lateDetach, 1, durableOutcome);
     assert.equal(fixture.kernel.store.readBySession("stream-1")?.state, durableOutcome === "cleaned" ? "released" : "cleanup_blocked");
+    const subsequent = await recovery.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+    assert.equal(lateDetach, 1, `${durableOutcome}: successful detach must not enter retry cleanup`);
+    assert.deepEqual(subsequent.lateCleanupFailures, []);
   }
 });
 
@@ -311,6 +314,47 @@ test("late channel after immediate cancellation cleanup is detached without repe
   await waitUntil(() => fixture.calls.includes("late-detach"));
   assert.equal(fixture.calls.filter((call) => call === "late-detach").length, 1);
   assert.equal(fixture.releaseCalls, 1); assert.equal(fixture.calls.filter((call) => call === "reconcile").length, 1);
+});
+
+test("noncooperative host reconciliation cannot delay cleanup of a late cancelled channel", { timeout: 1_000 }, async () => {
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => await new Promise<"cleaned">(() => undefined));
+  let resolveChannel!: (channel: import("../src/streaming-process-session-runtime.js").FakeStreamingChannel) => void; let lateDetach = 0;
+  fixture.setChannelAcquire(async () => await new Promise((resolve) => { resolveChannel = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  const started = Date.now(); await assert.rejects(opening); assert.ok(Date.now() - started < 200);
+  resolveChannel({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { lateDetach++; } });
+  await waitUntil(() => lateDetach === 1);
+  assert.equal(lateDetach, 1); assert.equal(fixture.releaseCalls, 1);
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked");
+});
+
+test("failed late channel detach cannot be overwritten by an earlier cleaned host result", { timeout: 1_000 }, async () => {
+  const fixture = await makeFixture(2, "cleaned"); let resolveChannel!: (channel: import("../src/streaming-process-session-runtime.js").FakeStreamingChannel) => void; let lateDetach = 0;
+  fixture.setChannelAcquire(async () => await new Promise((resolve) => { resolveChannel = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening);
+  resolveChannel({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { lateDetach++; throw new Error("cancel late detach failed"); } });
+  await waitUntil(() => lateDetach === 1); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked");
+  const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(lateDetach, 2, "one failed retry per bounded recovery");
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked");
+  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /cancel late detach failed/);
+});
+
+test("successful retry of failed cancelled late detach releases once and never double-cleans", { timeout: 1_000 }, async () => {
+  const fixture = await makeFixture(2, "cleaned"); let resolveChannel!: (channel: import("../src/streaming-process-session-runtime.js").FakeStreamingChannel) => void; let lateDetach = 0;
+  fixture.setChannelAcquire(async () => await new Promise((resolve) => { resolveChannel = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening);
+  resolveChannel({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { lateDetach++; if (lateDetach === 1) throw new Error("cancel late detach failed once"); } });
+  await waitUntil(() => lateDetach === 1); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked");
+  const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(lateDetach, 2); assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
+  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /cancel late detach failed once/);
+  const after = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(lateDetach, 2); assert.deepEqual(after.lateCleanupFailures, []);
 });
 
 async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blocked" | "outcome_unknown" = "outcome_unknown", handshakeVerify?: () => Promise<string>, retainedWindow: readonly import("../src/streaming-output-controller.js").StreamingOutputMetadata[] = [], replayCapacityChunks = 4, revokeAt?: "isolate" | "launch" | "channel" | "output" | "handshake", reconcileOverride?: () => Promise<"cleaned" | "blocked" | "outcome_unknown">, onPhase?: (phase: string) => void) {

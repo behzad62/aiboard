@@ -406,3 +406,65 @@ changed. The full fix diff was self-reviewed; recovery remains count/time/cancel
 bounded and no timer/listener/process/spill residue was created. Cleanup failures
 retain blocked/observable truth rather than being suppressed. This report does
 not claim independent approval or unlock B2.
+
+## Governed fix round 4 — response to re-review 3
+
+Base: `ac6b8035`. Authority: `task-8.0b1-rereview-3.md`. This round changes
+only cleanup accounting for the two linked defects. B2 remains locked.
+
+### Exact RED and GREEN evidence
+
+The exact direct command was:
+
+`npx tsx --test --test-name-pattern="late reattach racing|failed late channel detach|successful retry of failed cancelled" runner-v2/test/streaming-process-session-runtime.test.ts`
+
+Before repair it reported 0/3 passing: the blocked reattach race detached twice
+instead of once, and both failed late-cancellation detach tests falsely observed
+the host journal as `released` instead of `cleanup_blocked`. After repair, the
+same command reports 3/3 GREEN, zero skips/cancellations/failures, in 372 ms.
+The tests were added before production changes; no mutation remains.
+
+The preservation guard command was
+`npx tsx --test --test-name-pattern="noncooperative host reconciliation" runner-v2/test/streaming-process-session-runtime.test.ts`.
+Making late cleanup wait for the already-hung immediate reconciliation produced
+0/1 RED (detach 0 vs 1). Reverting that mutation and starting the late cleanup
+families concurrently produced 1/1 GREEN. The combined final direct run is 4/4
+GREEN; the mutation was reverted before broader validation.
+
+### Corrections and accounting proof
+
+- Late reattach settlement failure and resource-cleanup failure are tracked
+  separately. A blocked/released durable settlement race followed by successful
+  detach creates no retry entry. Both race variants run a later recovery and
+  prove detach count remains exactly one with an empty retry result.
+- A retry entry now represents only an actually failed channel detach. It owns
+  explicit detached/in-flight state: a timed-out cleanup promise is reused, a
+  completed detach is never repeated, and an actual rejection permits one later
+  bounded retry.
+- Cancellation establishes a supervised resource-cleanup barrier before final
+  journal settlement. Channel/attachment detach, checkpoint deletion, host
+  reconciliation, and lease release all contribute their exact outcomes. Any
+  failure forces `cleanup_blocked` and cannot be overwritten by an earlier
+  `cleaned` host result or lost when no attachment existed at cancellation.
+- Failed cancelled-channel detaches enter the bounded retry queue with their
+  launch identity. A failed recovery retry remains blocked and observable. A
+  successful retry lets the same recovery re-open the exact blocked journal,
+  reconcile it, and release it; a later recovery proves no double detach.
+
+### Round-4 validation
+
+- Direct accounting command: 3/3 GREEN.
+- Full B1 focused command: 67/67 GREEN, zero skips/cancellations/failures.
+- Task 8.0A: 89/89 GREEN, zero skips/cancellations/failures.
+- Task 7 plus Task 3 spool: 173/173 GREEN, zero
+  skips/cancellations/failures.
+- `npm run typecheck:runner-v2`, targeted ESLint, and `git diff --check
+  ac6b8035`: GREEN (line-ending notices only).
+
+### Scope and handoff
+
+Only the fake streaming runtime, its focused test, this report, and the supplied
+re-review evidence changed. No adapter, CLI/factory, family, process/shell/env
+path, database, OS branch, or Node policy changed. The complete fix diff was
+self-reviewed; no timer/listener/process/spill or mutation residue remains.
+This is evidence for independent re-review, not approval or a B2 unlock.
