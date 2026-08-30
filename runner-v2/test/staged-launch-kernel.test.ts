@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHmac } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -187,14 +188,100 @@ test("host cleanup is fenced through pending, blocked, expired-owner takeover, a
   writer.prepareLaunch(hostRecord());
   let record = writer.transitionLaunch({ type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, at: now });
   assert.equal(record.state, "cleanup_pending");
-  record = writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, blocker: "fake refusal", at: now });
+  const blockedFailure = { code: "host_reconciliation_failed", message: "Host reconciliation failed." };
+  record = writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, blocker: blockedFailure, results: [{ resource: "host", identity: "host:launch-1", ownerId: "host:run-1", fencingToken: 1, status: "failed", failure: blockedFailure }], at: now });
   assert.equal(record.state, "cleanup_blocked");
   assert.throws(() => writer.transitionLaunch({ type: "takeover_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, newOwnerId: "recovery:1", newFencingToken: 2, ownerExpiresAt: "2026-08-30T00:02:00.000Z", at: "2026-08-30T00:00:30.000Z" }), (error) => error instanceof StreamingSessionStoreError && error.code === "lease_not_expired");
   record = writer.transitionLaunch({ type: "takeover_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, newOwnerId: "recovery:1", newFencingToken: 2, ownerExpiresAt: "2026-08-30T00:03:00.000Z", at: "2026-08-30T00:02:00.000Z" });
   const cleanup = record.effects.find((effect) => effect.kind === "cleanup")!;
   assert.throws(() => parseHostLaunchRecord({ ...record, effects: record.effects.map((effect) => effect.kind === "cleanup" ? { ...cleanup, takeovers: [{ ...cleanup.takeovers![0]!, fromOwnerId: "forged" }] } : effect) }), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
-  record = writer.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: "launch-1", ownerId: "recovery:1", fencingToken: 2, expectedRevision: record.revision, at: "2026-08-30T00:02:01.000Z" });
+  record = writer.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: "launch-1", ownerId: "recovery:1", fencingToken: 2, expectedRevision: record.revision, results: [{ resource: "host", identity: "host:launch-1", ownerId: "recovery:1", fencingToken: 2, status: "succeeded" }], at: "2026-08-30T00:02:01.000Z" });
   assert.equal(record.state, "released"); assert.equal(record.cleanupOwner, "none");
+});
+
+test("kernel rejects a channel-only cleanup assertion for a fully bound launch without releasing ownership", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.prepareLaunch(hostRecord());
+  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
+  writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
+  writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
+  writer.transitionLaunch({ type: "begin_channel", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, at: now });
+  writer.claimHostOutputCheckpoint({ launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 4, at: now, record: { recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 4, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] } });
+  assert.throws(() => writer.transitionLaunch({
+    type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 5, at: now,
+    resources: [{ resource: "channel", identity: "channel:80000af88202cc6a2970b7864ec660ac3ee64291fc00bfd0b912360c62050d39" }],
+  }), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
+  const retained = kernel.store.readHostLaunch("launch-1")!;
+  assert.equal(retained.state, "bound"); assert.equal(retained.ownerId, "host:run-1");
+  assert.equal(retained.leaseBinding?.leaseId, "lease-1"); assert.equal(retained.backendBinding?.opaqueIdentity, "opaque-1");
+});
+
+test("parser refuses an unresolved cleanup fact authenticated only by a historical owner", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.prepareLaunch(hostRecord());
+  let record = writer.transitionLaunch({ type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, at: now, resources: [{ resource: "host", identity: "host:launch-1" }] });
+  record = writer.transitionLaunch({ type: "takeover_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: record.revision, newOwnerId: "recovery:2", newFencingToken: 2, ownerExpiresAt: "2026-08-30T00:03:00.000Z", at: "2026-08-30T00:01:00.000Z" });
+  const cleanup = record.effects.find((effect) => effect.kind === "cleanup")!;
+  const stale = { ...record, effects: record.effects.map((effect) => effect.kind === "cleanup" ? { ...cleanup, resources: cleanup.resources!.map((fact) => ({ ...fact, ownerId: "host:run-1", fencingToken: 1 })) } : effect) };
+  assert.throws(() => parseHostLaunchRecord(stale), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
+});
+
+test("cleanup ledger is exact, fully settled, and re-fences only unresolved duties on consecutive takeover", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+  writer.prepareLaunch(hostRecord());
+  writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
+  writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
+  writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
+  writer.transitionLaunch({ type: "begin_channel", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, at: now });
+  writer.claimHostOutputCheckpoint({ launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 4, at: now, record: { recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 4, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] } });
+  let record = writer.transitionLaunch({ type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 5, at: now });
+  const cleanup = record.effects.find((effect) => effect.kind === "cleanup")!; const facts = cleanup.resources!;
+  assert.deepEqual(facts.map(({ resource, identity }) => ({ resource, identity })), [
+    { resource: "host", identity: "host:launch-1" },
+    { resource: "isolation_lease", identity: "lease:6e57ee9e9a077eef678d07fb49152ba73eb24dab6546330f3a297271a9121d83" },
+    { resource: "channel", identity: "channel:80000af88202cc6a2970b7864ec660ac3ee64291fc00bfd0b912360c62050d39" },
+    { resource: "output_checkpoint", identity: "checkpoint:stream-1" },
+  ]);
+  const malformed = [
+    facts.slice(1),
+    [...facts, { ...facts[0]!, resource: "not_a_resource" }],
+    [...facts.slice(0, 3), { ...facts[0]! }],
+    facts.map((fact, index) => index === 0 ? { ...fact, resource: "not_a_resource" } : fact),
+    facts.map((fact, index) => index === 0 ? { ...fact, identity: "host:wrong" } : fact),
+    facts.map((fact, index) => index === 0 ? { ...fact, ownerId: "wrong-owner" } : fact),
+    facts.map((fact, index) => index === 0 ? { ...fact, fencingToken: 99 } : fact),
+  ];
+  for (const resources of malformed) assert.throws(() => parseHostLaunchRecord({ ...record, effects: record.effects.map((effect) => effect.kind === "cleanup" ? { ...effect, resources } : effect) }), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
+  const failure = { code: "host_reconciliation_failed", message: "Host reconciliation failed." };
+  const firstResults = facts.map((fact) => ({ resource: fact.resource, identity: fact.identity, ownerId: fact.ownerId, fencingToken: fact.fencingToken, status: fact.resource === "host" ? "failed" : "succeeded", ...(fact.resource === "host" ? { failure } : {}) }));
+  record = writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: record.revision, blocker: failure, results: firstResults, at: now });
+  record = writer.transitionLaunch({ type: "takeover_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: record.revision, newOwnerId: "recovery:2", newFencingToken: 2, ownerExpiresAt: "2026-08-30T00:03:00.000Z", at: "2026-08-30T00:01:00.000Z" });
+  let takeoverFacts = record.effects.find((effect) => effect.kind === "cleanup")!.resources!;
+  assert.deepEqual(takeoverFacts.map((fact) => [fact.resource, fact.status, fact.ownerId, fact.fencingToken]), [
+    ["host", "pending", "recovery:2", 2], ["isolation_lease", "succeeded", "host:run-1", 1],
+    ["channel", "succeeded", "host:run-1", 1], ["output_checkpoint", "succeeded", "host:run-1", 1],
+  ]);
+  record = writer.transitionLaunch({ type: "takeover_cleanup", launchId: "launch-1", ownerId: "recovery:2", fencingToken: 2, expectedRevision: record.revision, newOwnerId: "recovery:3", newFencingToken: 3, ownerExpiresAt: "2026-08-30T00:04:00.000Z", at: "2026-08-30T00:03:00.000Z" });
+  takeoverFacts = record.effects.find((effect) => effect.kind === "cleanup")!.resources!;
+  assert.equal(takeoverFacts[0]?.ownerId, "recovery:3"); assert.equal(takeoverFacts[0]?.fencingToken, 3);
+  const current = takeoverFacts[0]!;
+  assert.throws(() => writer.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: "launch-1", ownerId: "recovery:3", fencingToken: 3, expectedRevision: record.revision, results: [{ resource: current.resource, identity: current.identity, ownerId: "recovery:2", fencingToken: 2, status: "succeeded" }], at: "2026-08-30T00:03:01.000Z" }), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
+  record = writer.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: "launch-1", ownerId: "recovery:3", fencingToken: 3, expectedRevision: record.revision, results: [{ resource: current.resource, identity: current.identity, ownerId: "recovery:3", fencingToken: 3, status: "succeeded" }], at: "2026-08-30T00:03:01.000Z" });
+  assert.equal(record.state, "released"); assert.ok(record.effects.find((effect) => effect.kind === "cleanup")!.resources!.every((fact) => fact.status === "succeeded"));
+});
+
+test("cleanup failure parser accepts only the closed code-to-message schema", () => {
+  const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel); writer.prepareLaunch(hostRecord());
+  let record = writer.transitionLaunch({ type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, at: now });
+  const failure = { code: "host_reconciliation_failed", message: "Host reconciliation failed." };
+  record = writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: record.revision, blocker: failure, results: [{ resource: "host", identity: "host:launch-1", ownerId: "host:run-1", fencingToken: 1, status: "failed", failure }], at: now });
+  const cleanup = record.effects.find((effect) => effect.kind === "cleanup")!;
+  for (const invalidFailure of [
+    { code: "unknown_code", message: "Internal cleanup failed." },
+    { code: "host_reconciliation_failed", message: "provider credential=B1_R6" },
+    "legacy arbitrary failure text",
+    { code: "host_reconciliation_failed", message: "Host reconciliation failed.", diagnostic: "stack=B1_R6" },
+  ]) assert.throws(() => parseHostLaunchRecord({ ...record, effects: record.effects.map((effect) => effect.kind === "cleanup" ? { ...cleanup, blocker: invalidFailure, resources: cleanup.resources!.map((fact) => ({ ...fact, failure: invalidFailure })) } : effect) }), StreamingSessionStoreError);
 });
 
 test("impossible adoption pair leaves host ownership unchanged", () => {
@@ -255,6 +342,25 @@ test("SQLite host journal reopens with HMAC integrity and tamper fails closed", 
     const db = new DatabaseSync(path); db.prepare("UPDATE streaming_host_launches SET integrity = ? WHERE launch_id = ?").run("00", "launch-1"); db.close();
     kernel = openSqliteStreamingSessionStore(path, key); assert.throws(() => kernel.store.readHostLaunch("launch-1"), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record"); kernel.store.close();
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("SQLite refuses a pre-marker output checkpoint instead of deriving an incomplete cleanup ledger", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-legacy-output-duty-")); const path = join(root, "sessions.sqlite"); const key = Buffer.alloc(32, 19);
+  let kernel = openSqliteStreamingSessionStore(path, key); let closed = false;
+  try {
+    const writer = getStreamingSessionKernelWriter(kernel); writer.prepareLaunch(hostRecord());
+    writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
+    writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
+    writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
+    kernel.store.close(); closed = true;
+    const checkpoint = { recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: "stream-1", ownerId: "session-owner", fencingToken: 1, capacity: 4, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] };
+    const json = JSON.stringify(checkpoint); const integrity = createHmac("sha256", key).update(json).digest("hex"); const database = new DatabaseSync(path);
+    database.prepare("INSERT INTO streaming_output_checkpoints (session_id, record_json, integrity, revision) VALUES (?, ?, ?, ?)").run("stream-1", json, integrity, 0); database.close();
+    kernel = openSqliteStreamingSessionStore(path, key); closed = false;
+    assert.throws(() => kernel.store.readHostLaunch("launch-1"), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
+    assert.throws(() => getStreamingSessionKernelWriter(kernel).transitionLaunch({ type: "begin_cleanup", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, at: now }), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect");
+    const inspect = new DatabaseSync(path, { readOnly: true }); try { const row = inspect.prepare("SELECT record_json FROM streaming_host_launches WHERE launch_id = ?").get("launch-1") as { record_json: string }; assert.equal(JSON.parse(row.record_json).state, "bound"); } finally { inspect.close(); }
+  } finally { if (!closed) try { kernel.store.close(); } catch {} await rm(root, { recursive: true, force: true }); }
 });
 
 test("SQLite adoption faults expose only wholly pre- or post-adoption state", async () => {

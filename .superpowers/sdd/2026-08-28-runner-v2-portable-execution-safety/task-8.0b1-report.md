@@ -555,3 +555,144 @@ modified or deleted by this repair. This report and the supplied re-review-4
 file are force-added with the implementation commit. This is implementation
 evidence only; independent final re-review remains mandatory and B2 is not
 unlocked here.
+
+## Exceptional repair round 6 — kernel-complete cleanup and closed failures
+
+Base: `c6a5c5be`; authorized by
+`task-8.0b1-exceptional-round-6-brief.md`. Entry controller HEAD was
+`a213317c`. This section owns only the two remaining Important findings and
+does not claim approval or unlock B2.
+
+### Root cause and correction
+
+R6.1 root cause was split durability authority: the fake runtime assembled a
+caller-provided cleanup subset while the host reducer accepted that subset as
+the whole ledger. The parser authenticated unresolved facts against any owner
+in takeover history. Therefore the kernel could neither prove complete cleanup
+membership nor require the current owner/fence for every unresolved duty.
+
+The existing streaming kernel now derives the exact ledger from authenticated
+host facts. Every non-handoff host owns `host`; a durable lease owns
+`isolation_lease`; a durable pre-effect channel marker owns `channel`; and an
+atomically linked host/checkpoint marker owns `output_checkpoint`. Identities
+are computed inside the kernel from immutable launch/session/lease/backend
+facts. `begin_cleanup` no longer needs caller definitions; if compatibility
+definitions are supplied, their kind/identity set must equal the derived set.
+The generic checkpoint claim refuses a pre-adoption host, while the hidden
+host-checkpoint claim atomically writes the checkpoint and marker in memory or
+one SQLite transaction. A valid-HMAC pre-marker checkpoint from unsafe older
+active data is refused on read and transition without mutation.
+
+Parser and reducer validation require the exact derived facts. Pending and
+failed facts must carry the exact current cleanup owner/fence; succeeded facts
+retain authenticated historical proof. Takeover changes host/effect ownership
+and re-fences every and only unresolved duty in one parsed row update.
+Settlement outcomes carry their exact owner/fence and must name every and only
+unresolved duty. Missing, extra, duplicate, wrong-kind, wrong-identity,
+wrong-owner, stale-fence, and already-completed results fail before write.
+Release is impossible until the exact derived ledger is entirely succeeded.
+
+R6.2 root cause was `durableFailureMessage()`: truncation bounded arbitrary
+provider text but did not make it safe. Resource failures and blockers now use
+a closed `HostCleanupFailureCode` plus the one fixed Runner-owned message for
+that code. The closed set distinguishes channel detach, checkpoint deletion,
+host reconciliation, host outcome unknown, lease release,
+timeout/cancellation, and unknown internal cleanup. Parser keys and exact
+code/message pairing are strict. Runtime control flow uses
+`host_outcome_unknown` rather than regex inspection. Aggregate children,
+causes, stack/message text, arbitrary thrown values, path/env/argv/payload/
+endpoint data are discarded at classification; late cleanup results and
+caller-facing cleanup errors expose only fixed Runner-owned typed data.
+
+### Direct RED/GREEN evidence
+
+Initial exact command:
+
+`npx tsx --test --test-name-pattern="channel-only cleanup|historical owner|provider-controlled credential" runner-v2/test/staged-launch-kernel.test.ts runner-v2/test/streaming-process-session-runtime.test.ts`
+
+Before production changes it was RED 0/3: the channel-only assertion wrote
+instead of throwing; an `o1/1` unresolved fact parsed in an `o2/2` cleanup; and
+the serialized host row contained
+`payload=credential=B1_R6_PRIVATE_SENTINEL`. After repair the same command was
+GREEN 3/3.
+
+The valid-HMAC reopen regression was added before its link guard. Exact command
+`--test-name-pattern="pre-marker output checkpoint"` was RED 0/1 because
+`readHostLaunch` accepted the unsafe active pair. After the cross-table kernel
+guard it was GREEN 1/1 and the SQLite host row remained `bound` after refused
+read and transition attempts.
+
+The adopted caller sentinel was also test-first. Exact command
+`--test-name-pattern="adopted cleanup never exposes"` was RED 0/1 with the
+nested AggregateError graph containing credential, payload and argv sentinels;
+the fixed typed boundary made it GREEN 1/1.
+
+The cleanup matrix proves four hand-derived literal identities, exact fact
+membership, partial then final settlement, preservation/no-repeat of three
+successes, two consecutive takeovers, current result fencing, and final release
+only after the last duty succeeds. Memory and SQLite sentinel tests scan
+serialized host/session/output state and every `streaming_%` table cell;
+credential, token, env, argv, absolute-path, endpoint, payload, aggregate,
+cause, and arbitrary-value sentinels are absent after failure and after reopen.
+The SQLite test recomputes a valid HMAC over a mismatched fixed message and
+proves parser refusal.
+
+### Mutation evidence
+
+All mutations used `apply_patch`, were reverted, and their exact checks were
+rerun GREEN before final gates:
+
+1. Weakening exact-set length comparison made channel-only/matrix checks RED
+   0/2 (`Missing expected exception`); revert was GREEN 2/2.
+2. Disabling current-owner fencing made the historical-owner parser check RED
+   0/1; revert was GREEN 1/1.
+3. Removing exact code-to-message validation made parser plus valid-HMAC reopen
+   RED 0/2; revert was GREEN 2/2.
+4. Forcing every classifier result to `unknown_internal_cleanup_failure` made
+   the four-resource sentinel/classifier check RED 0/1; revert was GREEN 1/1.
+
+No mutation marker or injected sentinel remains in production or durable test
+state.
+
+### Final validation
+
+All final commands completed with zero failures, skips, or cancellations:
+
+- B1 focused (`staged-launch-kernel`, `streaming-output-checkpoint`,
+  `streaming-output-v2`, `streaming-process-session-runtime`): 79/79 GREEN.
+- Task 8.0A (`streaming-session-store`, `session-authority`,
+  `interactive-process-channel`, `execution-grants`): 89/89 GREEN.
+- Task 7 plus Task 3 spool (`process-backend-contract`,
+  `durable-process-store`, `subprocess-runtime`,
+  `execution-isolation-provider`, `tool-broker`, `bounded-output-spool`):
+  173/173 GREEN.
+- `npm run typecheck:runner-v2`: GREEN.
+- Targeted ESLint over both changed source and both changed test files: GREEN.
+- `git diff --check c6a5c5be`: GREEN (line-ending notices only).
+
+The first broad B1 attempt exposed one stale assertion that expected raw
+grant-revocation wording after the fixed caller boundary. Its exact test was
+updated to require the typed runtime code, rerun GREEN 1/1, then the complete
+B1 gate above was rerun GREEN 79/79.
+
+### Scope, rollback, and residue audit
+
+The production diff is limited to the fake streaming runtime and the sole
+existing streaming-session kernel. No adapter, CLI/control server/factory,
+child family, native/POSIX/Windows/Job/OCI path, raw spawn/kill/shell/
+environment seam, OS product branch, second database, or Node policy changed.
+Static added-line scanning found no `spawn`, `execFile`, `execSync`, process
+kill, taskkill, shell option, ambient `process.env`, child-process import, or
+exact Node pin.
+
+SQLite marker creation rolls back both rows on any pre-commit failure; all
+takeover facts live in one parsed/HMAC-protected host row, so a failed parse or
+CAS writes no partial re-fence. Tests close every SQLite handle and remove only
+their owned temporary root in `finally`. Final inspection found no matching R6
+sentinel/host/adoption temp root, spill, timer, listener, process, port,
+endpoint, container, or active mutation. The complete fix diff was reviewed
+for caller-defined membership, unsafe text copies, and false release paths.
+
+This is implementation and self-verification evidence only. The controller
+must dispatch the required fresh independent scoped re-review and rerun current
+gates before any B2 unlock decision.

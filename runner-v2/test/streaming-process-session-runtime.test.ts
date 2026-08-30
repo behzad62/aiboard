@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { BoundedOutputSpoolResult } from "../src/bounded-output-spool.js";
 
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import { createSessionAuthority } from "../src/session-authority.js";
 import { createStreamingProcessSessionRuntime, StreamingProcessSessionError, type StreamingRuntimeOptions } from "../src/streaming-process-session-runtime.js";
-import { createInMemoryStreamingSessionStore, getStreamingSessionKernelWriter, type StreamingSessionBackendBinding } from "../src/streaming-session-store.js";
+import { createInMemoryStreamingSessionStore, getStreamingSessionKernelWriter, openSqliteStreamingSessionStore, StreamingSessionStoreError, type StreamingSessionBackendBinding } from "../src/streaming-session-store.js";
 
 const now = "2026-08-30T00:00:00.000Z";
 
@@ -156,15 +160,26 @@ test("oversized asynchronous output settles adopted cleanup and finalizes the sp
 test("unverified adopted host cleanup preserves blocked disposition instead of claiming release", async () => {
   const fixture = await makeFixture(2, "blocked"); const facade = await fixture.runtime.open(fixture.request);
   const operation = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
-  await assert.rejects(facade.stop(facade.authorizeFirstOperation(operation), { ...operation, binding: fixture.request.binding }), AggregateError);
+  await assert.rejects(facade.stop(facade.authorizeFirstOperation(operation), { ...operation, binding: fixture.request.binding }), (error) => error instanceof StreamingProcessSessionError && error.code === "cleanup_blocked");
   assert.equal(fixture.kernel.store.readBySession("stream-1")?.state, "cleanup_blocked");
   assert.equal(fixture.releaseCalls, 1);
+});
+
+test("adopted cleanup never exposes provider error graphs to its caller", async () => {
+  const sentinel = "credential=R6_ADOPTED_CALLER_SENTINEL"; const fixture = await makeFixture(2, "cleaned");
+  fixture.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { throw new AggregateError([new Error(sentinel)], `payload=${sentinel}`, { cause: new Error(`argv=${sentinel}`) }); } }));
+  const facade = await fixture.runtime.open(fixture.request);
+  const operation = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const thrown = await facade.stop(facade.authorizeFirstOperation(operation), { ...operation, binding: fixture.request.binding }).then(() => assert.fail("cleanup must fail"), (error: unknown) => error);
+  const inspect = (error: unknown): unknown => error instanceof AggregateError ? { message: error.message, cause: inspect(error.cause), errors: error.errors.map(inspect) } : error instanceof Error ? { message: error.message, cause: inspect(error.cause) } : error;
+  assert.doesNotMatch(JSON.stringify(inspect(thrown)), /R6_ADOPTED_CALLER_SENTINEL|credential=|payload=|argv=/);
+  assert.equal(thrown instanceof StreamingProcessSessionError && thrown.code, "cleanup_blocked");
 });
 
 test("live grant revocation at every pre-adoption phase settles one exact cleanup", async () => {
   for (const phase of ["isolate", "launch", "channel", "output", "handshake"] as const) {
     const fixture = await makeFixture(2, "cleaned", undefined, [], 4, phase);
-    await assert.rejects(fixture.runtime.open(fixture.request), /grant_revoked|stale|unavailable|consumed/i);
+    await assert.rejects(fixture.runtime.open(fixture.request), (error) => error instanceof StreamingProcessSessionError && ["launch_failed", "handshake_refused"].includes(error.code));
     assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released", phase);
     assert.equal(fixture.releaseCalls, 1, phase);
   }
@@ -188,7 +203,7 @@ test("startup recovery spends one total deadline and every inspected terminal ro
   fixture.kernelWriter.prepareLaunch(fixture.preparedRecord("aaa-terminal", "terminal-session"));
   let terminal = fixture.kernel.store.readHostLaunch("aaa-terminal")!;
   terminal = fixture.kernelWriter.transitionLaunch({ type: "begin_cleanup", launchId: "aaa-terminal", ownerId: terminal.ownerId, fencingToken: 1, expectedRevision: terminal.revision, at: now });
-  fixture.kernelWriter.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: "aaa-terminal", ownerId: terminal.ownerId, fencingToken: 1, expectedRevision: terminal.revision, at: now });
+  fixture.kernelWriter.transitionLaunch({ type: "settle_cleanup_cleaned", launchId: "aaa-terminal", ownerId: terminal.ownerId, fencingToken: 1, expectedRevision: terminal.revision, results: [{ resource: "host", identity: "host:aaa-terminal", ownerId: terminal.ownerId, fencingToken: 1, status: "succeeded" }], at: now });
   fixture.kernelWriter.prepareLaunch(fixture.preparedRecord("zzz-pending-a", "pending-a-session")); fixture.kernelWriter.prepareLaunch(fixture.preparedRecord("zzz-pending-b", "pending-b-session")); fixture.kernelWriter.prepareLaunch(fixture.preparedRecord("zzz-pending-c", "pending-c-session"));
   const onlyTerminal = await fixture.runtime.reconcileStartup({ maxRecords: 1, timeoutMs: 20 });
   assert.equal(onlyTerminal.processed, 1); assert.deepEqual(onlyTerminal.outcomes, []);
@@ -237,7 +252,7 @@ test("failed late reattach cleanup is retained, surfaced, and retried without do
   const retried = await recovery.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(retried.lateCleanupFailures.length, 1);
   assert.equal(retried.lateCleanupFailures[0]?.sessionId, "stream-1");
-  assert.match(retried.lateCleanupFailures[0]?.message ?? "", /late detach failed/);
+  assert.equal(retried.lateCleanupFailures[0]?.message, "Streaming channel detach failed.");
   assert.equal(lateDetach, 2, "one failed detach and one successful retry");
 });
 
@@ -273,7 +288,7 @@ test("authorized stop surfaces complete finalized spool evidence and finalize er
   assert.ok(stopped.evidence && "result" in stopped.evidence); assert.deepEqual(stopped.evidence.result, finalized); assert.equal(stopped.evidence.evidenceLossy, true);
   const failed = await makeFixture(2, "cleaned"); failed.setEvidenceSpool(() => ({ write: async () => undefined, finalize: async () => { throw new Error("finalize proof lost"); }, cleanup: async () => undefined }));
   const failedFacade = await failed.runtime.open(failed.request);
-  await assert.rejects(failedFacade.stop(failedFacade.authorizeFirstOperation(operation), { ...operation, binding: failed.request.binding }), /finalize proof lost|durably settled/);
+  await assert.rejects(failedFacade.stop(failedFacade.authorizeFirstOperation(operation), { ...operation, binding: failed.request.binding }), (error) => error instanceof StreamingProcessSessionError && error.code === "cleanup_blocked");
   assert.equal(failed.kernel.store.readBySession("stream-1")?.state, "cleanup_blocked");
 });
 
@@ -339,7 +354,7 @@ test("failed late channel detach cannot be overwritten by an earlier cleaned hos
   const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(lateDetach, 2, "one failed retry per bounded recovery");
   assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked");
-  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /cancel late detach failed/);
+  assert.equal(retry.lateCleanupFailures[0]?.message, "Streaming channel detach failed.");
 });
 
 test("successful retry of failed cancelled late detach releases once and never double-cleans", { timeout: 1_000 }, async () => {
@@ -352,7 +367,7 @@ test("successful retry of failed cancelled late detach releases once and never d
   assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked");
   const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(lateDetach, 2); assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
-  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /cancel late detach failed once/);
+  assert.equal(retry.lateCleanupFailures[0]?.message, "Cleanup timed out or was cancelled.");
   const after = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(lateDetach, 2); assert.deepEqual(after.lateCleanupFailures, []);
 });
@@ -374,7 +389,77 @@ test("checkpoint-only cleanup failure stays durably blocked and retries the chec
   assert.equal(checkpointDeletes, 2, "recovery must retry the unresolved checkpoint cleanup");
   assert.equal(fixture.kernel.store.readOutputCheckpoint("stream-1"), undefined);
   assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
-  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /checkpoint cleanup failed once/);
+  assert.equal(retry.lateCleanupFailures[0]?.message, "Cleanup timed out or was cancelled.");
+});
+
+test("cleanup failure persistence discards provider-controlled credential text", { timeout: 1_000 }, async () => {
+  const sentinel = "credential=B1_R6_PRIVATE_SENTINEL"; let resolveHandshake!: (digest: string) => void;
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, {
+    deleteOutputCheckpoint: () => { throw new AggregateError([new Error(sentinel)], `payload=${sentinel}`, { cause: new Error(`argv=${sentinel}`) }); },
+  });
+  fixture.setHandshake(async () => await new Promise<string>((resolve) => { resolveHandshake = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening); await waitUntil(() => fixture.kernel.store.readHostLaunch("launch-1")?.state === "cleanup_blocked");
+  const serialized = JSON.stringify({
+    hosts: fixture.kernel.store.listHostLaunchIds().map((id) => fixture.kernel.store.readHostLaunch(id)),
+    sessions: fixture.kernel.store.listSessionIds().map((id) => fixture.kernel.store.readBySession(id)),
+    output: fixture.kernel.store.readOutputCheckpoint("stream-1"),
+  });
+  assert.doesNotMatch(serialized, /B1_R6_PRIVATE_SENTINEL|credential=|payload=|argv=/);
+  assert.match(serialized, /output_checkpoint_delete_failed/);
+  resolveHandshake("b".repeat(64));
+});
+
+test("every cleanup resource family classifies aggregate, cause, path, environment, argv, payload, and arbitrary sentinels", { timeout: 2_000 }, async () => {
+  const cases = [
+    { family: "host", code: "host_reconciliation_failed", make: () => makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { throw new AggregateError([new Error("credential=R6_HOST")], "payload=R6_HOST", { cause: new Error("C:\\secret\\R6_HOST") }); }) },
+    { family: "isolation_lease", code: "isolation_lease_release_failed", make: () => makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { releaseLease: async () => { throw new Error("env=R6_LEASE argv=--token=R6_LEASE"); } }) },
+    { family: "output_checkpoint", code: "output_checkpoint_delete_failed", make: () => makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { deleteOutputCheckpoint: () => { throw { arbitrary: "R6_CHECKPOINT", payload: ["R6_CHECKPOINT"] }; } }) },
+    { family: "channel", code: "channel_detach_failed", make: () => makeFixture(2, "cleaned") },
+  ] as const;
+  for (const entry of cases) {
+    let resolveHandshake!: (digest: string) => void; const fixture = await entry.make();
+    if (entry.family === "channel") fixture.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { throw new AggregateError([new Error("token=R6_CHANNEL")], "endpoint=R6_CHANNEL", { cause: "R6_CHANNEL" }); } }));
+    fixture.setHandshake(async () => await new Promise<string>((resolve) => { resolveHandshake = resolve; }));
+    const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+    await assert.rejects(opening); await waitUntil(() => fixture.kernel.store.readHostLaunch("launch-1")?.state === "cleanup_blocked");
+    const serialized = JSON.stringify({ host: fixture.kernel.store.readHostLaunch("launch-1"), sessions: fixture.kernel.store.listSessionIds().map((id) => fixture.kernel.store.readBySession(id)), output: fixture.kernel.store.readOutputCheckpoint("stream-1") });
+    assert.doesNotMatch(serialized, /R6_HOST|R6_LEASE|R6_CHECKPOINT|R6_CHANNEL|credential=|token=|env=|argv=|payload|endpoint=|C:\\secret/);
+    assert.match(serialized, new RegExp(entry.code)); resolveHandshake("b".repeat(64));
+  }
+});
+
+test("SQLite cleanup failure rows and reopened records contain only fixed Runner-owned failure data", { timeout: 1_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-cleanup-sentinel-")); const path = join(root, "sessions.sqlite"); const key = Buffer.alloc(32, 17);
+  let sqliteKernel = openSqliteStreamingSessionStore(path, key); let closed = false;
+  try {
+    const sentinel = "token=B1_R6_SQL_SENTINEL"; let resolveHandshake!: (digest: string) => void;
+    const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, {
+      kernel: sqliteKernel,
+      deleteOutputCheckpoint: () => { throw new AggregateError([new Error(sentinel)], `env=${sentinel}`, { cause: { payload: sentinel } }); },
+    });
+    fixture.setHandshake(async () => await new Promise<string>((resolve) => { resolveHandshake = resolve; }));
+    const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+    await assert.rejects(opening); await waitUntil(() => fixture.kernel.store.readHostLaunch("launch-1")?.state === "cleanup_blocked"); resolveHandshake("b".repeat(64));
+    fixture.kernel.store.close(); closed = true;
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'streaming_%'").all() as Array<{ name: string }>;
+      const cells = JSON.stringify(tables.flatMap(({ name }) => database.prepare(`SELECT * FROM ${name}`).all()));
+      assert.doesNotMatch(cells, /B1_R6_SQL_SENTINEL|token=|env=|payload/); assert.match(cells, /output_checkpoint_delete_failed/);
+    } finally { database.close(); }
+    sqliteKernel = openSqliteStreamingSessionStore(path, key); closed = false;
+    const reopened = JSON.stringify({ host: sqliteKernel.store.readHostLaunch("launch-1"), session: sqliteKernel.store.readBySession("stream-1"), output: sqliteKernel.store.readOutputCheckpoint("stream-1") });
+    assert.doesNotMatch(reopened, /B1_R6_SQL_SENTINEL|token=|env=|payload/); assert.match(reopened, /Output checkpoint deletion failed\./);
+    sqliteKernel.store.close(); closed = true;
+    const tamper = new DatabaseSync(path); const row = tamper.prepare("SELECT record_json FROM streaming_host_launches WHERE launch_id = ?").get("launch-1") as { record_json: string };
+    const unsafe = JSON.parse(row.record_json) as { effects: Array<{ kind: string; blocker?: { code: string; message: string } }> };
+    unsafe.effects.find((effect) => effect.kind === "cleanup")!.blocker!.message = "provider token=B1_R6_SQL_SENTINEL";
+    const unsafeJson = JSON.stringify(unsafe); const validHmac = createHmac("sha256", key).update(unsafeJson).digest("hex");
+    tamper.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ? WHERE launch_id = ?").run(unsafeJson, validHmac, "launch-1"); tamper.close();
+    sqliteKernel = openSqliteStreamingSessionStore(path, key); closed = false;
+    assert.throws(() => sqliteKernel.store.readHostLaunch("launch-1"), StreamingSessionStoreError);
+  } finally { if (!closed) try { sqliteKernel.store.close(); } catch {} await rm(root, { recursive: true, force: true }); }
 });
 
 test("lease-only cleanup failure stays durably blocked and never releases without a successful lease retry", { timeout: 1_000 }, async () => {
@@ -389,14 +474,14 @@ test("lease-only cleanup failure stays durably blocked and never releases withou
   const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(leaseReleases, 2, "recovery must retry the exact durable lease");
   assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
-  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /lease cleanup failed once/);
+  assert.equal(retry.lateCleanupFailures[0]?.message, "Cleanup timed out or was cancelled.");
 });
 
 test("combined cleanup retries only unresolved resources, remains blocked after a partial retry, and survives owner expiry", { timeout: 2_000 }, async () => {
   let checkpointDeletes = 0; let leaseReleases = 0; let channelDetaches = 0; let nowValue = new Date(now); let resolveHandshake!: (digest: string) => void;
   const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, {
     clock: () => new Date(nowValue),
-    deleteOutputCheckpoint: () => { checkpointDeletes++; if (checkpointDeletes < 4) throw new Error(`checkpoint cleanup failed ${checkpointDeletes}`); },
+    deleteOutputCheckpoint: () => { checkpointDeletes++; if (checkpointDeletes < 3) throw new Error(`checkpoint cleanup failed ${checkpointDeletes}`); },
     releaseLease: async () => { leaseReleases++; if (leaseReleases === 1) throw new Error("lease cleanup failed once"); },
   });
   fixture.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { channelDetaches++; if (channelDetaches === 1) throw new Error("channel cleanup failed once"); } }));
@@ -407,8 +492,8 @@ test("combined cleanup retries only unresolved resources, remains blocked after 
 
   const partial = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked", "checkpoint failure must prevent false release");
-  assert.equal(channelDetaches, 2); assert.equal(leaseReleases, 2); assert.equal(checkpointDeletes, 3);
-  assert.match(partial.lateCleanupFailures[0]?.message ?? "", /cleanup failed/);
+  assert.equal(channelDetaches, 2); assert.equal(leaseReleases, 2); assert.equal(checkpointDeletes, 2);
+  assert.equal(partial.lateCleanupFailures[0]?.message, "Output checkpoint deletion failed.");
   const partialFacts = fixture.kernel.store.readHostLaunch("launch-1")!.effects.find((effect) => effect.kind === "cleanup")?.resources ?? [];
   assert.equal(partialFacts.find((fact) => fact.resource === "output_checkpoint")?.status, "failed");
   assert.equal(partialFacts.find((fact) => fact.resource === "channel")?.status, "succeeded");
@@ -418,18 +503,18 @@ test("combined cleanup retries only unresolved resources, remains blocked after 
   const restarted = fixture.createRecoveryRuntime();
   const complete = await restarted.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
   assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
-  assert.equal(checkpointDeletes, 4);
+  assert.equal(checkpointDeletes, 3);
   assert.equal(channelDetaches, 2, "succeeded channel cleanup must not repeat after restart");
   assert.equal(leaseReleases, 2, "succeeded lease cleanup must not repeat after restart");
   assert.ok(fixture.kernel.store.readHostLaunch("launch-1")!.effects.find((effect) => effect.kind === "cleanup")?.resources?.every((fact) => fact.status === "succeeded"));
-  assert.match(complete.lateCleanupFailures[0]?.message ?? "", /checkpoint cleanup failed 3/);
+  assert.equal(complete.lateCleanupFailures[0]?.message, "Output checkpoint deletion failed.");
   await restarted.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
-  assert.equal(checkpointDeletes, 4); assert.equal(channelDetaches, 2); assert.equal(leaseReleases, 2);
+  assert.equal(checkpointDeletes, 3); assert.equal(channelDetaches, 2); assert.equal(leaseReleases, 2);
 });
 
-async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blocked" | "outcome_unknown" = "outcome_unknown", handshakeVerify?: () => Promise<string>, retainedWindow: readonly import("../src/streaming-output-controller.js").StreamingOutputMetadata[] = [], replayCapacityChunks = 4, revokeAt?: "isolate" | "launch" | "channel" | "output" | "handshake", reconcileOverride?: () => Promise<"cleaned" | "blocked" | "outcome_unknown">, onPhase?: (phase: string) => void, cleanupFaults?: { readonly clock?: () => Date; readonly releaseLease?: () => Promise<void>; readonly deleteOutputCheckpoint?: () => void }) {
+async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blocked" | "outcome_unknown" = "outcome_unknown", handshakeVerify?: () => Promise<string>, retainedWindow: readonly import("../src/streaming-output-controller.js").StreamingOutputMetadata[] = [], replayCapacityChunks = 4, revokeAt?: "isolate" | "launch" | "channel" | "output" | "handshake", reconcileOverride?: () => Promise<"cleaned" | "blocked" | "outcome_unknown">, onPhase?: (phase: string) => void, cleanupFaults?: { readonly kernel?: ReturnType<typeof createInMemoryStreamingSessionStore>; readonly clock?: () => Date; readonly releaseLease?: () => Promise<void>; readonly deleteOutputCheckpoint?: () => void }) {
   const grants = createExecutionGrantAuthority({ clock: () => new Date(now) });
-  const baseKernel = createInMemoryStreamingSessionStore();
+  const baseKernel = cleanupFaults?.kernel ?? createInMemoryStreamingSessionStore();
   const kernelWriterSymbol = Object.getOwnPropertySymbols(baseKernel).find((symbol) => typeof Object.getOwnPropertyDescriptor(baseKernel, symbol)?.value?.deleteOutputCheckpoint === "function");
   assert.ok(kernelWriterSymbol);
   const baseKernelWriter = Object.getOwnPropertyDescriptor(baseKernel, kernelWriterSymbol)?.value as ReturnType<typeof getStreamingSessionKernelWriter>;

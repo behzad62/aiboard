@@ -220,6 +220,19 @@ export const HOST_LAUNCH_RECORD_VERSION = 1 as const;
 export type HostLaunchState = "prepared" | "isolated" | "launching" | "bound" |
   "handshake_verified" | "handed_off" | "cleanup_pending" | "cleanup_blocked" | "released";
 export type HostCleanupResourceKind = "channel" | "output_checkpoint" | "host" | "isolation_lease";
+export type HostCleanupFailureCode = "channel_detach_failed" | "output_checkpoint_delete_failed" |
+  "host_reconciliation_failed" | "host_outcome_unknown" | "isolation_lease_release_failed" |
+  "cleanup_timeout_or_cancelled" | "unknown_internal_cleanup_failure";
+export interface HostCleanupFailure { readonly code: HostCleanupFailureCode; readonly message: string }
+export const HOST_CLEANUP_FAILURE_MESSAGES: Readonly<Record<HostCleanupFailureCode, string>> = Object.freeze({
+  channel_detach_failed: "Streaming channel detach failed.",
+  output_checkpoint_delete_failed: "Output checkpoint deletion failed.",
+  host_reconciliation_failed: "Host reconciliation failed.",
+  host_outcome_unknown: "Host outcome is unknown.",
+  isolation_lease_release_failed: "Isolation lease release failed.",
+  cleanup_timeout_or_cancelled: "Cleanup timed out or was cancelled.",
+  unknown_internal_cleanup_failure: "Internal cleanup failed.",
+});
 export interface HostCleanupResourceFact {
   readonly resource: HostCleanupResourceKind;
   readonly identity: string;
@@ -227,7 +240,7 @@ export interface HostCleanupResourceFact {
   readonly ownerId: string;
   readonly fencingToken: number;
   readonly attempts: number;
-  readonly failure?: string;
+  readonly failure?: HostCleanupFailure;
 }
 export interface HostLaunchEffect {
   readonly effectId: string;
@@ -238,7 +251,7 @@ export interface HostLaunchEffect {
   readonly createdAt: string;
   readonly acknowledgedAt?: string;
   readonly blockedAt?: string;
-  readonly blocker?: string;
+  readonly blocker?: HostCleanupFailure;
   readonly originOwnerId?: string;
   readonly originFencingToken?: number;
   readonly takeovers?: readonly Readonly<{ fromOwnerId: string; fromFencingToken: number; toOwnerId: string; toFencingToken: number; at: string }>[];
@@ -263,6 +276,8 @@ export interface HostLaunchRecord {
   readonly leaseBinding?: StreamingSessionLease;
   readonly backendBinding?: StreamingSessionBackendBinding;
   readonly handshakeDigest?: string;
+  readonly channelAcquisitionStartedAt?: string;
+  readonly outputCheckpointCreatedAt?: string;
   readonly history: readonly Readonly<{ state: HostLaunchState; at: string }>[];
   readonly effects: readonly HostLaunchEffect[];
 }
@@ -272,6 +287,7 @@ export interface StreamingSessionKernelWriter extends StreamingSessionStoreWrite
   transitionLaunch(command: unknown): Readonly<HostLaunchRecord>;
   commitAdoption(input: StreamingSessionAdoptionInput): Readonly<{ launch: Readonly<HostLaunchRecord>; session: Readonly<StreamingSessionRecord> }>;
   claimOutputCheckpoint(record: unknown): Readonly<{ record: Readonly<OutputCheckpointRecord>; won: boolean }>;
+  claimHostOutputCheckpoint(command: unknown): Readonly<{ host: Readonly<HostLaunchRecord>; record: Readonly<OutputCheckpointRecord>; won: boolean }>;
   applyOutputCheckpoint(command: unknown): Readonly<OutputCheckpointRecord>;
   deleteOutputCheckpoint(command: unknown): void;
   takeoverAdoptedWithOutput(command: unknown): Readonly<{ session: Readonly<StreamingSessionRecord>; output: Readonly<OutputCheckpointRecord> }>;
@@ -381,6 +397,7 @@ export function createInMemoryStreamingSessionStore(
     readHostLaunch(launchId: string) {
       const record = hostLaunches.get(launchId);
       if (record?.state === "handed_off") assertHostSessionIdentity(record, records.get(record.sessionId));
+      if (record) assertHostOutputCheckpointLink(record, outputCheckpoints.get(record.sessionId));
       return record ? cloneHostLaunchRecord(record) : undefined;
     },
     listHostLaunchIds() {
@@ -519,6 +536,7 @@ export function openSqliteStreamingSessionStore(
     readHostLaunch(launchId: string) {
       const record = readSqliteHostLaunch(database, integrityKey, launchId);
       if (record?.state === "handed_off") assertHostSessionIdentity(record, read(record.sessionId));
+      if (record) assertHostOutputCheckpointLink(record, readSqliteOutputCheckpoint(database, integrityKey, record.sessionId));
       return record;
     },
     listHostLaunchIds() {
@@ -1500,7 +1518,7 @@ const HOST_LAUNCH_REQUIRED_KEYS = new Set([
   "actor", "toolName", "callId", "ownerId", "fencingToken", "ownerExpiresAt", "state", "cleanupOwner", "history", "effects",
 ]);
 const HOST_LAUNCH_ALLOWED_KEYS = new Set([
-  ...HOST_LAUNCH_REQUIRED_KEYS, "leaseBinding", "backendBinding", "handshakeDigest",
+  ...HOST_LAUNCH_REQUIRED_KEYS, "leaseBinding", "backendBinding", "handshakeDigest", "channelAcquisitionStartedAt", "outputCheckpointCreatedAt",
 ]);
 
 export function parseHostLaunchRecord(value: unknown): Readonly<HostLaunchRecord> {
@@ -1544,6 +1562,8 @@ export function parseHostLaunchRecord(value: unknown): Readonly<HostLaunchRecord
   const leaseBinding = value.leaseBinding === undefined ? undefined : parseHostLeaseBinding(value.leaseBinding);
   const backendBinding = value.backendBinding === undefined ? undefined : parseBackendBindingValue(value.backendBinding);
   const handshakeDigest = value.handshakeDigest === undefined ? undefined : requiredDigest(value.handshakeDigest, "handshakeDigest");
+  const channelAcquisitionStartedAt = value.channelAcquisitionStartedAt === undefined ? undefined : requiredTimestamp(value.channelAcquisitionStartedAt, "channelAcquisitionStartedAt");
+  const outputCheckpointCreatedAt = value.outputCheckpointCreatedAt === undefined ? undefined : requiredTimestamp(value.outputCheckpointCreatedAt, "outputCheckpointCreatedAt");
   if ((value.state === "isolated" || value.state === "launching" || value.state === "bound" || value.state === "handshake_verified" || value.state === "handed_off") && !leaseBinding) {
     throw new StreamingSessionStoreError("invalid_state", "Host launch lease binding is required.");
   }
@@ -1553,7 +1573,9 @@ export function parseHostLaunchRecord(value: unknown): Readonly<HostLaunchRecord
   if ((value.state === "handshake_verified" || value.state === "handed_off") && !handshakeDigest) {
     throw new StreamingSessionStoreError("invalid_state", "Host launch handshake digest is required.");
   }
-  const parsed = deepFreeze(structuredClone({ ...value, revision, fencingToken, ownerExpiresAt, history, effects, ...(leaseBinding ? { leaseBinding } : {}), ...(backendBinding ? { backendBinding } : {}), ...(handshakeDigest ? { handshakeDigest } : {}) })) as unknown as Readonly<HostLaunchRecord>;
+  if (channelAcquisitionStartedAt && !backendBinding) throw new StreamingSessionStoreError("invalid_state", "Channel acquisition marker requires an exact backend binding.");
+  if (outputCheckpointCreatedAt && !channelAcquisitionStartedAt) throw new StreamingSessionStoreError("invalid_state", "Output checkpoint marker requires a channel acquisition marker.");
+  const parsed = deepFreeze(structuredClone({ ...value, revision, fencingToken, ownerExpiresAt, history, effects, ...(leaseBinding ? { leaseBinding } : {}), ...(backendBinding ? { backendBinding } : {}), ...(handshakeDigest ? { handshakeDigest } : {}), ...(channelAcquisitionStartedAt ? { channelAcquisitionStartedAt } : {}), ...(outputCheckpointCreatedAt ? { outputCheckpointCreatedAt } : {}) })) as unknown as Readonly<HostLaunchRecord>;
   assertHostLaunchLifecycle(parsed);
   return parsed;
 }
@@ -1567,12 +1589,17 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   ]);
   if (record.history[0]?.state !== "prepared") throw new StreamingSessionStoreError("invalid_state", "Host launch history must begin prepared.");
   const pendingTakeovers = [...(record.effects.find((effect) => effect.kind === "cleanup")?.takeovers ?? [])];
+  let markerRepeats = 0;
   for (let index = 1; index < record.history.length; index++) {
     const prior = record.history[index - 1]!; const entry = record.history[index]!;
     const takeoverIndex = prior.state === "cleanup_pending" && entry.state === "cleanup_pending" ? pendingTakeovers.findIndex((takeover) => takeover.at === entry.at) : -1;
-    if ((takeoverIndex < 0 && !(allowed.get(prior.state) ?? []).includes(entry.state)) || Date.parse(entry.at) < Date.parse(prior.at)) throw new StreamingSessionStoreError("invalid_state", "Host launch history transition is impossible.");
+    const markerRepeat = prior.state === "bound" && entry.state === "bound" &&
+      (entry.at === record.channelAcquisitionStartedAt || entry.at === record.outputCheckpointCreatedAt);
+    if (markerRepeat) markerRepeats += 1;
+    if ((takeoverIndex < 0 && !markerRepeat && !(allowed.get(prior.state) ?? []).includes(entry.state)) || Date.parse(entry.at) < Date.parse(prior.at)) throw new StreamingSessionStoreError("invalid_state", "Host launch history transition is impossible.");
     if (takeoverIndex >= 0) pendingTakeovers.splice(takeoverIndex, 1);
   }
+  if (markerRepeats !== Number(Boolean(record.channelAcquisitionStartedAt)) + Number(Boolean(record.outputCheckpointCreatedAt))) throw new StreamingSessionStoreError("invalid_state", "Host launch durable marker history is incomplete.");
   const byId = new Map<string, HostLaunchEffect>();
   for (const effect of record.effects) {
     if (byId.has(effect.effectId)) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect ids must be unique.");
@@ -1603,6 +1630,7 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   if (cleanup && record.state === "cleanup_pending" && cleanup.status !== "pending") throw new StreamingSessionStoreError("invalid_effect", "Cleanup pending state/effect mismatch.");
   if (cleanup && record.state === "cleanup_blocked" && cleanup.status !== "blocked") throw new StreamingSessionStoreError("invalid_effect", "Cleanup blocked state/effect mismatch.");
   if (cleanup && record.state === "released" && cleanup.status !== "acknowledged") throw new StreamingSessionStoreError("invalid_effect", "Released cleanup state/effect mismatch.");
+  if (cleanup && !sameCleanupDefinitions(cleanup.resources ?? [], derivedHostCleanupDefinitions(record))) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource facts do not equal the kernel-derived obligation set.");
   if (cleanup?.resources?.some((resource) => resource.status === "pending") && record.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_effect", "Pending cleanup resources require pending cleanup ownership.");
   if (record.state === "cleanup_blocked" && cleanup?.resources?.every((resource) => resource.status === "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Blocked cleanup must retain an unresolved resource.");
   if (record.state === "released" && cleanup?.resources?.some((resource) => resource.status !== "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Released cleanup contains an unresolved resource.");
@@ -1760,6 +1788,7 @@ function createHostLaunchWriter(
       const launchId = requiredText(input.launchId, "launchId");
       const current = records.get(launchId);
       if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+      assertHostOutputCheckpointLink(current, outputCheckpoints.get(current.sessionId));
       const next = applyHostLaunchCommand(current, input);
       if (next !== current) records.set(launchId, next);
       return cloneHostLaunchRecord(next);
@@ -1790,6 +1819,7 @@ function createHostLaunchWriter(
     },
     claimOutputCheckpoint(record: unknown) {
       const parsed = parseOutputCheckpointRecord(record);
+      if ([...records.values()].some((launch) => launch.sessionId === parsed.sessionId && launch.state !== "handed_off" && launch.state !== "released")) throw new StreamingSessionStoreError("invalid_state", "A pre-adoption output checkpoint must be claimed atomically with its host obligation marker.");
       const existing = outputCheckpoints.get(parsed.sessionId);
       if (existing) {
         if (canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Output checkpoint identity conflicts.");
@@ -1798,6 +1828,21 @@ function createHostLaunchWriter(
       if (outputCheckpoints.size >= outputCapacity) throw new StreamingSessionStoreError("capacity_exceeded", "Output checkpoint record capacity is full.");
       outputCheckpoints.set(parsed.sessionId, parsed);
       return Object.freeze({ record: cloneOutputCheckpoint(parsed), won: true });
+    },
+    claimHostOutputCheckpoint(command: unknown) {
+      const input = commandRecord(command, "host output checkpoint claim");
+      assertExactKeys(input, new Set(["record", "launchId", "ownerId", "fencingToken", "expectedRevision", "at"]), "host output checkpoint claim");
+      const parsed = parseOutputCheckpointRecord(input.record); const launchId = requiredText(input.launchId, "launchId");
+      const current = records.get(launchId); if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+      const existing = outputCheckpoints.get(parsed.sessionId);
+      if (existing || current.outputCheckpointCreatedAt) {
+        if (!existing || !current.outputCheckpointCreatedAt || canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Host output checkpoint identity conflicts.");
+        return Object.freeze({ host: cloneHostLaunchRecord(current), record: cloneOutputCheckpoint(existing), won: false });
+      }
+      if (outputCheckpoints.size >= outputCapacity) throw new StreamingSessionStoreError("capacity_exceeded", "Output checkpoint record capacity is full.");
+      const host = markHostOutputCheckpoint(current, input, parsed);
+      outputCheckpoints.set(parsed.sessionId, parsed); records.set(launchId, host);
+      return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(parsed), won: true });
     },
     applyOutputCheckpoint(command: unknown) {
       const input = commandRecord(command, "output checkpoint command");
@@ -1860,6 +1905,7 @@ function createSqliteHostLaunchWriter(
       const launchId = requiredText(input.launchId, "launchId");
       const current = readSqliteHostLaunch(database, integrityKey, launchId);
       if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+      assertHostOutputCheckpointLink(current, readSqliteOutputCheckpoint(database, integrityKey, current.sessionId));
       const next = applyHostLaunchCommand(current, input);
       if (next === current) return cloneHostLaunchRecord(current);
       const json = JSON.stringify(next);
@@ -1916,6 +1962,8 @@ function createSqliteHostLaunchWriter(
     claimOutputCheckpoint(record: unknown) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
       const parsed = parseOutputCheckpointRecord(record);
+      const activeHostRows = database.prepare("SELECT launch_id FROM streaming_host_launches").all() as Array<{ launch_id: string }>;
+      if (activeHostRows.map((row) => readSqliteHostLaunch(database, integrityKey, row.launch_id)!).some((launch) => launch.sessionId === parsed.sessionId && launch.state !== "handed_off" && launch.state !== "released")) throw new StreamingSessionStoreError("invalid_state", "A pre-adoption output checkpoint must be claimed atomically with its host obligation marker.");
       const json = JSON.stringify(parsed);
       const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
       const result = database.prepare("INSERT OR IGNORE INTO streaming_output_checkpoints (session_id, record_json, integrity, revision) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM streaming_output_checkpoints) < ?").run(parsed.sessionId, json, integrity, parsed.revision, outputCapacity) as { changes?: number };
@@ -1924,6 +1972,29 @@ function createSqliteHostLaunchWriter(
       if (!existing) throw new StreamingSessionStoreError("capacity_exceeded", "Output checkpoint record capacity is full.");
       if (canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Output checkpoint identity conflicts.");
       return Object.freeze({ record: cloneOutputCheckpoint(existing), won: false });
+    },
+    claimHostOutputCheckpoint(command: unknown) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      const input = commandRecord(command, "host output checkpoint claim");
+      assertExactKeys(input, new Set(["record", "launchId", "ownerId", "fencingToken", "expectedRevision", "at"]), "host output checkpoint claim");
+      const parsed = parseOutputCheckpointRecord(input.record); const launchId = requiredText(input.launchId, "launchId");
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const current = readSqliteHostLaunch(database, integrityKey, launchId); if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+        const existing = readSqliteOutputCheckpoint(database, integrityKey, parsed.sessionId);
+        if (existing || current.outputCheckpointCreatedAt) {
+          if (!existing || !current.outputCheckpointCreatedAt || canonicalJson(existing) !== canonicalJson(parsed)) throw new StreamingSessionStoreError("identity_conflict", "Host output checkpoint identity conflicts.");
+          database.exec("COMMIT"); return Object.freeze({ host: cloneHostLaunchRecord(current), record: cloneOutputCheckpoint(existing), won: false });
+        }
+        const host = markHostOutputCheckpoint(current, input, parsed);
+        const outputJson = JSON.stringify(parsed); const outputIntegrity = createHmac("sha256", integrityKey).update(outputJson).digest("hex");
+        const inserted = database.prepare("INSERT INTO streaming_output_checkpoints (session_id, record_json, integrity, revision) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM streaming_output_checkpoints) < ?").run(parsed.sessionId, outputJson, outputIntegrity, parsed.revision, outputCapacity) as { changes?: number };
+        if (inserted.changes !== 1) throw new StreamingSessionStoreError("capacity_exceeded", "Output checkpoint record capacity is full.");
+        const hostJson = JSON.stringify(host); const hostIntegrity = createHmac("sha256", integrityKey).update(hostJson).digest("hex");
+        const updated = database.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ?, revision = ? WHERE launch_id = ? AND revision = ?").run(hostJson, hostIntegrity, host.revision, launchId, current.revision) as { changes?: number };
+        if (updated.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Host launch revision is stale.");
+        database.exec("COMMIT"); return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(parsed), won: true });
+      } catch (error) { try { database.exec("ROLLBACK"); } catch {} throw error; }
     },
     applyOutputCheckpoint(command: unknown) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
@@ -1977,9 +2048,24 @@ function readSqliteHostLaunch(database: DatabaseSync, integrityKey: Uint8Array, 
   return parsed;
 }
 
+function markHostOutputCheckpoint(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>, checkpoint: Readonly<OutputCheckpointRecord>): Readonly<HostLaunchRecord> {
+  if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Host launch owner/fence is stale.");
+  if (requiredNonNegativeInteger(input.expectedRevision, "expectedRevision") !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Host launch revision is stale.");
+  const at = requiredTimestamp(input.at, "at");
+  if (Date.parse(at) >= Date.parse(current.ownerExpiresAt)) throw new StreamingSessionStoreError("lease_expired", "Host launch owner lease is expired.");
+  if (current.state !== "bound" || !current.channelAcquisitionStartedAt || current.outputCheckpointCreatedAt) throw new StreamingSessionStoreError("invalid_state", "Host output checkpoint requires an exact channel acquisition marker.");
+  if (checkpoint.sessionId !== current.sessionId) throw new StreamingSessionStoreError("identity_conflict", "Output checkpoint session differs from host launch.");
+  return parseHostLaunchRecord({ ...current, revision: current.revision + 1, outputCheckpointCreatedAt: at, history: [...current.history, { state: "bound", at }] });
+}
+
+function assertHostOutputCheckpointLink(record: Readonly<HostLaunchRecord>, checkpoint: Readonly<OutputCheckpointRecord> | undefined): void {
+  if (checkpoint && !record.outputCheckpointCreatedAt) throw new StreamingSessionStoreError("invalid_effect", "Output checkpoint exists without its authenticated host obligation marker.");
+  if (record.outputCheckpointCreatedAt && !checkpoint && !["cleanup_pending", "cleanup_blocked", "released", "handed_off"].includes(record.state)) throw new StreamingSessionStoreError("invalid_effect", "Authenticated host output obligation is missing its checkpoint before cleanup.");
+}
+
 function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>): Readonly<HostLaunchRecord> {
   assertNoForbiddenDurableValues(input);
-  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], bind_cleanup_isolation: ["lease", "resources"], begin_launch: [], bind_backend: ["backendBinding"], verify_handshake: ["handshakeDigest"], begin_cleanup: ["resources"], settle_cleanup_blocked: ["blocker", "results"], settle_cleanup_cleaned: ["results"], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
+  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], bind_cleanup_isolation: ["lease", "resources"], begin_launch: [], bind_backend: ["backendBinding"], begin_channel: [], verify_handshake: ["handshakeDigest"], begin_cleanup: ["resources"], settle_cleanup_blocked: ["blocker", "results"], settle_cleanup_cleaned: ["results"], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
   assertExactKeys(input, new Set(["type", "launchId", "ownerId", "fencingToken", "expectedRevision", "at", ...(extraKeys[String(input.type)] ?? [])]), "host launch command");
   const ownerId = requiredText(input.ownerId, "ownerId");
   const fence = requiredPositiveInteger(input.fencingToken, "fencingToken");
@@ -1996,6 +2082,8 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     fencingToken?: number;
     ownerExpiresAt?: string;
     cleanupOwner?: HostLaunchRecord["cleanupOwner"];
+    channelAcquisitionStartedAt?: string;
+    outputCheckpointCreatedAt?: string;
   } = {};
   const effects = current.effects.map((effect) => ({ ...effect }));
   if (input.type === "bind_isolation") {
@@ -2008,8 +2096,9 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     state = "cleanup_pending"; additions.leaseBinding = parseHostLeaseBinding(input.lease);
     acknowledgeHostEffect(effects, `isolate:${current.launchId}`, at);
     const index = effects.findIndex((effect) => effect.kind === "cleanup"); if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Exact cleanup effect is missing.");
-    const effect = effects[index]!; const definitions = parseHostCleanupResourceDefinitions(input.resources);
-    effects[index] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined, resources: beginCleanupResources(effect.resources ?? [], definitions, ownerId, fence) };
+    const effect = effects[index]!; const derived = derivedHostCleanupDefinitions({ ...current, leaseBinding: additions.leaseBinding });
+    if (input.resources !== undefined && !sameCleanupDefinitions(parseHostCleanupResourceDefinitions(input.resources), derived)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource assertion does not equal kernel-derived obligations.");
+    effects[index] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined, resources: beginCleanupResources(effect.resources ?? [], derived, ownerId, fence) };
   } else if (input.type === "begin_launch") {
     state = "launching";
     ensureTransition(current.state, "isolated", input, current, additions);
@@ -2019,6 +2108,9 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     additions.backendBinding = parseBackendBindingValue(input.backendBinding);
     ensureTransition(current.state, "launching", input, current, additions);
     acknowledgeHostEffect(effects, `launch:${current.launchId}`, at);
+  } else if (input.type === "begin_channel") {
+    if (current.state !== "bound" || current.channelAcquisitionStartedAt) throw new StreamingSessionStoreError("invalid_state", "Channel acquisition may be marked exactly once from a bound launch.");
+    state = "bound"; additions.channelAcquisitionStartedAt = at;
   } else if (input.type === "verify_handshake") {
     state = "handshake_verified";
     additions.handshakeDigest = requiredDigest(input.handshakeDigest, "handshakeDigest");
@@ -2028,11 +2120,12 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     if (current.state === "handed_off" || current.state === "released") throw new StreamingSessionStoreError("invalid_state", "Inert host launch cannot begin cleanup.");
     state = "cleanup_pending";
     const existing = effects.findIndex((effect) => effect.kind === "cleanup");
-    const definitions = input.resources === undefined ? [] : parseHostCleanupResourceDefinitions(input.resources);
+    const definitions = derivedHostCleanupDefinitions(current);
+    if (input.resources !== undefined && !sameCleanupDefinitions(parseHostCleanupResourceDefinitions(input.resources), definitions)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource assertion does not equal kernel-derived obligations.");
     if (existing >= 0) {
       const effect = effects[existing]!;
       effects[existing] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined, resources: beginCleanupResources(effect.resources ?? [], definitions, ownerId, fence) };
-    } else effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId, fencingToken: fence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [], ...(definitions.length ? { resources: beginCleanupResources([], definitions, ownerId, fence) } : {}) });
+    } else effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId, fencingToken: fence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [], resources: beginCleanupResources([], definitions, ownerId, fence) });
   } else if (input.type === "settle_cleanup_blocked") {
     if (current.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_state", "Cleanup is not pending.");
     state = "cleanup_blocked";
@@ -2041,7 +2134,7 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     const effect = effects[index]!;
     const resources = settleCleanupResources(effect.resources ?? [], input.results);
     if (resources.length && resources.every((resource) => resource.status === "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Blocked cleanup has no unresolved resource.");
-    effects[index] = { ...effect, status: "blocked", blockedAt: at, blocker: requiredText(input.blocker, "cleanup blocker"), ...(resources.length ? { resources } : {}) };
+    effects[index] = { ...effect, status: "blocked", blockedAt: at, blocker: parseHostCleanupFailure(input.blocker), resources };
   } else if (input.type === "settle_cleanup_cleaned") {
     if (current.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_state", "Cleanup is not pending.");
     state = "released"; additions.ownerId = "none"; additions.cleanupOwner = "none";
@@ -2050,7 +2143,7 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     const effect = effects[index]!;
     const resources = settleCleanupResources(effect.resources ?? [], input.results);
     if (resources.some((resource) => resource.status !== "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Cleanup cannot release with unresolved resources.");
-    effects[index] = { ...effect, status: "acknowledged", acknowledgedAt: at, ...(resources.length ? { resources } : {}) };
+    effects[index] = { ...effect, status: "acknowledged", acknowledgedAt: at, resources };
   } else if (input.type === "takeover_cleanup") {
     if (current.state === "handed_off" || current.state === "released") throw new StreamingSessionStoreError("invalid_state", "Inert host ownership cannot be taken over.");
     if (Date.parse(at) < Date.parse(current.ownerExpiresAt)) throw new StreamingSessionStoreError("lease_not_expired", "Host cleanup owner has not expired.");
@@ -2060,7 +2153,7 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     state = "cleanup_pending"; additions.ownerId = newOwnerId; additions.fencingToken = newFence; additions.ownerExpiresAt = requiredTimestamp(input.ownerExpiresAt, "ownerExpiresAt");
     if (Date.parse(additions.ownerExpiresAt) <= Date.parse(at)) throw new StreamingSessionStoreError("lease_expired", "New host cleanup ownership lease is expired.");
     const index = effects.findIndex((effect) => effect.kind === "cleanup");
-    if (index < 0) effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId: newOwnerId, fencingToken: newFence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [{ fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }] });
+    if (index < 0) effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId: newOwnerId, fencingToken: newFence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [{ fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }], resources: beginCleanupResources([], derivedHostCleanupDefinitions(current), newOwnerId, newFence) });
     else {
       const effect = effects[index]!;
       effects[index] = { ...effect, status: "pending", ownerId: newOwnerId, fencingToken: newFence, blocker: undefined, blockedAt: undefined, takeovers: [...(effect.takeovers ?? []), { fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }], ...(effect.resources ? { resources: effect.resources.map((resource) => resource.status === "succeeded" ? resource : { ...resource, status: "pending" as const, ownerId: newOwnerId, fencingToken: newFence, attempts: resource.attempts + 1, failure: undefined }) } : {}) };
@@ -2128,7 +2221,7 @@ function parseHostLaunchEffect(value: unknown): HostLaunchEffect {
   let parsed = { ...entry, fencingToken: requiredPositiveInteger(entry.fencingToken, "effect fence"), createdAt: requiredTimestamp(entry.createdAt, "effect createdAt") } as unknown as HostLaunchEffect;
   if (entry.acknowledgedAt !== undefined) requiredTimestamp(entry.acknowledgedAt, "acknowledgedAt");
   if (entry.blockedAt !== undefined) requiredTimestamp(entry.blockedAt, "blockedAt");
-  if (entry.blocker !== undefined) requiredText(entry.blocker, "blocker");
+  if (entry.blocker !== undefined) parseHostCleanupFailure(entry.blocker);
   if (entry.kind === "cleanup") {
     let priorOwner = requiredText(entry.originOwnerId, "originOwnerId"); let priorFence = requiredPositiveInteger(entry.originFencingToken, "originFencingToken");
     if (!Array.isArray(entry.takeovers) || entry.takeovers.length > 32) throw new StreamingSessionStoreError("invalid_effect", "Cleanup takeover provenance is invalid.");
@@ -2172,10 +2265,32 @@ function parseHostCleanupResourceFacts(value: unknown, effect: HostLaunchEffect)
     if (!(["pending", "succeeded", "failed"] as const).includes(status as "pending")) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource status is invalid.");
     const ownerId = requiredText(item.ownerId, "cleanup resource owner"); const fencingToken = requiredPositiveInteger(item.fencingToken, "cleanup resource fence");
     if (!ownership.has(`${ownerId}\0${fencingToken}`)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource fact has unauthenticated ownership.");
-    const failure = item.failure === undefined ? undefined : requiredText(item.failure, "cleanup resource failure");
+    const failure = item.failure === undefined ? undefined : parseHostCleanupFailure(item.failure);
     if ((status === "failed") !== Boolean(failure)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource failure evidence is invalid.");
+    if (status !== "succeeded" && (ownerId !== effect.ownerId || fencingToken !== effect.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Unresolved cleanup resource is not fenced to the current cleanup owner.");
     return Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), status: status as HostCleanupResourceFact["status"], ownerId, fencingToken, attempts: requiredPositiveInteger(item.attempts, "cleanup resource attempts"), ...(failure ? { failure } : {}) });
   }));
+}
+
+function parseHostCleanupFailure(value: unknown): HostCleanupFailure {
+  assertExactKeys(value, new Set(["code", "message"]), "cleanup failure");
+  const item = value as Record<string, unknown>; const code = item.code as HostCleanupFailureCode;
+  if (!(code in HOST_CLEANUP_FAILURE_MESSAGES) || item.message !== HOST_CLEANUP_FAILURE_MESSAGES[code]) throw new StreamingSessionStoreError("invalid_effect", "Cleanup failure code/message is invalid.");
+  return Object.freeze({ code, message: HOST_CLEANUP_FAILURE_MESSAGES[code] });
+}
+
+function derivedHostCleanupDefinitions(record: Pick<HostLaunchRecord, "launchId" | "sessionId" | "leaseBinding" | "backendBinding" | "channelAcquisitionStartedAt" | "outputCheckpointCreatedAt">): ReadonlyArray<Readonly<{ resource: HostCleanupResourceKind; identity: string }>> {
+  const definitions: Array<Readonly<{ resource: HostCleanupResourceKind; identity: string }>> = [{ resource: "host", identity: `host:${record.launchId}` }];
+  if (record.leaseBinding) definitions.push({ resource: "isolation_lease", identity: `lease:${createHash("sha256").update(JSON.stringify(record.leaseBinding)).digest("hex")}` });
+  if (record.channelAcquisitionStartedAt && record.backendBinding) definitions.push({ resource: "channel", identity: `channel:${createHash("sha256").update(JSON.stringify({ sessionId: record.sessionId, binding: record.backendBinding })).digest("hex")}` });
+  if (record.outputCheckpointCreatedAt) definitions.push({ resource: "output_checkpoint", identity: `checkpoint:${record.sessionId}` });
+  return Object.freeze(definitions);
+}
+
+function sameCleanupDefinitions(actual: readonly Pick<HostCleanupResourceFact, "resource" | "identity">[], expected: ReadonlyArray<Readonly<{ resource: HostCleanupResourceKind; identity: string }>>): boolean {
+  if (actual.length !== expected.length) return false;
+  const byKind = new Map(actual.map((entry) => [entry.resource, entry.identity]));
+  return byKind.size === expected.length && expected.every((entry) => byKind.get(entry.resource) === entry.identity);
 }
 
 function beginCleanupResources(existing: readonly HostCleanupResourceFact[], definitions: ReadonlyArray<Readonly<{ resource: HostCleanupResourceKind; identity: string }>>, ownerId: string, fencingToken: number): readonly HostCleanupResourceFact[] {
@@ -2192,24 +2307,20 @@ function beginCleanupResources(existing: readonly HostCleanupResourceFact[], def
 }
 
 function settleCleanupResources(existing: readonly HostCleanupResourceFact[], input: unknown): readonly HostCleanupResourceFact[] {
-  if (!existing.length) {
-    if (input !== undefined && (!Array.isArray(input) || input.length)) throw new StreamingSessionStoreError("invalid_effect", "Legacy cleanup cannot accept resource results.");
-    return existing;
-  }
   if (!Array.isArray(input)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource results are required.");
-  const results = new Map<HostCleanupResourceKind, Readonly<{ resource: HostCleanupResourceKind; identity: string; status: "succeeded" | "failed"; failure?: string }>>();
+  const results = new Map<HostCleanupResourceKind, Readonly<{ resource: HostCleanupResourceKind; identity: string; ownerId: string; fencingToken: number; status: "succeeded" | "failed"; failure?: HostCleanupFailure }>>();
   for (const raw of input) {
-    assertExactKeys(raw, new Set(["resource", "identity", "status", "failure"]), "cleanup resource result");
+    assertExactKeys(raw, new Set(["resource", "identity", "ownerId", "fencingToken", "status", "failure"]), "cleanup resource result");
     const item = raw as Record<string, unknown>;
     if (!isHostCleanupResourceKind(item.resource) || results.has(item.resource) || !["succeeded", "failed"].includes(item.status as string)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is duplicate or invalid.");
-    const failure = item.failure === undefined ? undefined : requiredText(item.failure, "cleanup resource failure");
+    const failure = item.failure === undefined ? undefined : parseHostCleanupFailure(item.failure);
     if ((item.status === "failed") !== Boolean(failure)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result failure evidence is invalid.");
-    results.set(item.resource, Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), status: item.status, ...(failure ? { failure } : {}) }) as Readonly<{ resource: HostCleanupResourceKind; identity: string; status: "succeeded" | "failed"; failure?: string }>);
+    results.set(item.resource, Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), ownerId: requiredText(item.ownerId, "cleanup result owner"), fencingToken: requiredPositiveInteger(item.fencingToken, "cleanup result fence"), status: item.status, ...(failure ? { failure } : {}) }) as Readonly<{ resource: HostCleanupResourceKind; identity: string; ownerId: string; fencingToken: number; status: "succeeded" | "failed"; failure?: HostCleanupFailure }>);
   }
   const settled = existing.map((fact) => {
     if (fact.status === "succeeded") return fact;
     const result = results.get(fact.resource);
-    if (!result || result.identity !== fact.identity) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is missing or mismatched.");
+    if (!result || result.identity !== fact.identity || result.ownerId !== fact.ownerId || result.fencingToken !== fact.fencingToken) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is missing, mismatched, or stale.");
     results.delete(fact.resource);
     return Object.freeze({ ...fact, status: result.status, ...(result.failure ? { failure: result.failure } : { failure: undefined }) });
   });
