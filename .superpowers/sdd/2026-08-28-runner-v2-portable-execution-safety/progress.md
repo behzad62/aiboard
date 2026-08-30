@@ -207,6 +207,19 @@ overlap is expected.
   host schema and forgeable provider error-provenance paths recorded in
   `task-8.0b1-exceptional-round-6-review.md`. Packet 8.0B2 remains locked until
   a fresh independent re-review and controller verification are both green.
+- Task 8.0B1 repair round 7 implementation (`392804c4`) closed the active host
+  generation ambiguity and fresh foreign-error forgery path. Reported gates
+  were B1 88/88, 8.0A 89/89, Task 7 plus Task 3 173/173, typecheck, targeted
+  lint, diff, mutations, scope, and residue green.
+- Task 8.0B1 round 7 re-review: 1 addressed, 1 Important open. Host schema
+  generation/refusal is independently approved. Error provenance remains open
+  because a previously caller-exposed genuine branded error is mutable and can
+  be replayed by a provider; WeakSet identity survives mutation and the normal
+  catch rethrows the same object. The controller reproduced `same:true` with
+  `credential=B1_R7_REPLAY` in both message and cause. See
+  `task-8.0b1-round-7-review.md`. This is the same authorized R7.2 secret-boundary
+  requirement, so it enters the automatic technically-determinate repair loop;
+  B2 remains locked.
 
 ## Breaker rulings
 
