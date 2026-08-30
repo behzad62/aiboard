@@ -468,3 +468,90 @@ re-review evidence changed. No adapter, CLI/factory, family, process/shell/env
 path, database, OS branch, or Node policy changed. The complete fix diff was
 self-reviewed; no timer/listener/process/spill or mutation residue remains.
 This is evidence for independent re-review, not approval or a B2 unlock.
+
+## Governed fix round 5 — resource-complete cleanup ownership
+
+Base: `55892af3`. Authority: `task-8.0b1-rereview-4.md`. This final governed
+repair is limited to the remaining cleanup-owner/retry defect. B2 remains
+locked pending independent approval.
+
+### Root cause and correction
+
+The prior retry queue retained only a late channel capability. Checkpoint
+deletion, host reconciliation and isolation release were one-shot local
+promises, while a successful channel retry could bypass the durable blocked
+guard. Consequently checkpoint-only, lease-only and combined failures could be
+falsely released.
+
+The host cleanup effect now contains a strict bounded resource ledger for
+`channel`, `output_checkpoint`, `host` and `isolation_lease`. Each fact stores a
+digest-safe exact identity, authenticated cleanup owner/fence, attempt count and
+`pending`/`succeeded`/`failed` result. Begin, blocked settlement, takeover and
+clean settlement validate and preserve these facts. Release is structurally
+refused until every required fact is succeeded. Takeover re-fences only
+unresolved duties; successful facts retain their original proof and are never
+re-executed.
+
+The fake runtime now derives recoverable duties from the durable host lease,
+backend binding and output checkpoint. It retries only unresolved facts and
+keeps idempotent in-memory channel/resource operations private. A missing
+channel capability after restart fails closed while the journal remains owned.
+Late isolation acquisition is journaled through an authenticated cleanup-only
+binding transition before release. Concurrent revoker, cancellation and
+recovery attempts share exact per-launch/per-resource promises, preventing
+double detach, release or host cleanup. Durable failure text is bounded and
+contains no payload or capability.
+
+### Direct RED/GREEN and mutation proof
+
+The direct command was:
+
+`npx tsx --test --test-name-pattern="checkpoint-only|lease-only|combined cleanup" runner-v2/test/streaming-process-session-runtime.test.ts`
+
+Before production repair it was RED 0/3: checkpoint deletion and lease release
+were each called once instead of being retried, and the combined case was
+falsely `released` instead of `cleanup_blocked`. After repair it is GREEN 3/3.
+The combined case proves a failed channel/checkpoint/lease attempt, a partial
+retry that remains blocked, an expired-owner second recovery in a newly created
+runtime, final release only after the checkpoint succeeds, and no repeated
+successful channel or lease cleanup. The checkpoint-only and lease-only cases
+prove their exact durable failed fact is surfaced and retried.
+
+The prior late-cleanup preservation command is GREEN:
+
+`npx tsx --test --test-name-pattern="late channel after|failed late channel|successful retry of failed|noncooperative host" runner-v2/test/streaming-process-session-runtime.test.ts`
+
+The new release guard was mutation-proven by inverting failed-resource
+classification. The exact combined test became RED 0/1 because durable cleanup
+failure evidence was no longer surfaced. The mutation was reverted; the exact
+same command returned GREEN 1/1. No mutation remains.
+
+### Round-5 final validation
+
+- B1 focused (`staged-launch-kernel`, `streaming-output-checkpoint`,
+  `streaming-output-v2`, `streaming-process-session-runtime`): 70/70 GREEN,
+  zero skips/cancellations/failures.
+- Runtime-only final rerun after the last typing repair: 32/32 GREEN.
+- Task 8.0A: 89/89 GREEN, zero skips/cancellations/failures.
+- Task 7 plus Task 3 spool: 173/173 GREEN, zero
+  skips/cancellations/failures.
+- `npm run typecheck:runner-v2`: GREEN.
+- Targeted ESLint over both changed source files and the changed test: GREEN.
+- `git diff --check 55892af3`: GREEN (line-ending notices only).
+
+### Scope, residue and handoff
+
+The production diff is limited to the fake streaming runtime and its existing
+single durable streaming kernel; tests are limited to the focused runtime file.
+No adapter, CLI/factory, family, raw spawn/kill/shell/environment path, second
+database, OS branch or Node policy changed. Static scanning found no spawn,
+exec, process kill, taskkill, shell, ambient environment or exact Node pin in
+the changed surfaces.
+
+No B1 host-journal, adoption, output-checkpoint, crash-snapshot or tee-spool
+temporary root remains. The global temp directory contains older Task 7
+fault-fixture roots last written before this round; they were not created,
+modified or deleted by this repair. This report and the supplied re-review-4
+file are force-added with the implementation commit. This is implementation
+evidence only; independent final re-review remains mandatory and B2 is not
+unlocked here.

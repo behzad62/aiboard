@@ -357,9 +357,90 @@ test("successful retry of failed cancelled late detach releases once and never d
   assert.equal(lateDetach, 2); assert.deepEqual(after.lateCleanupFailures, []);
 });
 
-async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blocked" | "outcome_unknown" = "outcome_unknown", handshakeVerify?: () => Promise<string>, retainedWindow: readonly import("../src/streaming-output-controller.js").StreamingOutputMetadata[] = [], replayCapacityChunks = 4, revokeAt?: "isolate" | "launch" | "channel" | "output" | "handshake", reconcileOverride?: () => Promise<"cleaned" | "blocked" | "outcome_unknown">, onPhase?: (phase: string) => void) {
+test("checkpoint-only cleanup failure stays durably blocked and retries the checkpoint before release", { timeout: 1_000 }, async () => {
+  let checkpointDeletes = 0; let resolveHandshake!: (digest: string) => void;
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, {
+    deleteOutputCheckpoint: () => { checkpointDeletes++; if (checkpointDeletes === 1) throw new Error("checkpoint cleanup failed once"); },
+  });
+  fixture.setHandshake(async () => await new Promise<string>((resolve) => { resolveHandshake = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening); await waitUntil(() => fixture.kernel.store.readHostLaunch("launch-1")?.state === "cleanup_blocked");
+  assert.equal(fixture.kernel.store.readOutputCheckpoint("stream-1") !== undefined, true);
+  const initiallyBlocked = fixture.kernel.store.readHostLaunch("launch-1")!; const initialFacts = initiallyBlocked.effects.find((effect) => effect.kind === "cleanup")?.resources ?? [];
+  assert.equal(initialFacts.find((fact) => fact.resource === "output_checkpoint")?.status, "failed");
+  assert.ok(initialFacts.every((fact) => fact.ownerId === initiallyBlocked.ownerId && fact.fencingToken === initiallyBlocked.fencingToken));
+  resolveHandshake("b".repeat(64)); await new Promise((resolve) => setImmediate(resolve));
+  const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(checkpointDeletes, 2, "recovery must retry the unresolved checkpoint cleanup");
+  assert.equal(fixture.kernel.store.readOutputCheckpoint("stream-1"), undefined);
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
+  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /checkpoint cleanup failed once/);
+});
+
+test("lease-only cleanup failure stays durably blocked and never releases without a successful lease retry", { timeout: 1_000 }, async () => {
+  let leaseReleases = 0; let resolveHandshake!: (digest: string) => void;
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, {
+    releaseLease: async () => { leaseReleases++; if (leaseReleases === 1) throw new Error("lease cleanup failed once"); },
+  });
+  fixture.setHandshake(async () => await new Promise<string>((resolve) => { resolveHandshake = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening); await waitUntil(() => fixture.kernel.store.readHostLaunch("launch-1")?.state === "cleanup_blocked");
+  resolveHandshake("b".repeat(64)); await new Promise((resolve) => setImmediate(resolve));
+  const retry = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(leaseReleases, 2, "recovery must retry the exact durable lease");
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
+  assert.match(retry.lateCleanupFailures[0]?.message ?? "", /lease cleanup failed once/);
+});
+
+test("combined cleanup retries only unresolved resources, remains blocked after a partial retry, and survives owner expiry", { timeout: 2_000 }, async () => {
+  let checkpointDeletes = 0; let leaseReleases = 0; let channelDetaches = 0; let nowValue = new Date(now); let resolveHandshake!: (digest: string) => void;
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, {
+    clock: () => new Date(nowValue),
+    deleteOutputCheckpoint: () => { checkpointDeletes++; if (checkpointDeletes < 4) throw new Error(`checkpoint cleanup failed ${checkpointDeletes}`); },
+    releaseLease: async () => { leaseReleases++; if (leaseReleases === 1) throw new Error("lease cleanup failed once"); },
+  });
+  fixture.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined, detach: async () => { channelDetaches++; if (channelDetaches === 1) throw new Error("channel cleanup failed once"); } }));
+  fixture.setHandshake(async () => await new Promise<string>((resolve) => { resolveHandshake = resolve; }));
+  const abort = new AbortController(); const opening = fixture.runtime.open({ ...fixture.request, signal: abort.signal }); setTimeout(() => abort.abort(), 10);
+  await assert.rejects(opening); await waitUntil(() => fixture.kernel.store.readHostLaunch("launch-1")?.state === "cleanup_blocked");
+  resolveHandshake("b".repeat(64)); await new Promise((resolve) => setImmediate(resolve));
+
+  const partial = await fixture.runtime.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "cleanup_blocked", "checkpoint failure must prevent false release");
+  assert.equal(channelDetaches, 2); assert.equal(leaseReleases, 2); assert.equal(checkpointDeletes, 3);
+  assert.match(partial.lateCleanupFailures[0]?.message ?? "", /cleanup failed/);
+  const partialFacts = fixture.kernel.store.readHostLaunch("launch-1")!.effects.find((effect) => effect.kind === "cleanup")?.resources ?? [];
+  assert.equal(partialFacts.find((fact) => fact.resource === "output_checkpoint")?.status, "failed");
+  assert.equal(partialFacts.find((fact) => fact.resource === "channel")?.status, "succeeded");
+  assert.equal(partialFacts.find((fact) => fact.resource === "isolation_lease")?.status, "succeeded");
+
+  nowValue = new Date("2026-08-30T00:02:00.000Z");
+  const restarted = fixture.createRecoveryRuntime();
+  const complete = await restarted.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(fixture.kernel.store.readHostLaunch("launch-1")?.state, "released");
+  assert.equal(checkpointDeletes, 4);
+  assert.equal(channelDetaches, 2, "succeeded channel cleanup must not repeat after restart");
+  assert.equal(leaseReleases, 2, "succeeded lease cleanup must not repeat after restart");
+  assert.ok(fixture.kernel.store.readHostLaunch("launch-1")!.effects.find((effect) => effect.kind === "cleanup")?.resources?.every((fact) => fact.status === "succeeded"));
+  assert.match(complete.lateCleanupFailures[0]?.message ?? "", /checkpoint cleanup failed 3/);
+  await restarted.reconcileStartup({ maxRecords: 4, timeoutMs: 100 });
+  assert.equal(checkpointDeletes, 4); assert.equal(channelDetaches, 2); assert.equal(leaseReleases, 2);
+});
+
+async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blocked" | "outcome_unknown" = "outcome_unknown", handshakeVerify?: () => Promise<string>, retainedWindow: readonly import("../src/streaming-output-controller.js").StreamingOutputMetadata[] = [], replayCapacityChunks = 4, revokeAt?: "isolate" | "launch" | "channel" | "output" | "handshake", reconcileOverride?: () => Promise<"cleaned" | "blocked" | "outcome_unknown">, onPhase?: (phase: string) => void, cleanupFaults?: { readonly clock?: () => Date; readonly releaseLease?: () => Promise<void>; readonly deleteOutputCheckpoint?: () => void }) {
   const grants = createExecutionGrantAuthority({ clock: () => new Date(now) });
-  const kernel = createInMemoryStreamingSessionStore();
+  const baseKernel = createInMemoryStreamingSessionStore();
+  const kernelWriterSymbol = Object.getOwnPropertySymbols(baseKernel).find((symbol) => typeof Object.getOwnPropertyDescriptor(baseKernel, symbol)?.value?.deleteOutputCheckpoint === "function");
+  assert.ok(kernelWriterSymbol);
+  const baseKernelWriter = Object.getOwnPropertyDescriptor(baseKernel, kernelWriterSymbol)?.value as ReturnType<typeof getStreamingSessionKernelWriter>;
+  const faultingKernel = { store: baseKernel.store };
+  for (const symbol of Object.getOwnPropertySymbols(baseKernel)) {
+    const descriptor = Object.getOwnPropertyDescriptor(baseKernel, symbol)!;
+    Object.defineProperty(faultingKernel, symbol, symbol === kernelWriterSymbol
+      ? { ...descriptor, value: Object.freeze({ ...baseKernelWriter, deleteOutputCheckpoint: (command: unknown) => { cleanupFaults?.deleteOutputCheckpoint?.(); baseKernelWriter.deleteOutputCheckpoint(command); } }) }
+      : descriptor);
+  }
+  const kernel = faultingKernel as ReturnType<typeof createInMemoryStreamingSessionStore>;
   const authority = createSessionAuthority({ grants, sessions: kernel, clock: () => new Date(now) });
   const binding = { runId: "run-1", sessionId: "agent-1", actor: { role: "worker" as const, id: "worker-1" }, toolName: "process.start", callId: "call-1", permissionProfile: "full" as const };
   const grant = await grants.issue({ ...binding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: false, networkApproved: false });
@@ -379,8 +460,8 @@ async function makeFixture(outputVersion = 2, reconcileOutcome: "cleaned" | "blo
   const maybeRevoke = (phase: typeof revokeAt) => { if (phase) onPhase?.(phase); if (revokeAt === phase) void grants.revoke(grant, "cancelled"); };
   const backendBinding = { registryId: "registry-1", backendId: "fake", implementationGeneration: "g1", implementationDigest: "c".repeat(64), attestationVersion: 1, attestationDigest: "d".repeat(64), opaqueIdentity: "opaque-1", birthFingerprint: { observedAt: now, discriminator: "birth-1" }, rootPid: 42, startedAt: now };
   const runtimeOptions = {
-    sessions: authority, kernel, clock: () => new Date(now),
-    isolation: { acquire: async () => { calls.push("isolate"); maybeRevoke("isolate"); return isolationAcquireOverride ? await isolationAcquireOverride() : leaseRecord(); }, release: async () => { releaseCalls++; } },
+    sessions: authority, kernel, clock: cleanupFaults?.clock ?? (() => new Date(now)),
+    isolation: { acquire: async () => { calls.push("isolate"); maybeRevoke("isolate"); return isolationAcquireOverride ? await isolationAcquireOverride() : leaseRecord(); }, release: async () => { releaseCalls++; await cleanupFaults?.releaseLease?.(); } },
     host: { launch: async () => { calls.push("launch"); launchCalls++; maybeRevoke("launch"); return hostLaunchOverride ? await hostLaunchOverride() : backendBinding; }, reconcile: async () => { calls.push("reconcile"); return reconcileOverride ? reconcileOverride() : reconcileOutcome; } },
     channel: { version: outputVersion, replayCapacityChunks: outputVersion === 2 ? replayCapacityChunks : undefined, replayCapacityBytes: outputVersion === 2 ? 16 : undefined, acquire: async () => { calls.push("channel"); maybeRevoke("channel"); return channelAcquireOverride ? await channelAcquireOverride() : { subscribeBackpressuredOutput: (sink) => { outputSink = sink; calls.push("output"); maybeRevoke("output"); return () => { outputSink = undefined; }; }, observeTerminal: () => () => undefined, detach: async () => { detachCalls++; } }; }, reattach: async (binding) => reattachOverride ? await reattachOverride(binding) : ({ version: 2 as const, binding, replayCapacityChunks: 4, replayCapacityBytes: 16, channel: { subscribeBackpressuredOutput: (sink) => { outputSink = sink; for (const metadata of retainedWindow) queueMicrotask(() => { void sink(metadata, Buffer.alloc(metadata.byteLength)).catch(() => undefined); }); return () => { outputSink = undefined; }; }, observeTerminal: () => () => undefined, detach: async () => { detachCalls++; } }, retainedWindow }) },
     handshake: { verify: async () => { calls.push("handshake"); maybeRevoke("handshake"); return handshakeOverride ? await handshakeOverride() : handshakeVerify ? handshakeVerify() : "b".repeat(64); } },

@@ -219,6 +219,16 @@ export const HOST_LAUNCH_RECORD_KIND = "runner.host-launch" as const;
 export const HOST_LAUNCH_RECORD_VERSION = 1 as const;
 export type HostLaunchState = "prepared" | "isolated" | "launching" | "bound" |
   "handshake_verified" | "handed_off" | "cleanup_pending" | "cleanup_blocked" | "released";
+export type HostCleanupResourceKind = "channel" | "output_checkpoint" | "host" | "isolation_lease";
+export interface HostCleanupResourceFact {
+  readonly resource: HostCleanupResourceKind;
+  readonly identity: string;
+  readonly status: "pending" | "succeeded" | "failed";
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly attempts: number;
+  readonly failure?: string;
+}
 export interface HostLaunchEffect {
   readonly effectId: string;
   readonly kind: "isolate" | "launch" | "handoff" | "cleanup";
@@ -232,6 +242,7 @@ export interface HostLaunchEffect {
   readonly originOwnerId?: string;
   readonly originFencingToken?: number;
   readonly takeovers?: readonly Readonly<{ fromOwnerId: string; fromFencingToken: number; toOwnerId: string; toFencingToken: number; at: string }>[];
+  readonly resources?: readonly HostCleanupResourceFact[];
 }
 export interface HostLaunchRecord {
   readonly recordKind: typeof HOST_LAUNCH_RECORD_KIND;
@@ -1576,7 +1587,8 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   const isolate = byId.get(`isolate:${record.launchId}`);
   if (!isolate || isolate.kind !== "isolate") throw new StreamingSessionStoreError("invalid_effect", "Normative isolation effect is missing.");
   if (isolate.fencingToken > record.fencingToken) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect fence exceeds current ownership.");
-  if (isolate.status !== (visited.has("isolated") ? "acknowledged" : "pending") || isolate.createdAt !== record.history[0]!.at || (visited.has("isolated") && isolate.acknowledgedAt !== record.history.find((entry) => entry.state === "isolated")!.at)) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect state or timing does not match history.");
+  const hasLateIsolationTransition = record.history.some((entry, index) => entry.state === "cleanup_pending" && record.history[index - 1]?.state === "cleanup_blocked" && entry.at === isolate.acknowledgedAt);
+  if (isolate.status !== (record.leaseBinding ? "acknowledged" : "pending") || isolate.createdAt !== record.history[0]!.at || (visited.has("isolated") && isolate.acknowledgedAt !== record.history.find((entry) => entry.state === "isolated")!.at) || (!visited.has("isolated") && record.leaseBinding && !hasLateIsolationTransition)) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect state or timing does not match history.");
   const launch = byId.get(`launch:${record.launchId}`);
   if (visited.has("launching") !== Boolean(launch) || (launch && launch.kind !== "launch")) throw new StreamingSessionStoreError("invalid_effect", "Normative launch effect does not match history.");
   if (launch && (launch.status !== (visited.has("bound") ? "acknowledged" : "pending") || launch.createdAt !== record.history.find((entry) => entry.state === "launching")!.at || (visited.has("bound") && launch.acknowledgedAt !== record.history.find((entry) => entry.state === "bound")!.at))) throw new StreamingSessionStoreError("invalid_effect", "Launch effect state or timing does not match history.");
@@ -1591,9 +1603,12 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   if (cleanup && record.state === "cleanup_pending" && cleanup.status !== "pending") throw new StreamingSessionStoreError("invalid_effect", "Cleanup pending state/effect mismatch.");
   if (cleanup && record.state === "cleanup_blocked" && cleanup.status !== "blocked") throw new StreamingSessionStoreError("invalid_effect", "Cleanup blocked state/effect mismatch.");
   if (cleanup && record.state === "released" && cleanup.status !== "acknowledged") throw new StreamingSessionStoreError("invalid_effect", "Released cleanup state/effect mismatch.");
+  if (cleanup?.resources?.some((resource) => resource.status === "pending") && record.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_effect", "Pending cleanup resources require pending cleanup ownership.");
+  if (record.state === "cleanup_blocked" && cleanup?.resources?.every((resource) => resource.status === "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Blocked cleanup must retain an unresolved resource.");
+  if (record.state === "released" && cleanup?.resources?.some((resource) => resource.status !== "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Released cleanup contains an unresolved resource.");
   if (cleanup && (cleanup.originOwnerId !== isolate.ownerId || cleanup.originFencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup effect origin differs from launch ownership.");
   if (!cleanup && record.state !== "handed_off" && (record.ownerId !== isolate.ownerId || record.fencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Host ownership differs from normative effect provenance.");
-  if (visited.has("isolated") !== Boolean(record.leaseBinding) || visited.has("bound") !== Boolean(record.backendBinding) || visited.has("handshake_verified") !== Boolean(record.handshakeDigest)) throw new StreamingSessionStoreError("invalid_state", "Host attested bindings do not match lifecycle history.");
+  if ((visited.has("isolated") && !record.leaseBinding) || visited.has("bound") !== Boolean(record.backendBinding) || visited.has("handshake_verified") !== Boolean(record.handshakeDigest)) throw new StreamingSessionStoreError("invalid_state", "Host attested bindings do not match lifecycle history.");
   if ((record.state === "handed_off" || record.state === "released") !== (record.ownerId === "none")) throw new StreamingSessionStoreError("invalid_state", "Host launch terminal ownership is invalid.");
 }
 
@@ -1964,7 +1979,7 @@ function readSqliteHostLaunch(database: DatabaseSync, integrityKey: Uint8Array, 
 
 function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>): Readonly<HostLaunchRecord> {
   assertNoForbiddenDurableValues(input);
-  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], begin_launch: [], bind_backend: ["backendBinding"], verify_handshake: ["handshakeDigest"], begin_cleanup: [], settle_cleanup_blocked: ["blocker"], settle_cleanup_cleaned: [], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
+  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], bind_cleanup_isolation: ["lease", "resources"], begin_launch: [], bind_backend: ["backendBinding"], verify_handshake: ["handshakeDigest"], begin_cleanup: ["resources"], settle_cleanup_blocked: ["blocker", "results"], settle_cleanup_cleaned: ["results"], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
   assertExactKeys(input, new Set(["type", "launchId", "ownerId", "fencingToken", "expectedRevision", "at", ...(extraKeys[String(input.type)] ?? [])]), "host launch command");
   const ownerId = requiredText(input.ownerId, "ownerId");
   const fence = requiredPositiveInteger(input.fencingToken, "fencingToken");
@@ -1988,6 +2003,13 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     additions.leaseBinding = parseHostLeaseBinding(input.lease);
     acknowledgeHostEffect(effects, `isolate:${current.launchId}`, at);
     ensureTransition(current.state, "prepared", input, current, additions);
+  } else if (input.type === "bind_cleanup_isolation") {
+    if (current.state !== "cleanup_blocked") throw new StreamingSessionStoreError("invalid_state", "Late cleanup isolation binding requires blocked ownership.");
+    state = "cleanup_pending"; additions.leaseBinding = parseHostLeaseBinding(input.lease);
+    acknowledgeHostEffect(effects, `isolate:${current.launchId}`, at);
+    const index = effects.findIndex((effect) => effect.kind === "cleanup"); if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Exact cleanup effect is missing.");
+    const effect = effects[index]!; const definitions = parseHostCleanupResourceDefinitions(input.resources);
+    effects[index] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined, resources: beginCleanupResources(effect.resources ?? [], definitions, ownerId, fence) };
   } else if (input.type === "begin_launch") {
     state = "launching";
     ensureTransition(current.state, "isolated", input, current, additions);
@@ -2006,22 +2028,29 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     if (current.state === "handed_off" || current.state === "released") throw new StreamingSessionStoreError("invalid_state", "Inert host launch cannot begin cleanup.");
     state = "cleanup_pending";
     const existing = effects.findIndex((effect) => effect.kind === "cleanup");
+    const definitions = input.resources === undefined ? [] : parseHostCleanupResourceDefinitions(input.resources);
     if (existing >= 0) {
       const effect = effects[existing]!;
-      effects[existing] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined };
-    } else effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId, fencingToken: fence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [] });
+      effects[existing] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined, resources: beginCleanupResources(effect.resources ?? [], definitions, ownerId, fence) };
+    } else effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId, fencingToken: fence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [], ...(definitions.length ? { resources: beginCleanupResources([], definitions, ownerId, fence) } : {}) });
   } else if (input.type === "settle_cleanup_blocked") {
     if (current.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_state", "Cleanup is not pending.");
     state = "cleanup_blocked";
     const index = effects.findIndex((effect) => effect.kind === "cleanup" && effect.status === "pending" && effect.ownerId === ownerId && effect.fencingToken === fence);
     if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Exact cleanup effect is missing.");
-    effects[index] = { ...effects[index]!, status: "blocked", blockedAt: at, blocker: requiredText(input.blocker, "cleanup blocker") };
+    const effect = effects[index]!;
+    const resources = settleCleanupResources(effect.resources ?? [], input.results);
+    if (resources.length && resources.every((resource) => resource.status === "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Blocked cleanup has no unresolved resource.");
+    effects[index] = { ...effect, status: "blocked", blockedAt: at, blocker: requiredText(input.blocker, "cleanup blocker"), ...(resources.length ? { resources } : {}) };
   } else if (input.type === "settle_cleanup_cleaned") {
     if (current.state !== "cleanup_pending") throw new StreamingSessionStoreError("invalid_state", "Cleanup is not pending.");
     state = "released"; additions.ownerId = "none"; additions.cleanupOwner = "none";
     const index = effects.findIndex((effect) => effect.kind === "cleanup" && effect.status === "pending" && effect.ownerId === ownerId && effect.fencingToken === fence);
     if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Exact cleanup effect is missing.");
-    effects[index] = { ...effects[index]!, status: "acknowledged", acknowledgedAt: at };
+    const effect = effects[index]!;
+    const resources = settleCleanupResources(effect.resources ?? [], input.results);
+    if (resources.some((resource) => resource.status !== "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Cleanup cannot release with unresolved resources.");
+    effects[index] = { ...effect, status: "acknowledged", acknowledgedAt: at, ...(resources.length ? { resources } : {}) };
   } else if (input.type === "takeover_cleanup") {
     if (current.state === "handed_off" || current.state === "released") throw new StreamingSessionStoreError("invalid_state", "Inert host ownership cannot be taken over.");
     if (Date.parse(at) < Date.parse(current.ownerExpiresAt)) throw new StreamingSessionStoreError("lease_not_expired", "Host cleanup owner has not expired.");
@@ -2034,7 +2063,7 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     if (index < 0) effects.push({ effectId: `cleanup:${current.launchId}`, kind: "cleanup", status: "pending", ownerId: newOwnerId, fencingToken: newFence, originOwnerId: ownerId, originFencingToken: fence, createdAt: at, takeovers: [{ fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }] });
     else {
       const effect = effects[index]!;
-      effects[index] = { ...effect, status: "pending", ownerId: newOwnerId, fencingToken: newFence, blocker: undefined, blockedAt: undefined, takeovers: [...(effect.takeovers ?? []), { fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }] };
+      effects[index] = { ...effect, status: "pending", ownerId: newOwnerId, fencingToken: newFence, blocker: undefined, blockedAt: undefined, takeovers: [...(effect.takeovers ?? []), { fromOwnerId: ownerId, fromFencingToken: fence, toOwnerId: newOwnerId, toFencingToken: newFence, at }], ...(effect.resources ? { resources: effect.resources.map((resource) => resource.status === "succeeded" ? resource : { ...resource, status: "pending" as const, ownerId: newOwnerId, fencingToken: newFence, attempts: resource.attempts + 1, failure: undefined }) } : {}) };
     }
   } else {
     throw new StreamingSessionStoreError("invalid_effect", "Host launch transition is unsupported.");
@@ -2092,11 +2121,11 @@ function acknowledgeHostEffect(effects: HostLaunchEffect[], effectId: string, at
 }
 
 function parseHostLaunchEffect(value: unknown): HostLaunchEffect {
-  assertExactKeys(value, new Set(["effectId", "kind", "status", "ownerId", "fencingToken", "createdAt", "acknowledgedAt", "blockedAt", "blocker", "originOwnerId", "originFencingToken", "takeovers"]), "host launch effect");
+  assertExactKeys(value, new Set(["effectId", "kind", "status", "ownerId", "fencingToken", "createdAt", "acknowledgedAt", "blockedAt", "blocker", "originOwnerId", "originFencingToken", "takeovers", "resources"]), "host launch effect");
   const entry = value as Record<string, unknown>;
   for (const key of ["effectId", "ownerId"] as const) requiredText(entry[key], key);
   if (!["isolate", "launch", "handoff", "cleanup"].includes(entry.kind as string) || !["pending", "acknowledged", "blocked"].includes(entry.status as string)) throw new StreamingSessionStoreError("invalid_effect", "Host launch effect is invalid.");
-  const parsed = { ...entry, fencingToken: requiredPositiveInteger(entry.fencingToken, "effect fence"), createdAt: requiredTimestamp(entry.createdAt, "effect createdAt") } as unknown as HostLaunchEffect;
+  let parsed = { ...entry, fencingToken: requiredPositiveInteger(entry.fencingToken, "effect fence"), createdAt: requiredTimestamp(entry.createdAt, "effect createdAt") } as unknown as HostLaunchEffect;
   if (entry.acknowledgedAt !== undefined) requiredTimestamp(entry.acknowledgedAt, "acknowledgedAt");
   if (entry.blockedAt !== undefined) requiredTimestamp(entry.blockedAt, "blockedAt");
   if (entry.blocker !== undefined) requiredText(entry.blocker, "blocker");
@@ -2111,10 +2140,85 @@ function parseHostLaunchEffect(value: unknown): HostLaunchEffect {
       priorOwner = takeover.toOwnerId as string; priorFence = toFence;
     }
     if (priorOwner !== entry.ownerId || priorFence !== entry.fencingToken) throw new StreamingSessionStoreError("invalid_effect", "Cleanup takeover endpoint is invalid.");
-  } else if (entry.originOwnerId !== undefined || entry.originFencingToken !== undefined || entry.takeovers !== undefined) {
+    if (entry.resources !== undefined) parsed = { ...parsed, resources: parseHostCleanupResourceFacts(entry.resources, parsed) };
+  } else if (entry.originOwnerId !== undefined || entry.originFencingToken !== undefined || entry.takeovers !== undefined || entry.resources !== undefined) {
     throw new StreamingSessionStoreError("invalid_effect", "Only cleanup effects carry takeover provenance.");
   }
   return Object.freeze(parsed);
+}
+
+function parseHostCleanupResourceDefinitions(value: unknown): ReadonlyArray<Readonly<{ resource: HostCleanupResourceKind; identity: string }>> {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource definitions are invalid.");
+  const seen = new Set<HostCleanupResourceKind>();
+  return value.map((raw) => {
+    assertExactKeys(raw, new Set(["resource", "identity"]), "cleanup resource definition");
+    const item = raw as Record<string, unknown>;
+    if (!isHostCleanupResourceKind(item.resource) || seen.has(item.resource)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource definition is duplicate or invalid.");
+    seen.add(item.resource);
+    return Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity") });
+  });
+}
+
+function parseHostCleanupResourceFacts(value: unknown, effect: HostLaunchEffect): readonly HostCleanupResourceFact[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource facts are invalid.");
+  const ownership = new Set([`${effect.originOwnerId}\0${effect.originFencingToken}`, ...(effect.takeovers ?? []).map((takeover) => `${takeover.toOwnerId}\0${takeover.toFencingToken}`)]);
+  const seen = new Set<HostCleanupResourceKind>();
+  return Object.freeze(value.map((raw) => {
+    assertExactKeys(raw, new Set(["resource", "identity", "status", "ownerId", "fencingToken", "attempts", "failure"]), "cleanup resource fact");
+    const item = raw as Record<string, unknown>;
+    if (!isHostCleanupResourceKind(item.resource) || seen.has(item.resource)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource fact is duplicate or invalid.");
+    seen.add(item.resource);
+    const status = item.status;
+    if (!(["pending", "succeeded", "failed"] as const).includes(status as "pending")) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource status is invalid.");
+    const ownerId = requiredText(item.ownerId, "cleanup resource owner"); const fencingToken = requiredPositiveInteger(item.fencingToken, "cleanup resource fence");
+    if (!ownership.has(`${ownerId}\0${fencingToken}`)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource fact has unauthenticated ownership.");
+    const failure = item.failure === undefined ? undefined : requiredText(item.failure, "cleanup resource failure");
+    if ((status === "failed") !== Boolean(failure)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource failure evidence is invalid.");
+    return Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), status: status as HostCleanupResourceFact["status"], ownerId, fencingToken, attempts: requiredPositiveInteger(item.attempts, "cleanup resource attempts"), ...(failure ? { failure } : {}) });
+  }));
+}
+
+function beginCleanupResources(existing: readonly HostCleanupResourceFact[], definitions: ReadonlyArray<Readonly<{ resource: HostCleanupResourceKind; identity: string }>>, ownerId: string, fencingToken: number): readonly HostCleanupResourceFact[] {
+  const requested = new Map(definitions.map((definition) => [definition.resource, definition]));
+  for (const fact of existing) {
+    const definition = requested.get(fact.resource);
+    if (definition && definition.identity !== fact.identity) throw new StreamingSessionStoreError("identity_conflict", "Cleanup resource identity conflicts with durable evidence.");
+    requested.delete(fact.resource);
+  }
+  return Object.freeze([
+    ...existing.map((fact) => fact.status === "succeeded" ? fact : Object.freeze({ ...fact, status: "pending" as const, ownerId, fencingToken, attempts: fact.attempts + 1, failure: undefined })),
+    ...[...requested.values()].map((definition) => Object.freeze({ ...definition, status: "pending" as const, ownerId, fencingToken, attempts: 1 })),
+  ]);
+}
+
+function settleCleanupResources(existing: readonly HostCleanupResourceFact[], input: unknown): readonly HostCleanupResourceFact[] {
+  if (!existing.length) {
+    if (input !== undefined && (!Array.isArray(input) || input.length)) throw new StreamingSessionStoreError("invalid_effect", "Legacy cleanup cannot accept resource results.");
+    return existing;
+  }
+  if (!Array.isArray(input)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource results are required.");
+  const results = new Map<HostCleanupResourceKind, Readonly<{ resource: HostCleanupResourceKind; identity: string; status: "succeeded" | "failed"; failure?: string }>>();
+  for (const raw of input) {
+    assertExactKeys(raw, new Set(["resource", "identity", "status", "failure"]), "cleanup resource result");
+    const item = raw as Record<string, unknown>;
+    if (!isHostCleanupResourceKind(item.resource) || results.has(item.resource) || !["succeeded", "failed"].includes(item.status as string)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is duplicate or invalid.");
+    const failure = item.failure === undefined ? undefined : requiredText(item.failure, "cleanup resource failure");
+    if ((item.status === "failed") !== Boolean(failure)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result failure evidence is invalid.");
+    results.set(item.resource, Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), status: item.status, ...(failure ? { failure } : {}) }) as Readonly<{ resource: HostCleanupResourceKind; identity: string; status: "succeeded" | "failed"; failure?: string }>);
+  }
+  const settled = existing.map((fact) => {
+    if (fact.status === "succeeded") return fact;
+    const result = results.get(fact.resource);
+    if (!result || result.identity !== fact.identity) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is missing or mismatched.");
+    results.delete(fact.resource);
+    return Object.freeze({ ...fact, status: result.status, ...(result.failure ? { failure: result.failure } : { failure: undefined }) });
+  });
+  if (results.size) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result does not own a pending resource.");
+  return Object.freeze(settled);
+}
+
+function isHostCleanupResourceKind(value: unknown): value is HostCleanupResourceKind {
+  return ["channel", "output_checkpoint", "host", "isolation_lease"].includes(value as string);
 }
 
 function parseHostLeaseBinding(value: unknown): HostLaunchRecord["leaseBinding"] {
