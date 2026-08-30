@@ -220,6 +220,19 @@ overlap is expected.
   `task-8.0b1-round-7-review.md`. This is the same authorized R7.2 secret-boundary
   requirement, so it enters the automatic technically-determinate repair loop;
   B2 remains locked.
+- Task 8.0B1 round 7 replay repair (`a8f972db`) replaces mutable-object identity
+  trust with immutable private claims and remints fresh cause-free errors at
+  every affected boundary. The exact replay regression was RED 0/1, then GREEN
+  1/1; both same-object return and public-field reconstruction mutations were
+  proven RED and reverted GREEN. Reported broad gates are B1 89/89, 8.0A 89/89,
+  Task 7 plus Task 3 173/173, typecheck, targeted lint, diff, scope, and residue
+  green.
+- Task 8.0B1 round 7 replay re-review: APPROVED with zero remaining or new
+  Critical/Important findings in the bounded repair. Immutable private claims,
+  fresh reminting, phase-owned mappings, and cleanup classification were checked
+  across launch, cancellation, delivery, channel/output, cleanup/retry, bounded
+  provider, and late-resource boundaries. Packet 8.0B2 remains locked pending
+  current controller verification.
 
 ## Breaker rulings
 
