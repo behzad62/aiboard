@@ -117,6 +117,41 @@ test("portable release refuses unsettled retained output until sink acknowledgem
   }
 });
 
+test("portable release retries exact retired-authority cleanup without reopening an effect", { timeout: 60_000 }, async () => {
+  if (process.platform !== "win32") return;
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-retired-cleanup-"));
+  let removals = 0;
+  const backend = new WindowsProcessBackend({
+    stateDirectory: root,
+    pollIntervalMs: 10,
+    removeRetiredAuthority: (directory) => {
+      removals += 1;
+      if (removals === 1) throw new Error("injected retired authority deletion fault");
+      rmSync(directory, { recursive: true, force: true });
+    },
+  });
+  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
+  const binding = bindingFor(launch);
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
+  try {
+    channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+    assert.equal((await channel.waitForTerminal() as { state: string }).state, "exited");
+    await channel.detach();
+    assert.equal(parseProcessReconciliation(await backend.reconcile(binding, fence)).state, "exited");
+    const empty = await backend.verifyEmpty(binding, fence) as { empty: boolean; proofArtifactId: string };
+    assert.equal(empty.empty, true);
+    assert.match(empty.proofArtifactId, /^native-empty:[0-9a-f]{48}$/);
+    await assert.rejects(backend.release(binding, fence), /writer fence effect boundary is unavailable/);
+    assert.equal(existsSync(identity.directory), true);
+    assert.deepEqual(await backend.release(binding, fence), { released: true });
+    assert.equal(removals, 2);
+    assert.equal(existsSync(identity.directory), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
 test("portable retained window backpressures output and replays it after exact reattach", { timeout: 60_000 }, async () => {
   if (process.platform !== "win32") return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-replay-"));

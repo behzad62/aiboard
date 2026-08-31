@@ -86,6 +86,43 @@ test("Windows Job supervisor request classifies a partial response reset through
   }
 });
 
+test("Windows Job durable release refuses stale post-release fence resurrection without coordination residue", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-retired-fence-"));
+  const processId = "job-retired-fence";
+  const ownedDirectory = join(root, processId);
+  mkdirSync(ownedDirectory, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const statusPath = join(ownedDirectory, "supervisor.jsonl");
+  const stdoutPath = join(ownedDirectory, "stdout.log");
+  const stderrPath = join(ownedDirectory, "stderr.log");
+  writeFileSync(stdoutPath, ""); writeFileSync(stderrPath, "");
+  writeFileSync(statusPath, `${JSON.stringify({
+    protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid, childPid: 0, port: 0,
+    status: "stopped", exitCode: 0, signal: null, error: null, ownershipReleased: true,
+    updatedAt: startedAt, retainedOutputChunks: 0, retainedOutputBytes: 0,
+  })}\n`);
+  writeFileSync(join(root, `${processId}.json`), JSON.stringify({
+    processId, runId: "run-retired", sessionId: "session-retired", pid: 0,
+    command: process.execPath, args: [], cwd: root, environmentKeys: [], startedAt, updatedAt: startedAt,
+    status: "stopped", exitCode: 0, signal: null, stdoutPath, stderrPath, interactive: true,
+    outputOffsets: { stdout: 0, stderr: 0 }, outputSequences: { stdout: 0, stderr: 0 },
+    supervisor: { protocol: "aiboard-managed-process/v1", token: "t".repeat(64), statusPath, supervisorPid: process.pid, port: 0 },
+    currentFence: fence,
+  }));
+  const owner = { runId: "run-retired", sessionId: "session-retired" };
+  const higher = { ownerId: "later-stale-owner", fencingToken: 2 };
+  const lockPath = join(root, `${processId}.fence.lock`);
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
+    assert.equal((await host.releaseOwned(processId, owner, startedAt, fence)).ownershipReleased, true);
+    assert.equal(existsSync(lockPath), false);
+    await assert.rejects(host.claimOwnedFence!(processId, owner, higher), /released|inactive|ownership/i);
+    await assert.rejects(host.reconcileOwned(processId, owner, higher), /released|inactive|ownership/i);
+    assert.equal(existsSync(lockPath), false, "stale post-release callers must not recreate the coordination database");
+    for (const suffix of ["-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 const verifiedWindowsSemanticFacts = {
   portableDuplex: "verified",
   windowsBatchArgv: "verified",

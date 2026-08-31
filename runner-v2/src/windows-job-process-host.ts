@@ -328,10 +328,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     try {
       await withOwnedFenceLock(lockPath, async () => {
         const record = this.ownedRecord(processId, owner);
+        this.assertActive(record);
         const current = record.currentFence;
         if (current && (fence.fencingToken < current.fencingToken || (fence.fencingToken === current.fencingToken && fence.ownerId !== current.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
         if (!current || fence.fencingToken > current.fencingToken) { record.currentFence = { ...fence }; record.updatedAt = this.clock(); this.persist(record); this.records.set(processId, record); }
-      });
+      }, { assertAuthority: () => this.assertActive(this.ownedRecord(processId, owner)) });
     } catch (error) {
       if (error instanceof WindowsJobHostError) throw error;
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job writer fence lock is unavailable: ${String(error)}`);
@@ -434,9 +435,16 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     try {
       return await withOwnedFenceLock(lockPath, async () => {
         const current = this.ownedRecord(record.processId, record);
+        if (kind !== "release") this.assertActive(current);
         this.assertCurrentFence(current, fence);
         return await effect(current);
-      }, { retireAfterEffect: kind === "release" });
+      }, {
+        retireAfterEffect: kind === "release",
+        assertAuthority: () => {
+          const current = this.ownedRecord(record.processId, record);
+          if (kind !== "release") this.assertActive(current);
+        },
+      });
     } catch (error) {
       if (error instanceof WindowsJobHostError) throw error;
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job writer fence effect lock is unavailable: ${String(error)}`);

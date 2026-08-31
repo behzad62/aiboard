@@ -395,3 +395,15 @@ overlap is expected.
   watchdog and every earlier B2 finding remain addressed. Governed fix round 4
   is authorized only for these four gaps under
   `task-8.0b2-fix-round-4-brief.md`. B3 remains locked.
+- Task 8.0B2 fix round 4 implementation is complete pending independent review.
+  Generic POSIX absence is now exact/injectable; native/portable authority
+  retirement is non-resurrectable with authenticated post-commit cleanup retry;
+  Job initialization is gated by its durable release tombstone; semantic-probe
+  timeout cleanup stops only exact supervisors across PID reuse; and historical
+  residue deletion requires a closed prefix plus a positive ownership document.
+  Current evidence: focused 53/53, portable+Windows 95/95, concurrent affected
+  113/113, compatibility 357/357, Node 22.13 and Node 24 locks 12/12 each,
+  type/lint/static/diff GREEN, and final serial package 1,384 total / 1,383 pass /
+  zero fail or cancelled / one explicit POSIX-host skip. Post-settle live helper
+  and exact B2-root inventories are both zero. B2 remains locked; B3 has not
+  started.

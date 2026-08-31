@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,9 +13,34 @@ const B2_PREFIXES = Object.freeze([
   "aiboard-owned-fence-lock-",
   "runner-job-host-",
 ] as const);
+const DELETION_ROOT_PREFIXES = Object.freeze([
+  "aiboard-owned-fence-lock-residue-",
+  "aiboard-owned-fence-lock-uncertain-",
+  "aiboard-owned-fence-lock-authority-retire-",
+  "aiboard-portable-temporal-enumeration-",
+  "aiboard-portable-signal-effect-fence-",
+  "aiboard-windows-temporal-reuse-",
+  "aiboard-windows-launch-cleanup-",
+  "aiboard-windows-semantic-duplex-",
+  "aiboard-windows-semantic-cleanup-",
+] as const);
+const DELETION_COORDINATION_PREFIXES = Object.freeze(["aiboard-windows-residue-"] as const);
+const TEST_INVOCATION_ID = randomUUID();
 const MAX_ENTRIES = 4_096;
 
 export interface B2ResidueEntry { readonly path: string; readonly prefix: string }
+
+export function registerCurrentB2TestRoot(root: string): void {
+  const resolvedRoot = resolve(root);
+  if (!isRegisteredRoot(resolvedRoot) || dirname(resolvedRoot) !== resolve(tmpdir())) throw new Error("B2 test root is not registered for deletion.");
+  const status = lstatSync(resolvedRoot);
+  if (!status.isDirectory() || status.isSymbolicLink()) throw new Error("B2 test root must be a real directory.");
+  writeFileSync(resolve(resolvedRoot, ".b2-test-owner.json"), JSON.stringify({
+    protocol: "aiboard-b2-test-root/v1",
+    invocationId: TEST_INVOCATION_ID,
+    rootName: basename(resolvedRoot),
+  }), { mode: 0o600 });
+}
 
 export function inventoryB2Residue(): readonly B2ResidueEntry[] {
   const temporary = resolve(tmpdir());
@@ -61,8 +87,8 @@ function exactB2EntryKind(entry: B2ResidueEntry): "root" | "coordination" | unde
   try {
     const status = lstatSync(path);
     if (status.isSymbolicLink()) return undefined;
-    if (status.isDirectory()) return "root";
-    if (status.isFile() && basename(path).endsWith(".fence.lock")) return "coordination";
+    if (status.isDirectory() && isRegisteredRoot(path)) return "root";
+    if (status.isFile() && basename(path).endsWith(".fence.lock") && DELETION_COORDINATION_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "coordination";
     return undefined;
   } catch { return undefined; }
 }
@@ -92,6 +118,7 @@ function inspectEvidence(root: string): { valid: boolean; owners: RecordedOwner[
   const owners: RecordedOwner[] = [];
   const pending = [root];
   let entries = 0;
+  let recognizedDocuments = 0;
   try {
     while (pending.length > 0) {
       const directory = pending.pop()!;
@@ -105,11 +132,30 @@ function inspectEvidence(root: string): { valid: boolean; owners: RecordedOwner[
         const text = readFileSync(path, "utf8");
         if (text.length > 4 * 1024 * 1024) return { valid: false, owners: [] };
         const documents = entry.name.endsWith(".jsonl") ? text.split(/\r?\n/).filter(Boolean) : [text];
-        for (const document of documents) collectEvidence(JSON.parse(document), owners);
+        for (const document of documents) {
+          const value = JSON.parse(document);
+          if (recognizedOwnershipDocument(entry.name, value, root)) recognizedDocuments += 1;
+          collectEvidence(value, owners);
+        }
       }
     }
-    return { valid: true, owners };
+    return { valid: recognizedDocuments > 0, owners };
   } catch { return { valid: false, owners: [] }; }
+}
+
+function isRegisteredRoot(root: string): boolean {
+  return DELETION_ROOT_PREFIXES.some((prefix) => basename(root).startsWith(prefix));
+}
+
+function recognizedOwnershipDocument(name: string, value: unknown, root: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (name === ".b2-test-owner.json")
+    return record.protocol === "aiboard-b2-test-root/v1" && record.invocationId === TEST_INVOCATION_ID && record.rootName === basename(root);
+  return name === "state.json" && record.protocol === "aiboard-portable-process/v1" &&
+    typeof record.nonce === "string" && record.nonce.length > 0 &&
+    Number.isSafeInteger(record.supervisorPid) && Number(record.supervisorPid) > 0 &&
+    ["started", "not_started", "unknown"].includes(String(record.launchEffect));
 }
 
 function collectEvidence(value: unknown, owners: RecordedOwner[]): void {

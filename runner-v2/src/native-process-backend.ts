@@ -13,7 +13,7 @@ import type {
 } from "./process-backend.js";
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
-import { withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
+import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
 export interface NativeOwnedProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -25,6 +25,8 @@ export interface NativeOwnedProcessBackendOptions {
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
   readonly beforeFenceEffect?: (kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "release") => void | Promise<void>;
+  /** Test seam for a bounded post-retirement authority-directory removal fault. */
+  readonly removeRetiredAuthority?: (directory: string) => void;
 }
 export interface NativeProcessOperations {
   inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
@@ -338,7 +340,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
-    this.assertFence(identity, _fence);
+    const lockPath = join(identity.directory, ".fence.lock");
+    if (retiredOwnedFenceCleanupAvailable(lockPath)) this.assertDurableFence(identity, _fence);
+    else this.assertFence(identity, _fence);
     const validation = this.validate(identity);
     if (validation === "mismatch" || validation === "unknown") throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
     const emptiness = await this.emptiness(identity);
@@ -352,14 +356,23 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (stableEmptiness !== "empty") throw new Error("Cannot release ownership without stable verified emptiness.");
     assertPortableOutputSettled(identity);
     if (!this.hasTerminalStoppedProof(identity)) throw new Error("Cannot release ownership after durable terminal state changed.");
-    await this.fencedEffect(identity, _fence, "release", () => {
+    const validateFinalRelease = () => {
+      this.assertDurableFence(identity, _fence);
       const finalValidation = this.validate(identity);
       if ((finalValidation !== "live" && finalValidation !== "exited") || !this.hasTerminalStoppedProof(identity) || this.emptiness(identity) !== "empty")
         throw new Error("Cannot release ownership without final terminal empty re-attestation.");
       assertPortableOutputSettled(identity);
-      rmSync(identity.directory, { recursive: true, force: true });
-      this.outputOffsets.delete(identity.nonce);
-    });
+    };
+    try {
+      await this.fencedEffect(identity, _fence, "release", validateFinalRelease);
+    } catch (error) {
+      if (errorChainHas(error, OwnedFenceAuthorityRetirementError) || !retiredOwnedFenceCleanupAvailable(lockPath) || !errorChainMatches(error, /retired/i)) throw error;
+      await retryRetiredOwnedFenceCleanup(lockPath, () => {
+        validateFinalRelease();
+        (this.options.removeRetiredAuthority ?? removeRetiredAuthorityDirectory)(identity.directory);
+        this.outputOffsets.delete(identity.nonce);
+      });
+    }
     return { released: true };
   }
 
@@ -370,7 +383,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private async fencedEffect<T>(identity: Identity, fence: ProcessEffectFence | undefined, kind: "signal" | "verify_empty" | "release", effect: () => T): Promise<T> {
     if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
     await this.options.beforeFenceEffect?.(kind);
-    return await commitOwnedFenceEffectAsync(identity, fence, effect, kind === "release");
+    return await commitOwnedFenceEffectAsync(identity, fence, effect, kind === "release"
+      ? () => {
+          (this.options.removeRetiredAuthority ?? removeRetiredAuthorityDirectory)(identity.directory);
+          this.outputOffsets.delete(identity.nonce);
+        }
+      : undefined);
   }
   private identity(binding: ProcessBackendBinding): Identity {
     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as Identity;
@@ -387,6 +405,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
     }
     claimOwnedFence(identity, fence);
+  }
+  private assertDurableFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
+    if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
+    const current = readOwnedFence(join(identity.directory, "fence.json"), identity);
+    if (fence.ownerId !== current.ownerId || fence.fencingToken !== current.fencingToken)
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
   }
   private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
     const inspection = this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
@@ -649,7 +673,7 @@ function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): voi
   if (!candidate.ownerId || !Number.isSafeInteger(candidate.fencingToken) || candidate.fencingToken < 1)
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence is invalid.");
   const path = join(identity.directory, "fence.json");
-  const lock = `${identity.directory}.fence.lock`;
+  const lock = join(identity.directory, ".fence.lock");
   try {
     withOwnedFenceLockSync(lock, () => {
       if (!existsSync(path) && !identity.fence) {
@@ -675,7 +699,7 @@ function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): voi
 }
 function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T): T {
   const path = join(identity.directory, "fence.json");
-  const lock = `${identity.directory}.fence.lock`;
+  const lock = join(identity.directory, ".fence.lock");
   try {
     return withOwnedFenceLockSync(lock, () => {
       const current = readOwnedFence(path, identity);
@@ -688,20 +712,43 @@ function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectF
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
-async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, retireAfterEffect = false): Promise<T> {
+async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, retireAuthority?: () => void): Promise<T> {
   const path = join(identity.directory, "fence.json");
-  const lock = `${identity.directory}.fence.lock`;
+  const lock = join(identity.directory, ".fence.lock");
   try {
     return await withOwnedFenceLock(lock, () => {
       const current = readOwnedFence(path, identity);
       if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
         throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
       return effect();
-    }, { retireAfterEffect });
+    }, { retireAfterEffect: Boolean(retireAuthority), ...(retireAuthority ? { retireAuthority } : {}) });
   } catch (error) {
     if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
+}
+function removeRetiredAuthorityDirectory(directory: string): void {
+  rmSync(directory, { recursive: true, force: true });
+}
+function errorChainMatches(error: unknown, pattern: RegExp): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (pattern.test(current instanceof Error ? current.message : String(current))) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+function errorChainHas(error: unknown, constructor: new (...args: never[]) => Error): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof constructor) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
 }
 function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
   try {

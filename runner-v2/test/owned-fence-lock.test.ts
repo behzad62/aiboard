@@ -7,9 +7,36 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+import { inspectGenericPosixProcessBirth, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
+
+test("generic POSIX holder inspection distinguishes exact absence from uncertain process-tool outcomes", () => {
+  const cases = [
+    { name: "ESRCH absent", existence: ["absent"], births: [], expected: { state: "absent" } },
+    { name: "exact live", existence: ["live", "live", "live"], births: ["birth-a", "birth-a"], expected: { state: "same", fingerprint: "birth-a" } },
+    { name: "birth mismatch", existence: ["live", "live", "live"], births: ["birth-b", "birth-b"], expected: { state: "same", fingerprint: "birth-b" } },
+    { name: "EPERM", existence: ["permission"], births: [], expected: { state: "unknown" } },
+    { name: "timeout", existence: ["live", "live"], births: ["timeout"], expected: { state: "unknown" } },
+    { name: "malformed", existence: ["live", "live"], births: ["malformed"], expected: { state: "unknown" } },
+    { name: "generic failure", existence: ["live", "live"], births: ["failure"], expected: { state: "unknown" } },
+    { name: "exit after second birth inspection failure", existence: ["live", "live", "absent"], births: ["birth-a", "failure"], expected: { state: "absent" } },
+    { name: "unresolved exit/reuse race", existence: ["live", "live", "live"], births: ["birth-a", "birth-b"], expected: { state: "unknown" } },
+  ] as const;
+  for (const fixtureCase of cases) {
+    let existenceIndex = 0;
+    let birthIndex = 0;
+    const result = inspectGenericPosixProcessBirth(4242, {
+      probeExistence: () => fixtureCase.existence[Math.min(existenceIndex++, fixtureCase.existence.length - 1)]!,
+      inspectBirth: () => {
+        const value = fixtureCase.births[Math.min(birthIndex++, fixtureCase.births.length - 1)];
+        if (value === "birth-a" || value === "birth-b") return { outcome: "ok" as const, fingerprint: value };
+        return { outcome: (value ?? "failure") as "timeout" | "malformed" | "failure" };
+      },
+    });
+    assert.deepEqual(result, fixtureCase.expected, fixtureCase.name);
+  }
+});
 
 test("a crashed real holder leaves exact identity and a higher contender reclaims it once", { timeout: 15_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-crash-"));
@@ -212,6 +239,50 @@ test("retirement rejects a proposal queued before release without resurrection o
   } finally {
     await stop(retiring);
     if (contender) await stop(contender);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("retirement removes its enclosing authority before stale sync async and concurrent arrivals", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-authority-retire-"));
+  const lockPath = join(root, ".fence.lock");
+  let effects = 0;
+  await withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+    retireAfterEffect: true,
+    retireAuthority: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+  } as Parameters<typeof withOwnedFenceLock>[2] & { retireAuthority: () => void });
+  assert.equal(effects, 1);
+  assert.equal(existsSync(root), false);
+
+  assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }), /unavailable|open|authority/i);
+  const late = await Promise.allSettled([
+    withOwnedFenceLock(lockPath, () => { effects += 1; }),
+    withOwnedFenceLock(lockPath, () => { effects += 1; }),
+    withOwnedFenceLock(lockPath, () => { effects += 1; }),
+  ]);
+  assert.ok(late.every((result) => result.status === "rejected"));
+  assert.equal(effects, 1, "no stale arrival may recreate authority or perform an effect");
+  assert.equal(existsSync(root), false);
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
+});
+
+test("a failed post-commit authority removal is recoverable only through the exact retired cleanup path", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-recovery-"));
+  const lockPath = join(root, ".fence.lock");
+  let effects = 0;
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("injected authority removal failure"); },
+    }), /authority retirement failed after its durable commit/);
+    assert.equal(effects, 1);
+    assert.equal(existsSync(root), true);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }), /retired|invalid|unavailable/i);
+    assert.equal(effects, 1);
+    await retryRetiredOwnedFenceCleanup(lockPath, () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }));
+    assert.equal(existsSync(root), false);
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
+  } finally {
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });

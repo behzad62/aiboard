@@ -173,33 +173,60 @@ async function withPortableProbe<T>(name: string, cleanupDeadlineMs: number, act
   });
   let binding: ProcessBackendBinding | undefined;
   let released = false;
+  let primaryError: unknown;
   try {
     const value = await action({ backend, workspace, own: (owned) => (binding = owned) });
     released = true;
     return value;
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
+    const cleanupErrors: unknown[] = [];
     if (binding && !released) {
-      await backend.signal(binding, "force_terminate", FENCE).catch(() => undefined);
+      try { await backend.signal(binding, "force_terminate", FENCE); }
+      catch (error) { cleanupErrors.push(error); }
       try {
         await requireEmptyAndRelease(backend, binding, cleanupDeadlineMs);
         released = true;
-      } catch {
+      } catch (error) {
+        cleanupErrors.push(error);
         try {
           await settleProbeOutput(backend, binding);
           await requireEmptyAndRelease(backend, binding, cleanupDeadlineMs);
           released = true;
-        } catch {}
+        } catch (settleError) { cleanupErrors.push(settleError); }
       }
     }
     if (released) rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-    else if (!binding) removeUnboundSemanticProbeRoot(root);
-    else removeInactiveSemanticProbeRoot(root, binding);
+    else if (!binding) {
+      if (!removeUnboundSemanticProbeRoot(root)) {
+        const blocker = new Error(`Windows semantic probe cleanup preserved unbound launch evidence at ${root}.`);
+        throw new AggregateError(
+          [...(primaryError === undefined ? [] : [primaryError]), blocker],
+          `Windows semantic probe failed before binding and exact cleanup could not be verified${primaryError === undefined ? "." : `: ${String(primaryError)}`}`,
+          { ...(primaryError === undefined ? {} : { cause: primaryError }) },
+        );
+      }
+    } else if (!removeInactiveSemanticProbeRoot(root, binding)) {
+      const blocker = new Error(`Windows semantic probe cleanup preserved uncertain evidence at ${root}.`);
+      throw new AggregateError(
+        [...(primaryError === undefined ? [] : [primaryError]), ...cleanupErrors, blocker],
+        `Windows semantic probe failed and exact cleanup could not be verified${primaryError === undefined ? "." : `: ${String(primaryError)}`}`,
+        { ...(primaryError === undefined ? {} : { cause: primaryError }) },
+      );
+    }
   }
 }
 
 export function removeInactiveSemanticProbeRoot(root: string, binding: ProcessBackendBinding): boolean {
   const resolvedRoot = resolve(root);
   if (!validGeneratedProbeRoot(resolvedRoot)) return false;
+  const ownership = inspectProbeOwnership(resolvedRoot, binding);
+  if (!ownership) return false;
+  if (ownership.supervisorLive) {
+    if (!stopExactProbeSupervisor(resolvedRoot, ownership)) return false;
+  }
   if (!probeEvidenceHasNoLiveOwners(resolvedRoot, binding)) return false;
   rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   return true;
@@ -224,6 +251,16 @@ function validGeneratedProbeRoot(root: string): boolean {
 }
 
 function probeEvidenceHasNoLiveOwners(root: string, binding: ProcessBackendBinding): boolean {
+  const ownership = inspectProbeOwnership(root, binding);
+  return Boolean(ownership && !ownership.supervisorLive);
+}
+
+interface ProbeOwnershipInspection {
+  readonly identity: { directory: string; nonce: string; supervisorPid: number; supervisorBirth: string };
+  readonly supervisorLive: boolean;
+}
+
+function inspectProbeOwnership(root: string, binding: ProcessBackendBinding): ProbeOwnershipInspection | undefined {
   try {
     const identity = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as {
       directory: string;
@@ -232,8 +269,8 @@ function probeEvidenceHasNoLiveOwners(root: string, binding: ProcessBackendBindi
       supervisorBirth: string;
     };
     const directory = resolve(identity.directory);
-    if (dirname(directory) !== resolve(root, "state") || !basename(directory).startsWith("owned-")) return false;
-    if (!identity.nonce || !validProbeOwner(identity.supervisorPid, identity.supervisorBirth)) return false;
+    if (dirname(directory) !== resolve(root, "state") || !basename(directory).startsWith("owned-")) return undefined;
+    if (!identity.nonce || !validProbeOwner(identity.supervisorPid, identity.supervisorBirth)) return undefined;
     const state = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as {
       nonce?: string;
       supervisorPid?: number;
@@ -243,42 +280,89 @@ function probeEvidenceHasNoLiveOwners(root: string, binding: ProcessBackendBindi
     };
     if (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid ||
         !Array.isArray(state.knownProcesses) || state.knownProcesses.length > 256 ||
-        !state.knownProcesses.every((process) => validProbeOwner(process.pid, process.birth))) return false;
+        !state.knownProcesses.every((process) => validProbeOwner(process.pid, process.birth))) return undefined;
     if (state.launchEffect === "not_started") {
-      if (state.rootProcess !== null || state.knownProcesses.length !== 0) return false;
+      if (state.rootProcess !== null || state.knownProcesses.length !== 0) return undefined;
     } else if (state.launchEffect === "started") {
       if (!state.rootProcess || !validProbeOwner(state.rootProcess.pid, state.rootProcess.birth) ||
-          !state.knownProcesses.some((process) => process.pid === state.rootProcess!.pid && sameProbeBirth(process.birth, state.rootProcess!.birth))) return false;
-    } else return false;
-    const expected = new Map<number, string>([[identity.supervisorPid, identity.supervisorBirth]]);
-    const addExpected = (pid: number, birth: string): boolean => {
-      const prior = expected.get(pid);
-      if (prior && !sameProbeBirth(prior, birth)) return false;
-      expected.set(pid, birth);
-      return true;
-    };
-    if (state.rootProcess && !addExpected(state.rootProcess.pid, state.rootProcess.birth)) return false;
-    for (const process of state.knownProcesses) if (!addExpected(process.pid, process.birth)) return false;
-    const filter = [...expected.keys()].map((pid) => `ProcessId = ${pid}`).join(" OR ");
-    const output = execFileSync("powershell.exe", [
-      "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-      `$ErrorActionPreference='Stop';Get-CimInstance Win32_Process -Filter '${filter}'|ForEach-Object{if($null -eq $_.CreationDate){throw 'missing birth'};\"$($_.ProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"};'OK'`,
-    ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
-    const lines = output.split(/\r?\n/);
-    if (lines.pop()?.trim() !== "OK") return false;
-    const current = new Map<number, string>();
-    for (const line of lines) {
-      const [pidText, birth, ...extra] = line.trim().split(",");
-      const pid = Number(pidText);
-      if (extra.length || !validProbeOwner(pid, birth)) return false;
-      current.set(pid, birth!);
+          !state.knownProcesses.some((process) => process.pid === state.rootProcess!.pid && sameProbeBirth(process.birth, state.rootProcess!.birth))) return undefined;
+    } else return undefined;
+    const expected = [
+      { pid: identity.supervisorPid, birth: identity.supervisorBirth, supervisor: true },
+      ...(state.rootProcess ? [{ ...state.rootProcess, supervisor: false }] : []),
+      ...state.knownProcesses.map((process) => ({ ...process, supervisor: false })),
+    ];
+    const current = probeProcessInventory([...new Set(expected.map((process) => process.pid))]);
+    let supervisorLive = false;
+    for (const process of current) {
+      const matches = expected.filter((candidate) => candidate.pid === process.pid && sameProbeBirth(candidate.birth, process.birth));
+      if (matches.some((candidate) => candidate.supervisor)) {
+        if (!probeCommandReferencesRoot(process.commandLine, root)) return undefined;
+        supervisorLive = true;
+        continue;
+      }
+      if (matches.length > 0 || probeCommandReferencesRoot(process.commandLine, root)) return undefined;
     }
-    for (const [pid, birth] of expected) {
-      const observed = current.get(pid);
-      if (observed && sameProbeBirth(observed, birth)) return false;
+    return { identity, supervisorLive };
+  } catch { return undefined; }
+}
+
+function stopExactProbeSupervisor(root: string, ownership: ProbeOwnershipInspection): boolean {
+  const deadline = Date.now() + 2_000;
+  try {
+    const current = probeProcessInventory([ownership.identity.supervisorPid]);
+    if (current.length !== 1 || !sameProbeBirth(current[0]!.birth, ownership.identity.supervisorBirth) ||
+        !probeCommandReferencesRoot(current[0]!.commandLine, root)) return false;
+    const result = execFileSync("taskkill.exe", ["/PID", String(ownership.identity.supervisorPid), "/T", "/F"], {
+      windowsHide: true, stdio: "ignore", timeout: 2_000,
+    });
+    void result;
+    const waiter = new Int32Array(new SharedArrayBuffer(4));
+    while (Date.now() < deadline) {
+      if (probeProcessInventory([ownership.identity.supervisorPid]).every((process) =>
+        !sameProbeBirth(process.birth, ownership.identity.supervisorBirth))) return true;
+      Atomics.wait(waiter, 0, 0, 25);
     }
-    return true;
+    return false;
   } catch { return false; }
+}
+
+function probeProcessInventory(pids: readonly number[]): Array<{ pid: number; birth: string; commandLine: string }> {
+  if (pids.length === 0 || pids.length > 258 || pids.some((pid) => !Number.isSafeInteger(pid) || pid < 1)) throw new Error("Invalid probe process inventory.");
+  const filter = pids.map((pid) => `ProcessId = ${pid}`).join(" OR ");
+  const output = execFileSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';Get-CimInstance Win32_Process -Filter '${filter}'|ForEach-Object{if($null-eq$_.CreationDate){throw 'missing birth'};$c=if($null-eq$_.CommandLine){''}else{$_.CommandLine};$j=@{pid=[int]$_.ProcessId;birth=$_.CreationDate.ToUniversalTime().ToString('o');commandLine=$c}|ConvertTo-Json -Compress;[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))}`,
+  ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+  return output.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+}
+
+function probeCommandReferencesRoot(commandLine: string, root: string): boolean {
+  const normalized = resolve(root).toLowerCase();
+  if (commandLine.toLowerCase().includes(normalized)) return true;
+  for (const token of commandLine.split(/\s+/)) {
+    const encoded = token.replace(/^["']+|["']+$/g, "");
+    if (!/^[A-Za-z0-9_-]{40,}$/.test(encoded)) continue;
+    try {
+      const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+      if (decoded.toLowerCase().includes(normalized)) return true;
+      if (decodedProbePayloadReferencesRoot(JSON.parse(decoded), normalized)) return true;
+    }
+    catch {}
+  }
+  return false;
+}
+
+function decodedProbePayloadReferencesRoot(value: unknown, normalizedRoot: string, depth = 0): boolean {
+  if (depth > 6) return false;
+  if (typeof value === "string") {
+    try { return resolve(value).toLowerCase().startsWith(normalizedRoot); }
+    catch { return false; }
+  }
+  if (Array.isArray(value)) return value.length <= 256 && value.some((item) => decodedProbePayloadReferencesRoot(item, normalizedRoot, depth + 1));
+  if (!value || typeof value !== "object") return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  return entries.length <= 256 && entries.some(([, item]) => decodedProbePayloadReferencesRoot(item, normalizedRoot, depth + 1));
 }
 
 function validProbeOwner(pid: unknown, birth: unknown): birth is string {

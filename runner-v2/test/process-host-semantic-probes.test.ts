@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,24 @@ async function waitUntilProcessAbsent(pid: number, deadlineMs: number): Promise<
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return; throw error; }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+function windowsBirth(pid: number): string {
+  return execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
+  ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+}
+
+function currentWindowsBirth(pid: number): string | undefined {
+  const output = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';$p=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}';if($null -ne $p){$p.CreationDate.ToUniversalTime().ToString('o')}`,
+  ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+  return output || undefined;
+}
+
+function sameTestBirth(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
+  return normalize(left) === normalize(right);
 }
 
 test("process host semantic facts are independent, immutable, and preserve partial states", async () => {
@@ -281,6 +300,45 @@ test("failed semantic-probe release removes evidence only after exact owner iden
     rmSync(outsideRoot, { recursive: true, force: true });
     rmSync(malformedRoot, { recursive: true, force: true });
     rmSync(nestedContainer, { recursive: true, force: true });
+  }
+});
+
+test("semantic cleanup stops only the exact authenticated supervisor when the recorded child PID was replaced", async (t) => {
+  if (process.platform !== "win32") { t.skip("The exact supervisor/replacement cleanup fixture requires Windows."); return; }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-semantic-duplex-"));
+  const directory = join(root, "state", "owned-fixture");
+  mkdirSync(directory, { recursive: true });
+  const supervisor = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", root], { windowsHide: true, stdio: "ignore" });
+  assert.ok(supervisor.pid);
+  const supervisorBirth = windowsBirth(supervisor.pid!);
+  const replacementBirth = windowsBirth(process.pid);
+  const recordedBirth = new Date(Date.parse(replacementBirth) - 60_000).toISOString();
+  const nonce = "semantic-recycled-child-cleanup";
+  const binding: ProcessBackendBinding = {
+    registryId: "semantic-cleanup-recycled-child", backendId: "runner-windows-supervisor-v1",
+    implementationGeneration: "test", implementationDigest: "1".repeat(64),
+    attestationVersion: 1, attestationDigest: "2".repeat(64),
+    opaqueIdentity: Buffer.from(JSON.stringify({ directory, nonce, supervisorPid: supervisor.pid, supervisorBirth })).toString("base64url"),
+    birthFingerprint: { observedAt: new Date().toISOString(), discriminator: "3".repeat(64) },
+    rootPid: supervisor.pid, startedAt: new Date().toISOString(),
+  };
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v1", nonce, supervisorPid: supervisor.pid,
+    launchEffect: "started", status: "outcome_unknown",
+    rootProcess: { pid: process.pid, birth: recordedBirth },
+    knownProcesses: [{ pid: process.pid, birth: recordedBirth }],
+    updatedAt: new Date().toISOString(),
+  }));
+  try {
+    assert.equal(removeInactiveSemanticProbeRoot(root, binding), true);
+    await waitUntilProcessAbsent(supervisor.pid!, 2_000);
+    assert.equal(existsSync(root), false);
+    assert.doesNotThrow(() => process.kill(process.pid, 0), "the replacement process must never be signalled");
+  } finally {
+    const currentSupervisorBirth = currentWindowsBirth(supervisor.pid!);
+    if (currentSupervisorBirth && sameTestBirth(currentSupervisorBirth, supervisorBirth))
+      execFileSync("taskkill.exe", ["/PID", String(supervisor.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 2_000 });
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
 

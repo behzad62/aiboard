@@ -18,6 +18,13 @@ export class OwnedFenceLockUnavailableError extends Error {
   }
 }
 
+export class OwnedFenceAuthorityRetirementError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "OwnedFenceAuthorityRetirementError";
+  }
+}
+
 export function withOwnedFenceLockSync(path, effect, options = {}) {
   path = resolve(path);
   const context = acquire(path, options);
@@ -39,7 +46,7 @@ export function withOwnedFenceLockSync(path, effect, options = {}) {
     throw error;
   } finally {
     context.database.close();
-    if (retired) removeRetiredProtocol(path);
+    if (retired) retireProtocol(path, options);
   }
 }
 
@@ -74,7 +81,7 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
       throw error;
     } finally {
       context.database.close();
-      if (retired) removeRetiredProtocol(path);
+      if (retired) retireProtocol(path, options);
     }
   } finally {
     finishTurn();
@@ -89,6 +96,53 @@ export function currentProcessBirthFingerprint() {
   return cachedCurrentBirth.fingerprint;
 }
 
+export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
+  path = resolve(path);
+  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
+    throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup bounds are invalid.");
+  if (!existsSync(path)) throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup evidence is missing.");
+  const deadline = Date.now() + deadlineMs;
+  let database;
+  try {
+    database = new DatabaseSync(path);
+    database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
+    for (;;) {
+      try { database.exec("BEGIN IMMEDIATE"); break; }
+      catch (error) {
+        if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
+        Atomics.wait(waiter, 0, 0, retryDelayMs);
+      }
+    }
+    const objects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
+    for (const required of ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable"])
+      if (!objects.has(required)) throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup metadata is incomplete or invalid.");
+    const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
+    const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
+    const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
+    if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 || proposals !== 0 || holders !== 0)
+      throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup authority is active, foreign, or incomplete.");
+    database.exec("COMMIT");
+  } catch (error) {
+    rollbackQuietly(database);
+    throw normalizeUnavailable(error);
+  } finally { database?.close(); }
+  cleanup();
+}
+
+export function retiredOwnedFenceCleanupAvailable(path) {
+  let database;
+  try {
+    database = new DatabaseSync(resolve(path), { readOnly: true });
+    const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
+    const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
+    const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
+    return protocol.length === 1 && protocol[0].version === PROTOCOL_VERSION && protocol[0].retired === 1 && proposals === 0 && holders === 0;
+  } catch { return false; }
+  finally { database?.close(); }
+}
+
 function acquire(path, options) {
   const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
@@ -100,7 +154,7 @@ function acquire(path, options) {
   if (!Number.isSafeInteger(holderPid) || holderPid < 1 || typeof holderBirth !== "string" || holderBirth.length === 0)
     throw new OwnedFenceLockUnavailableError("Owned fence holder identity is invalid.");
   const acquisitionId = randomUUID();
-  const database = openProtocol(path, deadline, retryDelayMs);
+  const database = openProtocol(path, deadline, retryDelayMs, options.assertAuthority);
   const context = {
     database, acquisitionId, holderPid, holderBirth, deadline, retryDelayMs,
     inspectHolder: options.inspectHolder ?? defaultInspectHolder,
@@ -142,12 +196,17 @@ function acquire(path, options) {
   }
 }
 
-function openProtocol(path, deadline, retryDelayMs) {
+function openProtocol(path, deadline, retryDelayMs, assertAuthority) {
   const mayInitialize = !existsSync(path);
   for (;;) {
     let database;
+    let authorityRefused = false;
     try {
       database = new DatabaseSync(path);
+      if (mayInitialize && assertAuthority) {
+        try { assertAuthority(); }
+        catch (error) { authorityRefused = true; throw error; }
+      }
       database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
       const objects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
       const required = ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable"];
@@ -182,6 +241,12 @@ function openProtocol(path, deadline, retryDelayMs) {
       return database;
     } catch (error) {
       try { database?.close(); } catch {}
+      if (mayInitialize && authorityRefused) {
+        try { removeRetiredProtocol(path); } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], "Owned fence authority refusal and coordination cleanup both failed.", { cause: error });
+        }
+        throw error;
+      }
       if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
       Atomics.wait(waiter, 0, 0, retryDelayMs);
     }
@@ -297,6 +362,18 @@ function removeRetiredProtocol(path) {
   }
 }
 
+function retireProtocol(path, options) {
+  try {
+    if (typeof options.retireAuthority === "function") {
+      options.retireAuthority();
+      return;
+    }
+    removeRetiredProtocol(path);
+  } catch (error) {
+    throw new OwnedFenceAuthorityRetirementError("Owned fence authority retirement failed after its durable commit.", { cause: error });
+  }
+}
+
 function validHolderRow(row) {
   return typeof row.acquisitionId === "string" && /^[0-9a-f-]{36}$/i.test(row.acquisitionId) &&
     Number.isSafeInteger(Number(row.holderPid)) && Number(row.holderPid) > 0 &&
@@ -330,10 +407,49 @@ function inspectProcessBirth(pid) {
         return start ? { state: "same", fingerprint: `proc-start:${start}` } : { state: "unknown" };
       } catch (error) { return error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" }; }
     }
-    const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim();
-    return output ? { state: "same", fingerprint: output } : { state: "absent" };
+    return inspectGenericPosixProcessBirth(pid);
   } catch { return { state: "unknown" }; }
 }
+
+export function inspectGenericPosixProcessBirth(pid, operations = genericPosixInspectionOperations) {
+  const firstExistence = operations.probeExistence(pid);
+  if (firstExistence === "absent") return { state: "absent" };
+  if (firstExistence !== "live") return { state: "unknown" };
+  const firstBirth = operations.inspectBirth(pid);
+  if (firstBirth.outcome !== "ok")
+    return operations.probeExistence(pid) === "absent" ? { state: "absent" } : { state: "unknown" };
+  if (!firstBirth.fingerprint.trim()) return { state: "unknown" };
+  if (operations.probeExistence(pid) !== "live") return { state: "unknown" };
+  const secondBirth = operations.inspectBirth(pid);
+  if (secondBirth.outcome !== "ok")
+    return operations.probeExistence(pid) === "absent" ? { state: "absent" } : { state: "unknown" };
+  if (!secondBirth.fingerprint.trim() || !sameBirth(firstBirth.fingerprint, secondBirth.fingerprint))
+    return { state: "unknown" };
+  const finalExistence = operations.probeExistence(pid);
+  if (finalExistence === "absent") return { state: "absent" };
+  if (finalExistence !== "live") return { state: "unknown" };
+  return { state: "same", fingerprint: normalizeBirth(secondBirth.fingerprint) };
+}
+
+const genericPosixInspectionOperations = Object.freeze({
+  probeExistence(pid) {
+    try { process.kill(pid, 0); return "live"; }
+    catch (error) {
+      if (error?.code === "ESRCH") return "absent";
+      if (error?.code === "EPERM") return "permission";
+      return "unknown";
+    }
+  },
+  inspectBirth(pid) {
+    try {
+      const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim();
+      return output ? { outcome: "ok", fingerprint: output } : { outcome: "malformed" };
+    } catch (error) {
+      if (error?.code === "ETIMEDOUT" || error?.signal) return { outcome: "timeout" };
+      return { outcome: "failure" };
+    }
+  },
+});
 
 function sameBirth(left, right) { return normalizeBirth(left) === normalizeBirth(right); }
 function normalizeBirth(value) { return value.replace(/(\.\d{6})\d+(Z)$/, "$1$2"); }

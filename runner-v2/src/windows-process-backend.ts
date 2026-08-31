@@ -17,6 +17,8 @@ export interface WindowsProcessBackendOptions {
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "reconcile" | "release") => void | Promise<void>;
+  /** Test seam forwarded to the portable owner for post-retirement cleanup faults. */
+  readonly removeRetiredAuthority?: (directory: string) => void;
   /** A caller may supply the existing authenticated Job supervisor as an optional enhancement. */
   readonly jobObjects?: "unavailable" | { readonly service: WindowsJobProcessHost };
   readonly semanticFacts?: ProcessHostSemanticFacts;
@@ -42,6 +44,7 @@ export class WindowsProcessBackend extends NativeOwnedProcessBackend {
       replayCapacityChunks: options.replayCapacityChunks,
       replayCapacityBytes: options.replayCapacityBytes,
       beforeFenceEffect: options.beforeFenceEffect,
+      removeRetiredAuthority: options.removeRetiredAuthority,
       platform: "windows",
       backendId: "runner-windows-supervisor-v1",
       capabilities: {

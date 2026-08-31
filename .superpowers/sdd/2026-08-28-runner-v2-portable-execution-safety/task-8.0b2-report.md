@@ -815,3 +815,74 @@ approve B2 or begin B3.
   line-ending notices only. No SQLite DB, journal, WAL, SHM, supervisor, Job
   host, or closed-prefix fixture root remains. B2 remains locked for independent
   review, and B3 has not started.
+
+## Fix round 4 implementation evidence
+
+- The reviewer command was first replayed unchanged at authority commit
+  `0a310341`: 48/48 passed, while its previously captured physical RED remained
+  authoritative (`aiboard-windows-semantic-duplex-QPXulx`, exact supervisor PID
+  30336, recycled child PID 61496). The governed cleanup later stopped only PID
+  30336 after exact current birth, command/config root, nonce, and durable-state
+  checks; PID 61496 was absent/replaced and was never signalled. The exact root
+  was removed and the closed inventory reached zero.
+- R4.1 added an injectable generic-POSIX birth inspector. The initial missing
+  export was RED. Injected `ESRCH` is the sole absence proof; exact-live refuses,
+  exact birth mismatch remains reclaimable, and `EPERM`, timeout, malformed/empty
+  birth output, generic tool failure, and unresolved exit/reuse races are unknown.
+  Replacing the `ESRCH` result with unknown made the focused guard RED; revert is
+  GREEN. Final self-review also added the missing bounded recheck after a second
+  birth-inspection failure: its injected exit-after-failure case was RED, then
+  GREEN in both Node 24 and Node 22.13 lock groups. Linux `/proc` and Windows inspection were not changed. No macOS host was
+  available, so real macOS validation is explicitly unavailable rather than
+  claimed.
+- R4.2 moved native and portable SQLite coordination inside each durable identity
+  directory. Retirement commits the protocol tombstone, rejects/removes queued
+  proposals, closes SQLite, then removes the enclosing authority. Stale sync,
+  async, and concurrent arrivals perform zero effects and cannot recreate a
+  missing parent. Restoring sibling unlink/recreate behavior was RED; revert is
+  GREEN. Job state keeps its durable `backendOwnershipReleasedAt` tombstone and
+  permits first DB initialization only after an active durable-record check;
+  stale post-release claims remain typed refusals with no DB/sidecars.
+- A post-commit authority-removal fault is observable and recoverable. The first
+  release surfaces `OwnedFenceAuthorityRetirementError` and leaves the retired
+  protocol/evidence intact. A later release validates the retired schema/version,
+  zero holders/proposals, exact durable fence, identity/birth, terminal/output/
+  emptiness evidence, and current release authority, then removes the directory
+  without reopening an effect. Removing this retry made the real portable guard
+  RED; revert is GREEN. Corrupt, active, or foreign retired state remains.
+- R4.3 cleanup now independently inventories bounded exact owners, distinguishes
+  recycled births, validates the encoded supervisor config/root, and uses bounded
+  exact supervisor tree termination before a second no-owner proof and deletion.
+  Removing the authenticated supervisor fallback made the real replacement-PID
+  guard RED (`false !== true`); revert is GREEN and leaves no process/root. Probe
+  cleanup errors are aggregated rather than suppressed, and every affected test
+  finally path removes only authenticated evidence.
+- R4.4 keeps broad-prefix detection separate from deletion authority. Deletion
+  has a closed exact fixture-prefix list and requires either a valid recognized
+  Runner state document or a current-invocation root sentinel. Unrelated
+  `keep.txt`, empty, malformed, unregistered, link/escape, oversized, and live or
+  uncertain roots remain detected but preserved. Restoring zero-document/broad
+  prefix authorization removed three protected fixtures and was RED; revert is
+  GREEN 7/7. The production-default portable root remains excluded.
+- The original focused command now contains five new guards and is GREEN 53/53.
+  Complete portable plus Windows is GREEN 95/95. A three-file concurrent run
+  first found one load-only portable cleanup `outcome_unknown`; the exact case
+  was GREEN, its single authenticated residue was removed through the governed
+  helper, and the current concurrent rerun is GREEN 113/113. Complete B1/8.0A/
+  Task 5/7/3 compatibility is GREEN 357/357. Node 22.13.0 and Node 24 lock suites
+  are both GREEN 12/12.
+- Repeated exact diagnosis of the pre-existing 65 MiB evidence fixture produced
+  five exact managed-supervisor roots. Each supervisor was matched to one durable
+  Job-host record and exact script identity, stopped by literal PID/tree, observed
+  absent, and its literal no-reference root removed. The evidence guard is GREEN
+  in about 44 seconds under its unchanged 60-second test broker bound while still
+  asserting the unchanged 25,000 ms production command timeout.
+- Final pre-gates and post-gates are GREEN: Runner typecheck, targeted ESLint,
+  static actor/dependency/coordination/Node-policy/product-routing audit, and
+  `git diff --check` (line-ending notices only). The uninterrupted serial
+  `npm run test:runner-v2` gate exited 0: 1,384 total, 1,383 pass, zero fail,
+  zero cancelled, and one explicit POSIX-host skip in 973.16 seconds; every
+  chained client/policy/UI/observability script passed. After a bounded settle,
+  live managed/portable supervisors = 0 and exact B2-prefix roots = 0. No B3,
+  OCI-family activation, production deadline change, or Node patch pin was made.
+  B2 remains locked for fresh independent review.

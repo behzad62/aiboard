@@ -265,7 +265,7 @@ function publishChannelInputAck(command, status, reason) {
 }
 
 function withCurrentFenceEffect(ownerId, fencingToken, effect) {
-  const lock = `${config.directory}.fence.lock`;
+  const lock = join(config.directory, ".fence.lock");
   try {
     const holder = JSON.parse(readFileSync(lockHolderPath, "utf8"));
     if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
