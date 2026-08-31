@@ -579,3 +579,36 @@ overlap is expected.
   historical fail-closed/unrelated roots remain; none was deleted. Node policy,
   B3, OCI activation, routing, Job optionality, and production limits are
   unchanged. B2 and B3 remain locked for the required independent review.
+- Task 8.0B2 fix-round-11 independent re-review: CHANGES REQUIRED with zero
+  Critical, two Important, and zero Minor findings. Ordinary acquisition can
+  consume a foreign or previously preserved SQLite sidecar and mutate a
+  foreign WAL-mode database before rejection. A contender that observes an
+  exclusive empty reservation also fails immediately instead of retaining the
+  caller's acquisition deadline while the winner initializes. Fix round 12 is
+  authorized only for read-only existing-protocol preflight, the no-sidecar
+  boundary on every ordinary open, and deadline-retained provisional
+  contention under `task-8.0b2-fix-round-12-brief.md`. B2 and B3 remain locked.
+- Task 8.0B2 fix round 12 implementation and controller verification are GREEN
+  pending fresh independent review. Every ordinary open now enforces an exact
+  main/no-sidecar observation, validates existing SQLite protocols read-only,
+  revalidates the same mutation-sensitive snapshot after validation, and only
+  then permits a read-write open. Exclusive-create losers retain the caller's
+  original acquisition deadline while a real winner initializes. The initial
+  reviewer group was RED 0/4; three isolated guard removals and the final
+  post-preflight rewrite adversary were RED, reverted, and GREEN. A loaded full
+  gate then exposed a pre-existing one-second atomic-state replacement cutoff:
+  the exact stopped state remained in a supervisor temporary file after a
+  transient Windows destination lock. A deterministic 1.5-second file-lock
+  regression was RED and is now GREEN under bounded adaptive 1/2/4/8/15-second
+  retry windows; this is a supervisor state-publication envelope, not a task or
+  command deadline. Current evidence: lock groups 30/30 on current Node and
+  Node 22.13; affected portable/OS matrix 169 pass plus one expected POSIX-host
+  skip; managed/runtime compatibility 87/87; type/lint/diff/Node policy GREEN;
+  and final uninterrupted package 1,432 total / 1,431 pass / zero fail or
+  cancelled / one expected skip in 826.527 seconds with every chained product
+  contract green. Post-gate owned helpers are zero. Twenty broad diagnostic or
+  historical roots remain fail-closed, including five `outcome_unknown` replay
+  roots and two state-publication diagnostics; none was deleted and the final
+  green gate created no new root. Node policy, B3, OCI activation, routing, Job
+  optionality, and production task/command/model/output limits are unchanged.
+  B2 and B3 remain locked for the required independent review.

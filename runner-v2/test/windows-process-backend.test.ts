@@ -442,7 +442,6 @@ test("Windows portable launch rejects a birth result that arrives after its abso
     assert.match(messages, /startup deadline is exhausted/i,
       "the absolute deadline, not an incidental supervisor outcome, must reject the late birth result");
     assert.equal(unexpected, undefined, "a late exact birth is cleanup authority, never a successful launch binding");
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
     for (const pid of observedPids) cleanupPids.add(pid);
     for (const entry of readdirSync(stateDirectory)) {
       let state: {
@@ -455,6 +454,7 @@ test("Windows portable launch rejects a birth result that arrives after its abso
       for (const process of state.knownProcesses ?? []) if (Number.isSafeInteger(process.pid)) cleanupPids.add(process.pid);
     }
     assert.ok(cleanupPids.size >= 2, "the fixture must observe both supervisor and target cleanup identities");
+    await waitForCondition(() => [...cleanupPids].every((pid) => !processIsAlive(pid)), 5_000);
     assert.ok([...cleanupPids].every((pid) => !processIsAlive(pid)), "deadline rejection must leave no recorded owned process live");
     assert.deepEqual(readdirSync(stateDirectory), [], "authenticated deadline cleanup must remove its owned state root");
   } finally {

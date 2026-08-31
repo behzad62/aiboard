@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -551,17 +551,43 @@ test("portable release refuses a live supervisor even when membership is empty",
 test("portable reconcile and release reject corrupt acknowledgement evidence", { timeout: 60_000 }, async () => {
   if (process.platform !== "win32") return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-release-corrupt-ack-"));
+  const exitGate = join(root, "target-exit");
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
+  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", `
+    const fs = require("node:fs");
+    const gate = process.argv[1];
+    const waiter = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(gate) && Date.now() < deadline) Atomics.wait(waiter, 0, 0, 10);
+    process.exit(fs.existsSync(gate) ? 0 : 1);
+  `, exitGate])));
   const binding = bindingFor(launch);
   const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
-  await waitFor(() => JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")).status === "stopped", 15_000);
-  writeFileSync(join(identity.directory, "channel", "ack", "corrupt.json"), "{}");
+  const statePath = join(identity.directory, "state.json");
+  const lockScript = "$ErrorActionPreference='Stop';$s=[IO.File]::Open($env:AIBOARD_TEST_LOCK_PATH,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{[Console]::Out.WriteLine('LOCKED');[Threading.Thread]::Sleep([int]$env:AIBOARD_TEST_LOCK_MS)}finally{$s.Dispose()}";
+  const holder = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", lockScript], {
+    env: { ...fixtureEnvironment(), AIBOARD_TEST_LOCK_PATH: statePath, AIBOARD_TEST_LOCK_MS: "1500" },
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   try {
+    await waitForChildText(holder, "LOCKED");
+    writeFileSync(exitGate, "exit");
+    await waitFor(() => JSON.parse(readFileSync(statePath, "utf8")).status === "stopped", 10_000);
+    await waitForChildExit(holder);
+    assert.equal(readdirSync(identity.directory).some((name) => name === `state.json.${identity.supervisorPid}.tmp`), false,
+      "a transient destination lock must not strand the supervisor's atomic state publication");
+    writeFileSync(join(identity.directory, "channel", "ack", "corrupt.json"), "{}");
     assert.deepEqual(await backend.reconcile(binding, fence), { state: "outcome_unknown" });
     await assert.rejects(backend.release(binding, fence), /acknowledgement|evidence|output/i);
     assert.equal(existsSync(identity.directory), true);
-  } finally { await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth); }
+  } finally {
+    if (holder.exitCode === null) holder.kill();
+    await waitForChildExit(holder).catch(() => undefined);
+    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
+    await backend.release(binding, fence).catch(() => undefined);
+    await removePortableTestRootAfterExactOwnerAbsence(root, identity.supervisorPid, identity.supervisorBirth);
+  }
 });
 
 test("portable final effects fail closed when durable fence evidence disappears", { timeout: 60_000 }, async () => {
@@ -793,6 +819,43 @@ async function waitFor(predicate: () => boolean, deadlineMs = 5_000): Promise<vo
     if (Date.now() >= deadline) throw new Error("portable output did not arrive");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+async function waitForChildText(child: ChildProcess, expected: string, deadlineMs = 5_000): Promise<void> {
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+  child.stderr?.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+  await waitFor(() => stdout.includes(expected) || child.exitCode !== null, deadlineMs);
+  if (!stdout.includes(expected)) throw new Error(`file-lock helper exited before readiness: ${stderr}`);
+}
+async function waitForChildExit(child: ChildProcess, deadlineMs = 5_000): Promise<void> {
+  await waitFor(() => child.exitCode !== null, deadlineMs);
+}
+async function removePortableTestRootAfterExactOwnerAbsence(root: string, supervisorPid: number, supervisorBirth: string): Promise<void> {
+  const resolvedRoot = resolve(root);
+  if (dirname(resolvedRoot) !== resolve(tmpdir()) || !basename(resolvedRoot).startsWith("aiboard-portable-release-corrupt-ack-"))
+    throw new Error("Portable publication test cleanup target is outside its exact temporary namespace.");
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const identities: Array<{ pid: number; birth: string }> = [{ pid: supervisorPid, birth: supervisorBirth }];
+    for (const entry of existsSync(resolvedRoot) ? readdirSync(resolvedRoot, { withFileTypes: true }) : []) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const state = JSON.parse(readFileSync(join(resolvedRoot, entry.name, "state.json"), "utf8")) as { knownProcesses?: Array<{ pid: number; birth: string }> };
+        for (const process of state.knownProcesses ?? []) identities.push(process);
+      } catch {}
+    }
+    const exactLive = identities.filter((identity) => {
+      const observed = inspectWindowsTestBirth(identity.pid);
+      return observed.state === "present" && sameTestBirth(observed.birth, identity.birth);
+    });
+    if (exactLive.length === 0) break;
+    const exactSupervisor = exactLive.find((identity) => identity.pid === supervisorPid);
+    if (exactSupervisor) try { process.kill(supervisorPid, "SIGKILL"); } catch {}
+    if (Date.now() >= deadline) throw new Error("Portable publication test retained an exact owned process.");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  if (existsSync(resolvedRoot)) rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
 }
 function writeOutputCheckpoint(root: string): void {
   writeFileSync(join(root, "channel", "output-checkpoint.json"), JSON.stringify({ nonce: "nonce", stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));

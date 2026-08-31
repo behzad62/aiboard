@@ -1329,3 +1329,104 @@ approve B2 or begin B3.
 - Fix round 11 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 11 independent review
+
+- The fresh review reports zero Critical, two Important, and zero Minor
+  findings. B2 unlock is refused.
+- Ordinary acquisition currently opens an existing path read-write and changes
+  journal mode before enforcing sidecar absence or validating protocol
+  authority read-only. Reproductions consumed a foreign WAL, laundered a WAL
+  preserved by failed recovery, and changed foreign WAL-mode database bytes.
+- A real two-process reproduction showed that a contender rejects the winner's
+  still-empty exclusive reservation in milliseconds even though the winner
+  completes within the contender's caller-supplied deadline.
+- Final revocation mutation-sensitive validation, authority-refusal guards,
+  sidecar-injection guards, Node-line checks, static checks, and helper hygiene
+  are accepted.
+- Fix round 12 is bounded by `task-8.0b2-fix-round-12-brief.md`. It adds no
+  build-task timeout and does not change Node, OCI, routing, Job Object, output,
+  or B3 policy. B2 and B3 remain locked.
+
+## Fix round 12 implementation evidence
+
+- The four round-11 reviewer regressions were RED together against the prior
+  implementation: ordinary acquisition deleted a WAL preserved by revoked
+  recovery, crossed an active foreign sidecar, changed a foreign WAL-mode
+  database, and rejected a legitimate contended initializer in milliseconds.
+  The group reported 0/4 in approximately 0.674 seconds. Disabling only the
+  ordinary sidecar observation, read-only preflight, and remembered `EEXIST`
+  contention each made its exact guard RED; every mutation was reverted and
+  the focused group returned GREEN.
+- R12.1 checks the exact main snapshot and absence of `-journal`, `-wal`, and
+  `-shm` before every ordinary SQLite open and immediately afterward. A sidecar
+  preserved by recovery remains byte-identical on the alternate ordinary path.
+  An active-protocol rollback journal supplies a valid guard mutation test: if
+  the no-sidecar check is removed, the external effect runs; with the guard it
+  and the main database remain byte-identical. No ordinary path deletes or
+  consumes uncertain sidecars.
+- R12.2 opens every existing protocol read-only before any write-capable open,
+  write PRAGMA, schema mutation, or transaction. It accepts only the current
+  exact active protocol or the existing safe empty legacy migration case.
+  Foreign, incomplete, retired, authority-mismatched, WAL-mode, or otherwise
+  invalid metadata fails closed without mutation. A final adversarial audit
+  found that adopting a fresh same-inode snapshot after validation could still
+  trust an in-place foreign rewrite. The deterministic rewrite changed the
+  foreign WAL header before rejection (RED 0/1); exact post-validation snapshot
+  revalidation now rejects it before a read-write open (GREEN 1/1).
+- R12.3 records exclusive-create contention and inspects an empty winner without
+  SQLite. A real second process reserves the path, waits 300 ms, initializes a
+  valid protocol, and the contender then succeeds exactly once inside its
+  original caller-supplied deadline. Incomplete same-identity observations are
+  retried only inside that deadline. This introduces no two-second task limit
+  or OS/hardware-specific build duration.
+- A concurrent portable retained-window pressure test initially exposed an
+  over-strict post-read-write-open check: a legitimate same-inode writer could
+  commit in that gap. Same-identity observation changes now close and retry the
+  read-only validation sequence; replacement identity still fails immediately.
+  The exact pressure test passed three consecutive runs and the affected/full
+  gates below.
+- The first complete current package run after the four reviewer fixes was
+  GREEN at 1,431 total / 1,430 pass / zero fail / one expected skip in 880.436
+  seconds, with every chained product contract green. A later adversarial
+  rewrite regression increased the current count to 1,432 and required a fresh
+  global restart. That restart reported one failure: the corrupt-acknowledgement
+  fixture waited for a stopped state while the supervisor had left its next
+  exact state in `state.json.<pid>.tmp` and exited.
+- The loaded failure proved that portable supervisor atomic replacement had a
+  fixed one-second retry cutoff for transient `EPERM`, `EACCES`, or `EBUSY`.
+  A deterministic Windows test holds the destination against replacement for
+  1.5 seconds: the former behavior was RED 0/1 in 11.219 seconds, while bounded
+  adaptive retry windows of 1, 2, 4, 8, then at most 15 seconds are GREEN 1/1
+  in 2.817 seconds. The retry expands only while the exact atomic replacement
+  keeps returning a recognized transient filesystem error. Permanent or
+  unknown errors still fail closed. This changes no build-task, command, model,
+  output, startup, or process-discovery deadline.
+- Final targeted evidence is GREEN: the ownership-lock module is 30/30 in
+  7.855 seconds on current Node and 30/30 in 7.591 seconds on Node 22.13; the
+  portable channel is 32/32 in 45.256 seconds; the affected cross-platform
+  matrix is 170 total / 169 pass / zero fail / one explicit POSIX-host skip in
+  133.900 seconds; and managed process plus subprocess runtime compatibility is
+  87/87 in 19.482 seconds.
+- The final uninterrupted exact-current `npm run test:runner-v2` exits zero:
+  1,432 total, 1,431 pass, zero fail or cancelled, and one explicit POSIX-host
+  skip in 826.527 seconds. Every chained Runner client, native policy, policy
+  UI, cutover, pause-gate, model-usage, live-state, transcript, native-files,
+  run-stats, steering, and observability contract also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint, `git diff --check`, and
+  Node-range audits are GREEN. Node remains
+  `>=22.13.0 <23 || >=24.0.0 <25`; it is not pinned to an exact patch. Process
+  inventory reports zero live portable supervisors/children, Job hosts,
+  TERM-ignore fixtures, or ownership-lock holders after excluding the audit
+  commands themselves.
+- The broad B2 inventory contains twenty preserved roots. Five
+  `aiboard-portable-replay-*` roots record `outcome_unknown` from the
+  same-identity pressure diagnosis. Two additional roots record the loaded
+  atomic-publication failure and a pre-identity diagnostic startup failure;
+  their exact processes are absent, but their durable state does not authorize
+  deletion. The other thirteen are historical fail-closed/unrelated evidence.
+  No entry was deleted, and the final successful package gate created no new
+  root.
+- Fix round 12 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

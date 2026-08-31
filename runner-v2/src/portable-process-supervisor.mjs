@@ -20,6 +20,8 @@ const channelOutputDirectory = join(channelDirectory, "output");
 const channelInputDirectory = join(channelDirectory, "input");
 const channelAckDirectory = join(channelDirectory, "ack");
 const outputCheckpointPath = join(channelDirectory, "output-checkpoint.json");
+const STATE_PUBLICATION_INITIAL_RETRY_MS = 1_000;
+const STATE_PUBLICATION_MAX_RETRY_MS = 15_000;
 for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
 if (!existsSync(outputCheckpointPath)) writeAtomic(outputCheckpointPath, JSON.stringify({ nonce: config.nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
 const replayCapacityChunks = config.replayCapacityChunks ?? 16;
@@ -610,15 +612,24 @@ function publish(status, error = null) {
 }
 
 function replaceState(temporary, destination) {
-  const deadline = Date.now() + 1_000;
+  const startedAt = Date.now();
+  let retryWindowMs = STATE_PUBLICATION_INITIAL_RETRY_MS;
+  let deadline = startedAt + retryWindowMs;
   const waiter = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
     try {
       renameSync(temporary, destination);
       return;
     } catch (error) {
-      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || Date.now() >= deadline) throw error;
-      Atomics.wait(waiter, 0, 0, 10);
+      if (!["EPERM", "EACCES", "EBUSY"].includes(error?.code)) throw error;
+      const now = Date.now();
+      if (now >= deadline) {
+        if (retryWindowMs >= STATE_PUBLICATION_MAX_RETRY_MS) throw error;
+        retryWindowMs = Math.min(STATE_PUBLICATION_MAX_RETRY_MS, retryWindowMs * 2);
+        deadline = startedAt + retryWindowMs;
+        if (now >= deadline && retryWindowMs >= STATE_PUBLICATION_MAX_RETRY_MS) throw error;
+      }
+      Atomics.wait(waiter, 0, 0, Math.min(10, Math.max(1, deadline - Date.now())));
     }
   }
 }

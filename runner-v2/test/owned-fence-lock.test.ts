@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { inspectGenericPosixProcessBirth, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
+const contendedInitializerFixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-contended-initializer.mjs", import.meta.url));
 
 test("generic POSIX holder inspection distinguishes exact absence from uncertain process-tool outcomes", () => {
   const cases = [
@@ -593,6 +594,182 @@ test("a sidecar made uncertain by one recovery remains uncertain on every later 
     assert.equal(readFileSync(sidecarPath, "utf8"), sentinel, "a later attempt must not promote uncertainty into deletion authority");
     assert.equal(existsSync(lockPath), true, "durable sidecar uncertainty must preserve the retired main authority");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("ordinary acquisition cannot launder a sidecar preserved by revoked recovery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-ordinary-laundering-"));
+  const lockPath = join(root, ".fence.lock");
+  const sidecarPath = `${lockPath}-wal`;
+  const sentinel = Buffer.from("revoked-recovery-sidecar-must-remain-byte-identical");
+  let effects = 0;
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 3) writeFileSync(sidecarPath, sentinel);
+      },
+    }), /sidecar|appeared|changed|unavailable/i);
+    assert.equal(assertions, 3);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      deadlineMs: 75,
+      retryDelayMs: 5,
+      holderBirth: "ordinary-laundering-test",
+    }), /sidecar|retired|unavailable|invalid/i);
+    assert.equal(effects, 0, "ordinary acquisition must not cross preserved recovery uncertainty");
+    assert.deepEqual(readFileSync(sidecarPath), sentinel, "ordinary acquisition must preserve the uncertain sidecar bytes");
+    assert.equal(existsSync(lockPath), true, "ordinary acquisition must preserve the retired main database");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("ordinary acquisition preserves an active protocol sidecar and performs no effect", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-active-sidecar-"));
+  const lockPath = join(root, "active.sqlite");
+  const sidecarPath = `${lockPath}-journal`;
+  const sentinel = Buffer.alloc(512);
+  sentinel.write("foreign-inactive-rollback-journal-must-remain-byte-identical", 64);
+  let effects = 0;
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined, { holderBirth: "active-sidecar-creator" });
+    const mainBefore = readFileSync(lockPath);
+    writeFileSync(sidecarPath, sentinel);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      deadlineMs: 75,
+      retryDelayMs: 5,
+      holderBirth: "active-sidecar-contender",
+    }), /sidecar|unavailable|invalid|database/i);
+    assert.equal(effects, 0);
+    assert.deepEqual(readFileSync(sidecarPath), sentinel, "the foreign sidecar must never be consumed or removed");
+    assert.deepEqual(readFileSync(lockPath), mainBefore, "a sidecar-blocked acquisition must not mutate the main database");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("ordinary acquisition rejects a foreign WAL-mode database without changing its bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-foreign-wal-"));
+  const lockPath = join(root, "foreign.sqlite");
+  let effects = 0;
+  try {
+    const foreign = new DatabaseSync(lockPath);
+    try {
+      foreign.exec("PRAGMA journal_mode=WAL; CREATE TABLE foreign_owner(value TEXT NOT NULL); INSERT INTO foreign_owner(value) VALUES ('sentinel'); PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally { foreign.close(); }
+    assert.equal(existsSync(`${lockPath}-wal`), false, "closed fixture must exercise read-only preflight rather than the sidecar guard");
+    assert.equal(existsSync(`${lockPath}-shm`), false, "closed fixture must exercise read-only preflight rather than the sidecar guard");
+    const before = readFileSync(lockPath);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      deadlineMs: 100,
+      retryDelayMs: 5,
+      holderBirth: "foreign-wal-contender",
+    }), /metadata|protocol|foreign|unavailable|invalid/i);
+    assert.equal(effects, 0);
+    assert.deepEqual(readFileSync(lockPath), before, "rejecting foreign WAL-mode metadata must be byte-for-byte read-only");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("ordinary acquisition revalidates an in-place rewrite after read-only preflight", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-post-preflight-rewrite-"));
+  const lockPath = join(root, "active.sqlite");
+  const foreignPath = join(root, "foreign.sqlite");
+  const originalPrepare = DatabaseSync.prototype.prepare;
+  let protocolReads = 0;
+  let injected = false;
+  let effects = 0;
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined, { holderBirth: "post-preflight-creator" });
+    const foreign = new DatabaseSync(foreignPath);
+    try {
+      foreign.exec("PRAGMA journal_mode=WAL; CREATE TABLE foreign_owner(value TEXT NOT NULL); INSERT INTO foreign_owner(value) VALUES ('sentinel'); PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally { foreign.close(); }
+    const foreignBytes = readFileSync(foreignPath);
+
+    DatabaseSync.prototype.prepare = (function prepare(this: DatabaseSync, sql: string) {
+      const statement = originalPrepare.call(this, sql);
+      if (sql !== "SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol") return statement;
+      return new Proxy(statement, {
+        get(target, property) {
+          if (property === "all") return () => {
+            const rows = target.all();
+            protocolReads += 1;
+            if (protocolReads === 2) {
+              writeFileSync(lockPath, foreignBytes);
+              injected = true;
+            }
+            return rows;
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    }) as typeof DatabaseSync.prototype.prepare;
+
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      deadlineMs: 100,
+      retryDelayMs: 5,
+      holderBirth: "post-preflight-contender",
+    }), /changed|foreign|metadata|protocol|unavailable|invalid/i);
+    assert.equal(injected, true, "the fixture must rewrite the same path after read-only validation");
+    assert.equal(effects, 0);
+    assert.deepEqual(readFileSync(lockPath), foreignBytes,
+      "post-validation foreign bytes must be rejected before any read-write open or journal-mode change");
+  } finally {
+    DatabaseSync.prototype.prepare = originalPrepare;
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("a contender retains its caller deadline while an exclusive winner initializes", { timeout: 10_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-contended-init-"));
+  const lockPath = join(root, "contended.sqlite");
+  const gatePath = join(root, "reserve.go");
+  const initializer = spawn(process.execPath, [contendedInitializerFixture, lockPath, "300", gatePath], {
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let diagnostics = "";
+  initializer.stderr?.on("data", (chunk) => { diagnostics += chunk.toString("utf8"); });
+  let effects = 0;
+  const originalOpenSync = fs.openSync;
+  let injected = false;
+  try {
+    assert.equal((await nextMessage(initializer)).state, "armed");
+    fs.openSync = ((candidate, flags, mode) => {
+      if (!injected && candidate === lockPath && flags === "wx") {
+        injected = true;
+        writeFileSync(gatePath, "reserve");
+        const reserveDeadline = Date.now() + 1_000;
+        while (!existsSync(lockPath) && Date.now() < reserveDeadline)
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+        assert.equal(existsSync(lockPath), true, "the real winner did not reserve before the contender's exclusive create");
+      }
+      return originalOpenSync(candidate, flags, mode);
+    }) as typeof fs.openSync;
+    syncBuiltinESMExports();
+    const moduleUrl = new URL("../src/owned-fence-lock.mjs", import.meta.url);
+    moduleUrl.searchParams.set("contended-init", `${Date.now()}-${Math.random()}`);
+    const isolated = await import(moduleUrl.href) as typeof import("../src/owned-fence-lock.mjs");
+    const startedAt = Date.now();
+    isolated.withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      deadlineMs: 1_500,
+      retryDelayMs: 10,
+      holderBirth: "contended-initializer-test",
+    });
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(injected, true, "the regression must force the real winner to win the contender's EEXIST race");
+    assert.equal(effects, 1, "the contender must acquire exactly once after valid initialization completes");
+    assert.ok(elapsedMs >= 200, `the contender returned before the 300ms winner could initialize (${elapsedMs}ms)`);
+    assert.ok(elapsedMs < 1_500, `the contender exceeded its original caller deadline (${elapsedMs}ms)`);
+    await exited(initializer);
+    assert.equal(initializer.exitCode, 0, diagnostics);
+  } finally {
+    fs.openSync = originalOpenSync;
+    syncBuiltinESMExports();
+    await stop(initializer);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
 });
 
 function startHolder(lockPath: string, effectPath?: string, deadlineMs = 2_000, holdMs = 60_000, mode = "hold"): ChildProcess {
