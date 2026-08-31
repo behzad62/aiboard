@@ -431,3 +431,11 @@ overlap is expected.
   cancelled / one explicit POSIX-host skip. No live helpers or new B2 roots
   remain; two historical fail-closed roots are deliberately preserved outside
   deletion authority. B2 remains locked and B3 has not started.
+- Task 8.0B2 fix-round-5 independent re-review: CHANGES REQUIRED with zero
+  Critical and two Important residual gaps. A substituted Job record can direct
+  released-tombstone recovery to another process ID and retire its coordination;
+  global cleanup treats inaccessible CIM properties as empty and misses encoded
+  roots embedded in option arguments. All focused/full implementation gates
+  remain green, but semantic closure is incomplete. Governed fix round 6 is
+  authorized only for these findings under `task-8.0b2-fix-round-6-brief.md`.
+  B2 remains locked.
