@@ -15,6 +15,8 @@ export interface PortableChannelAuthority {
   readonly directory: string;
   readonly nonce: string;
   readonly fence: ProcessEffectFence;
+  /** Exact durable supervisor PID; authenticates its atomic publication names. */
+  readonly supervisorPid?: number;
   reattest(): "live" | "exited";
   effect<T>(kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T>;
 }
@@ -228,7 +230,11 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     const expected = new Map<"stdout" | "stderr", { sequence: number; offset: number }>([["stdout", { sequence: checkpoint.stdout.sequence + 1, offset: checkpoint.stdout.endOffset }], ["stderr", { sequence: checkpoint.stderr.sequence + 1, offset: checkpoint.stderr.endOffset }]]);
     for (const name of names) {
       const filename = /^(stdout|stderr)-(\d{12})\.json$/.exec(name);
-      if (!filename) throw new Error("Portable output filename is invalid.");
+      if (!filename) {
+        const pending = /^(stdout|stderr)-(\d{12})\.json\.(\d+)\.tmp$/.exec(name);
+        if (pending && Number(pending[3]) === this.authority.supervisorPid) continue;
+        throw new Error("Portable output filename is invalid.");
+      }
       let raw: string;
       try { raw = readFileSync(join(this.outputDirectory, name), "utf8"); }
       catch (error) {
@@ -274,17 +280,41 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     this.inputClosed = nextState.inputClosed;
     const deadline = Date.now() + timeoutMs;
     const ackPath = join(this.ackDirectory, name);
-    while (Date.now() < deadline) {
-      this.reattest(false);
+    const readAcknowledgement = (): "acknowledged" | "failed" | undefined => {
+      let ack: Record<string, unknown>;
+      try { ack = JSON.parse(readFileSync(ackPath, "utf8")); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw new Error("Portable channel command acknowledgement is invalid.", { cause: error });
+      }
+      if (ack.nonce !== this.authority.nonce || ack.ownerId !== this.authority.fence.ownerId ||
+          ack.fencingToken !== this.authority.fence.fencingToken || ack.sequence !== sequence ||
+          (ack.status !== "acknowledged" && ack.status !== "failed"))
+        throw new Error("Portable channel command acknowledgement is invalid.");
+      return ack.status;
+    };
+    const settleAcknowledgement = async (): Promise<boolean> => {
+      const status = readAcknowledgement();
+      if (status === undefined) return false;
+      if (status === "failed") throw new Error("Portable channel command failed.");
       try {
-        const ack = JSON.parse(readFileSync(ackPath, "utf8"));
-        if (ack.nonce === this.authority.nonce && ack.ownerId === this.authority.fence.ownerId && ack.fencingToken === this.authority.fence.fencingToken && ack.sequence === sequence && ack.status === "acknowledged") {
-          await this.authority.effect("ack_consume", () => { try { unlinkSync(ackPath); } catch {} });
-          return;
-        }
-        if (ack.status === "failed") throw new Error("Portable channel command failed.");
+        await this.authority.effect("ack_consume", () => { try { unlinkSync(ackPath); } catch {} });
       } catch (error) {
-        if (existsSync(ackPath)) throw error;
+        // Delivery committed before takeover. If the prior owner can no longer
+        // consume its proof, accept only the same still-durable acknowledgement.
+        if (readAcknowledgement() !== "acknowledged") throw error;
+      }
+      return true;
+    };
+    while (Date.now() < deadline) {
+      if (await settleAcknowledgement()) return;
+      try { this.reattest(false); }
+      catch (error) {
+        // A takeover and a supervisor acknowledgement serialize through the
+        // same fence transaction. Re-read after observing takeover so the
+        // caller never reports rejection for an effect that already committed.
+        if (await settleAcknowledgement()) return;
+        throw error;
       }
       await delay(this.pollIntervalMs);
     }

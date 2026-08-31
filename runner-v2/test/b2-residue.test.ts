@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,13 +16,65 @@ test("the exact B2 residue inventory removes only a closed-prefix proven-absent 
     const inventory = inventoryB2Residue();
     assert.ok(inventory.some((entry) => entry.path === root));
     assert.ok(!inventory.some((entry) => entry.path === nearMiss));
-    assert.deepEqual(cleanProvenB2Residue(inventory.filter((entry) => entry.path === root)), [root]);
+    assert.deepEqual(cleanProvenB2Residue(inventory.filter((entry) => entry.path === root), {
+      processInventory: () => [accessibleInventoryProcess(process.pid, "2000-01-01T00:00:00.000Z")],
+    }), [root]);
     assert.equal(existsSync(root), false);
     assert.equal(existsSync(nearMiss), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(nearMiss, { recursive: true, force: true });
   }
+});
+
+test("the published-input race fixture has closed cleanup authority after every recorded owner is absent", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-published-stale-input-"));
+  try {
+    writeFileSync(join(root, "state.json"), JSON.stringify({
+      protocol: "aiboard-portable-process/v1",
+      nonce: "published-input-race",
+      supervisorPid: 2_147_483_646,
+      launchEffect: "not_started",
+      rootProcess: null,
+      knownProcesses: [],
+    }));
+    const entry = inventoryB2Residue().find((candidate) => candidate.path === root);
+    assert.ok(entry);
+    assert.deepEqual(cleanProvenB2Residue([entry], {
+      processInventory: () => [accessibleInventoryProcess(process.pid, "2000-01-01T00:00:00.000Z")],
+    }), [root]);
+    assert.equal(existsSync(root), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("B2 cleanup preserves embedded references and inaccessible post-root process evidence", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-published-stale-input-"));
+  const cleanup = cleanProvenB2Residue as unknown as (
+    entries: Parameters<typeof cleanProvenB2Residue>[0],
+    operations: { processInventory(): readonly Record<string, unknown>[] },
+  ) => readonly string[];
+  try {
+    writeFileSync(join(root, "state.json"), JSON.stringify({
+      protocol: "aiboard-portable-process/v1", nonce: "cleanup-reference-guard",
+      supervisorPid: 2_147_483_646, launchEffect: "not_started", rootProcess: null, knownProcesses: [],
+    }));
+    const entry = inventoryB2Residue().find((candidate) => candidate.path === root); assert.ok(entry);
+    const birth = new Date(statSync(root).birthtimeMs + 1_000).toISOString();
+    const base = { pid: process.pid, birth, parentPid: 0, executableAccessible: true, executable: process.execPath };
+    const embedded = Buffer.from(root).toString("base64url");
+    assert.deepEqual(cleanup([entry], { processInventory: () => [{
+      ...base, commandLineAccessible: true, commandLine: `node --payload=${embedded}`,
+    }] }), []);
+    assert.equal(existsSync(root), true);
+    assert.deepEqual(cleanup([entry], { processInventory: () => [{
+      ...base, commandLineAccessible: false, commandLine: "",
+    }] }), []);
+    assert.equal(existsSync(root), true);
+    assert.deepEqual(cleanup([entry], { processInventory: () => [{
+      ...base, commandLineAccessible: true, commandLine: "unrelated process",
+    }] }), [root]);
+    assert.equal(existsSync(root), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("an empty exact fence coordination database is removed but corrupt lock evidence is preserved", () => {
@@ -41,7 +93,9 @@ test("an empty exact fence coordination database is removed but corrupt lock evi
     writeFileSync(corrupt, "not coordination evidence");
     const inventory = inventoryB2Residue();
     const candidates = inventory.filter((entry) => entry.path === safe || entry.path === corrupt);
-    assert.deepEqual(cleanProvenB2Residue(candidates), [safe]);
+    assert.deepEqual(cleanProvenB2Residue(candidates, {
+      processInventory: () => [accessibleInventoryProcess(process.pid, "2000-01-01T00:00:00.000Z")],
+    }), [safe]);
     assert.equal(existsSync(safe), false);
     assert.equal(existsSync(corrupt), true);
   } finally {
@@ -113,7 +167,9 @@ test("an exact-live enumerated PID born before the recorded root is proven unrel
       knownProcesses: [{ pid: process.pid, birth: currentBirth }],
     }));
     const entry = inventoryB2Residue().find((candidate) => candidate.path === root); assert.ok(entry);
-    assert.deepEqual(cleanProvenB2Residue([entry]), [root]);
+    assert.deepEqual(cleanProvenB2Residue([entry], {
+      processInventory: () => [accessibleInventoryProcess(process.pid, currentBirth)],
+    }), [root]);
     assert.equal(existsSync(root), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -129,7 +185,9 @@ test("a reused birthless PID born after the durable state update is proven unrel
       launchEffect: "unknown", rootProcess: null, knownProcesses: [],
     }));
     const entry = inventoryB2Residue().find((candidate) => candidate.path === root); assert.ok(entry);
-    assert.deepEqual(cleanProvenB2Residue([entry]), [root]);
+    assert.deepEqual(cleanProvenB2Residue([entry], {
+      processInventory: () => [accessibleInventoryProcess(process.pid, currentBirth)],
+    }), [root]);
     assert.equal(existsSync(root), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -138,4 +196,12 @@ function windowsBirth(pid: number): string {
   return execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
     `$ErrorActionPreference='Stop';(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
   ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+}
+
+function accessibleInventoryProcess(pid: number, birth: string) {
+  return {
+    pid, birth, parentPid: 0,
+    executableAccessible: true, commandLineAccessible: true,
+    executable: process.execPath, commandLine: "unrelated test controller",
+  };
 }

@@ -128,17 +128,22 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     mkdirSync(this.stateDirectory, { recursive: true });
     for (const name of readdirSync(this.stateDirectory)) {
       if (!name.endsWith(".json")) continue;
+      const requestedProcessId = name.slice(0, -".json".length);
+      this.assertProcessId(requestedProcessId);
       const value = JSON.parse(readFileSync(join(this.stateDirectory, name), "utf8")) as Partial<HostRecord>;
-      if (isHostRecord(value)) this.records.set(value.processId, value);
+      if (isHostRecord(value)) {
+        this.assertEmbeddedProcessId(requestedProcessId, value);
+        this.records.set(requestedProcessId, value);
+      }
     }
   }
 
   async launchOwned(input: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot> {
     if (this.platform !== "win32" || process.platform !== "win32")
       throw new WindowsJobHostError("process_containment_unavailable", "Windows Job containment is unavailable on this platform.");
-    const processId = this.idFactory();
+    const processId = this.validatedProcessId(this.idFactory());
     if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
-    const processDirectory = join(this.stateDirectory, processId);
+    const processDirectory = this.containedProcessPath(processId, "");
     mkdirSync(processDirectory, { recursive: true });
     const token = randomBytes(32).toString("hex");
     const statusPath = join(processDirectory, "supervisor.jsonl");
@@ -169,7 +174,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       await writeSupervisorConfig(launcher, JSON.stringify({
         processId, token, statusPath, stdoutPath: record.stdoutPath, stderrPath: record.stderrPath,
         eventPath: join(processDirectory, "job-events.jsonl"),
-        recordPath: join(this.stateDirectory, `${processId}.json`),
+        recordPath: this.containedProcessPath(processId, ".json"),
         command: input.command, args: [...input.args], cwd: record.cwd,
         env: { ...input.environment }, stopDeadlineMs: this.stopDeadlineMs, interactive: input.interactive === true,
         maxPollBytes: this.maxPollBytes,
@@ -226,7 +231,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.assertCurrentFence(record, fence);
     if (record.startedAt !== expectedStartedAt) throw new WindowsJobHostError("process_identity_mismatch", `Windows Job process ${processId} identity mismatch.`);
     if (record.backendOwnershipReleasedAt) {
-      await this.recoverReleasedFence(record, owner, expectedStartedAt, fence);
+      await this.recoverReleasedFence(processId, record, owner, expectedStartedAt, fence);
       return { ...this.snapshot(this.ownedRecord(processId, owner)), ownershipReleased: true };
     }
     const status = await this.authenticatedStatus(record);
@@ -253,7 +258,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       if (releaseEffectPersisted) throw error;
       const current = this.ownedRecord(processId, owner);
       if (!current.backendOwnershipReleasedAt) throw error;
-      await this.recoverReleasedFence(current, owner, expectedStartedAt, fence);
+      await this.recoverReleasedFence(processId, current, owner, expectedStartedAt, fence);
       return { ...this.snapshot(this.ownedRecord(processId, owner)), ownershipReleased: true };
     }
   }
@@ -354,7 +359,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
 
   async claimOwnedFence(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
     if (!fence.ownerId || !Number.isSafeInteger(fence.fencingToken) || fence.fencingToken < 1) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is invalid.");
-    const lockPath = join(this.stateDirectory, `${processId}.fence.lock`);
+    const lockPath = this.containedProcessPath(processId, ".fence.lock");
     try {
       await withOwnedFenceLock(lockPath, async () => {
         const record = this.ownedRecord(processId, owner);
@@ -391,19 +396,27 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   }
 
   private ownedRecord(processId: string, owner: WindowsJobOwnershipKey): HostRecord {
+    this.assertProcessId(processId);
     const disk = this.readRecord(processId); if (disk) this.records.set(processId, disk);
     const record = this.records.get(processId);
     if (!record) throw new WindowsJobHostError("process_not_found", `Process ${processId} was not found.`);
+    this.assertEmbeddedProcessId(processId, record);
     if (record.runId !== owner.runId || record.sessionId !== owner.sessionId)
       throw new WindowsJobHostError("process_not_owned", `Process ${processId} belongs to another session.`);
     return record;
   }
   private readRecord(processId: string): HostRecord | null {
-    try { const value = JSON.parse(readFileSync(join(this.stateDirectory, `${processId}.json`), "utf8")) as Partial<HostRecord>; return isHostRecord(value) ? value : null; }
+    const path = this.containedProcessPath(processId, ".json");
+    try {
+      const value = JSON.parse(readFileSync(path, "utf8")) as Partial<HostRecord>;
+      if (!isHostRecord(value)) return null;
+      this.assertEmbeddedProcessId(processId, value);
+      return value;
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   }
   private persist(record: HostRecord): void {
-    const destination = join(this.stateDirectory, `${record.processId}.json`); const temporary = `${destination}.${randomUUID()}.tmp`;
+    const destination = this.containedProcessPath(record.processId, ".json"); const temporary = `${destination}.${randomUUID()}.tmp`;
     writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 }); renameSync(temporary, destination);
   }
   private applyStatus(record: HostRecord, status: SupervisorStatus, persistRecord = true): void {
@@ -472,7 +485,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const tail = previous.then(() => turn);
     this.effectTails.set(record.processId, tail);
     await previous;
-    const lockPath = join(this.stateDirectory, `${record.processId}.fence.lock`);
+    const lockPath = this.containedProcessPath(record.processId, ".fence.lock");
     try {
       return await withOwnedFenceLock(lockPath, async () => {
         const current = this.ownedRecord(record.processId, record);
@@ -494,11 +507,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       if (this.effectTails.get(record.processId) === tail) this.effectTails.delete(record.processId);
     }
   }
-  private async recoverReleasedFence(record: HostRecord, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence: WindowsJobWriterFence | undefined): Promise<void> {
-    const lockPath = join(this.stateDirectory, `${record.processId}.fence.lock`);
+  private async recoverReleasedFence(requestedProcessId: string, record: HostRecord, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence: WindowsJobWriterFence | undefined): Promise<void> {
+    this.assertEmbeddedProcessId(requestedProcessId, record);
+    const lockPath = this.containedProcessPath(requestedProcessId, ".fence.lock");
     const assertRevoked = (): void => {
-      const current = this.ownedRecord(record.processId, owner);
-      if (!current.backendOwnershipReleasedAt || current.processId !== record.processId || current.pid !== record.pid ||
+      const current = this.ownedRecord(requestedProcessId, owner);
+      this.assertEmbeddedProcessId(requestedProcessId, current);
+      if (!current.backendOwnershipReleasedAt || record.processId !== requestedProcessId || current.pid !== record.pid ||
           current.startedAt !== expectedStartedAt || current.runId !== owner.runId || current.sessionId !== owner.sessionId ||
           current.supervisor.protocol !== record.supervisor.protocol || current.supervisor.supervisorPid !== record.supervisor.supervisorPid ||
           current.supervisor.token !== record.supervisor.token || resolve(current.supervisor.statusPath) !== resolve(record.supervisor.statusPath))
@@ -516,6 +531,26 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       if (error instanceof WindowsJobHostError) throw error;
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job released writer fence cleanup is unavailable: ${String(error)}`);
     }
+  }
+  private validatedProcessId(processId: string): string {
+    this.assertProcessId(processId);
+    return processId;
+  }
+  private assertProcessId(processId: string): void {
+    if (typeof processId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/.test(processId) || processId === "." || processId === "..")
+      throw new WindowsJobHostError("process_identity_mismatch", "Windows Job process identity is invalid or path-escaping.");
+  }
+  private assertEmbeddedProcessId(requestedProcessId: string, record: Pick<HostRecord, "processId">): void {
+    this.assertProcessId(requestedProcessId);
+    if (record.processId !== requestedProcessId)
+      throw new WindowsJobHostError("process_identity_mismatch", `Windows Job record identity mismatch for ${requestedProcessId}.`);
+  }
+  private containedProcessPath(processId: string, suffix: string): string {
+    this.assertProcessId(processId);
+    const candidate = resolve(this.stateDirectory, `${processId}${suffix}`);
+    if (dirname(candidate) !== this.stateDirectory)
+      throw new WindowsJobHostError("process_identity_mismatch", "Windows Job process path escapes host state.");
+    return candidate;
   }
   private snapshot(record: HostRecord): WindowsJobProcessSnapshot {
     return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes) };

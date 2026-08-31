@@ -439,3 +439,17 @@ overlap is expected.
   remain green, but semantic closure is incomplete. Governed fix round 6 is
   authorized only for these findings under `task-8.0b2-fix-round-6-brief.md`.
   B2 remains locked.
+- Task 8.0B2 fix round 6 implementation and controller verification are GREEN
+  pending fresh independent review. Job record/recovery paths are bound to the
+  validated requested ID; inaccessible global process metadata and embedded
+  standard-base64/base64url references fail closed. Loaded replay additionally
+  replaced fixed Windows startup-birth observation windows with three adaptive
+  bounded probes inside one 30-second handshake, closed acknowledgement/takeover
+  truth and atomic-publication races, and preserved unrelated recycled PIDs.
+  Current evidence: affected pressure 145/145, final serial package 1,409 total /
+  1,408 pass / zero fail or cancelled / one explicit POSIX-host skip, current
+  Node and Node 22.13 lock groups 12/12 each, type/lint/static/diff GREEN, zero
+  live helpers, and zero new or deletion-authorized B2 residue. Thirteen
+  historical fail-closed/unrelated roots remain preserved. Node policy,
+  production command/output limits, B3, OCI, and family routing are unchanged.
+  B2 and B3 remain locked for the required independent review.

@@ -1,14 +1,99 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { WindowsProcessBackend } from "../src/windows-process-backend.js";
 import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessBackendBinding, type ProcessEffectFence } from "../src/process-backend.js";
 import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
 import { createPortableProcessChannelProvider } from "../src/portable-process-channel.js";
+
+test("portable channel ignores only the exact supervisor atomic output publication", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-publication-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({
+    nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken,
+    nextCommand: 1, nextWrite: 1, inputClosed: false,
+  }));
+  const binding = bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 321, startedAt: "now" });
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence, supervisorPid: 321,
+      reattest: () => "live", effect: async (_kind, effect) => effect(),
+    }),
+  });
+  const exactTemporary = join(root, "channel/output/stdout-000000000001.json.321.tmp");
+  try {
+    writeFileSync(exactTemporary, "partial authenticated publication");
+    const channel = await provider.acquire(binding, fence);
+    assert.deepEqual(channel.retainedWindow(), []);
+    await channel.detach();
+    writeFileSync(join(root, "channel/output/stdout-000000000001.json.999.tmp"), "foreign publication");
+    await assert.rejects(provider.acquire(binding, fence), /output filename is invalid/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("portable write returns its durable acknowledged outcome when takeover wins before acknowledgement consumption", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-durable-input-ack-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  let current: ProcessEffectFence = { ...fence };
+  const higher: ProcessEffectFence = { ownerId: "recovery-owner", fencingToken: fence.fencingToken + 1 };
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 1,
+    replayCapacityBytes: 8,
+    pollIntervalMs: 5,
+    authority: () => ({
+      directory: root,
+      nonce: "nonce",
+      fence,
+      reattest: () => {
+        if (current.ownerId !== fence.ownerId || current.fencingToken !== fence.fencingToken) throw new Error("stale writer fence");
+        return "live";
+      },
+      effect: async (kind, effect) => {
+        if (current.ownerId !== fence.ownerId || current.fencingToken !== fence.fencingToken) throw new Error("stale fence at effect boundary");
+        const result = effect();
+        if (kind === "write") {
+          writeFileSync(join(root, "channel/ack/input-000000000001.json"), JSON.stringify({
+            nonce: "nonce",
+            ownerId: fence.ownerId,
+            fencingToken: fence.fencingToken,
+            sequence: 1,
+            status: "acknowledged",
+          }));
+          current = higher;
+        }
+        return result;
+      },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({
+    opaqueIdentity: "opaque",
+    birthFingerprint: { observedAt: "now", discriminator: "birth" },
+    rootPid: 1,
+    startedAt: "now",
+  }), fence);
+  const payload = Buffer.from("delivered");
+  try {
+    assert.deepEqual(await channel.write({
+      sequence: 1,
+      byteLength: payload.byteLength,
+      digest: createHash("sha256").update(payload).digest("hex"),
+      timeoutMs: 1_000,
+    }, payload), { acknowledged: true, sequence: 1 });
+    assert.equal(existsSync(join(root, "channel/ack/input-000000000001.json")), true,
+      "the durable acknowledgement must remain when its prior owner cannot consume it");
+  } finally {
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("portable provider retains a chunk until the identical sink acknowledgement settles", { timeout: 60_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-order-"));
@@ -50,7 +135,7 @@ test("real portable channel preserves ordered duplex bytes and exact acknowledge
     "process.stdin.on('data',b=>{process.stdout.write(b);process.stderr.write(Buffer.from(b).reverse())});process.stdin.on('end',()=>process.exit(0))",
   ])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number };
   const provider = backend.backpressuredChannelProvider();
   const channel = await provider.acquire(binding, fence);
   const seen: Array<{ metadata: BackpressuredOutputMetadata; bytes: Buffer }> = [];
@@ -72,11 +157,14 @@ test("real portable channel preserves ordered duplex bytes and exact acknowledge
     const terminal = await channel.waitForTerminal() as { state: string };
     assert.equal(terminal.state, "exited");
     const supervisorState = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as {
+      revision?: number;
       windowsTreeRefreshCount?: number;
       windowsTreeRefreshMinimumGapMs?: number | null;
     };
     assert.ok((supervisorState.windowsTreeRefreshCount ?? 0) >= 2, "fixture must observe multiple Windows tree refreshes");
     assert.ok((supervisorState.windowsTreeRefreshMinimumGapMs ?? 0) >= 250, "Windows tree refreshes must remain cadence bounded");
+    assert.ok((supervisorState.revision ?? Number.POSITIVE_INFINITY) <= (supervisorState.windowsTreeRefreshCount ?? 0) + 12,
+      "unchanged polling ticks must not churn the durable state file");
     await waitFor(() => seen.some((entry) => entry.metadata.stream === "stdout") && seen.some((entry) => entry.metadata.stream === "stderr"));
     assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stdout").map((entry) => entry.bytes)).toString(), "abcdef");
     assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stderr").map((entry) => entry.bytes)).toString(), "cbafed");
@@ -100,7 +188,7 @@ test("portable release refuses unsettled retained output until sink acknowledgem
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
   const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.stdout.write('retained')"])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
   try {
     await waitFor(() => readdirSync(join(identity.directory, "channel/output")).length > 0);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -290,29 +378,39 @@ test("portable write paused before its effect cannot overwrite takeover state or
   }
 });
 
-test("portable takeover rejects an already-published stale input and advances to token2 command", { timeout: 60_000 }, async () => {
+test("portable takeover reports one truthful outcome for published input and advances to token2 command", { timeout: 60_000 }, async () => {
   if (process.platform !== "win32") return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-published-stale-input-"));
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 1_000 });
   const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.stdin.on('data',b=>process.stdout.write('seen:'+b));process.stdin.on('end',()=>process.exit(0))"])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+    directory: string;
+    supervisorPid: number;
+    supervisorBirth: string;
+  };
   const provider = backend.backpressuredChannelProvider(); const old = await provider.acquire(binding, fence);
   const staleBytes = Buffer.from("stale\n");
-  const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5_000 }, staleBytes);
+  const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5_000 }, staleBytes).then(
+    () => ({ status: "acknowledged" as const }),
+    (error: unknown) => ({ status: "rejected" as const, error }),
+  );
   await waitFor(() => existsSync(join(identity.directory, "channel", "input", "input-000000000001.json")));
   const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
   const recovered = await provider.acquire(binding, higher); const output: Buffer[] = [];
   recovered.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); return metadata; });
   const freshBytes = Buffer.from("fresh\n");
   try {
-    await assert.rejects(stale, /failed|stale|fence|rejected/i);
+    const staleOutcome = await stale;
+    if (staleOutcome.status === "rejected") assert.match(String(staleOutcome.error), /failed|stale|fence|rejected/i);
     assert.deepEqual(await recovered.write({ sequence: 2, byteLength: freshBytes.byteLength, digest: createHash("sha256").update(freshBytes).digest("hex"), timeoutMs: 5_000 }, freshBytes), { acknowledged: true, sequence: 2 });
     await recovered.closeInput(); await recovered.waitForTerminal();
-    assert.doesNotMatch(Buffer.concat(output).toString(), /stale/); assert.match(Buffer.concat(output).toString(), /seen:fresh/);
+    const seen = Buffer.concat(output).toString();
+    assert.equal(seen, staleOutcome.status === "acknowledged" ? "seen:stale\nseen:fresh\n" : "seen:fresh\n");
   } finally {
-    await old.detach(); await recovered.detach(); await backend.signal(binding, "force_terminate", higher).catch(() => undefined); await backend.release(binding, higher).catch(() => undefined);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    await old.detach(); await recovered.detach();
+    await cleanupPortableBackendFixture(backend, binding, higher);
+    await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
   }
 });
 
@@ -417,6 +515,7 @@ test("portable empty proof paused at its final fence cannot survive higher-fence
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "verify_empty" && hold) { hold = false; entered(); await barrier; } } });
   const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
   const binding = bindingFor(launch);
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { supervisorPid: number; supervisorBirth: string };
   await backend.observe(binding, async () => undefined, fence);
   const stale = backend.verifyEmpty(binding, fence);
   await atBoundary;
@@ -428,7 +527,7 @@ test("portable empty proof paused at its final fence cannot survive higher-fence
     assert.equal((await backend.verifyEmpty(binding, higher) as { empty: boolean }).empty, true);
   } finally {
     resume(); await backend.release(binding, higher).catch(() => undefined);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
   }
 });
 
@@ -454,14 +553,14 @@ test("portable reconcile and release reject corrupt acknowledgement evidence", {
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
   const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
   await waitFor(() => JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")).status === "stopped", 15_000);
   writeFileSync(join(identity.directory, "channel", "ack", "corrupt.json"), "{}");
   try {
     assert.deepEqual(await backend.reconcile(binding, fence), { state: "outcome_unknown" });
     await assert.rejects(backend.release(binding, fence), /acknowledgement|evidence|output/i);
     assert.equal(existsSync(identity.directory), true);
-  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+  } finally { await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth); }
 });
 
 test("portable final effects fail closed when durable fence evidence disappears", { timeout: 60_000 }, async () => {
@@ -470,14 +569,14 @@ test("portable final effects fail closed when durable fence evidence disappears"
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
   const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
   await backend.observe(binding, async () => undefined, fence);
   unlinkSync(join(identity.directory, "fence.json"));
   try {
     await assert.rejects(backend.release(binding, fence), /fence.*invalid|identity/i);
     assert.equal(existsSync(identity.directory), true);
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
   }
 });
 
@@ -487,14 +586,14 @@ test("portable terminal and release fail closed after owned output evidence disa
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
   const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
   await waitFor(() => JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")).status === "stopped", 15_000);
   rmSync(join(identity.directory, "channel", "output"), { recursive: true, force: true });
   try {
     assert.deepEqual(await backend.reconcile(binding, fence), { state: "outcome_unknown" });
     await assert.rejects(backend.release(binding, fence), /output|evidence|missing|unreadable/i);
     assert.equal(existsSync(identity.directory), true);
-  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+  } finally { await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth); }
 });
 
 test("portable acquire fails closed on a corrupt retained filename, nonce, metadata, digest, or payload", { timeout: 60_000 }, async (t) => {
@@ -617,6 +716,53 @@ function stateBackedWindowsFixtureOperations(root: string) {
   };
 }
 function processIsAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
+async function removeSettledPortableTestRoot(root: string, supervisorPid: number, supervisorBirth: string): Promise<void> {
+  const resolvedRoot = resolve(root);
+  if (dirname(resolvedRoot) !== resolve(tmpdir()) || !basename(resolvedRoot).startsWith("aiboard-portable-"))
+    throw new Error("Portable test cleanup target is outside its exact temporary namespace.");
+  const ownerDeadline = Date.now() + 10_000;
+  for (;;) {
+    const observed = inspectWindowsTestBirth(supervisorPid);
+    if (observed.state === "absent" || observed.state === "present" && !sameTestBirth(observed.birth, supervisorBirth)) break;
+    if (Date.now() >= ownerDeadline) throw new Error("Portable test supervisor did not become exactly absent before cleanup.");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  for (const entry of existsSync(resolvedRoot) ? readdirSync(resolvedRoot, { withFileTypes: true }) : []) {
+    if (!entry.isDirectory()) continue;
+    const statePath = join(resolvedRoot, entry.name, "state.json");
+    if (!existsSync(statePath)) continue;
+    const state = JSON.parse(readFileSync(statePath, "utf8")) as { status?: unknown };
+    if (state.status !== "stopped") throw new Error("Portable test cleanup requires durable stopped evidence.");
+  }
+  const cleanupDeadline = Date.now() + 2_000;
+  let absentSince: number | undefined;
+  while (Date.now() < cleanupDeadline) {
+    if (existsSync(resolvedRoot)) {
+      rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+      absentSince = undefined;
+    } else {
+      absentSince ??= Date.now();
+      if (Date.now() - absentSince >= 100) return;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+  throw new Error("Portable test root did not remain absent after exact cleanup.");
+}
+function inspectWindowsTestBirth(pid: number): { state: "absent" } | { state: "present"; birth: string } | { state: "unknown" } {
+  try {
+    const script = `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null-eq$p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`;
+    const value = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+      encoding: "utf8", windowsHide: true, timeout: 5_000,
+    }).trim();
+    if (value === "ABSENT") return { state: "absent" };
+    if (value.startsWith("PRESENT:") && value.length > "PRESENT:".length) return { state: "present", birth: value.slice("PRESENT:".length) };
+  } catch {}
+  return { state: "unknown" };
+}
+function sameTestBirth(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
+  return normalize(left) === normalize(right);
+}
 async function cleanupPortableBackendFixture(
   backend: WindowsProcessBackend,
   binding: ProcessBackendBinding,

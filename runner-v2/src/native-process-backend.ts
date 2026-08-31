@@ -15,6 +15,12 @@ import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutpu
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
 import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
+const PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS = 2_000;
+const WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS = 15_000;
+const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
+const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
+const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
+
 export interface NativeOwnedProcessBackendOptions {
   readonly stateDirectory?: string;
   readonly pollIntervalMs?: number;
@@ -29,7 +35,7 @@ export interface NativeOwnedProcessBackendOptions {
   readonly removeRetiredAuthority?: (directory: string) => void;
 }
 export interface NativeProcessOperations {
-  inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
+  inspectProcessBirth(pid: number, platform: "posix" | "windows", attemptDeadlineMs?: number): ProcessBirthInspection;
   /** Optional bounded snapshot used to avoid one host-tool process per recorded Windows member. */
   inspectProcessBirths?(pids: readonly number[], platform: "posix" | "windows"): ReadonlyMap<number, ProcessBirthInspection> | undefined;
   listPosixGroup(groupId: number): readonly number[] | undefined;
@@ -134,9 +140,18 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     });
     if (!child.pid) throw new Error("Portable process supervisor has no PID.");
     child.unref();
+    const startupDeadline = Date.now() + (this.options.platform === "windows"
+      ? WINDOWS_PORTABLE_STARTUP_DEADLINE_MS
+      : PORTABLE_STARTUP_DEADLINE_MS);
     let identity: Identity | undefined;
     try {
-      const supervisorBirth = await this.waitForBirth(child.pid, 1_000);
+      const supervisorBirth = await this.waitForBirth(
+        child.pid,
+        Math.min(
+          this.options.platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : 1_000,
+          Math.max(1, startupDeadline - Date.now()),
+        ),
+      );
       if (!supervisorBirth) throw new Error("Portable supervisor birth identity is unavailable.");
       identity = {
         version: 1,
@@ -148,7 +163,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         fence: Object.freeze({ ...request.fence }),
       };
       writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid: child.pid, holderBirth: supervisorBirth }), { mode: 0o600 });
-      const state = await this.waitForState(directory, nonce, child.pid, 5_000);
+      const state = await this.waitForState(directory, nonce, child.pid, Math.max(1, startupDeadline - Date.now()));
       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
       return launchResult(identity, startedAt);
@@ -203,6 +218,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           directory: identity.directory,
           nonce: identity.nonce,
           fence,
+          supervisorPid: identity.supervisorPid,
           reattest: () => {
             this.assertFence(identity, fence);
             const state = this.validate(identity);
@@ -266,7 +282,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       if (beforeSignal === "outcome_unknown") throw new Error("Owned descendant identity is unavailable.");
       const state = readState(identity.directory);
       const sequence = (state?.handledControl ?? 0) + 1;
-      await this.fencedEffect(identity, _fence, "signal", () => writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, ownerId: _fence!.ownerId, fencingToken: _fence!.fencingToken, sequence, action }), { mode: 0o600 }));
+      await this.fencedEffect(identity, _fence, "signal", () => writeJsonAtomic(join(identity.directory, "control.json"), { nonce: identity.nonce, ownerId: _fence!.ownerId, fencingToken: _fence!.fencingToken, sequence, action }));
     }
     await delay(action === "force_terminate" ? 250 : 75);
     return this.signalState(await this.waitForKnownEmptiness(identity));
@@ -449,7 +465,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       );
       if (inspection.state === "unknown") return "outcome_unknown";
       if (inspection.state === "absent") continue;
-      if (!sameProcessBirth(inspection.fingerprint, process.birth)) return "identity_mismatch";
+      // PID plus birth is the owned identity. A different exact birth proves
+      // the historical identity is absent; the live replacement is unrelated.
+      if (!sameProcessBirth(inspection.fingerprint, process.birth)) continue;
       live = true;
     }
     return live ? "nonempty" : "empty";
@@ -588,10 +606,17 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   }
   private async waitForBirth(pid: number, timeoutMs: number): Promise<string | undefined> {
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const inspection = this.operations.inspectProcessBirth(pid, this.options.platform);
+    const maximumAttempts = this.options.platform === "windows" ? WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS : Number.MAX_SAFE_INTEGER;
+    let attempts = 0;
+    let attemptDeadlineMs = Math.min(PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS, timeoutMs);
+    while (Date.now() < deadline && attempts < maximumAttempts) {
+      attemptDeadlineMs = Math.max(1, Math.min(attemptDeadlineMs, deadline - Date.now()));
+      const inspection = this.operations.inspectProcessBirth(pid, this.options.platform, attemptDeadlineMs);
+      attempts += 1;
       if (inspection.state === "present") return inspection.fingerprint;
       if (inspection.state === "absent") return undefined;
+      attemptDeadlineMs = Math.min(WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS, attemptDeadlineMs * 2);
+      if (attempts >= maximumAttempts) break;
       await delay(this.pollIntervalMs);
     }
     return undefined;
@@ -601,7 +626,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 function readState(directory: string): SupervisorState | undefined {
   try { return JSON.parse(readFileSync(join(directory, "state.json"), "utf8")) as SupervisorState; } catch { return undefined; }
 }
-function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection {
+function osProcessBirth(
+  pid: number,
+  platform: "posix" | "windows",
+  attemptDeadlineMs = PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
+): ProcessBirthInspection {
+  const boundedDeadlineMs = Math.max(1, Math.min(WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS, attemptDeadlineMs));
   try {
     if (platform === "windows") {
       try { process.kill(pid, 0); }
@@ -612,7 +642,7 @@ function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirt
         "-NonInteractive",
         "-Command",
         `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
-      ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+      ], { encoding: "utf8", windowsHide: true, timeout: boundedDeadlineMs }).trim();
       if (result === "ABSENT") return { state: "absent" };
       if (result.startsWith("PRESENT:") && result.length > "PRESENT:".length)
         return { state: "present", fingerprint: normalizeProcessBirth(result.slice("PRESENT:".length)) };
@@ -630,7 +660,7 @@ function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirt
         return (error as NodeJS.ErrnoException).code === "ENOENT" ? { state: "absent" } : { state: "unknown" };
       }
     }
-    const result = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim();
+    const result = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: boundedDeadlineMs }).trim();
     return result ? { state: "present", fingerprint: result } : { state: "absent" };
   } catch { return { state: "unknown" }; }
 }
@@ -702,6 +732,11 @@ function validKnownProcess(value: unknown): value is { readonly pid: number; rea
 }
 function normalizeProcessBirth(value: string): string {
   return value.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
+}
+function writeJsonAtomic(path: string, value: unknown): void {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
+  renameSync(temporary, path);
 }
 function sameProcessBirth(left: string, right: string): boolean {
   return normalizeProcessBirth(left) === normalizeProcessBirth(right);

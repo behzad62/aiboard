@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -81,6 +82,37 @@ async function stopExactWindowsFixture(pid: number | undefined, birth: string): 
       if (Date.now() >= deadline) throw new Error(`Exact fixture PID ${pid} remained live after authenticated cleanup.`);
     }
   }
+}
+
+function createInactiveSemanticCleanupFixture(suffix: string): {
+  readonly root: string;
+  readonly binding: ProcessBackendBinding;
+  readonly rootCreatedAt: number;
+} {
+  const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${suffix}-`));
+  const directory = join(root, "state", "owned-fixture");
+  mkdirSync(directory, { recursive: true });
+  const nonce = `semantic-${suffix}`;
+  const supervisorPid = 2_147_483_646;
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v1", nonce, supervisorPid,
+    launchEffect: "not_started", status: "outcome_unknown", rootProcess: null,
+    knownProcesses: [], updatedAt: new Date().toISOString(),
+  }));
+  return {
+    root,
+    rootCreatedAt: statSync(root).birthtimeMs,
+    binding: {
+      registryId: `semantic-${suffix}`, backendId: "runner-windows-supervisor-v1",
+      implementationGeneration: "test", implementationDigest: "1".repeat(64),
+      attestationVersion: 1, attestationDigest: "2".repeat(64),
+      opaqueIdentity: Buffer.from(JSON.stringify({
+        directory, nonce, supervisorPid, supervisorBirth: "2000-01-01T00:00:00.000000Z",
+      })).toString("base64url"),
+      birthFingerprint: { observedAt: new Date(0).toISOString(), discriminator: "3".repeat(64) },
+      rootPid: supervisorPid, startedAt: new Date(0).toISOString(),
+    },
+  };
 }
 
 test("process host semantic facts are independent, immutable, and preserve partial states", async () => {
@@ -309,6 +341,12 @@ test("failed semantic-probe release removes evidence only after exact owner iden
     rootPid: pid,
     startedAt: new Date(0).toISOString(),
   });
+  const controllerBirth = windowsBirth(process.pid);
+  const closedInventory = () => [{
+    pid: process.pid, birth: controllerBirth, parentPid: 0,
+    executableAccessible: true, commandLineAccessible: true,
+    executable: process.execPath, commandLine: "unrelated test controller",
+  }];
   try {
     assert.equal(removeInactiveSemanticProbeRoot(root, binding(outsideDirectory)), false, "an identity outside the exact generated root must preserve evidence");
     assert.equal(existsSync(root), true);
@@ -316,7 +354,7 @@ test("failed semantic-probe release removes evidence only after exact owner iden
     assert.equal(existsSync(malformedRoot), true);
     assert.equal(removeInactiveSemanticProbeRoot(nestedRoot, binding(nestedDirectory)), false, "cleanup target must be an immediate generated Temp child");
     assert.equal(existsSync(nestedRoot), true);
-    assert.equal(removeInactiveSemanticProbeRoot(root, binding(directory)), true);
+    assert.equal(removeInactiveSemanticProbeRoot(root, binding(directory), { globalInventory: closedInventory }), true);
     assert.equal(existsSync(root), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -352,6 +390,7 @@ test("semantic cleanup ignores a recorded descendant whose birth predates the ex
     assert.equal(removeInactiveSemanticProbeRoot(root, binding, {
       globalInventory: () => [{
         pid: impossible.pid, birth: impossible.birth, parentPid: 1,
+        executableAccessible: true, commandLineAccessible: true,
         executable: "C:\\unrelated.exe", commandLine: "unrelated",
       }],
     }), true, "a process born before the exact root cannot be its descendant");
@@ -363,7 +402,10 @@ test("semantic cleanup preserves evidence when global inventory is unavailable o
   for (const [label, globalInventory] of [
     ["timeout", () => { throw new Error("inventory timeout"); }],
     ["truncated", () => []],
-    ["malformed", () => [{ pid: 1, birth: "", parentPid: 0, executable: "node", commandLine: "" }]],
+    ["malformed", () => [{
+      pid: 1, birth: "", parentPid: 0, executableAccessible: true,
+      commandLineAccessible: true, executable: "node", commandLine: "",
+    }]],
   ] as const) {
     const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${label}-`));
     const directory = join(root, "state", "owned-fixture");
@@ -388,6 +430,153 @@ test("semantic cleanup preserves evidence when global inventory is unavailable o
   }
 });
 
+test("semantic cleanup resolves only inaccessible processes born strictly before the exact root", () => {
+  const old = createInactiveSemanticCleanupFixture("inaccessible-old");
+  try {
+    assert.equal(removeInactiveSemanticProbeRoot(old.root, old.binding, {
+      globalInventory: () => [{
+        pid: 41, birth: new Date(old.rootCreatedAt - 60_000).toISOString(), parentPid: 4,
+        executableAccessible: false, commandLineAccessible: false, executable: "", commandLine: "",
+      }],
+    }), true, "an immutable command line born before the unpredictable root is independently excluded");
+    assert.equal(existsSync(old.root), false);
+  } finally { rmSync(old.root, { recursive: true, force: true }); }
+
+  for (const [label, birth] of [
+    ["equal", 0],
+    ["newer", 60_000],
+  ] as const) {
+    const fixture = createInactiveSemanticCleanupFixture(`inaccessible-${label}`);
+    try {
+      assert.equal(removeInactiveSemanticProbeRoot(fixture.root, fixture.binding, {
+        globalInventory: () => [{
+          pid: 42, birth: new Date(fixture.rootCreatedAt + birth).toISOString(), parentPid: 4,
+          executableAccessible: false, commandLineAccessible: false, executable: "", commandLine: "",
+        }],
+      }), false, `${label} inaccessible metadata must preserve the complete root`);
+      assert.equal(existsSync(fixture.root), true);
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+  }
+});
+
+test("semantic cleanup stops an exact supervisor while inaccessible global evidence preserves the root", () => {
+  const fixture = createInactiveSemanticCleanupFixture("inaccessible-owned-stop");
+  const supervisorPid = fixture.binding.rootPid!;
+  const supervisorBirth = "2000-01-01T00:00:00.000000Z";
+  let supervisorLive = true;
+  let signalledPid: number | undefined;
+  try {
+    assert.equal(removeInactiveSemanticProbeRoot(fixture.root, fixture.binding, {
+      globalInventory: () => [
+        ...(supervisorLive ? [{
+          pid: supervisorPid, birth: supervisorBirth, parentPid: 0,
+          executableAccessible: true, commandLineAccessible: true,
+          executable: process.execPath, commandLine: `${process.execPath} ${fixture.root}`,
+        }] : []),
+        {
+          pid: 42, birth: new Date(fixture.rootCreatedAt + 60_000).toISOString(), parentPid: 4,
+          executableAccessible: false, commandLineAccessible: false, executable: "", commandLine: "",
+        },
+      ],
+      processInventory: () => supervisorLive
+        ? [{ pid: supervisorPid, birth: supervisorBirth, commandLine: `${process.execPath} ${fixture.root}` }]
+        : [],
+      taskkill: (pid) => { signalledPid = pid; supervisorLive = false; },
+    }), false, "uncertain global evidence must preserve the complete root");
+    assert.equal(signalledPid, supervisorPid, "only the exact authenticated supervisor may be stopped");
+    assert.equal(supervisorLive, false);
+    assert.equal(existsSync(fixture.root), true);
+  } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("semantic cleanup stops an exact authenticated supervisor when descendant evidence is corrupt", () => {
+  const fixture = createInactiveSemanticCleanupFixture("corrupt-descendant-stop");
+  const identity = JSON.parse(Buffer.from(fixture.binding.opaqueIdentity, "base64url").toString("utf8")) as {
+    directory: string; nonce: string; supervisorPid: number; supervisorBirth: string;
+  };
+  const effectFence = { ownerId: "windows-semantic-probe", fencingToken: 1 };
+  const authenticatedIdentity = { ...identity, version: 1, backendId: "runner-windows-supervisor-v1", fence: effectFence };
+  const binding = {
+    ...fixture.binding,
+    opaqueIdentity: Buffer.from(JSON.stringify(authenticatedIdentity)).toString("base64url"),
+    birthFingerprint: {
+      ...fixture.binding.birthFingerprint,
+      discriminator: createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex"),
+    },
+  };
+  writeFileSync(join(identity.directory, "lock-holder.json"), JSON.stringify({
+    nonce: identity.nonce, holderPid: identity.supervisorPid, holderBirth: identity.supervisorBirth,
+  }));
+  writeFileSync(join(identity.directory, "fence.json"), JSON.stringify({ nonce: identity.nonce, ...effectFence }));
+  writeFileSync(join(identity.directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v1", nonce: identity.nonce, supervisorPid: identity.supervisorPid,
+    launchEffect: "started", status: "outcome_unknown",
+    rootProcess: { pid: 99, birth: "2001-01-01T00:00:00.000000Z" },
+    knownProcesses: [{ pid: 99, birth: "2002-01-01T00:00:00.000000Z" }],
+  }));
+  let supervisorLive = true;
+  let signalledPid: number | undefined;
+  try {
+    assert.equal(removeInactiveSemanticProbeRoot(fixture.root, binding, {
+      processInventory: () => supervisorLive
+        ? [{ pid: identity.supervisorPid, birth: identity.supervisorBirth, commandLine: `${process.execPath} ${fixture.root}` }]
+        : [],
+      taskkill: (pid) => { signalledPid = pid; supervisorLive = false; },
+    }), false, "corrupt descendant evidence must remain available for investigation");
+    assert.equal(signalledPid, identity.supervisorPid);
+    assert.equal(supervisorLive, false);
+    assert.equal(existsSync(fixture.root), true);
+  } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("semantic cleanup detects executable and embedded strict base64 root references", () => {
+  const cases: Array<[string, (root: string) => { executable: string; commandLine: string }]> = [
+    ["executable", (root) => ({ executable: join(root, "unlisted.exe"), commandLine: "unrelated" })],
+    ["base64url-option", (root) => ({
+      executable: "C:\\safe.exe",
+      commandLine: `node --payload=${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}`,
+    })],
+    ["base64url-quoted", (root) => ({
+      executable: "C:\\safe.exe",
+      commandLine: `node --payload=\"${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}\"`,
+    })],
+    ["standard-base64", (root) => {
+      let encoded = "";
+      for (let value = 0; value < 256 && !/[+/]/.test(encoded); value += 1)
+        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64");
+      assert.match(encoded, /[+/]/, "fixture must exercise the standard-base64 alphabet");
+      return { executable: "C:\\safe.exe", commandLine: `node --payload=${encoded}` };
+    }],
+  ];
+  for (const [label, reference] of cases) {
+    const fixture = createInactiveSemanticCleanupFixture(`embedded-${label}`);
+    try {
+      const processReference = reference(fixture.root);
+      assert.equal(removeInactiveSemanticProbeRoot(fixture.root, fixture.binding, {
+        globalInventory: () => [{
+          pid: 43, birth: new Date(fixture.rootCreatedAt - 60_000).toISOString(), parentPid: 4,
+          executableAccessible: true, commandLineAccessible: true, ...processReference,
+        }],
+      }), false, `${label} must preserve the complete root even when the process predates it`);
+      assert.equal(existsSync(fixture.root), true);
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+  }
+});
+
+test("semantic cleanup fails closed when encoded-reference scanning exceeds its bound", () => {
+  const fixture = createInactiveSemanticCleanupFixture("encoded-bound");
+  try {
+    assert.equal(removeInactiveSemanticProbeRoot(fixture.root, fixture.binding, {
+      globalInventory: () => [{
+        pid: 44, birth: new Date(fixture.rootCreatedAt - 60_000).toISOString(), parentPid: 4,
+        executableAccessible: true, commandLineAccessible: true, executable: "C:\\safe.exe",
+        commandLine: Array.from({ length: 257 }, () => "A".repeat(40)).join(" "),
+      }],
+    }), false);
+    assert.equal(existsSync(fixture.root), true);
+  } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
 test("semantic cleanup spends one caller-configured absolute budget across every host effect", () => {
   const makeFixture = (suffix: string) => {
     const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${suffix}-`));
@@ -405,14 +594,22 @@ test("semantic cleanup spends one caller-configured absolute budget across every
     };
     return { root, binding, supervisorPid, supervisorBirth };
   };
-  const unrelated = { pid: 1, birth: "2025-01-01T00:00:00.000000Z", parentPid: 0, executable: "C:\\Windows\\system32\\safe.exe", commandLine: "safe" };
+  const unrelated = {
+    pid: 1, birth: "2025-01-01T00:00:00.000000Z", parentPid: 0,
+    executableAccessible: true, commandLineAccessible: true,
+    executable: "C:\\Windows\\system32\\safe.exe", commandLine: "safe",
+  };
 
   const success = makeFixture("budget-success"); let clock = 1_000; const observed: Array<[string, number]> = []; let globallyLive = true; let exactlyLive = true;
   try {
     assert.equal(removeInactiveSemanticProbeRoot(success.root, success.binding, {
       deadlineMs: 100, now: () => clock,
       globalInventory: (remaining) => { observed.push(["global", remaining]); clock += 10; return globallyLive
-        ? [unrelated, { pid: success.supervisorPid, birth: success.supervisorBirth, parentPid: 0, executable: process.execPath, commandLine: `${process.execPath} ${success.root}` }]
+        ? [unrelated, {
+          pid: success.supervisorPid, birth: success.supervisorBirth, parentPid: 0,
+          executableAccessible: true, commandLineAccessible: true,
+          executable: process.execPath, commandLine: `${process.execPath} ${success.root}`,
+        }]
         : [unrelated]; },
       processInventory: (_pids, remaining) => { observed.push(["exact", remaining]); clock += 10; return exactlyLive
         ? [{ pid: success.supervisorPid, birth: success.supervisorBirth, commandLine: `${process.execPath} ${success.root}` }]
@@ -428,7 +625,11 @@ test("semantic cleanup spends one caller-configured absolute budget across every
   try {
     assert.equal(removeInactiveSemanticProbeRoot(exhausted.root, exhausted.binding, {
       deadlineMs: 30, now: () => clock,
-      globalInventory: () => { clock += 20; return [unrelated, { pid: exhausted.supervisorPid, birth: exhausted.supervisorBirth, parentPid: 0, executable: process.execPath, commandLine: `${process.execPath} ${exhausted.root}` }]; },
+      globalInventory: () => { clock += 20; return [unrelated, {
+        pid: exhausted.supervisorPid, birth: exhausted.supervisorBirth, parentPid: 0,
+        executableAccessible: true, commandLineAccessible: true,
+        executable: process.execPath, commandLine: `${process.execPath} ${exhausted.root}`,
+      }]; },
       processInventory: () => { clock += 20; return [{ pid: exhausted.supervisorPid, birth: exhausted.supervisorBirth, commandLine: `${process.execPath} ${exhausted.root}` }]; },
       taskkill: () => { taskkillCalled = true; },
     }), false);
@@ -463,8 +664,22 @@ test("semantic cleanup stops only the exact authenticated supervisor when the re
     knownProcesses: [{ pid: process.pid, birth: recordedBirth }],
     updatedAt: new Date().toISOString(),
   }));
+  const globalInventory = () => {
+    const inventory = [{
+      pid: process.pid, birth: replacementBirth, parentPid: 0,
+      executableAccessible: true, commandLineAccessible: true,
+      executable: process.execPath, commandLine: "unrelated test controller",
+    }];
+    const currentSupervisorBirth = currentWindowsBirth(supervisor.pid!);
+    if (currentSupervisorBirth && sameTestBirth(currentSupervisorBirth, supervisorBirth)) inventory.push({
+      pid: supervisor.pid!, birth: currentSupervisorBirth, parentPid: process.pid,
+      executableAccessible: true, commandLineAccessible: true,
+      executable: process.execPath, commandLine: `${process.execPath} ${root}`,
+    });
+    return inventory;
+  };
   try {
-    assert.equal(removeInactiveSemanticProbeRoot(root, binding), true);
+    assert.equal(removeInactiveSemanticProbeRoot(root, binding, { globalInventory }), true);
     await waitUntilProcessAbsent(supervisor.pid!, 10_000);
     assert.equal(existsSync(root), false);
     assert.doesNotThrow(() => process.kill(process.pid, 0), "the replacement process must never be signalled");
@@ -499,14 +714,34 @@ test("semantic cleanup preserves an unlisted process that references the exact r
     launchEffect: "not_started", status: "outcome_unknown", rootProcess: null, knownProcesses: [],
     updatedAt: new Date().toISOString(),
   }));
+  const controllerBirth = windowsBirth(process.pid);
+  const globalInventory = () => {
+    const inventory = [{
+      pid: process.pid, birth: controllerBirth, parentPid: 0,
+      executableAccessible: true, commandLineAccessible: true,
+      executable: process.execPath, commandLine: "unrelated test controller",
+    }];
+    for (const [child, birth, commandLine] of [
+      [supervisor, supervisorBirth, `${process.execPath} ${root}`],
+      [unlisted, unlistedBirth, `${process.execPath} --payload=${encodedRoot}`],
+    ] as const) {
+      const current = currentWindowsBirth(child.pid!);
+      if (current && sameTestBirth(current, birth)) inventory.push({
+        pid: child.pid!, birth: current, parentPid: process.pid,
+        executableAccessible: true, commandLineAccessible: true,
+        executable: process.execPath, commandLine,
+      });
+    }
+    return inventory;
+  };
   try {
-    assert.equal(removeInactiveSemanticProbeRoot(root, binding), false, "an unlisted exact-root reference must preserve the complete root");
+    assert.equal(removeInactiveSemanticProbeRoot(root, binding, { globalInventory }), false, "an unlisted exact-root reference must preserve the complete root");
     await waitUntilProcessAbsent(supervisor.pid!, 10_000);
     assert.equal(existsSync(root), true);
     assert.equal(sameTestBirth(currentWindowsBirth(unlisted.pid!) ?? "", unlistedBirth), true, "cleanup must not signal the unlisted process");
     await stopExactWindowsFixture(unlisted.pid, unlistedBirth);
     await waitUntilProcessAbsent(unlisted.pid!, 10_000);
-    assert.equal(removeInactiveSemanticProbeRoot(root, binding), true);
+    assert.equal(removeInactiveSemanticProbeRoot(root, binding, { globalInventory }), true);
     assert.equal(existsSync(root), false);
   } finally {
     for (const [child, birth] of [[supervisor, supervisorBirth], [unlisted, unlistedBirth]] as const) {

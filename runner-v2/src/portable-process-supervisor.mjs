@@ -26,29 +26,37 @@ const replayCapacityChunks = config.replayCapacityChunks ?? 16;
 const replayCapacityBytes = config.replayCapacityBytes ?? 256 * 1024;
 const WINDOWS_TREE_FAILURE_LIMIT = 3;
 const WINDOWS_TREE_REFRESH_INTERVAL_MS = 250;
-const WINDOWS_TREE_INSPECTION_DEADLINE_MS = 2_000;
+const WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS = 2_000;
+const WINDOWS_TREE_INSPECTION_MAX_DEADLINE_MS = 15_000;
+const WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS = 2_000;
+const WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS = 15_000;
+const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 const outputSequences = { stdout: 0, stderr: 0 };
 const outputOffsets = { stdout: 0, stderr: 0 };
 const retained = new Map();
 let retainedBytes = 0;
 let handledInput = 0;
 let revision = 0;
+let lastPublishedSignature;
 let handledControl = 0;
 let targetExited = false;
 let targetExitCode = null;
 let targetSignal = null;
 const knownProcesses = new Map();
-let ownershipMismatch = false;
 let ownershipInspectionUnknown = false;
 let ownershipInspectionDetail = "";
 let controlInspectionUnknown = false;
 let lastWindowsProcesses;
 let lastWindowsParents;
 let windowsTreeRefreshInFlight = false;
+let windowsTreeSnapshotReady = false;
 let lastWindowsTreeRefreshFinishedAt = Number.NEGATIVE_INFINITY;
 let windowsTreeRefreshCount = 0;
 let windowsTreeRefreshMinimumGapMs = null;
 let windowsTreeFailures = 0;
+let windowsTreeInspectionDeadlineMs = WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS;
+let windowsBirthInspectionAttempts = 0;
+let windowsBirthInspectionDeadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
 let launchEffect = config.platform === "windows" ? "prepared" : "started";
 let rootProcess = null;
 
@@ -78,7 +86,7 @@ if (!child.pid) {
   fail("Owned process has no PID.", "stopped");
 }
 if (config.platform === "windows") {
-  const inspection = inspectWindowsBirth(child.pid);
+  const inspection = inspectWindowsBirthWithRetry(child.pid);
   if (inspection.state === "present") {
     rootProcess = { pid: child.pid, birth: inspection.fingerprint };
     knownProcesses.set(child.pid, inspection.fingerprint);
@@ -124,17 +132,13 @@ function tick() {
     handleChannelInput();
     drainOutput("stdout", child.stdout, stdoutPath);
     drainOutput("stderr", child.stderr, stderrPath);
-    if (config.platform === "windows" && windowsTreeFailures < WINDOWS_TREE_FAILURE_LIMIT) requestWindowsTreeRefresh();
+    if (config.platform === "windows" && !windowsTreeSnapshotReady && windowsTreeFailures < WINDOWS_TREE_FAILURE_LIMIT) requestWindowsTreeRefresh();
     if (ownershipInspectionUnknown) {
       if (windowsTreeFailures >= WINDOWS_TREE_FAILURE_LIMIT)
         publish("outcome_unknown", `Owned Windows process inspection is unavailable: ${ownershipInspectionDetail}`);
       return;
     }
-    if (ownershipMismatch) {
-      publish("outcome_unknown", "Owned Windows descendant birth identity changed.");
-      return;
-    }
-    if (config.platform === "windows" && !lastWindowsProcesses && windowsTreeRefreshInFlight) return;
+    if (config.platform === "windows" && windowsTreeRefreshInFlight) return;
     handleControl();
     const active = activeOwnedPids();
     if (active === undefined) {
@@ -147,6 +151,7 @@ function tick() {
       process.exit(0);
     }
     publish("running");
+    if (config.platform === "windows") windowsTreeSnapshotReady = false;
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -296,14 +301,19 @@ function waitForChildStartup(timeoutMs) {
 
 function handleControl() {
   if (!existsSync(controlPath)) return;
-  const request = JSON.parse(readFileSync(controlPath, "utf8"));
+  let request;
+  try { request = JSON.parse(readFileSync(controlPath, "utf8")); }
+  catch (error) {
+    if (["ENOENT", "EPERM", "EACCES", "EBUSY"].includes(error?.code)) return;
+    throw error;
+  }
   if (request.nonce !== config.nonce || request.sequence <= handledControl) return;
   const currentFence = readCurrentFence();
   if (!currentFence || request.ownerId !== currentFence.ownerId || request.fencingToken !== currentFence.fencingToken) return;
   handledControl = request.sequence;
   if (config.platform === "windows") {
-    refreshWindowsTree();
-    if (ownershipMismatch || ownershipInspectionUnknown) {
+    if (config.windowsControlInspector) refreshWindowsTree();
+    if (ownershipInspectionUnknown) {
       controlInspectionUnknown = true;
       publish("outcome_unknown", ownershipInspectionDetail || "Refused to signal a recycled Windows descendant PID.");
       return;
@@ -364,9 +374,9 @@ function requestWindowsTreeRefresh() {
   const inspectorArguments = Array.isArray(configuredInspector?.arguments)
     ? configuredInspector.arguments.map(String)
     : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TREE_SCRIPT];
-  const inspectorDeadlineMs = Number.isSafeInteger(configuredInspector?.deadlineMs) && configuredInspector.deadlineMs > 0
-    ? configuredInspector.deadlineMs
-    : WINDOWS_TREE_INSPECTION_DEADLINE_MS;
+  const hasConfiguredDeadline = Number.isSafeInteger(configuredInspector?.deadlineMs) && configuredInspector.deadlineMs > 0;
+  const inspectorDeadlineMs = hasConfiguredDeadline ? configuredInspector.deadlineMs : windowsTreeInspectionDeadlineMs;
+  const startedAt = Date.now();
   const inspector = spawn(inspectorCommand, inspectorArguments, {
     encoding: "utf8",
     windowsHide: true,
@@ -380,7 +390,14 @@ function requestWindowsTreeRefresh() {
     finished = true;
     clearTimeout(watchdog);
     windowsTreeRefreshInFlight = false;
-    acceptWindowsTreeResult(code, error ?? inspectionError, Buffer.concat(stdout).toString("utf8"));
+    const finalError = error ?? inspectionError;
+    if (!hasConfiguredDeadline) {
+      const elapsed = Math.max(1, Date.now() - startedAt);
+      windowsTreeInspectionDeadlineMs = code === 0 && !finalError
+        ? Math.min(WINDOWS_TREE_INSPECTION_MAX_DEADLINE_MS, Math.max(WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS, elapsed * 4))
+        : Math.min(WINDOWS_TREE_INSPECTION_MAX_DEADLINE_MS, windowsTreeInspectionDeadlineMs * 2);
+    }
+    acceptWindowsTreeResult(code, finalError, Buffer.concat(stdout).toString("utf8"), inspector.pid);
     lastWindowsTreeRefreshFinishedAt = Date.now();
   };
   const watchdog = setTimeout(() => {
@@ -405,16 +422,16 @@ function refreshWindowsTree() {
     windowsHide: true,
     timeout: configuredDeadline(configuredInspector),
   });
-  acceptWindowsTreeResult(result.status, result.error, String(result.stdout));
+  acceptWindowsTreeResult(result.status, result.error, String(result.stdout), result.pid);
 }
 
 function configuredDeadline(configuredOperation) {
   return Number.isSafeInteger(configuredOperation?.deadlineMs) && configuredOperation.deadlineMs > 0
     ? configuredOperation.deadlineMs
-    : WINDOWS_TREE_INSPECTION_DEADLINE_MS;
+    : windowsTreeInspectionDeadlineMs;
 }
 
-function acceptWindowsTreeResult(status, error, stdout) {
+function acceptWindowsTreeResult(status, error, stdout, inspectorPid) {
   if (status !== 0 || error) {
     windowsTreeFailures += 1;
     ownershipInspectionUnknown = true;
@@ -428,7 +445,7 @@ function acceptWindowsTreeResult(status, error, stdout) {
     ownershipInspectionDetail = "Windows process inventory was empty.";
     return;
   }
-  const rows = lines.map((line) => {
+  let rows = lines.map((line) => {
     const [pid, parent, birth] = line.split(",");
     return { pid: Number(pid), parent: Number(parent), birth: normalizeBirth(birth) };
   });
@@ -441,17 +458,41 @@ function acceptWindowsTreeResult(status, error, stdout) {
     }) ?? "unknown"}`;
     return;
   }
+  if (!Number.isSafeInteger(inspectorPid) || inspectorPid < 1) {
+    windowsTreeFailures += 1;
+    ownershipInspectionUnknown = true;
+    ownershipInspectionDetail = "Windows process inventory inspector identity is unavailable.";
+    return;
+  }
+  const inspectorTree = new Set([inspectorPid]);
+  let discovered = true;
+  while (discovered) {
+    discovered = false;
+    for (const { pid, parent } of rows) {
+      if (inspectorTree.has(parent) && !inspectorTree.has(pid)) {
+        inspectorTree.add(pid);
+        discovered = true;
+      }
+    }
+  }
+  rows = rows.filter(({ pid }) => !inspectorTree.has(pid));
+  if (rows.length === 0) {
+    windowsTreeFailures += 1;
+    ownershipInspectionUnknown = true;
+    ownershipInspectionDetail = "Windows process inventory contained only its inspector tree.";
+    return;
+  }
   ownershipInspectionUnknown = false;
   ownershipInspectionDetail = "";
   windowsTreeFailures = 0;
+  windowsTreeSnapshotReady = true;
   const current = new Map(rows.map(({ pid, birth }) => [pid, birth]));
   lastWindowsProcesses = current;
   lastWindowsParents = new Map(rows.map(({ pid, parent }) => [pid, parent]));
-  for (const [pid, birth] of knownProcesses) {
+  const owned = new Set([...knownProcesses].filter(([pid, birth]) => {
     const observed = current.get(pid);
-    if (observed && !sameBirth(observed, birth)) ownershipMismatch = true;
-  }
-  const owned = new Set(knownProcesses.keys());
+    return observed !== undefined && sameBirth(observed, birth);
+  }).map(([pid]) => pid));
   let changed = true;
   while (changed) {
     changed = false;
@@ -487,9 +528,36 @@ function activeOwnedPids() {
   return active;
 }
 
-function inspectWindowsBirth(pid) {
+function inspectWindowsBirthWithRetry(pid) {
+  const configuredInspector = config.windowsBirthInspector;
+  const hasConfiguredDeadline = Number.isSafeInteger(configuredInspector?.deadlineMs) && configuredInspector.deadlineMs > 0;
+  const absoluteDeadline = Date.now() + WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS;
+  const maximumAttempts = hasConfiguredDeadline ? 1 : WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS;
+  let attemptDeadlineMs = hasConfiguredDeadline ? configuredInspector.deadlineMs : WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
+  let inspection = { state: "unknown" };
+  for (let attempt = 0; attempt < maximumAttempts && Date.now() < absoluteDeadline; attempt += 1) {
+    attemptDeadlineMs = Math.max(1, Math.min(attemptDeadlineMs, absoluteDeadline - Date.now()));
+    windowsBirthInspectionAttempts += 1;
+    windowsBirthInspectionDeadlineMs = attemptDeadlineMs;
+    inspection = inspectWindowsBirth(pid, attemptDeadlineMs);
+    if (inspection.state !== "unknown") return inspection;
+    attemptDeadlineMs = Math.min(WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS, attemptDeadlineMs * 2);
+  }
+  return inspection;
+}
+
+function inspectWindowsBirth(pid, deadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS) {
+  const configuredInspector = config.windowsBirthInspector;
   const script = `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`;
-  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 2000 });
+  const command = typeof configuredInspector?.command === "string" ? configuredInspector.command : "powershell.exe";
+  const args = Array.isArray(configuredInspector?.arguments)
+    ? [...configuredInspector.arguments.map(String), String(pid)]
+    : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script];
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: Math.max(1, Math.min(WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS, deadlineMs)),
+  });
   if (result.status !== 0 || result.error) return { state: "unknown" };
   const value = String(result.stdout).trim();
   if (value === "ABSENT") return { state: "absent" };
@@ -511,13 +579,12 @@ function isAlive(pid) {
 }
 
 function publish(status, error = null) {
-  const state = {
+  const semanticState = {
     protocol: "aiboard-portable-process/v1",
     nonce: config.nonce,
     supervisorPid: process.pid,
     launchEffect,
     rootProcess,
-    revision: ++revision,
     handledControl,
     status,
     exitCode: targetExitCode,
@@ -526,12 +593,20 @@ function publish(status, error = null) {
     windowsTreeRefreshCount,
     windowsTreeRefreshMinimumGapMs,
     windowsTreeFailures,
+    windowsTreeInspectionDeadlineMs,
+    windowsBirthInspectionAttempts,
+    windowsBirthInspectionDeadlineMs,
     error,
-    updatedAt: new Date().toISOString(),
   };
+  const signature = JSON.stringify(semanticState);
+  if (signature === lastPublishedSignature) return;
+  const nextRevision = revision + 1;
+  const state = { ...semanticState, revision: nextRevision, updatedAt: new Date().toISOString() };
   const temporary = `${statePath}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(state));
   replaceState(temporary, statePath);
+  revision = nextRevision;
+  lastPublishedSignature = signature;
 }
 
 function replaceState(temporary, destination) {

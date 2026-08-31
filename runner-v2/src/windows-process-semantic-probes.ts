@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -44,7 +44,7 @@ export function minimalWindowsSemanticProbeEnvironment(
 }
 
 /** Live, independently callable Windows probes. Callers should cache their settled facts. */
-export function createWindowsProcessSemanticProbeSource(options: { readonly deadlineMs?: number } = {}): Pick<ProcessHostSemanticProbeSource,
+export function createWindowsProcessSemanticProbeSource(options: { readonly deadlineMs?: number; readonly cleanupDeadlineMs?: number } = {}): Pick<ProcessHostSemanticProbeSource,
   "portableDuplex" | "windowsBatchArgv" | "exactTreeBirth"> {
   // Each portable fixture performs Windows process inventory. Serialize the
   // one-time probes so capability discovery cannot create an inventory storm.
@@ -54,21 +54,31 @@ export function createWindowsProcessSemanticProbeSource(options: { readonly dead
     tail = result.then(() => undefined, () => undefined);
     return result;
   };
+  const cleanupDeadlineMs = options.cleanupDeadlineMs ?? PROBE_DEADLINE_MS;
   return Object.freeze({
-    portableDuplex: async () => await serialize(async () => await probePortableDuplex(options.deadlineMs ?? PROBE_DEADLINE_MS)),
-    windowsBatchArgv: async () => await serialize(async () => await probeWindowsBatchArgv(options.deadlineMs ?? PROBE_DEADLINE_MS)),
-    exactTreeBirth: async () => await serialize(async () => await probeExactTreeBirth(options.deadlineMs ?? PROBE_DEADLINE_MS)),
+    portableDuplex: async () => await serialize(async () => await probePortableDuplex(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs)),
+    windowsBatchArgv: async () => await serialize(async () => await probeWindowsBatchArgv(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs)),
+    exactTreeBirth: async () => await serialize(async () => await probeExactTreeBirth(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs)),
   });
 }
 
-async function probePortableDuplex(deadlineMs: number): Promise<boolean> {
-  return await withPortableProbe("duplex", deadlineMs, async ({ backend, workspace, own }) => {
+function remainingProbeDeadlineMs(deadline: number): number {
+  const remaining = Math.floor(deadline - Date.now());
+  if (remaining < 1) throw new Error("Windows semantic probe timed out.");
+  return remaining;
+}
+
+async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
+  remainingProbeDeadlineMs(deadline);
+  return await withPortableProbe("duplex", cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const launch = parseProcessLaunchResult(await backend.launch(request(
       workspace,
       process.execPath,
       ["-e", "process.stdin.on('data',b=>process.stdout.write(Buffer.concat([Buffer.from('probe:'),b])));process.stdin.on('end',()=>process.exit(0))"],
     )));
     const binding = own(bindingFor(launch));
+    remainingProbeDeadlineMs(deadline);
     const channel = await backend.backpressuredChannelProvider().acquire(binding, FENCE);
     let attached: InteractiveProcessChannel | undefined = channel;
     const received: Buffer[] = [];
@@ -82,13 +92,14 @@ async function probePortableDuplex(deadlineMs: number): Promise<boolean> {
         sequence: 1,
         byteLength: payload.byteLength,
         digest: (await import("node:crypto")).createHash("sha256").update(payload).digest("hex"),
-        timeoutMs: PROBE_DEADLINE_MS,
+        timeoutMs: remainingProbeDeadlineMs(deadline),
       }, payload);
       await channel.closeInput();
+      remainingProbeDeadlineMs(deadline);
       await waitForPortableTerminal(backend, binding, () =>
-        Buffer.concat(received).equals(Buffer.from("probe:duplex-boundary")), deadlineMs);
+        Buffer.concat(received).equals(Buffer.from("probe:duplex-boundary")), remainingProbeDeadlineMs(deadline));
       await channel.detach(); attached = undefined;
-      await requireEmptyAndRelease(backend, binding, deadlineMs);
+      await requireEmptyAndRelease(backend, binding, remainingProbeDeadlineMs(deadline));
       return Buffer.concat(received).equals(Buffer.from("probe:duplex-boundary"));
     } finally {
       await attached?.detach().catch(() => undefined);
@@ -96,8 +107,10 @@ async function probePortableDuplex(deadlineMs: number): Promise<boolean> {
   });
 }
 
-async function probeWindowsBatchArgv(deadlineMs: number): Promise<boolean> {
-  return await withPortableProbe("batch", deadlineMs, async ({ backend, workspace, own }) => {
+async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: number): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
+  remainingProbeDeadlineMs(deadline);
+  return await withPortableProbe("batch", cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const script = join(workspace, "capture-argv.mjs");
     const shim = join(workspace, "capture-argv.cmd");
     writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n", { mode: 0o600 });
@@ -108,6 +121,7 @@ async function probeWindowsBatchArgv(deadlineMs: number): Promise<boolean> {
       PROBE_SCRIPT: script,
     })));
     const binding = own(bindingFor(launch));
+    remainingProbeDeadlineMs(deadline);
     const channel = await backend.backpressuredChannelProvider().acquire(binding, FENCE);
     let attached: InteractiveProcessChannel | undefined = channel;
     const stdout: Buffer[] = [];
@@ -116,9 +130,9 @@ async function probeWindowsBatchArgv(deadlineMs: number): Promise<boolean> {
         if (metadata.stream === "stdout") stdout.push(Buffer.from(bytes));
         return metadata;
       });
-      await waitForPortableTerminal(backend, binding, () => stdout.length > 0, deadlineMs);
+      await waitForPortableTerminal(backend, binding, () => stdout.length > 0, remainingProbeDeadlineMs(deadline));
       await channel.detach(); attached = undefined;
-      await requireEmptyAndRelease(backend, binding, deadlineMs);
+      await requireEmptyAndRelease(backend, binding, remainingProbeDeadlineMs(deadline));
       return JSON.stringify(JSON.parse(Buffer.concat(stdout).toString("utf8"))) === JSON.stringify(expected);
     } finally {
       await attached?.detach().catch(() => undefined);
@@ -126,12 +140,15 @@ async function probeWindowsBatchArgv(deadlineMs: number): Promise<boolean> {
   });
 }
 
-async function probeExactTreeBirth(deadlineMs: number): Promise<"partial" | false> {
-  return await withPortableProbe<"partial" | false>("tree", deadlineMs, async ({ backend, workspace, own }) => {
+async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number): Promise<"partial" | false> {
+  const deadline = Date.now() + deadlineMs;
+  remainingProbeDeadlineMs(deadline);
+  return await withPortableProbe<"partial" | false>("tree", cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const child = "setTimeout(()=>process.exit(0),4000)";
     const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),4000)`;
     const launch = parseProcessLaunchResult(await backend.launch(request(workspace, process.execPath, ["-e", parent])));
     const binding = own(bindingFor(launch));
+    remainingProbeDeadlineMs(deadline);
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
     await waitForWindowsSemanticProbe(() => {
       try {
@@ -141,13 +158,13 @@ async function probeExactTreeBirth(deadlineMs: number): Promise<"partial" | fals
         };
         return Boolean(state.rootProcess?.birth) && (state.knownProcesses?.length ?? 0) >= 2 && state.knownProcesses!.every((entry) => entry.pid > 0 && entry.birth.length > 0);
       } catch { return false; }
-    }, { deadlineMs });
+    }, { deadlineMs: remainingProbeDeadlineMs(deadline) });
     // This fact attests birth-tagged ownership, not destructive-control
     // throughput. Let the bounded fixture exit normally so the probe measures
     // the independent tree/re-attestation contract without contending on a
     // second synchronous Windows inventory during capability discovery.
-    await waitForPortableTerminal(backend, binding, () => true, deadlineMs);
-    await requireEmptyAndRelease(backend, binding, deadlineMs);
+    await waitForPortableTerminal(backend, binding, () => true, remainingProbeDeadlineMs(deadline));
+    await requireEmptyAndRelease(backend, binding, remainingProbeDeadlineMs(deadline));
     // The portable supervisor proves birth-tagged known members, but not global
     // OS containment, so the honest semantic level remains partial.
     return "partial";
@@ -159,6 +176,11 @@ async function withPortableProbe<T>(name: string, cleanupDeadlineMs: number, act
   workspace: string;
   own(binding: ProcessBackendBinding): ProcessBackendBinding;
 }) => Promise<T>): Promise<T> {
+  // Initialize and validate the Windows inventory provider before the random
+  // root exists. Protected provider helpers created by this query then have an
+  // immutable birth strictly before the root rather than becoming an
+  // unresolvable post-root process during cleanup.
+  probeGlobalProcessInventory(cleanupDeadlineMs);
   const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${name}-`));
   const stateDirectory = join(root, "state");
   const workspace = join(root, "workspace");
@@ -191,12 +213,16 @@ async function withPortableProbe<T>(name: string, cleanupDeadlineMs: number, act
       try { await backend.signal(binding, "force_terminate", FENCE); }
       catch (error) { cleanupErrors.push(error); }
       try {
+        // The portable supervisor intentionally retains ownership until every
+        // durable output chunk is acknowledged.  Settle that output before
+        // waiting for terminal emptiness; reversing these two operations can
+        // consume the entire cleanup budget in a dependency deadlock.
+        await settleProbeOutput(backend, binding, cleanupDeadlineMs);
         await requireEmptyAndRelease(backend, binding, cleanupDeadlineMs);
         released = true;
       } catch (error) {
         cleanupErrors.push(error);
         try {
-          await settleProbeOutput(backend, binding);
           await requireEmptyAndRelease(backend, binding, cleanupDeadlineMs);
           released = true;
         } catch (settleError) { cleanupErrors.push(settleError); }
@@ -240,7 +266,15 @@ export function removeInactiveSemanticProbeRoot(root: string, binding: ProcessBa
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) return false;
   const budget: CleanupBudget = { deadline: now() + deadlineMs, now };
   const ownership = inspectProbeOwnership(resolvedRoot, binding, operations, budget);
-  if (!ownership) return false;
+  if (!ownership) {
+    const exactSupervisor = inspectAuthenticatedProbeSupervisor(resolvedRoot, binding);
+    if (exactSupervisor)
+      stopExactProbeSupervisor(resolvedRoot, { identity: exactSupervisor, supervisorLive: true, foreignReference: true }, operations, budget);
+    // Invalid descendant/closure evidence can authorize stopping only the
+    // independently authenticated Runner supervisor. It can never authorize
+    // deleting the evidence root.
+    return false;
+  }
   if (ownership.supervisorLive) {
     if (!stopExactProbeSupervisor(resolvedRoot, ownership, operations, budget)) return false;
   }
@@ -270,6 +304,9 @@ function validGeneratedProbeRoot(root: string): boolean {
 
 interface CleanupBudget { readonly deadline: number; readonly now: () => number }
 interface ProbeProcess { readonly pid: number; readonly birth: string; readonly commandLine: string }
+const MAX_ENCODED_REFERENCE_CANDIDATES = 256;
+const MAX_ENCODED_REFERENCE_CHARS = 64 * 1024;
+const MAX_DECODED_REFERENCE_BYTES = 64 * 1024;
 
 function remainingCleanupMs(budget: CleanupBudget): number {
   const remaining = Math.floor(budget.deadline - budget.now());
@@ -282,14 +319,57 @@ function probeEvidenceHasNoLiveOwners(root: string, binding: ProcessBackendBindi
   return Boolean(ownership && !ownership.supervisorLive && !ownership.foreignReference);
 }
 
+interface ProbeSupervisorIdentity {
+  readonly directory: string;
+  readonly nonce: string;
+  readonly supervisorPid: number;
+  readonly supervisorBirth: string;
+}
+
 interface ProbeOwnershipInspection {
-  readonly identity: { directory: string; nonce: string; supervisorPid: number; supervisorBirth: string };
+  readonly identity: ProbeSupervisorIdentity;
   readonly supervisorLive: boolean;
   readonly foreignReference: boolean;
 }
 
+function inspectAuthenticatedProbeSupervisor(root: string, binding: ProcessBackendBinding): ProbeSupervisorIdentity | undefined {
+  try {
+    const identity = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as ProbeSupervisorIdentity & {
+      version?: number;
+      backendId?: string;
+      fence?: ProcessEffectFence;
+    };
+    const directory = resolve(identity.directory);
+    if (identity.version !== 1 || identity.backendId !== "runner-windows-supervisor-v1" ||
+        binding.backendId !== identity.backendId || binding.rootPid !== identity.supervisorPid ||
+        dirname(directory) !== resolve(root, "state") || !basename(directory).startsWith("owned-") ||
+        !identity.nonce || !validProbeOwner(identity.supervisorPid, identity.supervisorBirth) ||
+        !identity.fence?.ownerId || !Number.isSafeInteger(identity.fence.fencingToken) || identity.fence.fencingToken < 1)
+      return undefined;
+    const expectedDiscriminator = createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex");
+    if (binding.birthFingerprint.discriminator !== expectedDiscriminator) return undefined;
+    const state = JSON.parse(readFileSync(join(directory, "state.json"), "utf8")) as {
+      protocol?: string; nonce?: string; supervisorPid?: number;
+    };
+    const holder = JSON.parse(readFileSync(join(directory, "lock-holder.json"), "utf8")) as {
+      nonce?: string; holderPid?: number; holderBirth?: string;
+    };
+    const fence = JSON.parse(readFileSync(join(directory, "fence.json"), "utf8")) as {
+      nonce?: string; ownerId?: string; fencingToken?: number;
+    };
+    if (state.protocol !== "aiboard-portable-process/v1" || state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid ||
+        holder.nonce !== identity.nonce || holder.holderPid !== identity.supervisorPid ||
+        !sameProbeBirth(holder.holderBirth ?? "", identity.supervisorBirth) ||
+        fence.nonce !== identity.nonce || fence.ownerId !== identity.fence.ownerId ||
+        fence.fencingToken !== identity.fence.fencingToken)
+      return undefined;
+    return { directory, nonce: identity.nonce, supervisorPid: identity.supervisorPid, supervisorBirth: identity.supervisorBirth };
+  } catch { return undefined; }
+}
+
 function inspectProbeOwnership(root: string, binding: ProcessBackendBinding, operations: SemanticProbeCleanupOperations, budget: CleanupBudget): ProbeOwnershipInspection | undefined {
   try {
+    const rootCreatedAt = exactProbeRootCreationTime(root);
     const identity = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as {
       directory: string;
       nonce: string;
@@ -328,13 +408,24 @@ function inspectProbeOwnership(root: string, binding: ProcessBackendBinding, ope
     let supervisorLive = false;
     let foreignReference = false;
     for (const process of current) {
+      const executableReferencesRoot = process.executableAccessible && probeTextReferencesRoot(process.executable, root);
+      const commandReferencesRoot = process.commandLineAccessible && probeTextReferencesRoot(process.commandLine, root);
+      if (executableReferencesRoot || commandReferencesRoot) foreignReference = true;
       const matches = expected.filter((candidate) => candidate.pid === process.pid && sameProbeBirth(candidate.birth, process.birth));
+      if ((!process.executableAccessible || !process.commandLineAccessible) && !(probeBirthTime(process.birth) < rootCreatedAt)) {
+        // Unreadable post-root metadata makes global deletion closure unknown,
+        // but it does not invalidate independent proof for a different exact
+        // supervisor. Preserve the root while still allowing only that
+        // birth-and-command-authenticated supervisor to be stopped.
+        if (matches.some((candidate) => candidate.supervisor)) return undefined;
+        foreignReference = true;
+      }
       if (matches.some((candidate) => candidate.supervisor)) {
-        if (!probeCommandReferencesRoot(process.commandLine, root)) return undefined;
+        if (!process.commandLineAccessible || !probeTextReferencesRoot(process.commandLine, root)) return undefined;
         supervisorLive = true;
         continue;
       }
-      if (matches.length > 0 || probeCommandReferencesRoot(process.commandLine, root)) foreignReference = true;
+      if (matches.length > 0) foreignReference = true;
     }
     return { identity, supervisorLive, foreignReference };
   } catch { return undefined; }
@@ -379,6 +470,8 @@ export interface GlobalProbeProcess {
   readonly pid: number;
   readonly birth: string;
   readonly parentPid: number;
+  readonly executableAccessible: boolean;
+  readonly commandLineAccessible: boolean;
   readonly executable: string;
   readonly commandLine: string;
 }
@@ -387,16 +480,20 @@ function probeGlobalProcessInventory(timeoutMs: number): GlobalProbeProcess[] {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("Invalid global process inventory deadline.");
   const output = execFileSync("powershell.exe", [
     "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-    `$ErrorActionPreference='Stop';$p=@(Get-CimInstance Win32_Process);if($p.Count -lt 1 -or $p.Count -gt 4096){throw 'invalid process count'};$tab=[char]9;foreach($x in $p){if($null-eq$x.CreationDate){throw 'missing birth'};$e=if($null-eq$x.ExecutablePath){''}else{[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$x.ExecutablePath))};$c=if($null-eq$x.CommandLine){''}else{[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$x.CommandLine))};"$([int]$x.ProcessId)$tab$($x.CreationDate.ToUniversalTime().ToString('o'))$tab$([int]$x.ParentProcessId)$tab$e$tab$c"};"COMPLETE:$($p.Count)"`,
+    `$ErrorActionPreference='Stop';$p=@(Get-CimInstance Win32_Process);if($p.Count -lt 1 -or $p.Count -gt 4096){throw 'invalid process count'};$tab=[char]9;foreach($x in $p){if($null-eq$x.CreationDate){throw 'missing birth'};$ea=if($null-eq$x.ExecutablePath){0}else{1};$e=if($ea-eq0){''}else{[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$x.ExecutablePath))};$ca=if($null-eq$x.CommandLine){0}else{1};$c=if($ca-eq0){''}else{[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$x.CommandLine))};"$([int]$x.ProcessId)$tab$($x.CreationDate.ToUniversalTime().ToString('o'))$tab$([int]$x.ParentProcessId)$tab$ea$tab$e$tab$ca$tab$c"};"COMPLETE:$($p.Count)"`,
   ], { encoding: "utf8", windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }).trim();
   const lines = output.split(/\r?\n/).filter(Boolean);
   const completion = /^COMPLETE:(\d+)$/.exec(lines.pop() ?? "");
   if (!completion) throw new Error("Global probe process inventory is truncated or incomplete.");
   const processes = lines.map((line): Partial<GlobalProbeProcess> => {
-    const [pid, birth, parentPid, executable, commandLine, ...extra] = line.split("\t");
+    const [pid, birth, parentPid, executableAccessible, executable, commandLineAccessible, commandLine, ...extra] = line.split("\t");
     if (extra.length > 0 || executable === undefined || commandLine === undefined) throw new Error("Global probe process inventory row is malformed.");
+    if (!["0", "1"].includes(executableAccessible ?? "") || !["0", "1"].includes(commandLineAccessible ?? ""))
+      throw new Error("Global probe process inventory accessibility is malformed.");
     return {
       pid: Number(pid), birth, parentPid: Number(parentPid),
+      executableAccessible: executableAccessible === "1",
+      commandLineAccessible: commandLineAccessible === "1",
       executable: Buffer.from(executable, "base64").toString("utf8"),
       commandLine: Buffer.from(commandLine, "base64").toString("utf8"),
     };
@@ -410,25 +507,46 @@ function validateGlobalProbeProcessInventory(processes: readonly Partial<GlobalP
   if (processes.length < 1 || processes.length > 4096 || processes.some((process) => !Number.isSafeInteger(process.pid) || Number(process.pid) < 0 ||
       !Number.isSafeInteger(process.parentPid) || Number(process.parentPid) < 0 ||
       typeof process.birth !== "string" || !Number.isFinite(probeBirthTime(process.birth)) ||
-      typeof process.executable !== "string" || typeof process.commandLine !== "string"))
-    throw new Error("Global probe process inventory contains malformed or inaccessible entries.");
+      typeof process.executableAccessible !== "boolean" || typeof process.commandLineAccessible !== "boolean" ||
+      typeof process.executable !== "string" || typeof process.commandLine !== "string" ||
+      (!process.executableAccessible && process.executable !== "") || (!process.commandLineAccessible && process.commandLine !== "")))
+    throw new Error("Global probe process inventory contains malformed entries.");
   return processes as GlobalProbeProcess[];
 }
 
 function probeCommandReferencesRoot(commandLine: string, root: string): boolean {
+  return probeTextReferencesRoot(commandLine, root);
+}
+
+function probeTextReferencesRoot(value: string, root: string): boolean {
+  if (value.length > MAX_ENCODED_REFERENCE_CHARS) throw new Error("Probe process reference evidence exceeds its bound.");
   const normalized = resolve(root).toLowerCase();
-  if (commandLine.toLowerCase().includes(normalized)) return true;
-  for (const token of commandLine.split(/\s+/)) {
-    const encoded = token.replace(/^["']+|["']+$/g, "");
-    if (!/^[A-Za-z0-9_-]{40,}$/.test(encoded)) continue;
-    try {
-      const decoded = Buffer.from(encoded, "base64url").toString("utf8");
-      if (decoded.toLowerCase().includes(normalized)) return true;
-      if (decodedProbePayloadReferencesRoot(JSON.parse(decoded), normalized)) return true;
-    }
+  if (value.toLowerCase().includes(normalized)) return true;
+  const candidates = [...value.matchAll(/[A-Za-z0-9+\/_-]{40,}={0,2}/g)].map((match) => match[0]);
+  if (candidates.length > MAX_ENCODED_REFERENCE_CANDIDATES) throw new Error("Probe process encoded-reference count exceeds its bound.");
+  for (const encoded of candidates) {
+    if (encoded.length > MAX_ENCODED_REFERENCE_CHARS) throw new Error("Probe process encoded reference exceeds its bound.");
+    const decodedBytes = decodeStrictProbeBase64(encoded);
+    if (!decodedBytes) continue;
+    if (decodedBytes.byteLength > MAX_DECODED_REFERENCE_BYTES) throw new Error("Probe process decoded reference exceeds its bound.");
+    const decoded = decodedBytes.toString("utf8");
+    if (decoded.toLowerCase().includes(normalized)) return true;
+    try { if (decodedProbePayloadReferencesRoot(JSON.parse(decoded), normalized)) return true; }
     catch {}
   }
   return false;
+}
+
+function decodeStrictProbeBase64(encoded: string): Buffer | undefined {
+  const unpadded = encoded.replace(/=+$/, "");
+  if (unpadded.length < 40 || unpadded.length % 4 === 1) return undefined;
+  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) {
+    const decoded = Buffer.from(unpadded, "base64url");
+    return decoded.toString("base64url") === unpadded ? decoded : undefined;
+  }
+  if (!/^[A-Za-z0-9+/]+$/.test(unpadded)) return undefined;
+  const decoded = Buffer.from(unpadded, "base64");
+  return decoded.toString("base64").replace(/=+$/, "") === unpadded ? decoded : undefined;
 }
 
 function decodedProbePayloadReferencesRoot(value: unknown, normalizedRoot: string, depth = 0): boolean {
@@ -449,16 +567,25 @@ function validProbeOwner(pid: unknown, birth: unknown): birth is string {
 
 function probeBirthTime(birth: string): number { return Date.parse(birth); }
 
+function exactProbeRootCreationTime(root: string): number {
+  const createdAt = statSync(root).birthtimeMs;
+  if (!Number.isFinite(createdAt) || createdAt <= 0) throw new Error("Exact probe root creation time is unavailable.");
+  // JavaScript process-birth parsing resolves to whole milliseconds. Flooring
+  // the filesystem time makes same-millisecond ordering ambiguous and therefore
+  // fail-closed instead of treating a rounded timestamp as strictly older.
+  return Math.floor(createdAt);
+}
+
 function sameProbeBirth(left: string, right: string): boolean {
   const normalize = (value: string) => value.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
   return normalize(left) === normalize(right);
 }
 
-async function settleProbeOutput(backend: WindowsProcessBackend, binding: ProcessBackendBinding): Promise<void> {
+async function settleProbeOutput(backend: WindowsProcessBackend, binding: ProcessBackendBinding, deadlineMs: number): Promise<void> {
   const channel = await backend.backpressuredChannelProvider().acquire(binding, FENCE);
   try {
     channel.subscribeBackpressuredOutput(async (metadata) => metadata);
-    await waitForPortableTerminal(backend, binding, () => true, PROBE_DEADLINE_MS);
+    await waitForPortableTerminal(backend, binding, () => true, deadlineMs);
   } finally {
     await channel.detach().catch(() => undefined);
   }

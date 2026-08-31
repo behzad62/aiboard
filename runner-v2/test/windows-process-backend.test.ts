@@ -185,6 +185,87 @@ test("Windows Job exact release recovers a durable tombstone after SQLite holder
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
+test("Windows Job release rejects a substituted record before touching another process lock", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-record-substitution-"));
+  const requestedId = "requested-a";
+  const targetId = "target-b";
+  const startedAt = new Date().toISOString();
+  const owner = { runId: "run-record-substitution", sessionId: "session-record-substitution" };
+  const targetDirectory = join(root, targetId);
+  mkdirSync(targetDirectory, { recursive: true });
+  const statusPath = join(targetDirectory, "supervisor.jsonl");
+  const stdoutPath = join(targetDirectory, "stdout.log");
+  const stderrPath = join(targetDirectory, "stderr.log");
+  writeFileSync(stdoutPath, ""); writeFileSync(stderrPath, "");
+  writeFileSync(statusPath, `${JSON.stringify({
+    protocol: "aiboard-managed-process/v1", processId: targetId, supervisorPid: process.pid,
+    childPid: 0, port: 0, status: "stopped", exitCode: 0, signal: null, error: null,
+    ownershipReleased: true, updatedAt: startedAt, retainedOutputChunks: 0, retainedOutputBytes: 0,
+  })}\n`);
+  const record = {
+    processId: targetId, ...owner, pid: 0, command: process.execPath, args: [], cwd: root,
+    environmentKeys: [], startedAt, updatedAt: startedAt, status: "stopped", exitCode: 0,
+    signal: null, stdoutPath, stderrPath, interactive: true,
+    outputOffsets: { stdout: 0, stderr: 0 }, outputSequences: { stdout: 0, stderr: 0 },
+    supervisor: { protocol: "aiboard-managed-process/v1", token: "s".repeat(64), statusPath, supervisorPid: process.pid, port: 0 },
+    currentFence: fence,
+  };
+  const targetRecordPath = join(root, `${targetId}.json`);
+  const requestedRecordPath = join(root, `${requestedId}.json`);
+  writeFileSync(targetRecordPath, JSON.stringify(record));
+  const targetLockPath = join(root, `${targetId}.fence.lock`);
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
+    await host.claimOwnedFence!(targetId, owner, fence);
+    const releasedAt = new Date(Date.parse(startedAt) + 1).toISOString();
+    const releasedRecord = { ...record, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
+    writeFileSync(targetRecordPath, JSON.stringify(releasedRecord));
+    writeFileSync(requestedRecordPath, JSON.stringify(releasedRecord));
+    const before = new DatabaseSync(targetLockPath);
+    const beforeHolders = Number(before.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count);
+    before.close();
+    await assert.rejects(host.releaseOwned(requestedId, owner, startedAt, fence), /process.*identity|record.*identity|mismatch/i);
+    assert.equal(existsSync(targetLockPath), true, "the unrelated target coordination database must remain");
+    const after = new DatabaseSync(targetLockPath);
+    assert.equal(Number(after.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), beforeHolders);
+    after.close();
+    for (const suffix of ["-journal", "-wal", "-shm"])
+      assert.equal(existsSync(`${targetLockPath}${suffix}`), false);
+    assert.equal(readFileSync(targetRecordPath, "utf8"), JSON.stringify(releasedRecord));
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("Windows Job rejects path-escaping process IDs before reading outside host state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-path-identity-"));
+  const stateDirectory = join(root, "state");
+  mkdirSync(stateDirectory);
+  const outside = join(root, "escape.json");
+  writeFileSync(outside, "outside evidence must not be parsed");
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory, platform: "win32" });
+    await assert.rejects(
+      host.reconcileOwned("../escape", { runId: "run", sessionId: "session" }, fence),
+      /process.*identity|invalid.*process|path/i,
+    );
+    assert.equal(readFileSync(outside, "utf8"), "outside evidence must not be parsed");
+    assert.equal(existsSync(join(root, "escape.fence.lock")), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Windows Job startup refuses to cache a filename and embedded process identity mismatch", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-startup-identity-"));
+  writeFileSync(join(root, "requested-a.json"), JSON.stringify({
+    processId: "target-b", runId: "run", sessionId: "session", startedAt: new Date().toISOString(),
+    stdoutPath: join(root, "stdout.log"), stderrPath: join(root, "stderr.log"), supervisor: {},
+  }));
+  try {
+    assert.throws(
+      () => createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" }),
+      /record.*identity|process.*identity|mismatch/i,
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Windows Job prequeued releases persist one tombstone and both retire exact coordination", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-release-race-"));
   const processId = "job-release-race";
@@ -434,6 +515,67 @@ test("Windows portable supervisor reuses one birth-tagged tree snapshot per owne
   assert.match(source, /const gap\s*=\s*now\s*-\s*lastWindowsTreeRefreshFinishedAt/);
   assert.match(source, /gap\s*<\s*WINDOWS_TREE_REFRESH_INTERVAL_MS/);
   assert.match(source, /WINDOWS_TREE_FAILURE_LIMIT/);
+  assert.match(source, /acceptWindowsTreeResult\(code,[^\n]*inspector\.pid\)/);
+  assert.match(source, /const inspectorTree = new Set\(\[inspectorPid\]\)/);
+  assert.match(source, /rows = rows\.filter\(\(\{ pid \}\) => !inspectorTree\.has\(pid\)\)/);
+  assert.doesNotMatch(source, /knownProcesses\.delete\(/,
+    "historical exact identities must remain available for durable terminal proof");
+  assert.match(source, /const owned = new Set\(\[\.\.\.knownProcesses\]\.filter\(\(\[pid, birth\]\) => \{\s*const observed = current\.get\(pid\);\s*return observed !== undefined && sameBirth\(observed, birth\);\s*\}\)\.map\(\(\[pid\]\) => pid\)\);/,
+    "only currently birth-matched identities may seed descendant traversal");
+  const tick = source.slice(source.indexOf("function tick"), source.indexOf("function installOutput"));
+  assert.match(tick, /if \(config\.platform === "windows" && windowsTreeRefreshInFlight\) return;/,
+    "destructive control must wait for the in-flight inventory instead of starting a competing query");
+  const control = source.slice(source.indexOf("function handleControl"), source.indexOf("const WINDOWS_TREE_SCRIPT"));
+  assert.match(control, /if \(config\.windowsControlInspector\) refreshWindowsTree\(\);/,
+    "production control must reuse the fresh periodic snapshot; only an explicit test/control inspector may replace it");
+  assert.match(control, /\["ENOENT", "EPERM", "EACCES", "EBUSY"\]/,
+    "transient Windows sharing conflicts must leave control pending for the next tick");
+});
+
+test("Windows portable supervisor preserves historical proof without traversing a PID replacement", { timeout: 30_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("Windows PID-reuse fixture requires Windows."); return; }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-recycled-tree-"));
+  const directory = join(root, "owned-recycled-tree");
+  mkdirSync(directory);
+  const statePath = join(directory, "state.json");
+  const replacementChildPid = 2_147_483_000;
+  const inspector = [
+    "const fs=require('node:fs')",
+    "const state=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))",
+    "if(!state.rootProcess)process.exit(2)",
+    "const replacementBirth='2000-01-01T00:00:00.000000Z'",
+    "process.stdout.write(state.rootProcess.pid+',1,'+replacementBirth+'\\n')",
+    `process.stdout.write('${replacementChildPid},'+state.rootProcess.pid+','+replacementBirth+'\\n')`,
+  ].join(";");
+  const encoded = Buffer.from(JSON.stringify({
+    nonce: "recycled-tree-proof",
+    directory,
+    executable: process.execPath,
+    arguments: ["-e", "process.exit(0)"],
+    workingDirectory: process.cwd(),
+    environment: fixtureEnvironment(),
+    platform: "windows",
+    pollIntervalMs: 20,
+    windowsTreeInspector: { command: process.execPath, arguments: ["-e", inspector, statePath], deadlineMs: 2_000 },
+  })).toString("base64url");
+  const supervisor = spawn(process.execPath, [join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), encoded], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  assert.ok(supervisor.pid);
+  try {
+    const stopped = await waitForPortableState(directory, (state) => state.status === "stopped");
+    assert.ok(stopped.rootProcess);
+    assert.deepEqual(stopped.knownProcesses, [stopped.rootProcess],
+      "the exact root remains as historical proof and the replacement tree is never adopted");
+    assert.equal(stopped.knownProcesses.some((candidate: { pid: number }) => candidate.pid === replacementChildPid), false);
+    await waitForCondition(() => !processIsAlive(supervisor.pid!));
+  } finally {
+    if (supervisor.pid && processIsAlive(supervisor.pid)) {
+      try { execFileSync("taskkill.exe", ["/PID", String(supervisor.pid), "/T", "/F"], { stdio: "ignore" }); } catch {}
+    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
 });
 
 test("Windows Job supervisor durably settles final retained output before acknowledging it", () => {
@@ -499,7 +641,7 @@ test("Windows reconciliation distinguishes missing opaque identity from a birth 
   assert.deepEqual(await backend.reconcile(mismatch, fence), { state: "identity_mismatch" });
 });
 
-test("Windows portable ownership rejects a recycled descendant before control is written", async () => {
+test("Windows portable recovery treats a replaced historical process identity as absent", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-identity-contract-"));
   const operations: NativeProcessOperations = {
     inspectProcessBirth: (pid) => ({ state: "present", fingerprint: pid === 9001 ? "supervisor-birth" : "recycled-birth" }),
@@ -525,10 +667,19 @@ test("Windows portable ownership rejects a recycled descendant before control is
     error: null,
     updatedAt: "2026-01-01T00:00:00.000Z",
   }));
-  const binding = portableWindowsBinding(stateDirectory, "supervisor-birth");
+  const stopped = JSON.parse(readFileSync(join(stateDirectory, "state.json"), "utf8"));
+  stopped.status = "stopped";
+  writeFileSync(join(stateDirectory, "state.json"), JSON.stringify(stopped));
+  const identity = portableIdentity(stateDirectory, "supervisor-birth");
+  const internal = backend as unknown as {
+    emptiness(value: typeof identity): string;
+    hasTerminalStoppedProof(value: typeof identity): boolean;
+  };
   try {
-    assert.deepEqual(parseProcessReconciliation(await backend.reconcile(binding, fence)), { state: "identity_mismatch" });
-    await assert.rejects(backend.signal(binding, "force_terminate", fence), /identity/i);
+    assert.equal(internal.emptiness(identity), "empty",
+      "a different exact birth proves the recorded identity is gone, not that the replacement is owned");
+    assert.equal(internal.hasTerminalStoppedProof(identity), true,
+      "historical root membership must remain sufficient for durable terminal proof");
     assert.equal(existsSync(join(stateDirectory, "control.json")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -719,7 +870,7 @@ test("Windows supervisor watchdog terminates a hung CIM inspector and reaches du
     windowsTreeInspector: {
       command: process.execPath,
       arguments: ["-e", "require('node:fs').appendFileSync(process.argv[1],process.pid+'\\n');setInterval(()=>{},1000)", inspectorPids],
-      deadlineMs: 100,
+      deadlineMs: 1_000,
     },
   })).toString("base64url");
   const child = spawn(process.execPath, [supervisor, encoded], { stdio: "ignore", windowsHide: true });
@@ -738,6 +889,89 @@ test("Windows supervisor watchdog terminates a hung CIM inspector and reaches du
     assert.equal(processIsAlive(state.rootProcess!.pid), true, "uncertain owned process must remain intact");
   } finally {
     try { execFileSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch {}
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("Windows portable startup retries an exact birth inspection with an adaptive bounded budget", { timeout: 30_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("Windows adaptive birth fixture requires a Windows host."); return; }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-birth-"));
+  const directory = join(root, "owned-adaptive-birth"); mkdirSync(directory);
+  const inspector = "setTimeout(()=>process.stdout.write('PRESENT:2030-01-01T00:00:00.000000Z'),3000)";
+  const encoded = Buffer.from(JSON.stringify({
+    nonce: "adaptive-birth",
+    directory,
+    executable: process.execPath,
+    arguments: ["-e", "setInterval(()=>{},1000)"],
+    workingDirectory: process.cwd(),
+    environment: fixtureEnvironment(),
+    platform: "windows",
+    pollIntervalMs: 20,
+    windowsBirthInspector: { command: process.execPath, arguments: ["-e", inspector] },
+  })).toString("base64url");
+  const supervisorPath = join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs");
+  const child = spawn(process.execPath, [supervisorPath, encoded], {
+    stdio: "ignore",
+    windowsHide: true,
+    env: { ...process.env, PATH: join(root, "no-powershell-on-path") },
+  });
+  assert.ok(child.pid);
+  try {
+    const running = await waitForPortableState(directory, (state) =>
+      state.status === "running" && state.windowsBirthInspectionAttempts === 2 &&
+      (state.windowsBirthInspectionDeadlineMs ?? 0) >= 4_000,
+    10_000);
+    assert.equal(running.launchEffect, "started");
+    assert.equal(running.rootProcess?.birth, "2030-01-01T00:00:00.000000Z");
+  } finally {
+    try { execFileSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", timeout: 5_000 }); } catch {}
+    await waitForCondition(() => !processIsAlive(child.pid!), 10_000);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("portable backend does not cap Windows supervisor birth discovery at the former one-second window", () => {
+  const source = readFileSync(join(process.cwd(), "runner-v2", "src", "native-process-backend.ts"), "utf8");
+  assert.doesNotMatch(source, /waitForBirth\(child\.pid,\s*1_000\)/);
+  assert.match(source, /inspectProcessBirth\(pid,\s*this\.options\.platform,\s*attemptDeadlineMs\)/);
+  assert.match(source, /WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS/);
+});
+
+test("Windows supervisor adapts its default inventory attempt budget to a slower host", { timeout: 30_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("Windows adaptive CIM fixture requires a Windows host."); return; }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-cim-"));
+  const directory = join(root, "owned-adaptive-query"); mkdirSync(directory);
+  const statePath = join(directory, "state.json");
+  const inspector = [
+    "const fs=require('node:fs')",
+    "setTimeout(()=>{",
+    "const state=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))",
+    "if(!state.rootProcess)process.exit(2)",
+    "process.stdout.write(state.rootProcess.pid+',1,'+state.rootProcess.birth+'\\n')",
+    "},3000)",
+  ].join(";");
+  const encoded = Buffer.from(JSON.stringify({
+    nonce: "adaptive-cim",
+    directory,
+    executable: process.execPath,
+    arguments: ["-e", "setInterval(()=>{},1000)"],
+    workingDirectory: process.cwd(),
+    environment: fixtureEnvironment(),
+    platform: "windows",
+    pollIntervalMs: 20,
+    windowsTreeInspector: { command: process.execPath, arguments: ["-e", inspector, statePath] },
+  })).toString("base64url");
+  const child = spawn(process.execPath, [join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), encoded], { stdio: "ignore", windowsHide: true });
+  assert.ok(child.pid);
+  try {
+    const recovered = await waitForPortableState(directory, (state) =>
+      state.status === "running" && (state.windowsTreeRefreshCount ?? 0) >= 2 &&
+      (state.windowsTreeFailures ?? 0) === 0 && (state.windowsTreeInspectionDeadlineMs ?? 0) > 2_000,
+    8_000);
+    assert.ok(recovered.rootProcess);
+    assert.equal(processIsAlive(recovered.rootProcess.pid), true);
+  } finally {
+    try { execFileSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", timeout: 5_000 }); } catch {}
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
@@ -1516,6 +1750,7 @@ test("Windows Job signal reports exact empty while retained output drains and ex
   const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
   const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { processId: string };
   const record = JSON.parse(readFileSync(join(stateDirectory, `${identity.processId}.json`), "utf8")) as { supervisor: { supervisorPid: number } };
+  const statusPath = join(stateDirectory, identity.processId, "supervisor.jsonl");
   let channel: Awaited<ReturnType<ReturnType<WindowsJobObjectProcessBackend["backpressuredChannelProvider"]>["acquire"]>> | undefined;
   let entered!: () => void; let resume!: () => void; const atSink = new Promise<void>((resolve) => { entered = resolve; }); const barrier = new Promise<void>((resolve) => { resume = resolve; });
   const output: Buffer[] = [];
@@ -1523,7 +1758,15 @@ test("Windows Job signal reports exact empty while retained output drains and ex
     channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
     channel.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); entered(); await barrier; return metadata; });
     await atSink;
-    assert.deepEqual(parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence)), { state: "exited" });
+    let signalled = parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence));
+    if (signalled.state === "running") {
+      await waitForCondition(() => {
+        const durable = JSON.parse(readFileSync(statusPath, "utf8").trim().split(/\r?\n/).at(-1)!) as { jobEmptyProof?: boolean };
+        return durable.jobEmptyProof === true;
+      }, 20_000);
+      signalled = parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence));
+    }
+    assert.deepEqual(signalled, { state: "exited" });
     resume();
     await channel.waitForTerminal(); assert.equal(Buffer.concat(output).toString(), "h".repeat(131072)); await channel.detach(); channel = undefined;
     await backend.release(binding, fence);
@@ -2208,13 +2451,19 @@ async function waitForPortableState(
     rootProcess?: { pid: number; birth: string } | null;
     knownProcesses: Array<{ pid: number; birth: string }>;
     handledControl: number;
+    windowsTreeRefreshCount?: number;
     windowsTreeFailures?: number;
+    windowsTreeInspectionDeadlineMs?: number;
+    windowsBirthInspectionAttempts?: number;
+    windowsBirthInspectionDeadlineMs?: number;
     error?: string | null;
   }) => boolean,
+  timeoutMs = 15_000,
 ) {
   const path = join(directory, "state.json");
   let latest: unknown;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       const state = JSON.parse(readFileSync(path, "utf8"));
       latest = state;
@@ -2225,8 +2474,8 @@ async function waitForPortableState(
   throw new Error(`Portable supervisor state did not settle at ${path}: ${JSON.stringify(latest)}.`);
 }
 
-async function waitForCondition(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error("condition did not become true");
     await new Promise((resolve) => setTimeout(resolve, 10));

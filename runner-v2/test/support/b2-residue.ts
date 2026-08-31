@@ -19,16 +19,30 @@ const DELETION_ROOT_PREFIXES = Object.freeze([
   "aiboard-owned-fence-lock-authority-retire-",
   "aiboard-portable-temporal-enumeration-",
   "aiboard-portable-signal-effect-fence-",
+  "aiboard-portable-published-stale-input-",
   "aiboard-windows-temporal-reuse-",
   "aiboard-windows-launch-cleanup-",
   "aiboard-windows-semantic-duplex-",
   "aiboard-windows-semantic-cleanup-",
+  "aiboard-windows-semantic-corrupt-descendant-stop-",
 ] as const);
 const DELETION_COORDINATION_PREFIXES = Object.freeze(["aiboard-windows-residue-"] as const);
 const TEST_INVOCATION_ID = randomUUID();
 const MAX_ENTRIES = 4_096;
 
 export interface B2ResidueEntry { readonly path: string; readonly prefix: string }
+interface B2ResidueProcess {
+  readonly pid: number;
+  readonly birth: string;
+  readonly parentPid: number;
+  readonly executableAccessible: boolean;
+  readonly commandLineAccessible: boolean;
+  readonly executable: string;
+  readonly commandLine: string;
+}
+export interface B2ResidueCleanupOperations {
+  readonly processInventory?: () => readonly B2ResidueProcess[];
+}
 
 export function registerCurrentB2TestRoot(root: string): void {
   const resolvedRoot = resolve(root);
@@ -50,21 +64,29 @@ export function inventoryB2Residue(): readonly B2ResidueEntry[] {
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
-export function cleanProvenB2Residue(entries: readonly B2ResidueEntry[] = inventoryB2Residue()): readonly string[] {
-  const processes = processInventory();
+export function cleanProvenB2Residue(
+  entries: readonly B2ResidueEntry[] = inventoryB2Residue(),
+  operations: B2ResidueCleanupOperations = {},
+): readonly string[] {
+  let processes: readonly B2ResidueProcess[];
+  try { processes = validateProcessInventory(operations.processInventory?.() ?? processInventory()); }
+  catch { return []; }
   const removed: string[] = [];
   for (const entry of entries) {
     const kind = exactB2EntryKind(entry);
     if (!kind) continue;
+    let createdAt: number;
+    try { createdAt = Math.floor(lstatSync(entry.path).birthtimeMs); }
+    catch { continue; }
+    if (!Number.isFinite(createdAt) || createdAt <= 0 || processes.some((process) => unresolvedProcessReference(process, entry.path, createdAt))) continue;
     if (kind === "coordination") {
-      if (!isSettledCoordinationDatabase(entry.path) || processes.some((process) => referencesRoot(process.commandLine, entry.path))) continue;
+      if (!isSettledCoordinationDatabase(entry.path)) continue;
       rmSync(entry.path, { force: true, maxRetries: 30, retryDelay: 50 });
       removed.push(entry.path);
       continue;
     }
     const evidence = inspectEvidence(entry.path);
     if (!evidence.valid) continue;
-    if (processes.some((process) => referencesRoot(process.commandLine, entry.path))) continue;
     let uncertain = false;
     for (const owner of evidence.owners) {
       const process = processes.find((candidate) => candidate.pid === owner.pid);
@@ -196,30 +218,85 @@ function validProcessRecord(value: unknown): value is { pid: number; birth: stri
     typeof (value as { birth?: unknown }).birth === "string" && (value as { birth: string }).birth.length > 0;
 }
 
-function processInventory(): Array<{ pid: number; birth: string; commandLine: string }> {
+function processInventory(): B2ResidueProcess[] {
   if (process.platform === "win32") {
     const encoded = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-      "$ErrorActionPreference='Stop';Get-CimInstance Win32_Process|ForEach-Object{$b=if($null-eq$_.CreationDate){''}else{$_.CreationDate.ToUniversalTime().ToString('o')};$c=if($null-eq$_.CommandLine){''}else{$_.CommandLine};$j=@{pid=[int]$_.ProcessId;birth=$b;commandLine=$c}|ConvertTo-Json -Compress;[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))}",
+      "$ErrorActionPreference='Stop';$p=@(Get-CimInstance Win32_Process);if($p.Count-lt1-or$p.Count-gt4096){throw 'invalid process count'};foreach($x in $p){$b=if($null-eq$x.CreationDate){''}else{$x.CreationDate.ToUniversalTime().ToString('o')};$ea=$null-ne$x.ExecutablePath;$e=if($ea){[string]$x.ExecutablePath}else{''};$ca=$null-ne$x.CommandLine;$c=if($ca){[string]$x.CommandLine}else{''};$j=@{pid=[int]$x.ProcessId;birth=$b;parentPid=[int]$x.ParentProcessId;executableAccessible=$ea;commandLineAccessible=$ca;executable=$e;commandLine=$c}|ConvertTo-Json -Compress;[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))};'COMPLETE:'+$p.Count",
     ], { encoding: "utf8", windowsHide: true, timeout: 5_000 });
-    return encoded.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+    const lines = encoded.split(/\r?\n/).filter(Boolean);
+    const completion = /^COMPLETE:(\d+)$/.exec(lines.pop() ?? "");
+    if (!completion || lines.length !== Number(completion[1])) throw new Error("B2 process inventory is incomplete.");
+    return validateProcessInventory(lines.map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8"))));
   }
   const output = execFileSync("ps", ["-e", "-o", "pid=,lstart=,args="], { encoding: "utf8", timeout: 5_000 });
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const match = line.trim().match(/^(\d+)\s+(.{24})\s+(.*)$/);
     if (!match) throw new Error("process inventory is malformed");
-    return { pid: Number(match[1]), birth: match[2]!.trim(), commandLine: match[3]! };
+    return {
+      pid: Number(match[1]), birth: new Date(match[2]!.trim()).toISOString(), parentPid: 0,
+      executableAccessible: true, commandLineAccessible: true, executable: "", commandLine: match[3]!,
+    };
   });
 }
 
-function referencesRoot(commandLine: string, root: string): boolean {
-  const normalized = resolve(root).toLowerCase();
-  if (commandLine.toLowerCase().includes(normalized)) return true;
-  for (const token of commandLine.split(/\s+/)) {
-    if (!/^[A-Za-z0-9_-]{40,}$/.test(token)) continue;
-    try { if (Buffer.from(token, "base64url").toString("utf8").toLowerCase().includes(normalized)) return true; }
-    catch {}
+function validateProcessInventory(processes: readonly Partial<B2ResidueProcess>[]): B2ResidueProcess[] {
+  if (processes.length < 1 || processes.length > MAX_ENTRIES || processes.some((process) =>
+    !Number.isSafeInteger(process.pid) || Number(process.pid) < 0 ||
+    !Number.isSafeInteger(process.parentPid) || Number(process.parentPid) < 0 ||
+    typeof process.birth !== "string" || !Number.isFinite(Date.parse(process.birth)) ||
+    typeof process.executableAccessible !== "boolean" || typeof process.commandLineAccessible !== "boolean" ||
+    typeof process.executable !== "string" || typeof process.commandLine !== "string" ||
+    !process.executableAccessible && process.executable !== "" || !process.commandLineAccessible && process.commandLine !== ""))
+    throw new Error("B2 process inventory is invalid.");
+  return processes as B2ResidueProcess[];
+}
+
+function unresolvedProcessReference(process: B2ResidueProcess, root: string, rootCreatedAt: number): boolean {
+  if (process.executableAccessible && referencesRoot(process.executable, root) ||
+      process.commandLineAccessible && referencesRoot(process.commandLine, root)) return true;
+  return (!process.executableAccessible || !process.commandLineAccessible) && !(Date.parse(process.birth) < rootCreatedAt);
+}
+
+function referencesRoot(value: string, root: string): boolean {
+  try {
+    if (value.length > 64 * 1024) return true;
+    const normalized = resolve(root).toLowerCase();
+    if (value.toLowerCase().includes(normalized)) return true;
+    const candidates = [...value.matchAll(/[A-Za-z0-9+\/_-]{40,}={0,2}/g)].map((match) => match[0]);
+    if (candidates.length > 256) return true;
+    for (const candidate of candidates) {
+      const decoded = decodeStrictBase64(candidate);
+      if (!decoded || decoded.byteLength > 64 * 1024) continue;
+      const text = decoded.toString("utf8");
+      if (text.toLowerCase().includes(normalized)) return true;
+      try { if (decodedPayloadReferencesRoot(JSON.parse(text), normalized)) return true; } catch {}
+    }
+    return false;
+  } catch { return true; }
+}
+
+function decodeStrictBase64(value: string): Buffer | undefined {
+  const unpadded = value.replace(/=+$/, "");
+  if (unpadded.length < 40 || unpadded.length % 4 === 1) return undefined;
+  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) {
+    const decoded = Buffer.from(unpadded, "base64url");
+    return decoded.toString("base64url") === unpadded ? decoded : undefined;
   }
-  return false;
+  if (!/^[A-Za-z0-9+/]+$/.test(unpadded)) return undefined;
+  const decoded = Buffer.from(unpadded, "base64");
+  return decoded.toString("base64").replace(/=+$/, "") === unpadded ? decoded : undefined;
+}
+
+function decodedPayloadReferencesRoot(value: unknown, normalizedRoot: string, depth = 0): boolean {
+  if (depth > 6) return false;
+  if (typeof value === "string") {
+    try { return resolve(value).toLowerCase().startsWith(normalizedRoot); }
+    catch { return false; }
+  }
+  if (Array.isArray(value)) return value.length <= 256 && value.some((item) => decodedPayloadReferencesRoot(item, normalizedRoot, depth + 1));
+  if (!value || typeof value !== "object") return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  return entries.length <= 256 && entries.some(([, item]) => decodedPayloadReferencesRoot(item, normalizedRoot, depth + 1));
 }
 
 function sameBirth(left: string, right: string): boolean {

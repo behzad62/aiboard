@@ -965,3 +965,83 @@ approve B2 or begin B3.
 - Fix round 5 implementation and verification are complete. B2 remains locked
   until a fresh independent scoped review reports zero Critical and Important
   findings. B3 has not started.
+
+## Fix round 6 implementation evidence
+
+- R6.1 binds every durable Windows Job record to the validated requested
+  process ID used for its filename and operation. Startup loading, normal reads,
+  fence claims/effects, released-tombstone recovery, and the final revocation
+  assertion reject an embedded ID mismatch. Record and coordination paths are
+  derived only through one contained-path validator; separators, traversal,
+  corrupt identity, wrong owner/fence, and substituted records fail closed
+  without touching another process record or coordination database. The exact
+  `requested-a.json -> target-b` reproduction was RED before the binding and is
+  GREEN after it; removing the equality/path binding makes the guard RED and
+  reverting restores GREEN.
+- R6.2 preserves executable-path and command-line accessibility as independent
+  global inventory facts. An inaccessible post-root field now makes deletion
+  uncertain unless immutable birth proves the process predates the exact random
+  root. Both fields are searched for literal, standard-base64, and base64url
+  references, including quoted and option-embedded payloads. Candidate count,
+  encoded size, decoded size, total inventory, completion marker, and the
+  caller's single cleanup deadline remain bounded. Inaccessible-metadata and
+  embedded-payload reproductions were RED before the guards; removal mutations
+  were RED; the reverted exact guards and unchanged reviewer group are GREEN.
+- Adversarial replay found and repaired related lifecycle truth gaps without
+  expanding B2. Portable command/control publication and retained output use
+  atomic same-directory publication. A durable acknowledgement that wins the
+  same fence transaction as takeover is reported as committed even if the old
+  owner can no longer consume its proof. Historical PID plus a different exact
+  birth is treated as the owned process being absent, never as authority over
+  the replacement. Corrupt descendant evidence permits only an independently
+  authenticated exact supervisor stop and never authorizes root deletion.
+  Semantic probes now share one absolute operation deadline, and unchanged
+  terminal/output ordering is preserved.
+- Loaded Windows execution proved the former fixed startup observation windows
+  were too short: two full-suite fixtures failed before takeover because both
+  the controller and supervisor happened to time out their one exact birth
+  query under host load. Startup identity discovery now begins with a bounded
+  2-second probe, retries at 4 seconds and then the remaining bounded allowance,
+  permits at most three attempts and 15 seconds of birth discovery, and shares
+  one 30-second maximum with supervisor readiness. The supervisor records the
+  actual attempt count/deadline. Normal Windows tree inventory likewise adapts
+  its next per-attempt watchdog from measured host latency, capped at 15
+  seconds. These are process-startup and inspection envelopes only; no build
+  task, production command, retained-output, or model deadline changed.
+- RED/GREEN guards cover a deliberately 3-second birth inspector (the first
+  2-second attempt times out, the second succeeds), rejection of the former
+  one-second controller cap, a hung inventory watchdog, truthful write/takeover
+  acknowledgement, exact supervisor fallback, atomic publication, replaced
+  historical births, and whole-probe deadline exhaustion. The affected
+  concurrent pressure gate is GREEN 145/145 in about 80.5 seconds.
+- Two diagnostic full gates supplied load-bearing RED evidence. The first was
+  1,407 total / 1,405 pass / one fail / one explicit POSIX-host skip and exposed
+  a reset semantic-probe deadline. The next was 1,407 total / 1,404 pass / two
+  fail / one skip and exposed the fixed startup-birth windows. After exact
+  repairs, the uninterrupted serial `npm run test:runner-v2` gate is GREEN,
+  exit 0: 1,409 total / 1,408 pass / zero fail or cancelled / one explicit
+  POSIX-host skip in 829.999 seconds. Every chained Runner client, policy, UI,
+  cutover, pause, model-usage, live-state, transcript, files, run-stats,
+  steering, and observability check also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint over all ten changed
+  source/test files, and `git diff --check` are GREEN. The current Node 24 and
+  minimum Node 22.13 ownership-lock groups are both GREEN 12/12. Static scope
+  audit confirms only the approved adapter/host/supervisor/test surfaces
+  changed; Node remains exactly `>=22.13.0 <23 || >=24.0.0 <25`; B3, OCI,
+  production family routing, the 25-second command deadline, and the 256 KiB
+  retained-output cap remain unchanged.
+- Post-gate process inventory reports zero portable/managed Node supervisors
+  and zero Windows Job hosts. The successful final gate created no new B2 root.
+  Thirteen historical broad-prefix roots remain detected: eleven pre-existing
+  fail-closed/unrelated roots plus
+  `aiboard-portable-write-effect-fence-AT9tXs` and
+  `aiboard-portable-published-stale-input-SwC5Lv` from the earlier RED gate.
+  Those two exact supervisors were independently identity-, nonce-, root-, and
+  birth-authenticated, stopped with their exact trees, and proved absent. A
+  current governed cleanup pass removed zero roots because global inaccessible
+  metadata still withholds deletion authority. This is zero live helper and
+  zero deletion-authorized residue; uncertain evidence is deliberately
+  preserved rather than deleted.
+- Fix round 6 implementation gates are complete. B2 remains locked until a new
+  independent scoped review reports zero Critical and Important findings. B3
+  has not started.
