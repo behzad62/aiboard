@@ -1202,3 +1202,59 @@ approve B2 or begin B3.
 - Fix round 9 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 10 implementation evidence
+
+- The fresh round-9 review reported zero Critical, one Important, and zero
+  Minor findings. Revoked recovery treated an absent main database as authority
+  to delete sidecar-named files, while present-main cleanup retained only a
+  shape check and could not distinguish its verified database from a later
+  regular single-link replacement. The three prior round-9 fixes were accepted.
+- Three physical regressions were RED before repair. With only `<lock>-wal`
+  present, recovery deleted the sentinel and the assertion failed with `ENOENT`.
+  Both a captured-main replacement and a linked sidecar incorrectly completed
+  without the expected rejection. The separated post-capture-sidecar guard was
+  additionally proven RED by moving revocation ahead of authority capture, then
+  reverting the mutation. Removing each of the absent-main, stable-main, and
+  single-link guards likewise made only its exact check RED. After every
+  mutation was reverted, the exact group is GREEN 4/4 in 0.535 seconds and
+  preserves every foreign byte and path.
+- R10.1 returns without physical mutation when the main coordination database
+  is absent. It neither creates a database nor interprets sidecar names as
+  deletion authority.
+- R10.2 captures a portable stable filesystem identity from BigInt stat facts
+  (device, inode/file index, and birth time) immediately around the exact
+  database open. That identity follows proposal, claim, effect, finalization,
+  recovery, and retirement. Physical retirement additionally reopens and
+  validates the exact retired protocol authority after close, then snapshots
+  only regular, non-symbolic, single-link sidecars while the same main identity
+  remains present.
+- R10.3 repeats external revocation validation immediately before physical
+  mutation. Cleanup revalidates the captured main before inspecting each
+  sidecar, requires an exact captured sidecar identity before unlink, confirms
+  no sidecar appeared or changed, and revalidates the main immediately before
+  its unlink. Main disappearance/replacement, new or replaced sidecars,
+  symbolic links, and multiple links fail closed. Only the pre-existing bounded
+  transient access/busy failures are retried.
+- The exact-current ownership-lock module is GREEN 20/20 in 4.753 seconds.
+  Targeted backend/Windows Job release contracts are GREEN 19/19. The affected
+  cross-platform matrix is GREEN: 152 total, 151 pass, zero fail, and one
+  explicit POSIX-live-fixture skip on Windows in 131.844 seconds. Managed
+  process and subprocess-runtime compatibility is GREEN 87/87 in 23.838
+  seconds. The minimum Node 22.13 lock group is independently GREEN 20/20 in
+  5.559 seconds; current Node is covered by the complete and affected groups.
+- The final exact-current uninterrupted `npm run test:runner-v2` gate exits
+  zero: 1,422 total, 1,421 pass, zero fail or cancelled, and one explicit
+  POSIX-host skip in 882.610 seconds. Every chained Runner client, native
+  policy, policy UI, cutover, pause-gate, model-usage, live-state, transcript,
+  native-files, run-stats, steering, and observability contract also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint, `git diff --check`, scope,
+  and Node-range audits are GREEN. Node remains
+  `>=22.13.0 <23 || >=24.0.0 <25`; it is not pinned to an exact patch. Process
+  inventory reports zero live portable, managed, Job-host, or TERM-ignore
+  helpers. Governed cleanup removed zero entries; the same thirteen historical
+  fail-closed/unrelated roots remain and the successful gate created no new B2
+  residue. No uncertain evidence was deleted.
+- Fix round 10 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

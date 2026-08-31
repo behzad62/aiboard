@@ -389,6 +389,90 @@ test("revoked-lock recovery rejects a hard link added inside its transaction", {
   }
 });
 
+test("revoked-lock recovery preserves an unowned sidecar when the main authority is absent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-absent-main-sidecar-"));
+  const lockPath = join(root, ".fence.lock");
+  const sidecarPath = `${lockPath}-wal`;
+  const sentinel = "foreign-sidecar-must-remain";
+  try {
+    writeFileSync(sidecarPath, sentinel);
+    await recoverRevokedOwnedFenceLock(lockPath, { assertRevoked: () => undefined });
+    assert.equal(existsSync(lockPath), false, "absent recovery must not create a coordination database");
+    assert.equal(readFileSync(sidecarPath, "utf8"), sentinel, "an absent main path cannot authorize sidecar deletion");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("physical retirement rejects a replaced captured main identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-replacement-"));
+  const lockPath = join(root, ".fence.lock");
+  const foreignMain = "foreign-main-must-remain";
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 3) {
+          rmSync(lockPath, { force: true });
+          writeFileSync(lockPath, foreignMain);
+        }
+      },
+    }), /identity|replacement|coordination path|unavailable/i);
+    assert.equal(assertions, 3, "physical cleanup must reassert revocation after capturing retired authority");
+    assert.equal(readFileSync(lockPath, "utf8"), foreignMain, "cleanup must preserve a replacement main path");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("physical retirement rejects a linked sidecar under the captured main authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-linked-sidecar-"));
+  const lockPath = join(root, ".fence.lock");
+  const foreignPath = join(root, "foreign.bin");
+  const sidecarPath = `${lockPath}-wal`;
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    writeFileSync(foreignPath, "foreign-linked-sidecar");
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 2) linkSync(foreignPath, sidecarPath);
+      },
+    }), /sidecar|alias|linked|unavailable/i);
+    assert.equal(assertions, 2);
+    assert.equal(readFileSync(foreignPath, "utf8"), "foreign-linked-sidecar");
+    assert.equal(readFileSync(sidecarPath, "utf8"), "foreign-linked-sidecar");
+    assert.equal(existsSync(lockPath), true, "uncertain sidecar identity must preserve the retired main authority");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("physical retirement rejects a sidecar that appears after authority capture", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-new-sidecar-"));
+  const lockPath = join(root, ".fence.lock");
+  const sidecarPath = `${lockPath}-wal`;
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 3) writeFileSync(sidecarPath, "late-foreign-sidecar");
+      },
+    }), /sidecar|appeared|changed|unavailable/i);
+    assert.equal(assertions, 3);
+    assert.equal(readFileSync(sidecarPath, "utf8"), "late-foreign-sidecar");
+    assert.equal(existsSync(lockPath), true, "a post-capture sidecar must preserve the retired main authority");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 function startHolder(lockPath: string, effectPath?: string, deadlineMs = 2_000, holdMs = 60_000, mode = "hold"): ChildProcess {
   return spawn(process.execPath, [fixture, mode, lockPath, effectPath ?? "", String(deadlineMs), String(holdMs)], {
     windowsHide: true,

@@ -524,3 +524,29 @@ overlap is expected.
   authority. Node policy, B3, OCI activation, product routing, and production
   task/command/model/output limits are unchanged. B2 and B3 remain locked for
   the required independent review.
+- Task 8.0B2 fix-round-9 independent re-review: CHANGES REQUIRED with zero
+  Critical, one Important, and zero Minor findings. Physical retirement treats
+  a missing main coordination database as authority to delete same-named
+  sidecars and does not pin the verified database identity against later
+  disappearance or replacement. The three named round-9 regressions are
+  accepted. Fix round 10 is authorized only for exact physical-retirement
+  identity and sidecar safety under `task-8.0b2-fix-round-10-brief.md`. B2 and
+  B3 remain locked.
+- Task 8.0B2 fix round 10 implementation and controller verification are GREEN
+  pending fresh independent review. Missing-main recovery now performs no
+  physical mutation. Every live lock operation carries the stable identity of
+  the exact database it opened; retired cleanup captures that verified
+  identity, exact path authority, and bounded sidecar identity snapshot, then
+  revalidates the main and candidate at every removal boundary. Replacement,
+  disappearance, symbolic/multiple links, or a newly appeared sidecar fail
+  closed. Independent RED/revert/GREEN evidence covers absent-main, main
+  replacement, linked-sidecar, and post-capture-sidecar cases. Current evidence:
+  lock groups 20/20 on current Node and Node 22.13; affected portable/OS pressure
+  151 pass plus one expected POSIX-host skip; managed/runtime compatibility
+  87/87; type/lint/diff/policy GREEN; and one uninterrupted exact-current
+  package gate with 1,422 total / 1,421 pass / zero fail or cancelled / one
+  expected skip in 882.610 seconds, with every chained product contract green.
+  Post-gate helpers are zero and the same thirteen uncertain/unrelated roots
+  remain with no deletion authority. Node
+  policy, B3, OCI activation, routing, and production limits are unchanged. B2
+  and B3 remain locked for the required independent review.
