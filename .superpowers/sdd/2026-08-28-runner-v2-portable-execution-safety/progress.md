@@ -386,3 +386,12 @@ overlap is expected.
   one explicit POSIX-host skip. Post-gate typecheck, targeted lint, static/diff,
   three-second helper settle, and exact B2-root inventory are GREEN/zero. B2
   remains locked for independent review and B3 has not started.
+- Task 8.0B2 fix-round-3 independent re-review: CHANGES REQUIRED with zero
+  Critical and four Important residual gaps. Generic POSIX/macOS `ps` absence is
+  misclassified as unknown; deleting a retired coordination database lets a late
+  stale caller recreate it; a fresh 48-test focused run leaked one live semantic
+  probe supervisor/root after PID reuse; and broad prefix plus zero-document
+  cleanup authority deleted an unrelated review directory. The optional Job
+  watchdog and every earlier B2 finding remain addressed. Governed fix round 4
+  is authorized only for these four gaps under
+  `task-8.0b2-fix-round-4-brief.md`. B3 remains locked.
