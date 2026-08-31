@@ -1092,3 +1092,60 @@ approve B2 or begin B3.
 - Fix round 7 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 8 implementation evidence
+
+- The fresh round-7 review reported zero Critical and three Important findings:
+  no exact-path recheck after a fence claim and before the external effect;
+  mixed standard-base64/base64url wrapper characters that prevented either
+  scanner from decoding the maximal token; and acceptance of a process-birth
+  result after the absolute startup deadline followed by a fresh positive state
+  allowance. The exact guards were RED before repair: the post-claim hard link
+  reached the effect, both cleanup scanners deleted referenced roots, and the
+  late-birth fixture reported an incidental supervisor timeout instead of the
+  exhausted caller deadline.
+- R8.1 carries the resolved coordination path through the live fence context
+  and revalidates its exact single-link authority before proposal mutation,
+  inside claim transactions and before their commits, at the external-effect
+  boundary, and before finalization/retirement mutation and commit. The
+  post-claim hard-link guard is GREEN and the effect count remains zero.
+- R8.2 attempts every existing bounded start/end phase with both base64 decoders
+  independently. Strict standard-base64 wrapped in base64url-only characters
+  and strict base64url wrapped in standard-only characters are detected by both
+  the production semantic cleanup and governed B2 cleanup paths. Existing
+  candidate, encoded, decoded, inventory, and deadline bounds are unchanged.
+- R8.3 passes one absolute startup deadline through process-birth inspection
+  and supervisor-state readiness, rechecks it after blocking inspection and
+  state reads, and never resets an expired budget to one millisecond. The 150 ms
+  birth inspection under a 50 ms caller deadline now rejects specifically for
+  the exhausted startup deadline. The existing adaptive Windows inspection
+  attempts and separate owned-cleanup safety budget remain unchanged.
+- Exact reviewer regressions are GREEN. The four directly affected modules are
+  GREEN 132/132. The portable compatibility group is GREEN 137 pass plus one
+  explicit POSIX-on-Windows skip. The current Node 24.18 runtime and Node 22.13
+  capability floor ownership-lock groups are GREEN 15/15 each. This records
+  tested runtimes only; the supported range remains the maintained-line policy
+  `>=22.13.0 <23 || >=24.0.0 <25`, not either exact patch.
+- The first full gate supplied useful loaded RED evidence after 1,414 tests had
+  passed: one pre-existing portable-channel test inferred durable process
+  termination solely from retained-output deletion and raced the independent
+  stopped-state publication. It ended at 1,416 total / 1,414 pass / one fail /
+  one expected skip in 877.715 seconds. The exact check immediately passed in
+  isolation, proving load sensitivity. The test-only repair now awaits the
+  channel's public terminal contract before release; no production process or
+  timeout behavior changed. The exact check and its complete module are GREEN
+  1/1 and 32/32.
+- The required uninterrupted final `npm run test:runner-v2` gate exits zero:
+  1,416 total, 1,415 pass, zero fail or cancelled, and one explicit POSIX-host
+  skip in 851.691 seconds. Every chained Runner client, native policy, policy
+  UI, cutover, pause-gate, model-usage, live-state, transcript, native-files,
+  run-stats, steering, and observability contract also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint over all nine changed
+  source/test files, `git diff --check`, changed-file scope, and Node-range
+  audits are GREEN. Post-gate process inventory reports zero live portable,
+  managed, or Job helpers. Governed cleanup removed zero entries; the same
+  thirteen historical fail-closed/unrelated roots remain and the successful
+  gate created no new B2 residue. No uncertain evidence was deleted.
+- Fix round 8 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

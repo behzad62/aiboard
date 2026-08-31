@@ -197,6 +197,7 @@ test("portable release refuses unsettled retained output until sink acknowledgem
     await assert.rejects(backend.release(binding, fence), /output.*unsettled|release.*refused/i);
     channel.subscribeBackpressuredOutput(async (metadata) => metadata);
     await waitFor(() => readdirSync(join(identity.directory, "channel/output")).length === 0 && readdirSync(join(identity.directory, "channel/ack")).length === 0);
+    assert.equal((await channel.waitForTerminal() as { state: string }).state, "exited");
     await channel.detach();
     assert.deepEqual(await backend.release(binding, fence), { released: true });
   } finally {

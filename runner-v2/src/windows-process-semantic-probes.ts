@@ -550,9 +550,7 @@ function probeTextReferencesRoot(value: string, root: string): boolean {
 function decodeProbeBase64Phases(encoded: string): readonly Buffer[] {
   const unpadded = encoded.replace(/=+$/, "");
   if (unpadded.length < 40) return [];
-  const encodings: BufferEncoding[] = [];
-  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) encodings.push("base64url");
-  if (/^[A-Za-z0-9+/]+$/.test(unpadded)) encodings.push("base64");
+  const encodings: BufferEncoding[] = ["base64url", "base64"];
   const decoded: Buffer[] = [];
   const seen = new Set<string>();
   for (const encoding of encodings) {

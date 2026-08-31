@@ -246,7 +246,7 @@ function acquire(path, options) {
   const authorityId = coordinationAuthorityId(path);
   const database = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority);
   const context = {
-    database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
+    path, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
     inspectHolder: options.inspectHolder ?? defaultInspectHolder,
     afterClaim: options.afterClaim,
   };
@@ -254,6 +254,7 @@ function acquire(path, options) {
   try {
     while (!proposalInserted) {
       try {
+        assertCoordinationPath(path);
         database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)")
           .run(acquisitionId, holderPid, holderBirth);
         proposalInserted = true;
@@ -276,7 +277,10 @@ function acquire(path, options) {
       database.close();
       throw normalizeUnavailable(error);
     }
-    try { database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId); }
+    try {
+      assertCoordinationPath(path);
+      database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
+    }
     catch (cleanupError) {
       database.close();
       throw new AggregateError([error, cleanupError], "Owned fence acquisition and proposal cleanup both failed.", { cause: error });
@@ -382,7 +386,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
 }
 
 function tryClaim(context) {
-  const { database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder } = context;
+  const { path, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder } = context;
   try {
     database.exec("BEGIN IMMEDIATE");
   } catch (error) {
@@ -390,6 +394,7 @@ function tryClaim(context) {
     throw error;
   }
   try {
+    assertCoordinationPath(path);
     assertActiveProtocol(database, authorityId);
     const row = database.prepare(`
       SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
@@ -401,12 +406,17 @@ function tryClaim(context) {
     `).get();
     if (!row) {
       insertHolder(database, acquisitionId, holderPid, holderBirth);
+      assertCoordinationPath(path);
       database.exec("COMMIT");
       return true;
     }
     if (!validHolderRow(row))
       throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
-    if (row.acquisitionId === acquisitionId) { database.exec("COMMIT"); return true; }
+    if (row.acquisitionId === acquisitionId) {
+      assertCoordinationPath(path);
+      database.exec("COMMIT");
+      return true;
+    }
     const inspection = inspectHolder(Number(row.holderPid), String(row.holderBirth));
     if (inspection === "same") { database.exec("ROLLBACK"); return false; }
     if (inspection !== "absent" && inspection !== "birth_mismatch")
@@ -419,6 +429,7 @@ function tryClaim(context) {
     if (Number(update.changes) !== 1)
       throw new OwnedFenceLockUnavailableError("Owned fence stale-holder election changed concurrently.");
     database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(row.acquisitionId);
+    assertCoordinationPath(path);
     database.exec("COMMIT");
     return true;
   } catch (error) {
@@ -433,7 +444,7 @@ function insertHolder(database, acquisitionId, holderPid, holderBirth) {
 }
 
 function beginEffect(context) {
-  const { database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs } = context;
+  const { path, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs } = context;
   for (;;) {
     try { database.exec("BEGIN IMMEDIATE"); break; }
     catch (error) {
@@ -441,6 +452,7 @@ function beginEffect(context) {
       Atomics.wait(waiter, 0, 0, retryDelayMs);
     }
   }
+  assertCoordinationPath(path);
   assertActiveProtocol(database, authorityId);
   const row = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_holder WHERE lock_key = 'owned'").get();
   if (!row || row.acquisitionId !== acquisitionId || Number(row.holderPid) !== holderPid || row.holderBirth !== holderBirth) {
@@ -450,8 +462,9 @@ function beginEffect(context) {
 }
 
 function finalizeEffect(context, primaryError, retireAfterEffect) {
-  const { database, acquisitionId } = context;
+  const { path, database, acquisitionId } = context;
   try {
+    assertCoordinationPath(path);
     const removed = database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
     if (Number(removed.changes) !== 1)
       throw new OwnedFenceLockUnavailableError("Owned fence holder finalization lost its exact acquisition identity.");
@@ -460,6 +473,7 @@ function finalizeEffect(context, primaryError, retireAfterEffect) {
       database.prepare("DELETE FROM owned_fence_acquisition").run();
       database.prepare("UPDATE owned_fence_protocol SET retired = 1 WHERE retired = 0").run();
     }
+    assertCoordinationPath(path);
     database.exec("COMMIT");
     return retireAfterEffect && primaryError === undefined;
   } catch (error) {

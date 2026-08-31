@@ -408,6 +408,51 @@ test("Windows portable launch consumes the caller's shared absolute startup dead
   }
 });
 
+test("Windows portable launch rejects a birth result that arrives after its absolute deadline", { timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-late-birth-deadline-"));
+  const stateDirectory = join(root, "state");
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  let inspections = 0;
+  const operations: NativeProcessOperations = {
+    inspectProcessBirth: (pid) => {
+      if (inspections++ === 0) Atomics.wait(waiter, 0, 0, 150);
+      return processIsAlive(pid) ? { state: "present", fingerprint: "late-supervisor-birth" } : { state: "absent" };
+    },
+    listPosixGroup: () => undefined,
+    signal: () => assert.fail("Windows late-birth cleanup must use the authenticated supervisor seam"),
+  };
+  const backend = new WindowsProcessBackend({
+    stateDirectory,
+    operations,
+    startupDeadlineAt: Date.now() + 50,
+    semanticFacts: verifiedWindowsSemanticFacts,
+  });
+  let unexpected: ProcessBackendBinding | undefined;
+  let rejection: unknown;
+  try {
+    try {
+      unexpected = bindingFor(parseProcessLaunchResult(await backend.launch(request(["-e", "setInterval(()=>{},1000)"]))));
+    } catch (error) { rejection = error; }
+    if (unexpected) await cleanupWindowsProcessFixture(backend, unexpected, fence);
+    assert.ok(rejection, "a post-deadline birth result must not produce a successful launch");
+    const messages = [String(rejection), ...(rejection instanceof AggregateError ? rejection.errors.map(String) : [])].join("\n");
+    assert.match(messages, /startup deadline is exhausted/i,
+      "the absolute deadline, not an incidental supervisor outcome, must reject the late birth result");
+  } finally {
+    if (unexpected) await cleanupWindowsProcessFixture(backend, unexpected, fence).catch(() => undefined);
+    if (existsSync(stateDirectory)) {
+      for (const entry of readdirSync(stateDirectory)) {
+        try {
+          const state = JSON.parse(readFileSync(join(stateDirectory, entry, "state.json"), "utf8")) as { supervisorPid?: number };
+          if (Number.isSafeInteger(state.supervisorPid) && processIsAlive(state.supervisorPid!))
+            execFileSync("taskkill.exe", ["/PID", String(state.supervisorPid), "/T", "/F"], { stdio: "ignore", timeout: 5_000 });
+        } catch {}
+      }
+    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
 test("omitted Windows semantic facts fail closed and service presence alone cannot select Job containment", async () => {
   let activeProbes = 0;
   let launches = 0;

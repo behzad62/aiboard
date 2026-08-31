@@ -263,6 +263,19 @@ test("a replacement between claim and effect is rejected by the final acquisitio
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
+test("a hard link added after claim is rejected before the external effect", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-post-claim-alias-"));
+  const lockPath = join(root, "effect.sqlite");
+  const aliasPath = join(root, "late-alias.sqlite");
+  let effects = 0;
+  try {
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      afterClaim: () => linkSync(lockPath, aliasPath),
+    } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /alias|linked|coordination path/i);
+    assert.equal(effects, 0);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 test("durable acquisition identity is immutable after it becomes authoritative", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-immutable-"));
   const lockPath = join(root, "effect.sqlite");

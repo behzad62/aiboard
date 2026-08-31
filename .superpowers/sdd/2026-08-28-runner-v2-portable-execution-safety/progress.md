@@ -474,3 +474,27 @@ overlap is expected.
   no deletion authority. Node policy, B3, OCI activation, product routing, and
   production command/output limits are unchanged. B2 and B3 remain locked for
   independent review.
+- Task 8.0B2 fix-round-7 independent re-review: CHANGES REQUIRED with zero
+  Critical and three Important findings. A hard link added after claim could
+  survive into the external effect; mixed standard-base64/base64url wrapper
+  characters prevented either bounded scanner from decoding a referenced root;
+  and a late birth-inspection result could outlive the caller's absolute startup
+  deadline before a fresh state allowance was created. Fix round 8 is authorized
+  only for these findings and direct validation fallout under
+  `task-8.0b2-fix-round-8-brief.md`. B2 and B3 remain locked.
+- Task 8.0B2 fix round 8 implementation and controller verification are GREEN
+  pending fresh independent review. Exact coordination-path authority is
+  rechecked at proposal, claim, effect, finalization, and retirement boundaries;
+  both cleanup scanners decode each bounded phase with both alphabets; and one
+  absolute startup deadline survives blocking birth inspection and state
+  readiness. A loaded full gate exposed and repaired a test-only ordering race
+  by awaiting durable terminal proof instead of inferring it from output-file
+  deletion. Current evidence: direct affected 132/132, portable channel 32/32,
+  compatibility 137 pass plus one expected Windows-host skip, current Node and
+  Node 22.13 lock groups 15/15 each, type/lint/diff/policy GREEN, and final
+  uninterrupted package 1,416 total / 1,415 pass / zero fail or cancelled / one
+  expected skip with every chained product contract green. Post-gate helpers
+  are zero and the same thirteen uncertain/unrelated roots remain, with no
+  deletion authority. Node policy, B3, OCI activation, product routing, and
+  production command/output limits are unchanged. B2 and B3 remain locked for
+  the required independent review.

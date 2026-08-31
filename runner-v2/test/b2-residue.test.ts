@@ -63,7 +63,22 @@ test("B2 cleanup preserves embedded references and inaccessible post-root proces
     const birth = new Date(statSync(root).birthtimeMs + 1_000).toISOString();
     const base = { pid: process.pid, birth, parentPid: 0, executableAccessible: true, executable: process.execPath };
     const embedded = Buffer.from(root).toString("base64url");
-    for (const commandLine of [`node --payload=${embedded}`, `node --payload=A${embedded}`, `node --payload=${embedded}A`]) {
+    let standardMixed = "";
+    let urlMixed = "";
+    for (let value = 0; value <= 0x10ffff && (!/[+/]/.test(standardMixed) || !/[-_]/.test(urlMixed)); value += 1) {
+      if (value >= 0xd800 && value <= 0xdfff) continue;
+      const payload = JSON.stringify({ retainedRoot: root, marker: String.fromCodePoint(value) });
+      if (!/[+/]/.test(standardMixed)) standardMixed = Buffer.from(payload).toString("base64");
+      if (!/[-_]/.test(urlMixed)) urlMixed = Buffer.from(payload).toString("base64url");
+    }
+    assert.match(standardMixed, /[+/]/); assert.match(urlMixed, /[-_]/);
+    for (const commandLine of [
+      `node --payload=${embedded}`,
+      `node --payload=A${embedded}`,
+      `node --payload=${embedded}A`,
+      `node --payload=_${standardMixed}-`,
+      `node --payload=+${urlMixed}/`,
+    ]) {
       assert.deepEqual(cleanup([entry], { processInventory: () => [{
         ...base, commandLineAccessible: true, commandLine,
       }] }), [], commandLine);

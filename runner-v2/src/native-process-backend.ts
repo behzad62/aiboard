@@ -158,13 +158,8 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     let identity: Identity | undefined;
     try {
       if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
-      const supervisorBirth = await this.waitForBirth(
-        child.pid,
-        Math.min(
-          this.options.platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : 1_000,
-          Math.max(1, startupDeadline - Date.now()),
-        ),
-      );
+      const supervisorBirth = await this.waitForBirth(child.pid, startupDeadline);
+      if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
       if (!supervisorBirth) throw new Error("Portable supervisor birth identity is unavailable.");
       identity = {
         version: 1,
@@ -176,7 +171,8 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         fence: Object.freeze({ ...request.fence }),
       };
       writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid: child.pid, holderBirth: supervisorBirth }), { mode: 0o600 });
-      const state = await this.waitForState(directory, nonce, child.pid, Math.max(1, startupDeadline - Date.now()));
+      if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
+      const state = await this.waitForState(directory, nonce, child.pid, startupDeadline);
       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
       return launchResult(identity, startedAt);
@@ -607,25 +603,29 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     this.outputOffsets.set(identity.nonce, offsets);
   }
-  private async waitForState(directory: string, nonce: string, pid: number, timeoutMs: number): Promise<SupervisorState> {
-    const deadline = Date.now() + timeoutMs;
+  private async waitForState(directory: string, nonce: string, pid: number, deadline: number): Promise<SupervisorState> {
     while (Date.now() < deadline) {
       const state = readState(directory);
+      if (Date.now() >= deadline) break;
       if (state && state.nonce === nonce && state.supervisorPid === pid && state.status !== "preparing") return state;
       if (!pidAlive(pid)) throw new Error("Portable process supervisor exited before proving launch.");
       await delay(this.pollIntervalMs);
     }
-    throw new Error("Portable process supervisor startup timed out.");
+    throw new Error("Portable process startup deadline is exhausted.");
   }
-  private async waitForBirth(pid: number, timeoutMs: number): Promise<string | undefined> {
-    const deadline = Date.now() + timeoutMs;
+  private async waitForBirth(pid: number, deadline: number): Promise<string | undefined> {
     const maximumAttempts = this.options.platform === "windows" ? WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS : Number.MAX_SAFE_INTEGER;
     let attempts = 0;
-    let attemptDeadlineMs = Math.min(PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS, timeoutMs);
+    let attemptDeadlineMs = Math.min(
+      this.options.platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : 1_000,
+      PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
+      Math.max(1, deadline - Date.now()),
+    );
     while (Date.now() < deadline && attempts < maximumAttempts) {
       attemptDeadlineMs = Math.max(1, Math.min(attemptDeadlineMs, deadline - Date.now()));
       const inspection = this.operations.inspectProcessBirth(pid, this.options.platform, attemptDeadlineMs);
       attempts += 1;
+      if (Date.now() >= deadline) return undefined;
       if (inspection.state === "present") return inspection.fingerprint;
       if (inspection.state === "absent") return undefined;
       attemptDeadlineMs = Math.min(WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS, attemptDeadlineMs * 2);
