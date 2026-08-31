@@ -12,6 +12,47 @@ const LEGACY_PROTOCOL_COLUMNS = Object.freeze(["version", "retired"]);
 const AUTHORITY_UPDATE_TRIGGER = "owned_fence_authority_immutable";
 const AUTHORITY_DELETE_TRIGGER = "owned_fence_authority_delete_immutable";
 const PROTOCOL_SIDECAR_SUFFIXES = Object.freeze(["-journal", "-wal", "-shm"]);
+const CANONICAL_ACQUISITION_TABLE_SQL = `
+  CREATE TABLE owned_fence_acquisition(
+    acquisition_id TEXT PRIMARY KEY NOT NULL,
+    holder_pid INTEGER NOT NULL,
+    holder_birth TEXT NOT NULL
+  )`;
+const CANONICAL_HOLDER_TABLE_SQL = `
+  CREATE TABLE owned_fence_holder(
+    lock_key TEXT PRIMARY KEY NOT NULL CHECK(lock_key = 'owned'),
+    acquisition_id TEXT UNIQUE NOT NULL,
+    holder_pid INTEGER NOT NULL,
+    holder_birth TEXT NOT NULL,
+    FOREIGN KEY(acquisition_id) REFERENCES owned_fence_acquisition(acquisition_id)
+  )`;
+const CANONICAL_LEGACY_PROTOCOL_TABLE_SQL =
+  "CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)))";
+const CANONICAL_CURRENT_PROTOCOL_TABLE_SQL = `
+  CREATE TABLE owned_fence_protocol(
+    version INTEGER NOT NULL,
+    retired INTEGER NOT NULL CHECK(retired IN (0, 1)),
+    authority_id TEXT NOT NULL
+  )`;
+const CANONICAL_MIGRATED_PROTOCOL_TABLE_SQL =
+  "CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)), authority_id TEXT)";
+const CANONICAL_ACQUISITION_TRIGGER_SQL = `
+  CREATE TRIGGER owned_fence_acquisition_immutable
+  BEFORE UPDATE ON owned_fence_acquisition
+  BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END`;
+const CANONICAL_AUTHORITY_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER owned_fence_authority_immutable
+  BEFORE UPDATE OF authority_id ON owned_fence_protocol
+  BEGIN SELECT RAISE(ABORT, 'owned fence authority identity is immutable'); END`;
+const CANONICAL_AUTHORITY_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER owned_fence_authority_delete_immutable
+  BEFORE DELETE ON owned_fence_protocol
+  BEGIN SELECT RAISE(ABORT, 'owned fence authority identity cannot be deleted'); END`;
+const CANONICAL_AUTOINDEX_TABLES = new Map([
+  ["sqlite_autoindex_owned_fence_acquisition_1", "owned_fence_acquisition"],
+  ["sqlite_autoindex_owned_fence_holder_1", "owned_fence_holder"],
+  ["sqlite_autoindex_owned_fence_holder_2", "owned_fence_holder"],
+]);
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
 let cachedCurrentBirth;
@@ -140,7 +181,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
           Atomics.wait(waiter, 0, 0, retryDelayMs);
         }
       }
-      assertRecoverableProtocol(database, authorityId);
+      assertRecoverableProtocol(database, authorityId, { allowHolderDeleteTriggers: true });
       options.assertRevoked();
       assertCoordinationPathIdentity(path, pathIdentity);
       const triggers = database.prepare("SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'trigger'").all();
@@ -208,16 +249,7 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
       }
     }
     assertCoordinationPathIdentity(path, pathIdentity);
-    const objects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
-    for (const required of ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable", AUTHORITY_UPDATE_TRIGGER, AUTHORITY_DELETE_TRIGGER])
-      if (!objects.has(required)) throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup metadata is incomplete or invalid.");
-    assertProtocolColumns(database, PROTOCOL_COLUMNS, "Owned fence retired-cleanup metadata is incomplete or invalid.");
-    const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-    const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-    const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-    if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
-        protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
-      throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup authority is active, foreign, or incomplete.");
+    assertRetiredProtocol(database, authorityId);
     assertCoordinationPathIdentity(path, pathIdentity);
     database.exec("COMMIT");
   } catch (error) {
@@ -238,12 +270,8 @@ export function retiredOwnedFenceCleanupAvailable(path) {
     assertNoProtocolSidecars(path, pathIdentity);
     database = new DatabaseSync(path, { readOnly: true });
     assertCoordinationPathSnapshot(path, pathIdentity);
-    assertProtocolColumns(database, PROTOCOL_COLUMNS, "Owned fence retired-cleanup metadata is incomplete or invalid.");
-    const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-    const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-    const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-    return protocol.length === 1 && protocol[0].version === PROTOCOL_VERSION && protocol[0].retired === 1 &&
-      protocol[0].authorityId === authorityId && proposals === 0 && holders === 0;
+    assertRetiredProtocol(database, authorityId);
+    return true;
   } catch { return false; }
   finally { database?.close(); }
 }
@@ -433,9 +461,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         BEFORE DELETE ON owned_fence_protocol
         BEGIN SELECT RAISE(ABORT, 'owned fence authority identity cannot be deleted'); END;
       `);
-      const currentObjects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
-      if (![...required, AUTHORITY_UPDATE_TRIGGER, AUTHORITY_DELETE_TRIGGER].every((name) => currentObjects.has(name)))
-        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is incomplete or invalid.");
+      assertCanonicalProtocolSchema(database, "current");
       const version = database.prepare("SELECT version, authority_id AS authorityId FROM owned_fence_protocol").all();
       if (version.length === 0 && mayInitialize)
         database.prepare("INSERT INTO owned_fence_protocol(version, retired, authority_id) VALUES (?, 0, ?)").run(PROTOCOL_VERSION, authorityId);
@@ -573,22 +599,8 @@ function assertActiveProtocol(database, authorityId) {
     throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
 }
 
-function assertRecoverableProtocol(database, authorityId) {
-  const required = new Map([
-    ["owned_fence_protocol", PROTOCOL_COLUMNS],
-    ["owned_fence_acquisition", ["acquisition_id", "holder_pid", "holder_birth"]],
-    ["owned_fence_holder", ["lock_key", "acquisition_id", "holder_pid", "holder_birth"]],
-  ]);
-  const objects = new Map(database.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => [row.name, row.type]));
-  if (objects.get("owned_fence_acquisition_immutable") !== "trigger" ||
-      objects.get(AUTHORITY_UPDATE_TRIGGER) !== "trigger" || objects.get(AUTHORITY_DELETE_TRIGGER) !== "trigger")
-    throw new OwnedFenceLockUnavailableError("Owned fence revocation metadata is incomplete or invalid.");
-  for (const [table, columns] of required) {
-    if (objects.get(table) !== "table") throw new OwnedFenceLockUnavailableError("Owned fence revocation metadata is incomplete or invalid.");
-    const actual = database.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all().map((row) => row.name);
-    if (actual.length !== columns.length || actual.some((name, index) => name !== columns[index]))
-      throw new OwnedFenceLockUnavailableError("Owned fence revocation schema is corrupt or foreign.");
-  }
+function assertRecoverableProtocol(database, authorityId, options = {}) {
+  assertCanonicalProtocolSchema(database, "current", options);
   const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
   if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || ![0, 1].includes(protocol[0].retired) || protocol[0].authorityId !== authorityId)
     throw new OwnedFenceLockUnavailableError("Owned fence revocation protocol is corrupt or foreign.");
@@ -734,29 +746,15 @@ function assertExistingProtocolPreflight(database, authorityId) {
   if (!journal || String(journal.journal_mode).toLowerCase() !== "delete")
     throw new OwnedFenceLockUnavailableError("Owned fence lock protocol uses an unsupported or foreign journal mode.");
 
-  const objects = new Map(database.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'trigger')").all()
-    .map((row) => [row.name, row.type]));
-  const requiredTables = new Map([
-    ["owned_fence_acquisition", ["acquisition_id", "holder_pid", "holder_birth"]],
-    ["owned_fence_holder", ["lock_key", "acquisition_id", "holder_pid", "holder_birth"]],
-  ]);
-  if (objects.get("owned_fence_protocol") !== "table" || objects.get("owned_fence_acquisition_immutable") !== "trigger")
-    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is incomplete or invalid.");
-  for (const [table, columns] of requiredTables) {
-    if (objects.get(table) !== "table" || !sameColumns(tableColumns(database, table), columns))
-      throw new OwnedFenceLockUnavailableError("Owned fence lock protocol schema is corrupt or foreign.");
-  }
-
   const protocolColumns = tableColumns(database, "owned_fence_protocol");
   if (sameColumns(protocolColumns, PROTOCOL_COLUMNS)) {
-    if (objects.get(AUTHORITY_UPDATE_TRIGGER) !== "trigger" || objects.get(AUTHORITY_DELETE_TRIGGER) !== "trigger")
-      throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is incomplete or invalid.");
     assertRecoverableProtocol(database, authorityId);
     assertActiveProtocol(database, authorityId);
     return;
   }
   if (!sameColumns(protocolColumns, LEGACY_PROTOCOL_COLUMNS))
     throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is invalid.");
+  assertCanonicalProtocolSchema(database, "legacy");
   const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
   const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
   const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
@@ -772,8 +770,149 @@ function sameColumns(actual, expected) {
   return actual.length === expected.length && actual.every((name, index) => name === expected[index]);
 }
 
-function assertProtocolColumns(database, expected, message) {
-  if (!sameColumns(tableColumns(database, "owned_fence_protocol"), expected))
+function assertCanonicalProtocolSchema(database, variant, options = {}) {
+  const expected = new Map([
+    ["owned_fence_acquisition", canonicalSchemaObject("table", "owned_fence_acquisition", CANONICAL_ACQUISITION_TABLE_SQL)],
+    ["owned_fence_holder", canonicalSchemaObject("table", "owned_fence_holder", CANONICAL_HOLDER_TABLE_SQL)],
+    ["owned_fence_protocol", canonicalSchemaObject("table", "owned_fence_protocol",
+      ...(variant === "legacy"
+        ? [CANONICAL_LEGACY_PROTOCOL_TABLE_SQL]
+        : [CANONICAL_CURRENT_PROTOCOL_TABLE_SQL, CANONICAL_MIGRATED_PROTOCOL_TABLE_SQL]))],
+    ["owned_fence_acquisition_immutable", canonicalSchemaObject("trigger", "owned_fence_acquisition", CANONICAL_ACQUISITION_TRIGGER_SQL)],
+  ]);
+  if (variant === "current") {
+    expected.set(AUTHORITY_UPDATE_TRIGGER, canonicalSchemaObject("trigger", "owned_fence_protocol", CANONICAL_AUTHORITY_UPDATE_TRIGGER_SQL));
+    expected.set(AUTHORITY_DELETE_TRIGGER, canonicalSchemaObject("trigger", "owned_fence_protocol", CANONICAL_AUTHORITY_DELETE_TRIGGER_SQL));
+  }
+  const rows = database.prepare(`
+    SELECT type, name, tbl_name AS tableName, sql
+    FROM sqlite_master
+  `).all();
+  let protocolSql;
+  for (const row of rows) {
+    const descriptor = expected.get(row.name);
+    if (descriptor) {
+      if (row.type !== descriptor.type || row.tableName !== descriptor.tableName ||
+          typeof row.sql !== "string" || !descriptor.sql.has(normalizeSchemaSql(row.sql)))
+        throw new OwnedFenceLockUnavailableError("Owned fence protocol schema semantics are corrupt or foreign.");
+      expected.delete(row.name);
+      if (row.name === "owned_fence_protocol") protocolSql = normalizeSchemaSql(row.sql);
+      continue;
+    }
+    if (canonicalAutoindex(row)) continue;
+    if (options.allowHolderDeleteTriggers === true && recoverableHolderDeleteTrigger(row)) continue;
+    throw new OwnedFenceLockUnavailableError("Owned fence protocol contains an extra or foreign schema object.");
+  }
+  if (expected.size !== 0)
+    throw new OwnedFenceLockUnavailableError("Owned fence protocol canonical schema is incomplete.");
+  assertCanonicalProtocolStructure(database, variant, protocolSql);
+}
+
+function canonicalSchemaObject(type, tableName, ...sql) {
+  return Object.freeze({ type, tableName, sql: new Set(sql.map(normalizeSchemaSql)) });
+}
+
+function normalizeSchemaSql(sql) {
+  return String(sql).trim().replace(/;+\s*$/, "").replace(/\s+/g, " ")
+    .replace(/\s*([(),=])\s*/g, "$1");
+}
+
+function recoverableHolderDeleteTrigger(row) {
+  return row?.type === "trigger" && row?.tableName === "owned_fence_holder" && typeof row.sql === "string" &&
+    /\bbefore\s+delete\s+on\s+owned_fence_holder\b/i.test(row.sql);
+}
+
+function canonicalAutoindex(row) {
+  return row?.type === "index" && row?.sql === null && CANONICAL_AUTOINDEX_TABLES.get(row.name) === row.tableName;
+}
+
+function assertCanonicalProtocolStructure(database, variant, protocolSql) {
+  const protocolColumns = [
+    canonicalColumn("version", "INTEGER", 1, 0),
+    canonicalColumn("retired", "INTEGER", 1, 0),
+  ];
+  if (variant === "current") {
+    const migrated = protocolSql === normalizeSchemaSql(CANONICAL_MIGRATED_PROTOCOL_TABLE_SQL);
+    protocolColumns.push(canonicalColumn("authority_id", "TEXT", migrated ? 0 : 1, 0));
+  }
+  assertCanonicalFacts(tableStructure(database, "owned_fence_protocol"), protocolColumns,
+    "Owned fence protocol table structure is corrupt or foreign.");
+  assertCanonicalFacts(tableStructure(database, "owned_fence_acquisition"), [
+    canonicalColumn("acquisition_id", "TEXT", 1, 1),
+    canonicalColumn("holder_pid", "INTEGER", 1, 0),
+    canonicalColumn("holder_birth", "TEXT", 1, 0),
+  ], "Owned fence acquisition table structure is corrupt or foreign.");
+  assertCanonicalFacts(tableStructure(database, "owned_fence_holder"), [
+    canonicalColumn("lock_key", "TEXT", 1, 1),
+    canonicalColumn("acquisition_id", "TEXT", 1, 0),
+    canonicalColumn("holder_pid", "INTEGER", 1, 0),
+    canonicalColumn("holder_birth", "TEXT", 1, 0),
+  ], "Owned fence holder table structure is corrupt or foreign.");
+
+  assertCanonicalFacts(indexStructure(database, "owned_fence_protocol"), [],
+    "Owned fence protocol indexes are corrupt or foreign.");
+  assertCanonicalFacts(indexStructure(database, "owned_fence_acquisition"), [{
+    name: "sqlite_autoindex_owned_fence_acquisition_1", unique: 1, origin: "pk", partial: 0,
+    columns: ["acquisition_id"],
+  }], "Owned fence acquisition indexes are corrupt or foreign.");
+  assertCanonicalFacts(indexStructure(database, "owned_fence_holder"), [{
+    name: "sqlite_autoindex_owned_fence_holder_1", unique: 1, origin: "pk", partial: 0,
+    columns: ["lock_key"],
+  }, {
+    name: "sqlite_autoindex_owned_fence_holder_2", unique: 1, origin: "u", partial: 0,
+    columns: ["acquisition_id"],
+  }], "Owned fence holder indexes are corrupt or foreign.");
+
+  assertCanonicalFacts(foreignKeyStructure(database, "owned_fence_protocol"), [],
+    "Owned fence protocol foreign keys are corrupt or foreign.");
+  assertCanonicalFacts(foreignKeyStructure(database, "owned_fence_acquisition"), [],
+    "Owned fence acquisition foreign keys are corrupt or foreign.");
+  assertCanonicalFacts(foreignKeyStructure(database, "owned_fence_holder"), [{
+    id: 0, sequence: 0, table: "owned_fence_acquisition", from: "acquisition_id", to: "acquisition_id",
+    onUpdate: "NO ACTION", onDelete: "NO ACTION", match: "NONE",
+  }], "Owned fence holder foreign keys are corrupt or foreign.");
+}
+
+function canonicalColumn(name, type, notNull, primaryKey) {
+  return { name, type, notNull, defaultValue: null, primaryKey, hidden: 0 };
+}
+
+function tableStructure(database, table) {
+  return database.prepare(`PRAGMA table_xinfo(${quoteIdentifier(table)})`).all().map((row) => ({
+    name: row.name,
+    type: row.type,
+    notNull: Number(row.notnull),
+    defaultValue: row.dflt_value,
+    primaryKey: Number(row.pk),
+    hidden: Number(row.hidden),
+  }));
+}
+
+function indexStructure(database, table) {
+  return database.prepare(`PRAGMA index_list(${quoteIdentifier(table)})`).all().map((row) => ({
+    name: row.name,
+    unique: Number(row.unique),
+    origin: row.origin,
+    partial: Number(row.partial),
+    columns: database.prepare(`PRAGMA index_info(${quoteIdentifier(row.name)})`).all().map((column) => column.name),
+  })).sort((left, right) => String(left.name).localeCompare(String(right.name)));
+}
+
+function foreignKeyStructure(database, table) {
+  return database.prepare(`PRAGMA foreign_key_list(${quoteIdentifier(table)})`).all().map((row) => ({
+    id: Number(row.id),
+    sequence: Number(row.seq),
+    table: row.table,
+    from: row.from,
+    to: row.to,
+    onUpdate: row.on_update,
+    onDelete: row.on_delete,
+    match: row.match,
+  }));
+}
+
+function assertCanonicalFacts(actual, expected, message) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected))
     throw new OwnedFenceLockUnavailableError(message);
 }
 

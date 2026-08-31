@@ -152,10 +152,17 @@ test("Windows Job exact release recovers a durable tombstone after SQLite holder
   try {
     const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
     await host.claimOwnedFence!(processId, owner, fence);
-    const fault = new DatabaseSync(lockPath);
-    fault.exec("CREATE TRIGGER injected_release_delete_fault BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'injected release holder finalization fault'); END;");
-    fault.close();
-    await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /fence.*lock|finalization|unavailable/i);
+    const originalExec = DatabaseSync.prototype.exec;
+    let beginTransactions = 0;
+    DatabaseSync.prototype.exec = function exec(sql: string): void {
+      originalExec.call(this, sql);
+      if (sql.trim() === "BEGIN IMMEDIATE" && ++beginTransactions === 3)
+        originalExec.call(this, "CREATE TRIGGER injected_release_delete_fault BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'injected release holder finalization fault'); END;");
+    };
+    try {
+      await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /fence.*lock|finalization|unavailable/i);
+      assert.equal(beginTransactions, 3, "the fixture must inject only after exact schema authentication and claim");
+    } finally { DatabaseSync.prototype.exec = originalExec; }
     const releasedRecord = JSON.parse(readFileSync(join(root, `${processId}.json`), "utf8")) as { backendOwnershipReleasedAt?: string };
     assert.match(releasedRecord.backendOwnershipReleasedAt ?? "", /\S/);
     const retained = new DatabaseSync(lockPath);

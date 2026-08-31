@@ -20,7 +20,8 @@ const channelOutputDirectory = join(channelDirectory, "output");
 const channelInputDirectory = join(channelDirectory, "input");
 const channelAckDirectory = join(channelDirectory, "ack");
 const outputCheckpointPath = join(channelDirectory, "output-checkpoint.json");
-const STATE_PUBLICATION_INITIAL_RETRY_MS = 1_000;
+const ATOMIC_REPLACEMENT_INITIAL_RETRY_MS = 1_000;
+const ATOMIC_WRITE_MAX_RETRY_MS = 1_000;
 const STATE_PUBLICATION_MAX_RETRY_MS = 15_000;
 for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
 if (!existsSync(outputCheckpointPath)) writeAtomic(outputCheckpointPath, JSON.stringify({ nonce: config.nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
@@ -288,7 +289,7 @@ function withCurrentFenceEffect(ownerId, fencingToken, effect) {
 function writeAtomic(destination, value) {
   const temporary = `${destination}.${process.pid}.tmp`;
   writeFileSync(temporary, value);
-  replaceState(temporary, destination);
+  replaceAtomic(temporary, destination, ATOMIC_WRITE_MAX_RETRY_MS);
 }
 
 function waitForChildStartup(timeoutMs) {
@@ -606,14 +607,14 @@ function publish(status, error = null) {
   const state = { ...semanticState, revision: nextRevision, updatedAt: new Date().toISOString() };
   const temporary = `${statePath}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(state));
-  replaceState(temporary, statePath);
+  replaceAtomic(temporary, statePath, STATE_PUBLICATION_MAX_RETRY_MS);
   revision = nextRevision;
   lastPublishedSignature = signature;
 }
 
-function replaceState(temporary, destination) {
+function replaceAtomic(temporary, destination, maximumRetryMs) {
   const startedAt = Date.now();
-  let retryWindowMs = STATE_PUBLICATION_INITIAL_RETRY_MS;
+  let retryWindowMs = Math.min(ATOMIC_REPLACEMENT_INITIAL_RETRY_MS, maximumRetryMs);
   let deadline = startedAt + retryWindowMs;
   const waiter = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
@@ -624,10 +625,10 @@ function replaceState(temporary, destination) {
       if (!["EPERM", "EACCES", "EBUSY"].includes(error?.code)) throw error;
       const now = Date.now();
       if (now >= deadline) {
-        if (retryWindowMs >= STATE_PUBLICATION_MAX_RETRY_MS) throw error;
-        retryWindowMs = Math.min(STATE_PUBLICATION_MAX_RETRY_MS, retryWindowMs * 2);
+        if (retryWindowMs >= maximumRetryMs) throw error;
+        retryWindowMs = Math.min(maximumRetryMs, retryWindowMs * 2);
         deadline = startedAt + retryWindowMs;
-        if (now >= deadline && retryWindowMs >= STATE_PUBLICATION_MAX_RETRY_MS) throw error;
+        if (now >= deadline && retryWindowMs >= maximumRetryMs) throw error;
       }
       Atomics.wait(waiter, 0, 0, Math.min(10, Math.max(1, deadline - Date.now())));
     }

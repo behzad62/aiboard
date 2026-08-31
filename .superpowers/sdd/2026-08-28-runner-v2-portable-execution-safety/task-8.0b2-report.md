@@ -1430,3 +1430,100 @@ approve B2 or begin B3.
 - Fix round 12 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 12 independent review
+
+- The fresh review reports zero Critical, two Important, and one Minor finding.
+  B2 unlock is refused.
+- A foreign database with the correct object names, column names, and
+  path-derived authority but no-op named triggers was accepted by ordinary
+  acquisition. Its external effect ran once and its supposedly immutable
+  authority remained mutable. Canonical table/trigger semantics, including
+  constraints and foreign keys, must be authenticated read-only.
+- The publication test's custom cleanup ignores unreadable state and treats an
+  unknown birth inspection as absence. Review executions could pass and leave
+  newly recreated uncertain roots. Cleanup needs authenticated durable state,
+  stable exact absence for every recorded identity, one bounded removal, and a
+  no-reappearance proof; uncertainty must preserve and fail.
+- The adaptive 15-second replacement helper is shared by state, output,
+  checkpoint, control, and acknowledgement writes. Only durable state
+  publication was authorized to use that envelope; generic atomic writes must
+  keep the prior one-second ceiling.
+- The intended round-11 reviewer races, focused lock/channel suites, both Node
+  lines, static gates, Node policy, optional Job/portable routing boundaries,
+  and live-helper hygiene are accepted. Uncertain review evidence was not
+  deleted.
+- Fix round 13 is bounded by `task-8.0b2-fix-round-13-brief.md`. B2 and B3
+  remain locked.
+
+## Fix round 13 implementation evidence
+
+- The seven new reviewer regressions were RED together against round 12:
+  forged canonical trigger names/bodies, forged current table semantics,
+  forged empty legacy semantics, unknown PID/birth inspection, unreadable
+  durable state, post-removal root reappearance, and state-retry scope. The
+  first three schema tests and four cleanup/retry tests each returned GREEN as
+  exact focused groups after repair.
+- Every new guard was then physically fault-injected on its own. Bypassing
+  trigger SQL authentication made the no-op-trigger test RED; bypassing table
+  definition and structural authentication made both forged current and legacy
+  tests RED; converting unknown inspection or unreadable state into trusted
+  absence made each cleanup test RED; accepting a recreated root made the
+  no-reappearance test RED; and giving generic `writeAtomic()` the state ceiling
+  made the retry-scope test RED. Each mutation was reverted and its exact failed
+  and affected checks returned GREEN.
+- R13.1 authenticates the complete `sqlite_master` object set before ordinary
+  acquisition and after canonical creation/migration. Required tables and
+  triggers must have canonical normalized definitions; `table_xinfo`, index
+  list/columns, nullability, primary/unique roles, checks, and the holder foreign
+  key must match. Extra objects fail closed except for a recognized holder-delete
+  fault trigger on the already-authorized revoked-recovery path, where it is
+  removed before recovery effects. Canonical current schema, the one known
+  nullable-authority schema produced by legacy migration, and exact empty
+  historical legacy schema remain accepted. Lookalikes are rejected read-only,
+  run no external effect, and remain byte-identical.
+- The compatibility fixture for a post-effect holder-finalization failure now
+  injects its fault after canonical preflight and claim. This preserves the
+  original outcome-ambiguity coverage without teaching ordinary acquisition to
+  accept a pre-existing foreign trigger.
+- R13.2 binds publication cleanup to the exact Temp namespace and direct owned
+  directory, pins root and directory filesystem identities, authenticates the
+  opaque nonce/supervisor identity and stopped durable state, rejects pending
+  state-publication temporary files, and validates every root/known PID plus
+  birth. Every accumulated identity must be exactly absent or demonstrably
+  reused for a stable 200 ms window. The helper removes the exact root once and
+  requires another bounded 200 ms absence window; uncertainty, malformed state,
+  identity change, or reappearance preserves evidence and fails.
+- R13.3 parameterizes atomic replacement explicitly. Generic channel, output,
+  checkpoint, control, and acknowledgement publication retains the prior
+  one-second transient replacement ceiling. Only `publish(state.json)` selects
+  the adaptive 1/2/4/8/15-second ceiling established in round 12. Permanent and
+  unknown filesystem errors still fail immediately. No build-task, command,
+  model, startup, process-discovery, output-retention, or user-request duration
+  changed.
+- Final targeted evidence is GREEN on the completed implementation: the
+  ownership-lock module is 33/33 on current Node and 33/33 on Node 22.13; the
+  exact final cleanup/retry group is 4/4; Windows process backend is 80/80 in
+  72.755 seconds; the affected portable/OS matrix is 177 total / 176 pass /
+  zero fail / one explicit POSIX-host skip in 75.471 seconds; and managed
+  process plus subprocess runtime compatibility is 87/87 in 11.280 seconds.
+  The complete portable-channel module was GREEN 36/36 before the final
+  filesystem-identity hardening, whose exact affected group and the later full
+  package gate are GREEN on the final source.
+- The final uninterrupted exact-current `npm run test:runner-v2` exits zero:
+  1,439 total, 1,438 pass, zero fail or cancelled, and one explicit POSIX-host
+  skip in 788.256 seconds. Every chained Runner client, native policy, policy
+  UI, cutover, pause-gate, model-usage, live-state, transcript, native-files,
+  run-stats, steering, and observability contract also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint over all five changed
+  source/test files, and `git diff --check` are GREEN. The Node-range audit is
+  exact in root package, Runner package, and package lock:
+  `>=22.13.0 <23 || >=24.0.0 <25`; no exact patch pin was introduced.
+- Two relevant process inventories separated by a three-second settle report
+  zero live portable/managed supervisors, Job hosts, lock holders, or
+  TERM-ignore helpers. The broad B2 inventory was twenty before and after the
+  full gate. All are uncertain, diagnostic, or historical evidence; no entry
+  was deleted and no new root was created.
+- Fix round 13 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

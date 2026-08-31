@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs, { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -48,8 +49,8 @@ test("a single-link legacy coordination database migrates to immutable exact-pat
     legacy.exec(`
       CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)));
       CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
-      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL, acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
-      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL CHECK(lock_key = 'owned'), acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL, FOREIGN KEY(acquisition_id) REFERENCES owned_fence_acquisition(acquisition_id));
+      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END;
       INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
     `);
     legacy.close();
@@ -77,8 +78,8 @@ test("non-empty legacy coordination remains unbound when its original hard-link 
     legacy.exec(`
       CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)));
       CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
-      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL, acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
-      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL CHECK(lock_key = 'owned'), acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL, FOREIGN KEY(acquisition_id) REFERENCES owned_fence_acquisition(acquisition_id));
+      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END;
       INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
       INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES ('11111111-1111-4111-8111-111111111111', ${process.pid}, 'unbound-target-birth');
       INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', '11111111-1111-4111-8111-111111111111', ${process.pid}, 'unbound-target-birth');
@@ -228,12 +229,15 @@ test("a persistent finalization failure never reports an effect as successfully 
   const lockPath = join(root, "effect.sqlite");
   try {
     withOwnedFenceLockSync(lockPath, () => undefined);
-    const database = new DatabaseSync(lockPath);
-    try { database.exec("CREATE TRIGGER refuse_holder_delete BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'persistent finalization fault'); END;"); }
-    finally { database.close(); }
     let effects = 0;
     assert.throws(
-      () => withOwnedFenceLockSync(lockPath, () => { effects += 1; }),
+      () => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+        afterClaim: () => {
+          const database = new DatabaseSync(lockPath);
+          try { database.exec("CREATE TRIGGER refuse_holder_delete BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'persistent finalization fault'); END;"); }
+          finally { database.close(); }
+        },
+      } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }),
       /finalization|unavailable|persistent/i,
     );
     assert.equal(effects, 1, "the caller must see uncertainty when the external effect ran but lock commit failed");
@@ -721,6 +725,83 @@ test("ordinary acquisition revalidates an in-place rewrite after read-only prefl
   }
 });
 
+test("ordinary acquisition rejects forged canonical trigger names without changing bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-forged-triggers-"));
+  const lockPath = join(root, "forged.sqlite");
+  let effects = 0;
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined, { holderBirth: "forged-trigger-creator" });
+    const forged = new DatabaseSync(lockPath);
+    try {
+      forged.exec(`
+        DROP TRIGGER owned_fence_acquisition_immutable;
+        DROP TRIGGER owned_fence_authority_immutable;
+        DROP TRIGGER owned_fence_authority_delete_immutable;
+        CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT 1; END;
+        CREATE TRIGGER owned_fence_authority_immutable BEFORE UPDATE OF authority_id ON owned_fence_protocol BEGIN SELECT 1; END;
+        CREATE TRIGGER owned_fence_authority_delete_immutable BEFORE DELETE ON owned_fence_protocol BEGIN SELECT 1; END;
+      `);
+    } finally { forged.close(); }
+    const before = readFileSync(lockPath);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      holderBirth: "forged-trigger-contender",
+    }), /schema|trigger|foreign|metadata|protocol|invalid|unavailable/i);
+    assert.equal(effects, 0);
+    assert.deepEqual(readFileSync(lockPath), before, "forged trigger semantics must be rejected read-only");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("ordinary acquisition rejects forged current table semantics without changing bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-forged-tables-"));
+  const lockPath = join(root, "forged.sqlite");
+  let effects = 0;
+  try {
+    const authorityId = testCoordinationAuthorityId(lockPath);
+    const forged = new DatabaseSync(lockPath);
+    try {
+      forged.exec(`
+        CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL, authority_id TEXT NOT NULL);
+        CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+        CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL, acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+        CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END;
+        CREATE TRIGGER owned_fence_authority_immutable BEFORE UPDATE OF authority_id ON owned_fence_protocol BEGIN SELECT RAISE(ABORT, 'owned fence authority identity is immutable'); END;
+        CREATE TRIGGER owned_fence_authority_delete_immutable BEFORE DELETE ON owned_fence_protocol BEGIN SELECT RAISE(ABORT, 'owned fence authority identity cannot be deleted'); END;
+      `);
+      forged.prepare("INSERT INTO owned_fence_protocol(version, retired, authority_id) VALUES (1, 0, ?)").run(authorityId);
+    } finally { forged.close(); }
+    const before = readFileSync(lockPath);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      holderBirth: "forged-table-contender",
+    }), /schema|constraint|foreign|metadata|protocol|invalid|unavailable/i);
+    assert.equal(effects, 0);
+    assert.deepEqual(readFileSync(lockPath), before, "forged table semantics must be rejected read-only");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("ordinary acquisition rejects a forged empty legacy schema without migration", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-forged-legacy-"));
+  const lockPath = join(root, "forged.sqlite");
+  let effects = 0;
+  try {
+    const forged = new DatabaseSync(lockPath);
+    try {
+      forged.exec(`
+        CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL);
+        CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+        CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL, acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+        CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END;
+        INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
+      `);
+    } finally { forged.close(); }
+    const before = readFileSync(lockPath);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+      holderBirth: "forged-legacy-contender",
+    }), /legacy|schema|constraint|foreign|metadata|protocol|invalid|unavailable/i);
+    assert.equal(effects, 0);
+    assert.deepEqual(readFileSync(lockPath), before, "forged legacy semantics must be rejected without migration");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 test("a contender retains its caller deadline while an exclusive winner initializes", { timeout: 10_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-contended-init-"));
   const lockPath = join(root, "contended.sqlite");
@@ -777,6 +858,11 @@ function startHolder(lockPath: string, effectPath?: string, deadlineMs = 2_000, 
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function testCoordinationAuthorityId(path: string): string {
+  const normalized = process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+  return createHash("sha256").update(`aiboard-owned-fence-path/v1\0${normalized}`).digest("hex");
 }
 
 async function nextMessage(child: ChildProcess): Promise<{ state: string; pid?: number; message?: string }> {

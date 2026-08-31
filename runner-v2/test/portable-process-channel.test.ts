@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -562,7 +562,7 @@ test("portable reconcile and release reject corrupt acknowledgement evidence", {
     process.exit(fs.existsSync(gate) ? 0 : 1);
   `, exitGate])));
   const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; nonce: string; supervisorPid: number; supervisorBirth: string };
   const statePath = join(identity.directory, "state.json");
   const lockScript = "$ErrorActionPreference='Stop';$s=[IO.File]::Open($env:AIBOARD_TEST_LOCK_PATH,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{[Console]::Out.WriteLine('LOCKED');[Threading.Thread]::Sleep([int]$env:AIBOARD_TEST_LOCK_MS)}finally{$s.Dispose()}";
   const holder = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", lockScript], {
@@ -586,8 +586,51 @@ test("portable reconcile and release reject corrupt acknowledgement evidence", {
     await waitForChildExit(holder).catch(() => undefined);
     await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
     await backend.release(binding, fence).catch(() => undefined);
-    await removePortableTestRootAfterExactOwnerAbsence(root, identity.supervisorPid, identity.supervisorBirth);
+    await removePortableTestRootAfterExactOwnerAbsence(root, identity.directory, identity.nonce, identity.supervisorPid, identity.supervisorBirth);
   }
+});
+
+test("portable publication cleanup preserves unknown owner identity", async () => {
+  if (process.platform !== "win32") return;
+  const fixture = portableCleanupFixture("unknown-owner");
+  try {
+    await assert.rejects(removePortableTestRootAfterExactOwnerAbsence(
+      fixture.root, fixture.directory, fixture.nonce, fixture.supervisorPid, fixture.supervisorBirth,
+      { inspectBirth: () => ({ state: "unknown" }) },
+    ), /unknown|uncertain|unavailable/i);
+    assert.equal(existsSync(fixture.root), true);
+  } finally { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("portable publication cleanup preserves unreadable durable state", async () => {
+  if (process.platform !== "win32") return;
+  const fixture = portableCleanupFixture("unreadable-state");
+  writeFileSync(join(fixture.directory, "state.json"), "{");
+  try {
+    await assert.rejects(removePortableTestRootAfterExactOwnerAbsence(
+      fixture.root, fixture.directory, fixture.nonce, fixture.supervisorPid, fixture.supervisorBirth,
+      { inspectBirth: () => ({ state: "absent" }) },
+    ), /state|unreadable|invalid|uncertain/i);
+    assert.equal(existsSync(fixture.root), true);
+  } finally { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("portable publication cleanup preserves a root that reappears after removal", async () => {
+  if (process.platform !== "win32") return;
+  const fixture = portableCleanupFixture("late-reappearance");
+  try {
+    await assert.rejects(removePortableTestRootAfterExactOwnerAbsence(
+      fixture.root, fixture.directory, fixture.nonce, fixture.supervisorPid, fixture.supervisorBirth,
+      { inspectBirth: () => ({ state: "absent" }), afterRemoval: () => mkdirSync(fixture.root, { recursive: true }) },
+    ), /reappear|remain absent|uncertain/i);
+    assert.equal(existsSync(fixture.root), true);
+  } finally { rmSync(fixture.root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("portable supervisor reserves adaptive atomic replacement for durable state", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  assert.match(source, /function writeAtomic[\s\S]*?replaceAtomic\(temporary, destination, ATOMIC_WRITE_MAX_RETRY_MS\);[\s\S]*?\n}/);
+  assert.match(source, /function publish[\s\S]*?replaceAtomic\(temporary, statePath, STATE_PUBLICATION_MAX_RETRY_MS\);[\s\S]*?\n}/);
 });
 
 test("portable final effects fail closed when durable fence evidence disappears", { timeout: 60_000 }, async () => {
@@ -831,31 +874,131 @@ async function waitForChildText(child: ChildProcess, expected: string, deadlineM
 async function waitForChildExit(child: ChildProcess, deadlineMs = 5_000): Promise<void> {
   await waitFor(() => child.exitCode !== null, deadlineMs);
 }
-async function removePortableTestRootAfterExactOwnerAbsence(root: string, supervisorPid: number, supervisorBirth: string): Promise<void> {
+type PortableCleanupBirth = { state: "absent" } | { state: "present"; birth: string } | { state: "unknown" };
+interface PortableCleanupOptions {
+  readonly inspectBirth?: (pid: number) => PortableCleanupBirth;
+  readonly afterRemoval?: () => void;
+}
+async function removePortableTestRootAfterExactOwnerAbsence(
+  root: string,
+  directory: string,
+  nonce: string,
+  supervisorPid: number,
+  supervisorBirth: string,
+  options: PortableCleanupOptions = {},
+): Promise<void> {
   const resolvedRoot = resolve(root);
   if (dirname(resolvedRoot) !== resolve(tmpdir()) || !basename(resolvedRoot).startsWith("aiboard-portable-release-corrupt-ack-"))
     throw new Error("Portable publication test cleanup target is outside its exact temporary namespace.");
+  const resolvedDirectory = resolve(directory);
+  if (dirname(resolvedDirectory) !== resolvedRoot || !basename(resolvedDirectory).startsWith("owned-") ||
+      !/^[0-9a-f]{48}$/i.test(nonce) || !Number.isSafeInteger(supervisorPid) || supervisorPid < 1 || !supervisorBirth)
+    throw new Error("Portable publication test cleanup identity is invalid or unauthenticated.");
+  const rootIdentity = portableCleanupDirectoryIdentity(resolvedRoot);
+  const directoryIdentity = portableCleanupDirectoryIdentity(resolvedDirectory);
+  const inspectBirth = options.inspectBirth ?? inspectWindowsTestBirth;
+  const authenticatedIdentities = new Map<number, string>([[supervisorPid, supervisorBirth]]);
   const deadline = Date.now() + 10_000;
+  let exactlyAbsentSince: number | undefined;
   for (;;) {
-    const identities: Array<{ pid: number; birth: string }> = [{ pid: supervisorPid, birth: supervisorBirth }];
-    for (const entry of existsSync(resolvedRoot) ? readdirSync(resolvedRoot, { withFileTypes: true }) : []) {
-      if (!entry.isDirectory()) continue;
-      try {
-        const state = JSON.parse(readFileSync(join(resolvedRoot, entry.name, "state.json"), "utf8")) as { knownProcesses?: Array<{ pid: number; birth: string }> };
-        for (const process of state.knownProcesses ?? []) identities.push(process);
-      } catch {}
+    assertPortableCleanupDirectoryIdentity(resolvedRoot, rootIdentity);
+    assertPortableCleanupDirectoryIdentity(resolvedDirectory, directoryIdentity);
+    for (const identity of authenticatedPortableCleanupIdentities(
+      resolvedRoot, resolvedDirectory, nonce, supervisorPid, supervisorBirth,
+    )) {
+      const prior = authenticatedIdentities.get(identity.pid);
+      if (prior !== undefined && !sameTestBirth(prior, identity.birth))
+        throw new Error("Portable publication test cleanup observed conflicting durable process identities.");
+      authenticatedIdentities.set(identity.pid, identity.birth);
     }
-    const exactLive = identities.filter((identity) => {
-      const observed = inspectWindowsTestBirth(identity.pid);
-      return observed.state === "present" && sameTestBirth(observed.birth, identity.birth);
-    });
-    if (exactLive.length === 0) break;
-    const exactSupervisor = exactLive.find((identity) => identity.pid === supervisorPid);
-    if (exactSupervisor) try { process.kill(supervisorPid, "SIGKILL"); } catch {}
+    let exactLive = false;
+    for (const [pid, birth] of authenticatedIdentities) {
+      const observed = inspectBirth(pid);
+      if (observed.state === "unknown")
+        throw new Error("Portable publication test cleanup process identity is unknown or unavailable.");
+      if (observed.state === "present" && sameTestBirth(observed.birth, birth)) exactLive = true;
+    }
+    if (!exactLive) {
+      exactlyAbsentSince ??= Date.now();
+      if (Date.now() - exactlyAbsentSince >= 200) break;
+    } else exactlyAbsentSince = undefined;
     if (Date.now() >= deadline) throw new Error("Portable publication test retained an exact owned process.");
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
   }
-  if (existsSync(resolvedRoot)) rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assertPortableCleanupDirectoryIdentity(resolvedRoot, rootIdentity);
+  assertPortableCleanupDirectoryIdentity(resolvedDirectory, directoryIdentity);
+  rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  options.afterRemoval?.();
+  const settleDeadline = Date.now() + 200;
+  while (Date.now() < settleDeadline) {
+    if (existsSync(resolvedRoot))
+      throw new Error("Portable publication test root reappeared and did not remain absent after exact cleanup.");
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+}
+interface PortableCleanupDirectoryIdentity { readonly device: string; readonly inode: string; readonly birth: string }
+function portableCleanupDirectoryIdentity(path: string): PortableCleanupDirectoryIdentity {
+  const status = lstatSync(path, { bigint: true });
+  if (!status.isDirectory() || status.isSymbolicLink())
+    throw new Error("Portable publication test cleanup directory is linked, replaced, or invalid.");
+  return { device: status.dev.toString(), inode: status.ino.toString(), birth: status.birthtimeNs.toString() };
+}
+function assertPortableCleanupDirectoryIdentity(path: string, expected: PortableCleanupDirectoryIdentity): void {
+  const current = portableCleanupDirectoryIdentity(path);
+  if (current.device !== expected.device || current.inode !== expected.inode || current.birth !== expected.birth)
+    throw new Error("Portable publication test cleanup directory identity changed or became uncertain.");
+}
+function authenticatedPortableCleanupIdentities(
+  root: string,
+  directory: string,
+  nonce: string,
+  supervisorPid: number,
+  supervisorBirth: string,
+): Array<{ pid: number; birth: string }> {
+  if (!existsSync(root) || !existsSync(directory))
+    throw new Error("Portable publication test durable state is unavailable before cleanup.");
+  const ownedDirectories = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  if (ownedDirectories.length !== 1 || resolve(root, ownedDirectories[0]!.name) !== directory)
+    throw new Error("Portable publication test cleanup directory is unauthenticated or ambiguous.");
+  if (readdirSync(directory).some((name) => /^state\.json\.\d+\.tmp$/.test(name)))
+    throw new Error("Portable publication test state publication remains uncertain.");
+  let state: {
+    protocol?: unknown;
+    nonce?: unknown;
+    supervisorPid?: unknown;
+    status?: unknown;
+    rootProcess?: unknown;
+    knownProcesses?: unknown;
+  };
+  try { state = JSON.parse(readFileSync(join(directory, "state.json"), "utf8")); }
+  catch (error) { throw new Error("Portable publication test durable state is unreadable or invalid.", { cause: error }); }
+  if (state.protocol !== "aiboard-portable-process/v1" || state.nonce !== nonce ||
+      state.supervisorPid !== supervisorPid || state.status !== "stopped" || !Array.isArray(state.knownProcesses))
+    throw new Error("Portable publication test durable state is unauthenticated or incomplete.");
+  const identities: Array<{ pid: number; birth: string }> = [{ pid: supervisorPid, birth: supervisorBirth }];
+  if (state.rootProcess !== null && state.rootProcess !== undefined) identities.push(assertPortableCleanupIdentity(state.rootProcess));
+  for (const identity of state.knownProcesses) identities.push(assertPortableCleanupIdentity(identity));
+  return identities;
+}
+function assertPortableCleanupIdentity(value: unknown): { pid: number; birth: string } {
+  const identity = value as { pid?: unknown; birth?: unknown };
+  if (!identity || !Number.isSafeInteger(identity.pid) || Number(identity.pid) < 1 ||
+      typeof identity.birth !== "string" || identity.birth.length === 0)
+    throw new Error("Portable publication test recorded process identity is malformed or uncertain.");
+  return { pid: Number(identity.pid), birth: identity.birth };
+}
+function portableCleanupFixture(label: string): { root: string; directory: string; nonce: string; supervisorPid: number; supervisorBirth: string } {
+  const root = mkdtempSync(join(tmpdir(), `aiboard-portable-release-corrupt-ack-${label}-`));
+  const directory = join(root, "owned-fixture");
+  const nonce = createHash("sha256").update(root).digest("hex").slice(0, 48);
+  const supervisorPid = 2_000_000_000;
+  const supervisorBirth = "fixture-birth";
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v1", nonce, supervisorPid, status: "stopped", rootProcess: null,
+    knownProcesses: [{ pid: supervisorPid, birth: supervisorBirth }],
+  }));
+  return { root, directory, nonce, supervisorPid, supervisorBirth };
 }
 function writeOutputCheckpoint(root: string): void {
   writeFileSync(join(root, "channel", "output-checkpoint.json"), JSON.stringify({ nonce: "nonce", stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));

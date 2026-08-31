@@ -612,3 +612,29 @@ overlap is expected.
   green gate created no new root. Node policy, B3, OCI activation, routing, Job
   optionality, and production task/command/model/output limits are unchanged.
   B2 and B3 remain locked for the required independent review.
+- Task 8.0B2 fix-round-12 independent re-review: CHANGES REQUIRED with zero
+  Critical, two Important, and one Minor finding. Name/column-only SQLite
+  authentication accepts forged current protocol semantics; the publication
+  regression's cleanup converts unreadable or unknown identity evidence into
+  deletion authority; and the adaptive state retry unintentionally applies to
+  all channel/control atomic writes. Fix round 13 is authorized only for exact
+  current/legacy schema semantics, fail-closed stable test cleanup, and
+  state-only adaptive replacement under `task-8.0b2-fix-round-13-brief.md`.
+  Review-created uncertain roots remain preserved. B2 and B3 remain locked.
+- Task 8.0B2 fix round 13 implementation and controller verification are GREEN
+  pending fresh independent review. Current and canonical migrated/legacy
+  coordination schemas are authenticated by exact definitions plus table,
+  index, constraint, and foreign-key facts before any ordinary write-capable
+  open. Publication-fixture cleanup now authenticates its exact root, directory,
+  nonce, stopped state, and every PID/birth identity; unknown, unreadable, or
+  reappearing evidence fails closed. The adaptive 15-second replacement ceiling
+  is selected only for durable supervisor state while other atomic writes retain
+  one second. Seven new regressions were RED together and every guard was also
+  proven RED independently, reverted, and restored GREEN. Current and Node
+  22.13 lock groups are 33/33 each; affected pressure is 177 total / 176 pass /
+  one expected Windows-host POSIX skip; Windows is 80/80; managed/runtime is
+  87/87; type/lint/diff/Node policy are GREEN. The uninterrupted package gate is
+  1,439 total / 1,438 pass / zero fail or cancelled / one expected skip in
+  788.256 seconds with every chained product contract green. Post-gate helper
+  inventory is zero and the same twenty uncertain/historical roots remain; none
+  was deleted. B2 and B3 remain locked for the required independent review.
