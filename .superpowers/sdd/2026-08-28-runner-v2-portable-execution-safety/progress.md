@@ -359,3 +359,11 @@ overlap is expected.
   targeted lint, diff check, and five-second residue settle are GREEN with zero
   live owned supervisors. Fix Round 2 is implementation-verified and ready for
   review; it does not approve B2 or unlock B3.
+- Task 8.0B2 fix-round-2 independent re-review: CHANGES REQUIRED with zero
+  Critical and three Important residual gaps. The optional active Job probe can
+  hang the aggregate semantic probe and block an already verified portable
+  baseline; anonymous fence lock files cannot safely recover after their holder
+  crashes; and passing fixtures plus prior attempts leave non-zero task-owned
+  Temp roots. All six preceding Important findings are confirmed addressed.
+  Governed fix round 3 is authorized for only these three gaps under
+  `task-8.0b2-fix-round-3-brief.md`. B3 remains locked.
