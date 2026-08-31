@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -36,6 +36,64 @@ test("generic POSIX holder inspection distinguishes exact absence from uncertain
     });
     assert.deepEqual(result, fixtureCase.expected, fixtureCase.name);
   }
+});
+
+test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-authority-"));
+  const lockPath = join(root, "effect.sqlite");
+  try {
+    const legacy = new DatabaseSync(lockPath);
+    legacy.exec(`
+      CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)));
+      CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL, acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
+    `);
+    legacy.close();
+    let effects = 0;
+    withOwnedFenceLockSync(lockPath, () => { effects += 1; });
+    assert.equal(effects, 1);
+    const migrated = new DatabaseSync(lockPath, { readOnly: true });
+    assert.deepEqual(migrated.prepare("PRAGMA table_info(owned_fence_protocol)").all().map((row) => row.name),
+      ["version", "retired", "authority_id"]);
+    const protocol = migrated.prepare("SELECT authority_id AS authorityId FROM owned_fence_protocol").get();
+    assert.match(String(protocol?.authorityId), /^[0-9a-f]{64}$/);
+    const triggers = new Set(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all().map((row) => row.name));
+    assert.equal(triggers.has("owned_fence_authority_immutable"), true);
+    assert.equal(triggers.has("owned_fence_authority_delete_immutable"), true);
+    migrated.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("non-empty legacy coordination remains unbound when its original hard-link name disappears", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-alias-"));
+  const targetPath = join(root, "target.sqlite");
+  const requestedPath = join(root, "requested.sqlite");
+  try {
+    const legacy = new DatabaseSync(targetPath);
+    legacy.exec(`
+      CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)));
+      CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY NOT NULL, acquisition_id TEXT UNIQUE NOT NULL, holder_pid INTEGER NOT NULL, holder_birth TEXT NOT NULL);
+      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
+      INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES ('11111111-1111-4111-8111-111111111111', ${process.pid}, 'unbound-target-birth');
+      INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', '11111111-1111-4111-8111-111111111111', ${process.pid}, 'unbound-target-birth');
+    `);
+    legacy.close();
+    linkSync(targetPath, requestedPath);
+    rmSync(targetPath);
+    let effects = 0;
+    assert.throws(() => withOwnedFenceLockSync(requestedPath, () => { effects += 1; }), /legacy|unbound|authority|ownership/i);
+    assert.equal(effects, 0);
+    const preserved = new DatabaseSync(requestedPath, { readOnly: true });
+    assert.deepEqual(preserved.prepare("PRAGMA table_info(owned_fence_protocol)").all().map((row) => row.name),
+      ["version", "retired"]);
+    assert.equal(preserved.prepare("SELECT retired FROM owned_fence_protocol").get()!.retired, 0);
+    assert.equal(Number(preserved.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), 1);
+    preserved.close();
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a crashed real holder leaves exact identity and a higher contender reclaims it once", { timeout: 15_000 }, async () => {

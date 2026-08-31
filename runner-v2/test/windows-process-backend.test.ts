@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -235,6 +235,63 @@ test("Windows Job release rejects a substituted record before touching another p
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
+test("Windows Job release rejects hard-link and symbolic-link coordination aliases", async () => {
+  for (const aliasKind of ["hard-link", "symbolic-link"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `aiboard-windows-job-${aliasKind}-alias-`));
+    const owner = { runId: `run-${aliasKind}`, sessionId: `session-${aliasKind}` };
+    const startedAt = new Date().toISOString();
+    const requestedId = "requested-a";
+    const targetId = "target-b";
+    const writeRecord = (processId: string, released: boolean) => {
+      const directory = join(root, processId); mkdirSync(directory);
+      const statusPath = join(directory, "supervisor.jsonl");
+      const stdoutPath = join(directory, "stdout.log");
+      const stderrPath = join(directory, "stderr.log");
+      writeFileSync(stdoutPath, ""); writeFileSync(stderrPath, "");
+      writeFileSync(statusPath, `${JSON.stringify({
+        protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid,
+        childPid: 0, port: 0, status: "stopped", exitCode: 0, signal: null, error: null,
+        ownershipReleased: released, updatedAt: startedAt, retainedOutputChunks: 0, retainedOutputBytes: 0,
+      })}\n`);
+      writeFileSync(join(root, `${processId}.json`), JSON.stringify({
+        processId, ...owner, pid: 0, command: process.execPath, args: [], cwd: root,
+        environmentKeys: [], startedAt, updatedAt: startedAt, status: "stopped", exitCode: 0,
+        signal: null, stdoutPath, stderrPath, interactive: true,
+        outputOffsets: { stdout: 0, stderr: 0 }, outputSequences: { stdout: 0, stderr: 0 },
+        supervisor: { protocol: "aiboard-managed-process/v1", token: "a".repeat(64), statusPath, supervisorPid: process.pid, port: 0 },
+        currentFence: fence,
+        ...(released ? { backendOwnershipReleasedAt: startedAt } : {}),
+      }));
+    };
+    try {
+      writeRecord(targetId, false);
+      writeRecord(requestedId, true);
+      const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
+      await host.claimOwnedFence!(targetId, owner, fence);
+      const targetLock = join(root, `${targetId}.fence.lock`);
+      const requestedLock = join(root, `${requestedId}.fence.lock`);
+      let inspectionPath = targetLock;
+      if (aliasKind === "hard-link") {
+        linkSync(targetLock, requestedLock);
+        rmSync(targetLock);
+        inspectionPath = requestedLock;
+        assert.equal(statSync(requestedLock).nlink, 1,
+          "the immutable database authority must reject an alias even after its original name disappears");
+      } else symlinkSync(targetLock, requestedLock, "file");
+      const before = new DatabaseSync(inspectionPath);
+      assert.equal(before.prepare("SELECT retired FROM owned_fence_protocol").get()!.retired, 0);
+      const beforeHolders = Number(before.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count);
+      before.close();
+      await assert.rejects(host.releaseOwned(requestedId, owner, startedAt, fence), /authority|alias|identity|protocol|symbolic|link/i);
+      const after = new DatabaseSync(inspectionPath);
+      assert.equal(after.prepare("SELECT retired FROM owned_fence_protocol").get()!.retired, 0,
+        `${aliasKind} must not retire the unrelated target coordination database`);
+      assert.equal(Number(after.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), beforeHolders);
+      after.close();
+    } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+  }
+});
+
 test("Windows Job rejects path-escaping process IDs before reading outside host state", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-path-identity-"));
   const stateDirectory = join(root, "state");
@@ -326,6 +383,29 @@ test("Windows portable baseline is selectable without Job Objects and reports cr
   assert.equal(probe.capabilities.tree_termination, "unavailable");
   assert.equal(probe.capabilities.verified_emptiness, "unavailable");
   assert.equal(probe.capabilities.crash_cleanup, "unavailable");
+});
+
+test("Windows portable launch consumes the caller's shared absolute startup deadline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-absolute-startup-deadline-"));
+  const stateDirectory = join(root, "state");
+  const backend = new WindowsProcessBackend({
+    stateDirectory,
+    startupDeadlineAt: Date.now() - 1,
+    semanticFacts: verifiedWindowsSemanticFacts,
+  });
+  let unexpected: ProcessBackendBinding | undefined;
+  let rejection: unknown;
+  try {
+    try {
+      unexpected = bindingFor(parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"]))));
+    } catch (error) { rejection = error; }
+    if (unexpected) await cleanupWindowsProcessFixture(backend, unexpected, fence);
+    assert.match(String(rejection), /startup.*timed out|deadline.*exhausted/i);
+    assert.deepEqual(readdirSync(stateDirectory), [], "an exhausted absolute deadline must refuse before creating launch state");
+  } finally {
+    if (unexpected) await cleanupWindowsProcessFixture(backend, unexpected, fence).catch(() => undefined);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
 });
 
 test("omitted Windows semantic facts fail closed and service presence alone cannot select Job containment", async () => {

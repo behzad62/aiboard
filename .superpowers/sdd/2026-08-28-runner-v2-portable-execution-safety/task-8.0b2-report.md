@@ -1045,3 +1045,50 @@ approve B2 or begin B3.
 - Fix round 6 implementation gates are complete. B2 remains locked until a new
   independent scoped review reports zero Critical and Important findings. B3
   has not started.
+
+## Fix round 7 implementation evidence
+
+- The fresh round-6 review reported zero Critical and three Important findings:
+  a hard-link coordination alias could retire another process's database;
+  alphabet prefixes/suffixes could hide encoded root references; and semantic
+  probe prewarming/startup reset the advertised operation budget. The exact
+  reproductions were RED: missing alias rejection, root deletion for
+  `A<base64url(root)>`, and a 50 ms probe returning after about 3.27 seconds.
+- R7.1 stores a SHA-256 exact-path authority in every new coordination database
+  and protects it with immutable update/delete triggers. Acquisition, effect,
+  revocation recovery, retired cleanup, and governed residue cleanup validate
+  the same authority inside their transaction boundaries. Symbolic links and
+  multi-link paths refuse before mutation. A hard-linked bound database remains
+  foreign after its original name is removed. Empty single-link legacy state
+  migrates transactionally; non-empty legacy ownership is unbound and remains
+  untouched. Removing either production or cleanup authority validation made
+  the exact regressions RED; restoration is GREEN.
+- R7.2 scans bounded base64 and base64url start/end phases rather than trusting
+  only the maximal alphabet run. Direct, JSON-escaped, and decoded structured
+  references are detected with the existing encoded/decoded/candidate limits.
+  Prefix, suffix, and longer alphabet-wrapped fixtures were RED before the
+  repair and GREEN afterward in both semantic and residue cleanup paths.
+- R7.3 propagates one absolute operation deadline through Windows inventory
+  prewarm and the portable startup handshake. The backend refuses an expired
+  absolute deadline before creating launch state and never resets it after
+  spawning. The unchanged 50 ms reviewer reproduction is GREEN in about
+  0.18 seconds; the expired-startup fixture is GREEN in about 0.004 seconds.
+  Owned cleanup retains its separate bounded safety budget.
+- Focused and impact gates are GREEN: affected concurrent pressure 162/162;
+  compatibility 105 pass plus one explicit POSIX-on-Windows skip; current Node
+  and Node 22.13 ownership-lock groups 14/14 each; Runner typecheck, targeted
+  ESLint, and diff integrity all exit zero.
+- The uninterrupted final `npm run test:runner-v2` gate exits zero: 1,414 total,
+  1,413 pass, zero fail or cancelled, and one explicit POSIX-host skip in
+  799.836 seconds. Every chained Runner client, policy, UI, cutover, pause,
+  model-usage, live-state, transcript, files, run-stats, steering, and
+  observability check also passed.
+- Post-gate inventory reports zero portable/managed supervisors. Governed
+  cleanup removed zero entries and the same thirteen historical
+  fail-closed/unrelated roots remain; the successful gate created no new B2
+  residue. Node remains `>=22.13.0 <23 || >=24.0.0 <25`. B3, OCI activation,
+  product routing, production command limits, and the 256 KiB retained-output
+  cap remain unchanged.
+- Fix round 7 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

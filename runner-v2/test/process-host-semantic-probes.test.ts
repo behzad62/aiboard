@@ -293,6 +293,10 @@ test("semantic probe polling stops permanently on timeout or cancellation", asyn
 test("a timed-out live duplex probe tears down its channel, process, and owned root before rejection", { timeout: 30_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows semantic timeout fixture requires Windows."); return; }
   const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
+  const startedAt = Date.now();
+  const bounded = createWindowsProcessSemanticProbeSource({ deadlineMs: 50, cleanupDeadlineMs: 15_000 });
+  await assert.rejects(bounded.portableDuplex(), /timed out/i);
+  assert.ok(Date.now() - startedAt < 1_000, "the positive operation deadline must bound prewarming and startup");
   const active = createWindowsProcessSemanticProbeSource({ deadlineMs: 0 });
   await assert.rejects(active.portableDuplex(), /timed out/i);
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -539,6 +543,18 @@ test("semantic cleanup detects executable and embedded strict base64 root refere
     ["base64url-quoted", (root) => ({
       executable: "C:\\safe.exe",
       commandLine: `node --payload=\"${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}\"`,
+    })],
+    ["base64url-alphabet-prefix", (root) => ({
+      executable: "C:\\safe.exe",
+      commandLine: `node --payload=A${Buffer.from(root).toString("base64url")}`,
+    })],
+    ["base64url-alphabet-suffix", (root) => ({
+      executable: "C:\\safe.exe",
+      commandLine: `node --payload=${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}A`,
+    })],
+    ["base64url-alphabet-wrap", (root) => ({
+      executable: "C:\\safe.exe",
+      commandLine: `node --payload=ABCDE${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}XYZAB`,
     })],
     ["standard-base64", (root) => {
       let encoded = "";

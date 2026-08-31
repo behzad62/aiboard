@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, linkSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -62,10 +63,12 @@ test("B2 cleanup preserves embedded references and inaccessible post-root proces
     const birth = new Date(statSync(root).birthtimeMs + 1_000).toISOString();
     const base = { pid: process.pid, birth, parentPid: 0, executableAccessible: true, executable: process.execPath };
     const embedded = Buffer.from(root).toString("base64url");
-    assert.deepEqual(cleanup([entry], { processInventory: () => [{
-      ...base, commandLineAccessible: true, commandLine: `node --payload=${embedded}`,
-    }] }), []);
-    assert.equal(existsSync(root), true);
+    for (const commandLine of [`node --payload=${embedded}`, `node --payload=A${embedded}`, `node --payload=${embedded}A`]) {
+      assert.deepEqual(cleanup([entry], { processInventory: () => [{
+        ...base, commandLineAccessible: true, commandLine,
+      }] }), [], commandLine);
+      assert.equal(existsSync(root), true);
+    }
     assert.deepEqual(cleanup([entry], { processInventory: () => [{
       ...base, commandLineAccessible: false, commandLine: "",
     }] }), []);
@@ -83,12 +86,14 @@ test("an empty exact fence coordination database is removed but corrupt lock evi
   try {
     const database = new DatabaseSync(safe);
     database.exec(`
-      CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL);
+      CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL, authority_id TEXT NOT NULL);
       CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY, holder_pid INTEGER, holder_birth TEXT);
       CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY, acquisition_id TEXT, holder_pid INTEGER, holder_birth TEXT);
       CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
-      INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
+      CREATE TRIGGER owned_fence_authority_immutable BEFORE UPDATE OF authority_id ON owned_fence_protocol BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      CREATE TRIGGER owned_fence_authority_delete_immutable BEFORE DELETE ON owned_fence_protocol BEGIN SELECT RAISE(ABORT, 'immutable'); END;
     `);
+    database.prepare("INSERT INTO owned_fence_protocol(version, retired, authority_id) VALUES (1, 0, ?)").run(coordinationAuthorityId(safe));
     database.close();
     writeFileSync(corrupt, "not coordination evidence");
     const inventory = inventoryB2Residue();
@@ -101,6 +106,56 @@ test("an empty exact fence coordination database is removed but corrupt lock evi
   } finally {
     rmSync(safe, { force: true });
     rmSync(corrupt, { force: true });
+  }
+});
+
+test("B2 coordination cleanup preserves unbound legacy and linked databases", () => {
+  const target = join(tmpdir(), `unrelated-fence-target-${process.pid}.sqlite`);
+  const alias = join(tmpdir(), `aiboard-windows-residue-linked-${process.pid}.fence.lock`);
+  const legacy = join(tmpdir(), `aiboard-windows-residue-legacy-${process.pid}.fence.lock`);
+  const initializeBound = (path: string) => {
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL, authority_id TEXT NOT NULL);
+      CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY, holder_pid INTEGER, holder_birth TEXT);
+      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY, acquisition_id TEXT, holder_pid INTEGER, holder_birth TEXT);
+      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      CREATE TRIGGER owned_fence_authority_immutable BEFORE UPDATE OF authority_id ON owned_fence_protocol BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      CREATE TRIGGER owned_fence_authority_delete_immutable BEFORE DELETE ON owned_fence_protocol BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+    `);
+    database.prepare("INSERT INTO owned_fence_protocol(version, retired, authority_id) VALUES (1, 0, ?)").run(coordinationAuthorityId(path));
+    database.close();
+  };
+  const initializeLegacy = (path: string) => {
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL);
+      CREATE TABLE owned_fence_acquisition(acquisition_id TEXT PRIMARY KEY, holder_pid INTEGER, holder_birth TEXT);
+      CREATE TABLE owned_fence_holder(lock_key TEXT PRIMARY KEY, acquisition_id TEXT, holder_pid INTEGER, holder_birth TEXT);
+      CREATE TRIGGER owned_fence_acquisition_immutable BEFORE UPDATE ON owned_fence_acquisition BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+      INSERT INTO owned_fence_protocol(version, retired) VALUES (1, 0);
+    `);
+    database.close();
+  };
+  try {
+    initializeBound(target);
+    initializeLegacy(legacy);
+    linkSync(target, alias);
+    rmSync(target);
+    assert.equal(statSync(alias).nlink, 1,
+      "stored authority, not a transient link count, must protect an alias after its original name disappears");
+    const candidates = inventoryB2Residue().filter((entry) => entry.path === alias || entry.path === legacy);
+    assert.deepEqual(cleanProvenB2Residue(candidates, {
+      processInventory: () => [accessibleInventoryProcess(process.pid, "2000-01-01T00:00:00.000Z")],
+    }), []);
+    for (const path of [alias, legacy]) {
+      const database = new DatabaseSync(path);
+      assert.equal(database.prepare("SELECT retired FROM owned_fence_protocol").get()!.retired, 0);
+      database.close();
+    }
+    assert.equal(existsSync(alias), true);
+  } finally {
+    for (const path of [alias, target, legacy]) rmSync(path, { force: true });
   }
 });
 
@@ -204,4 +259,9 @@ function accessibleInventoryProcess(pid: number, birth: string) {
     executableAccessible: true, commandLineAccessible: true,
     executable: process.execPath, commandLine: "unrelated test controller",
   };
+}
+
+function coordinationAuthorityId(path: string): string {
+  const normalized = process.platform === "win32" ? join(path).toLowerCase() : join(path);
+  return createHash("sha256").update(`aiboard-owned-fence-path/v1\0${normalized}`).digest("hex");
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
@@ -110,7 +110,8 @@ function exactB2EntryKind(entry: B2ResidueEntry): "root" | "coordination" | unde
     const status = lstatSync(path);
     if (status.isSymbolicLink()) return undefined;
     if (status.isDirectory() && isRegisteredRoot(path)) return "root";
-    if (status.isFile() && basename(path).endsWith(".fence.lock") && DELETION_COORDINATION_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "coordination";
+    if (status.isFile() && !status.isSymbolicLink() && status.nlink === 1 && basename(path).endsWith(".fence.lock") &&
+        DELETION_COORDINATION_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "coordination";
     return undefined;
   } catch { return undefined; }
 }
@@ -118,20 +119,33 @@ function exactB2EntryKind(entry: B2ResidueEntry): "root" | "coordination" | unde
 function isSettledCoordinationDatabase(path: string): boolean {
   let database: DatabaseSync | undefined;
   try {
+    const initialStatus = lstatSync(path);
+    if (!initialStatus.isFile() || initialStatus.isSymbolicLink() || initialStatus.nlink !== 1) return false;
     database = new DatabaseSync(path);
     database.exec("PRAGMA busy_timeout=100; BEGIN IMMEDIATE");
     const names = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => String(row.name)));
     for (const required of ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable"])
       if (!names.has(required)) return false;
+    const columns = database.prepare("PRAGMA table_info(owned_fence_protocol)").all().map((row) => String(row.name));
+    const bound = columns.length === 3 && columns[0] === "version" && columns[1] === "retired" && columns[2] === "authority_id";
+    if (!bound || !names.has("owned_fence_authority_immutable") || !names.has("owned_fence_authority_delete_immutable")) return false;
     const protocol = database.prepare("SELECT * FROM owned_fence_protocol").all() as Array<Record<string, unknown>>;
     if (protocol.length !== 1 || protocol[0]?.version !== 1 || !Number.isSafeInteger(protocol[0].retired) || ![0, 1].includes(Number(protocol[0].retired))) return false;
+    if (protocol[0]?.authority_id !== coordinationAuthorityId(path)) return false;
     if (Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()!.count) !== 0) return false;
     if (Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count) !== 0) return false;
     if (protocol[0].retired === 0) database.prepare("UPDATE owned_fence_protocol SET retired = 1 WHERE retired = 0").run();
+    const finalStatus = lstatSync(path);
+    if (!finalStatus.isFile() || finalStatus.isSymbolicLink() || finalStatus.nlink !== 1) return false;
     database.exec("COMMIT");
     return true;
   } catch { try { database?.exec("ROLLBACK"); } catch {} return false; }
   finally { database?.close(); }
+}
+
+function coordinationAuthorityId(path: string): string {
+  const normalized = process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+  return createHash("sha256").update(`aiboard-owned-fence-path/v1\0${normalized}`).digest("hex");
 }
 
 interface RecordedOwner { pid: number; birth?: string; recordedAt?: string; enumeratedBeforeRoot?: true }
@@ -261,30 +275,43 @@ function referencesRoot(value: string, root: string): boolean {
   try {
     if (value.length > 64 * 1024) return true;
     const normalized = resolve(root).toLowerCase();
+    const jsonEscaped = JSON.stringify(resolve(root)).slice(1, -1).toLowerCase();
     if (value.toLowerCase().includes(normalized)) return true;
     const candidates = [...value.matchAll(/[A-Za-z0-9+\/_-]{40,}={0,2}/g)].map((match) => match[0]);
     if (candidates.length > 256) return true;
     for (const candidate of candidates) {
-      const decoded = decodeStrictBase64(candidate);
-      if (!decoded || decoded.byteLength > 64 * 1024) continue;
-      const text = decoded.toString("utf8");
-      if (text.toLowerCase().includes(normalized)) return true;
-      try { if (decodedPayloadReferencesRoot(JSON.parse(text), normalized)) return true; } catch {}
+      for (const decoded of decodeBase64Phases(candidate)) {
+        if (decoded.byteLength > 64 * 1024) return true;
+        const text = decoded.toString("utf8");
+        const normalizedText = text.toLowerCase();
+        if (normalizedText.includes(normalized) || normalizedText.includes(jsonEscaped)) return true;
+        try { if (decodedPayloadReferencesRoot(JSON.parse(text), normalized)) return true; } catch {}
+      }
     }
     return false;
   } catch { return true; }
 }
 
-function decodeStrictBase64(value: string): Buffer | undefined {
+function decodeBase64Phases(value: string): readonly Buffer[] {
   const unpadded = value.replace(/=+$/, "");
-  if (unpadded.length < 40 || unpadded.length % 4 === 1) return undefined;
-  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) {
-    const decoded = Buffer.from(unpadded, "base64url");
-    return decoded.toString("base64url") === unpadded ? decoded : undefined;
+  if (unpadded.length < 40) return [];
+  const encodings: BufferEncoding[] = [];
+  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) encodings.push("base64url");
+  if (/^[A-Za-z0-9+/]+$/.test(unpadded)) encodings.push("base64");
+  const decoded: Buffer[] = [];
+  const seen = new Set<string>();
+  for (const encoding of encodings) {
+    for (let offset = 0; offset < 4; offset += 1) {
+      for (let trim = 0; trim < 4; trim += 1) {
+        const phase = unpadded.slice(offset, trim === 0 ? undefined : -trim);
+        if (phase.length < 40 || phase.length % 4 === 1) continue;
+        const bytes = Buffer.from(phase, encoding);
+        const key = bytes.toString("base64");
+        if (!seen.has(key)) { seen.add(key); decoded.push(bytes); }
+      }
+    }
   }
-  if (!/^[A-Za-z0-9+/]+$/.test(unpadded)) return undefined;
-  const decoded = Buffer.from(unpadded, "base64");
-  return decoded.toString("base64").replace(/=+$/, "") === unpadded ? decoded : undefined;
+  return decoded;
 }
 
 function decodedPayloadReferencesRoot(value: unknown, normalizedRoot: string, depth = 0): boolean {

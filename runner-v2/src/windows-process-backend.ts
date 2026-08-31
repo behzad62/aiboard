@@ -16,6 +16,8 @@ export interface WindowsProcessBackendOptions {
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
+  /** Internal absolute startup deadline shared by semantic probes and tests. */
+  readonly startupDeadlineAt?: number;
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "reconcile" | "release") => void | Promise<void>;
   /** Test seam forwarded to the portable owner for post-retirement cleanup faults. */
   readonly removeRetiredAuthority?: (directory: string) => void;
@@ -43,6 +45,7 @@ export class WindowsProcessBackend extends NativeOwnedProcessBackend {
       operations: options.operations,
       replayCapacityChunks: options.replayCapacityChunks,
       replayCapacityBytes: options.replayCapacityBytes,
+      startupDeadlineAt: options.startupDeadlineAt,
       beforeFenceEffect: options.beforeFenceEffect,
       removeRetiredAuthority: options.removeRetiredAuthority,
       platform: "windows",

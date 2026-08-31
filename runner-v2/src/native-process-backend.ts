@@ -30,6 +30,8 @@ export interface NativeOwnedProcessBackendOptions {
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
+  /** Optional absolute startup deadline shared with semantic probes and tests. */
+  readonly startupDeadlineAt?: number;
   readonly beforeFenceEffect?: (kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "release") => void | Promise<void>;
   /** Test seam for a bounded post-retirement authority-directory removal fault. */
   readonly removeRetiredAuthority?: (directory: string) => void;
@@ -93,11 +95,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private readonly stateDirectory: string;
   private readonly pollIntervalMs: number;
   private readonly operations: NativeProcessOperations;
+  private readonly startupDeadlineAt: number | undefined;
   private readonly outputOffsets = new Map<string, { stdout: number; stderr: number }>();
   constructor(private readonly options: NativeOwnedProcessBackendOptions) {
     this.stateDirectory = resolve(options.stateDirectory ?? join(tmpdir(), "aiboard-portable-processes"));
     this.pollIntervalMs = options.pollIntervalMs ?? 25;
     this.operations = options.operations ?? DEFAULT_OPERATIONS;
+    this.startupDeadlineAt = options.startupDeadlineAt;
+    if (this.startupDeadlineAt !== undefined && (!Number.isSafeInteger(this.startupDeadlineAt) || this.startupDeadlineAt < 1))
+      throw new Error("Portable process absolute startup deadline must be a positive integer.");
     mkdirSync(this.stateDirectory, { recursive: true });
   }
 
@@ -113,6 +119,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
     this.assertPlatform();
+    const startupDeadline = Math.min(
+      Date.now() + (this.options.platform === "windows" ? WINDOWS_PORTABLE_STARTUP_DEADLINE_MS : PORTABLE_STARTUP_DEADLINE_MS),
+      this.startupDeadlineAt ?? Number.MAX_SAFE_INTEGER,
+    );
+    if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
     const nonce = randomBytes(24).toString("hex");
     const directory = join(this.stateDirectory, `owned-${randomUUID()}`);
     mkdirSync(directory, { recursive: false, mode: 0o700 });
@@ -133,6 +144,10 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
       fence: { ...request.fence },
     })).toString("base64url");
+    if (Date.now() >= startupDeadline) {
+      rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+      throw new Error("Portable process startup deadline is exhausted.");
+    }
     const child = spawn(process.execPath, [supervisor, encoded], {
       detached: true,
       windowsHide: true,
@@ -140,11 +155,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     });
     if (!child.pid) throw new Error("Portable process supervisor has no PID.");
     child.unref();
-    const startupDeadline = Date.now() + (this.options.platform === "windows"
-      ? WINDOWS_PORTABLE_STARTUP_DEADLINE_MS
-      : PORTABLE_STARTUP_DEADLINE_MS);
     let identity: Identity | undefined;
     try {
+      if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
       const supervisorBirth = await this.waitForBirth(
         child.pid,
         Math.min(

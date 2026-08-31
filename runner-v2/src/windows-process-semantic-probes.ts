@@ -71,7 +71,7 @@ function remainingProbeDeadlineMs(deadline: number): number {
 async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
-  return await withPortableProbe("duplex", cleanupDeadlineMs, async ({ backend, workspace, own }) => {
+  return await withPortableProbe("duplex", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const launch = parseProcessLaunchResult(await backend.launch(request(
       workspace,
       process.execPath,
@@ -110,7 +110,7 @@ async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number
 async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: number): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
-  return await withPortableProbe("batch", cleanupDeadlineMs, async ({ backend, workspace, own }) => {
+  return await withPortableProbe("batch", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const script = join(workspace, "capture-argv.mjs");
     const shim = join(workspace, "capture-argv.cmd");
     writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n", { mode: 0o600 });
@@ -143,7 +143,7 @@ async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: numb
 async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number): Promise<"partial" | false> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
-  return await withPortableProbe<"partial" | false>("tree", cleanupDeadlineMs, async ({ backend, workspace, own }) => {
+  return await withPortableProbe<"partial" | false>("tree", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const child = "setTimeout(()=>process.exit(0),4000)";
     const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),4000)`;
     const launch = parseProcessLaunchResult(await backend.launch(request(workspace, process.execPath, ["-e", parent])));
@@ -171,7 +171,7 @@ async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number
   });
 }
 
-async function withPortableProbe<T>(name: string, cleanupDeadlineMs: number, action: (context: {
+async function withPortableProbe<T>(name: string, operationDeadline: number, cleanupDeadlineMs: number, action: (context: {
   backend: WindowsProcessBackend;
   workspace: string;
   own(binding: ProcessBackendBinding): ProcessBackendBinding;
@@ -180,7 +180,14 @@ async function withPortableProbe<T>(name: string, cleanupDeadlineMs: number, act
   // root exists. Protected provider helpers created by this query then have an
   // immutable birth strictly before the root rather than becoming an
   // unresolvable post-root process during cleanup.
-  probeGlobalProcessInventory(cleanupDeadlineMs);
+  try { probeGlobalProcessInventory(remainingProbeDeadlineMs(operationDeadline)); }
+  catch (error) {
+    if (Date.now() >= operationDeadline || (error as NodeJS.ErrnoException).code === "ETIMEDOUT" ||
+        (error as NodeJS.ErrnoException & { signal?: unknown }).signal)
+      throw new Error("Windows semantic probe timed out.", { cause: error });
+    throw error;
+  }
+  remainingProbeDeadlineMs(operationDeadline);
   const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${name}-`));
   const stateDirectory = join(root, "state");
   const workspace = join(root, "workspace");
@@ -190,6 +197,7 @@ async function withPortableProbe<T>(name: string, cleanupDeadlineMs: number, act
   // is trusted by product construction only after exact argv output matches.
   const backend = new WindowsProcessBackend({
     stateDirectory,
+    startupDeadlineAt: operationDeadline,
     semanticFacts: {
       portableDuplex: "verified",
       windowsBatchArgv: "verified",
@@ -521,32 +529,44 @@ function probeCommandReferencesRoot(commandLine: string, root: string): boolean 
 function probeTextReferencesRoot(value: string, root: string): boolean {
   if (value.length > MAX_ENCODED_REFERENCE_CHARS) throw new Error("Probe process reference evidence exceeds its bound.");
   const normalized = resolve(root).toLowerCase();
+  const jsonEscaped = JSON.stringify(resolve(root)).slice(1, -1).toLowerCase();
   if (value.toLowerCase().includes(normalized)) return true;
   const candidates = [...value.matchAll(/[A-Za-z0-9+\/_-]{40,}={0,2}/g)].map((match) => match[0]);
   if (candidates.length > MAX_ENCODED_REFERENCE_CANDIDATES) throw new Error("Probe process encoded-reference count exceeds its bound.");
   for (const encoded of candidates) {
     if (encoded.length > MAX_ENCODED_REFERENCE_CHARS) throw new Error("Probe process encoded reference exceeds its bound.");
-    const decodedBytes = decodeStrictProbeBase64(encoded);
-    if (!decodedBytes) continue;
-    if (decodedBytes.byteLength > MAX_DECODED_REFERENCE_BYTES) throw new Error("Probe process decoded reference exceeds its bound.");
-    const decoded = decodedBytes.toString("utf8");
-    if (decoded.toLowerCase().includes(normalized)) return true;
-    try { if (decodedProbePayloadReferencesRoot(JSON.parse(decoded), normalized)) return true; }
-    catch {}
+    for (const decodedBytes of decodeProbeBase64Phases(encoded)) {
+      if (decodedBytes.byteLength > MAX_DECODED_REFERENCE_BYTES) throw new Error("Probe process decoded reference exceeds its bound.");
+      const decoded = decodedBytes.toString("utf8");
+      const normalizedDecoded = decoded.toLowerCase();
+      if (normalizedDecoded.includes(normalized) || normalizedDecoded.includes(jsonEscaped)) return true;
+      try { if (decodedProbePayloadReferencesRoot(JSON.parse(decoded), normalized)) return true; }
+      catch {}
+    }
   }
   return false;
 }
 
-function decodeStrictProbeBase64(encoded: string): Buffer | undefined {
+function decodeProbeBase64Phases(encoded: string): readonly Buffer[] {
   const unpadded = encoded.replace(/=+$/, "");
-  if (unpadded.length < 40 || unpadded.length % 4 === 1) return undefined;
-  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) {
-    const decoded = Buffer.from(unpadded, "base64url");
-    return decoded.toString("base64url") === unpadded ? decoded : undefined;
+  if (unpadded.length < 40) return [];
+  const encodings: BufferEncoding[] = [];
+  if (/^[A-Za-z0-9_-]+$/.test(unpadded)) encodings.push("base64url");
+  if (/^[A-Za-z0-9+/]+$/.test(unpadded)) encodings.push("base64");
+  const decoded: Buffer[] = [];
+  const seen = new Set<string>();
+  for (const encoding of encodings) {
+    for (let offset = 0; offset < 4; offset += 1) {
+      for (let trim = 0; trim < 4; trim += 1) {
+        const phase = unpadded.slice(offset, trim === 0 ? undefined : -trim);
+        if (phase.length < 40 || phase.length % 4 === 1) continue;
+        const bytes = Buffer.from(phase, encoding);
+        const key = bytes.toString("base64");
+        if (!seen.has(key)) { seen.add(key); decoded.push(bytes); }
+      }
+    }
   }
-  if (!/^[A-Za-z0-9+/]+$/.test(unpadded)) return undefined;
-  const decoded = Buffer.from(unpadded, "base64");
-  return decoded.toString("base64").replace(/=+$/, "") === unpadded ? decoded : undefined;
+  return decoded;
 }
 
 function decodedProbePayloadReferencesRoot(value: unknown, normalizedRoot: string, depth = 0): boolean {

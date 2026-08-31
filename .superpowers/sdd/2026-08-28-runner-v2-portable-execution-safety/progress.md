@@ -453,3 +453,24 @@ overlap is expected.
   historical fail-closed/unrelated roots remain preserved. Node policy,
   production command/output limits, B3, OCI, and family routing are unchanged.
   B2 and B3 remain locked for the required independent review.
+- Task 8.0B2 fix-round-6 independent re-review: CHANGES REQUIRED with zero
+  Critical and three Important findings. A hard-link alias can retire another
+  process's coordination database after its original name disappears; maximal
+  base64 runs miss alphabet-prefixed/suffixed encoded roots; and semantic probe
+  prewarming/startup is outside the advertised operation deadline. Fix round 7
+  is authorized only for these findings under
+  `task-8.0b2-fix-round-7-brief.md`. B2 and B3 remain locked.
+- Task 8.0B2 fix round 7 controller verification is GREEN pending fresh
+  independent review. Coordination databases now carry immutable exact-path
+  authority, non-empty legacy ownership remains fail-closed, both cleanup
+  scanners use bounded base64/base64url phase detection, and semantic probes
+  share one absolute prewarm/startup deadline. Physical RED/revert/GREEN
+  evidence covers every new guard. Affected pressure is 162/162; compatibility
+  is 105 pass plus one expected Windows-host skip; Node 24 and Node 22.13 lock
+  groups are 14/14 each; type/lint/diff are GREEN. The uninterrupted package
+  gate exits zero with 1,414 total / 1,413 pass / zero fail or cancelled / one
+  expected skip and every chained product contract check green. Post-gate live
+  helpers are zero and the same thirteen uncertain/unrelated roots remain with
+  no deletion authority. Node policy, B3, OCI activation, product routing, and
+  production command/output limits are unchanged. B2 and B3 remain locked for
+  independent review.
