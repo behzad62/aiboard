@@ -413,8 +413,11 @@ test("Windows portable launch rejects a birth result that arrives after its abso
   const stateDirectory = join(root, "state");
   const waiter = new Int32Array(new SharedArrayBuffer(4));
   let inspections = 0;
+  const observedPids = new Set<number>();
+  const cleanupPids = new Set<number>();
   const operations: NativeProcessOperations = {
     inspectProcessBirth: (pid) => {
+      observedPids.add(pid);
       if (inspections++ === 0) Atomics.wait(waiter, 0, 0, 150);
       return processIsAlive(pid) ? { state: "present", fingerprint: "late-supervisor-birth" } : { state: "absent" };
     },
@@ -438,17 +441,26 @@ test("Windows portable launch rejects a birth result that arrives after its abso
     const messages = [String(rejection), ...(rejection instanceof AggregateError ? rejection.errors.map(String) : [])].join("\n");
     assert.match(messages, /startup deadline is exhausted/i,
       "the absolute deadline, not an incidental supervisor outcome, must reject the late birth result");
+    assert.equal(unexpected, undefined, "a late exact birth is cleanup authority, never a successful launch binding");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    for (const pid of observedPids) cleanupPids.add(pid);
+    for (const entry of readdirSync(stateDirectory)) {
+      let state: {
+        supervisorPid?: number;
+        knownProcesses?: Array<{ pid: number }>;
+      };
+      try { state = JSON.parse(readFileSync(join(stateDirectory, entry, "state.json"), "utf8")); }
+      catch { continue; }
+      if (Number.isSafeInteger(state.supervisorPid)) cleanupPids.add(state.supervisorPid!);
+      for (const process of state.knownProcesses ?? []) if (Number.isSafeInteger(process.pid)) cleanupPids.add(process.pid);
+    }
+    assert.ok(cleanupPids.size >= 2, "the fixture must observe both supervisor and target cleanup identities");
+    assert.ok([...cleanupPids].every((pid) => !processIsAlive(pid)), "deadline rejection must leave no recorded owned process live");
+    assert.deepEqual(readdirSync(stateDirectory), [], "authenticated deadline cleanup must remove its owned state root");
   } finally {
     if (unexpected) await cleanupWindowsProcessFixture(backend, unexpected, fence).catch(() => undefined);
-    if (existsSync(stateDirectory)) {
-      for (const entry of readdirSync(stateDirectory)) {
-        try {
-          const state = JSON.parse(readFileSync(join(stateDirectory, entry, "state.json"), "utf8")) as { supervisorPid?: number };
-          if (Number.isSafeInteger(state.supervisorPid) && processIsAlive(state.supervisorPid!))
-            execFileSync("taskkill.exe", ["/PID", String(state.supervisorPid), "/T", "/F"], { stdio: "ignore", timeout: 5_000 });
-        } catch {}
-      }
-    }
+    for (const pid of new Set([...observedPids, ...cleanupPids])) if (processIsAlive(pid))
+      try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", timeout: 5_000 }); } catch {}
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });

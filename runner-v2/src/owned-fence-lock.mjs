@@ -136,6 +136,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
       }
       assertRecoverableProtocol(database, authorityId);
       options.assertRevoked();
+      assertCoordinationPath(path);
       const triggers = database.prepare("SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'trigger'").all();
       for (const trigger of triggers) {
         if (["owned_fence_acquisition_immutable", AUTHORITY_UPDATE_TRIGGER, AUTHORITY_DELETE_TRIGGER].includes(String(trigger.name))) continue;
@@ -153,6 +154,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
       if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
           protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
         throw new OwnedFenceLockUnavailableError("Owned fence revocation did not retire exact coordination state.");
+      assertCoordinationPath(path);
       database.exec("COMMIT");
       committed = true;
     } catch (error) {
@@ -196,6 +198,7 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
         Atomics.wait(waiter, 0, 0, retryDelayMs);
       }
     }
+    assertCoordinationPath(path);
     const objects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
     for (const required of ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable", AUTHORITY_UPDATE_TRIGGER, AUTHORITY_DELETE_TRIGGER])
       if (!objects.has(required)) throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup metadata is incomplete or invalid.");
@@ -206,11 +209,13 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
     if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
         protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
       throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup authority is active, foreign, or incomplete.");
+    assertCoordinationPath(path);
     database.exec("COMMIT");
   } catch (error) {
     rollbackQuietly(database);
     throw normalizeUnavailable(error);
   } finally { database?.close(); }
+  assertCoordinationPath(path);
   cleanup();
 }
 
@@ -559,7 +564,9 @@ function removeRetiredProtocol(path) {
   const deadline = Date.now() + DEFAULT_DEADLINE_MS;
   for (;;) {
     try {
+      assertCoordinationPath(path, true);
       for (const candidate of [`${path}-journal`, `${path}-wal`, `${path}-shm`, path]) {
+        if (candidate === path) assertCoordinationPath(path, true);
         try { unlinkSync(candidate); }
         catch (error) { if (error?.code !== "ENOENT") throw error; }
       }
@@ -577,6 +584,7 @@ function removeRetiredProtocol(path) {
 function retireProtocol(path, options) {
   try {
     if (typeof options.retireAuthority === "function") {
+      assertCoordinationPath(path);
       options.retireAuthority();
       return;
     }

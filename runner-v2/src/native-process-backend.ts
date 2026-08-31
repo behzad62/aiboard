@@ -74,6 +74,9 @@ interface Identity {
   readonly supervisorBirth: string;
   readonly fence?: ProcessEffectFence;
 }
+type ProcessBirthDiscovery =
+  | { readonly state: "present"; readonly fingerprint: string; readonly deadlineExpired: boolean }
+  | { readonly state: "absent" | "unknown"; readonly deadlineExpired: boolean };
 interface SupervisorState {
   readonly protocol: "aiboard-portable-process/v1";
   readonly nonce: string;
@@ -159,19 +162,26 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     try {
       if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
       const supervisorBirth = await this.waitForBirth(child.pid, startupDeadline);
+      if (supervisorBirth.state === "present") {
+        identity = {
+          version: 1,
+          backendId: this.options.backendId,
+          nonce,
+          directory,
+          supervisorPid: child.pid,
+          supervisorBirth: supervisorBirth.fingerprint,
+          fence: Object.freeze({ ...request.fence }),
+        };
+        // A late exact birth is not launch success authority. It is retained
+        // only so the existing fenced failure-cleanup path can stop the exact
+        // supervisor and its descendants before the deadline error escapes.
+        writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
+          nonce, holderPid: child.pid, holderBirth: supervisorBirth.fingerprint,
+        }), { mode: 0o600 });
+      }
       if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
-      if (!supervisorBirth) throw new Error("Portable supervisor birth identity is unavailable.");
-      identity = {
-        version: 1,
-        backendId: this.options.backendId,
-        nonce,
-        directory,
-        supervisorPid: child.pid,
-        supervisorBirth,
-        fence: Object.freeze({ ...request.fence }),
-      };
-      writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid: child.pid, holderBirth: supervisorBirth }), { mode: 0o600 });
-      if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
+      if (supervisorBirth.deadlineExpired) throw new Error("Portable supervisor birth discovery deadline is exhausted.");
+      if (!identity) throw new Error("Portable supervisor birth identity is unavailable.");
       const state = await this.waitForState(directory, nonce, child.pid, startupDeadline);
       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
@@ -613,11 +623,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     throw new Error("Portable process startup deadline is exhausted.");
   }
-  private async waitForBirth(pid: number, deadline: number): Promise<string | undefined> {
+  private async waitForBirth(pid: number, startupDeadline: number): Promise<ProcessBirthDiscovery> {
+    const discoveryLimitMs = this.options.platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : 1_000;
+    const deadline = Math.min(startupDeadline, Date.now() + discoveryLimitMs);
     const maximumAttempts = this.options.platform === "windows" ? WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS : Number.MAX_SAFE_INTEGER;
     let attempts = 0;
     let attemptDeadlineMs = Math.min(
-      this.options.platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : 1_000,
+      discoveryLimitMs,
       PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
       Math.max(1, deadline - Date.now()),
     );
@@ -625,14 +637,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       attemptDeadlineMs = Math.max(1, Math.min(attemptDeadlineMs, deadline - Date.now()));
       const inspection = this.operations.inspectProcessBirth(pid, this.options.platform, attemptDeadlineMs);
       attempts += 1;
-      if (Date.now() >= deadline) return undefined;
-      if (inspection.state === "present") return inspection.fingerprint;
-      if (inspection.state === "absent") return undefined;
-      attemptDeadlineMs = Math.min(WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS, attemptDeadlineMs * 2);
+      const deadlineExpired = Date.now() >= deadline;
+      if (inspection.state === "present") return { ...inspection, deadlineExpired };
+      if (inspection.state === "absent") return { state: "absent", deadlineExpired };
+      if (deadlineExpired) return { state: "unknown", deadlineExpired: true };
+      attemptDeadlineMs = Math.min(discoveryLimitMs, attemptDeadlineMs * 2);
       if (attempts >= maximumAttempts) break;
       await delay(this.pollIntervalMs);
     }
-    return undefined;
+    return { state: "unknown", deadlineExpired: Date.now() >= deadline };
   }
 }
 

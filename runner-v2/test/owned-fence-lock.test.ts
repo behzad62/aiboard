@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { inspectGenericPosixProcessBirth, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+import { inspectGenericPosixProcessBirth, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
 
@@ -354,6 +354,37 @@ test("a failed post-commit authority removal is recoverable only through the exa
     assert.equal(existsSync(root), false);
     for (const suffix of ["", "-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
   } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("revoked-lock recovery rejects a hard link added inside its transaction", { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-revoked-alias-"));
+  const lockPath = join(root, ".fence.lock");
+  const aliasPath = join(root, "late-alias.lock");
+  const holder = startHolder(lockPath, undefined, 2_000, 60_000);
+  try {
+    assert.equal((await nextMessage(holder)).state, "acquired");
+    holder.kill("SIGKILL");
+    await exited(holder);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 2) linkSync(lockPath, aliasPath);
+      },
+    }), /alias|linked|coordination path/i);
+    assert.equal(assertions, 2);
+    assert.equal(existsSync(lockPath), true, "failed recovery must preserve the requested coordination path");
+    assert.equal(existsSync(aliasPath), true, "failed recovery must not unlink either hard-link name");
+    const database = new DatabaseSync(lockPath, { readOnly: true });
+    try {
+      const protocol = database.prepare("SELECT retired FROM owned_fence_protocol").get() as { retired: number };
+      assert.equal(protocol.retired, 0, "the hard-link race must roll back retirement");
+      assert.ok(readDurableHolder(lockPath), "the active holder evidence must remain intact");
+    } finally { database.close(); }
+  } finally {
+    await stop(holder);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });

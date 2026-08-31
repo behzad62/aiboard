@@ -1149,3 +1149,56 @@ approve B2 or begin B3.
 - Fix round 8 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 9 implementation evidence
+
+- The fresh round-8 review reported zero Critical, two Important, and one Minor
+  finding: revoked recovery could commit and remove a coordination name after
+  an in-transaction hard-link injection; a late exact birth was discarded
+  before it could authorize failure cleanup; and generic POSIX birth discovery
+  had inherited the full startup window instead of its prior one-second cap.
+  Each exact reproduction was physically RED before repair: the recovery guard
+  failed with `Missing expected rejection`, the deadline fixture reported a
+  live recorded owned process after rejection, and POSIX discovery consumed
+  about 4,003 ms instead of the required sub-1,750 ms envelope.
+- R9.1 revalidates the exact regular, non-symbolic, single-link coordination
+  path after the in-transaction revocation assertion, before recovery commit,
+  inside retired-cleanup transactions, before their commit and callback, and
+  immediately before default physical protocol removal. The injected hard-link
+  guard is GREEN in about 0.37 seconds: recovery rejects, retirement rolls back,
+  the active holder remains, and neither path name is removed.
+- R9.2 distinguishes exact birth discovery from timely birth discovery. A late
+  exact fingerprint creates only the minimum internal identity and holder proof
+  needed by the existing fenced failure-cleanup path; it is rejected before
+  state readiness and can never be returned as launch success. The strengthened
+  Windows regression is GREEN in about 2.2 seconds and proves, before emergency
+  fixture cleanup, that no binding was returned, every recorded supervisor and
+  target PID is absent, and the owned state directory is empty.
+- R9.3 derives a platform-specific absolute discovery deadline bounded by the
+  earlier overall startup deadline. POSIX keeps a one-second total discovery
+  envelope; Windows keeps the existing adaptive 15-second maximum and
+  three-attempt cap. The POSIX guard is GREEN in about 1.005 seconds. No build
+  task, production command, model, retained-output, or overall startup policy
+  was changed.
+- The complete affected group is GREEN: 139 total, 138 pass, zero fail, and one
+  explicit POSIX-live-fixture skip on Windows in 116.101 seconds. Managed
+  process, backend-contract, and subprocess-runtime compatibility is GREEN
+  96/96 in 20.019 seconds. The current Node ownership-lock group is GREEN 16/16
+  within the affected run, and the minimum Node 22.13 group is independently
+  GREEN 16/16 in 5.273 seconds.
+- The required uninterrupted `npm run test:runner-v2` gate exits zero: 1,418
+  total, 1,417 pass, zero fail or cancelled, and one explicit POSIX-host skip in
+  820.803 seconds. Every chained Runner client, native policy, policy UI,
+  cutover, pause-gate, model-usage, live-state, transcript, native-files,
+  run-stats, steering, and observability contract also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint over all five changed
+  source/test files, `git diff --check`, changed-file scope, and Node-range
+  audits are GREEN. Node remains `>=22.13.0 <23 || >=24.0.0 <25`; it is not
+  pinned to an exact patch. Post-gate process inventory reports zero live
+  portable, managed, Job-host, or TERM-ignore helpers. Governed cleanup removed
+  zero entries; the same thirteen historical fail-closed/unrelated roots remain
+  and the successful gate created no new B2 residue. No uncertain evidence was
+  deleted.
+- Fix round 9 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

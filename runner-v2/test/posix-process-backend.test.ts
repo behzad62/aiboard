@@ -28,6 +28,29 @@ test("POSIX backend attests session ownership without claiming host-crash cleanu
   assert.equal(probe.capabilities.crash_cleanup, "unavailable");
 });
 
+test("generic POSIX birth discovery keeps its one-second absolute envelope", { timeout: 5_000 }, async () => {
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  let attempts = 0;
+  const operations: NativeProcessOperations = {
+    inspectProcessBirth: (_pid, _platform, attemptDeadlineMs = 1_000) => {
+      attempts += 1;
+      Atomics.wait(waiter, 0, 0, Math.min(600, attemptDeadlineMs));
+      return { state: "unknown" };
+    },
+    listPosixGroup: () => [],
+    signal: () => undefined,
+  };
+  const backend = createPosixProcessBackend({ operations, pollIntervalMs: 10 });
+  const internal = backend as unknown as {
+    waitForBirth(pid: number, startupDeadline: number): Promise<unknown>;
+  };
+  const started = Date.now();
+  await internal.waitForBirth(2_147_483_646, started + 4_000);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 900 && elapsed < 1_750, `POSIX birth discovery exceeded its one-second envelope: ${elapsed}ms`);
+  assert.ok(attempts >= 2 && attempts <= 3, `unexpected POSIX birth attempt count: ${attempts}`);
+});
+
 test("POSIX native session fixture owns descendants after launcher exit", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX session/process-group behavior requires a POSIX host.");

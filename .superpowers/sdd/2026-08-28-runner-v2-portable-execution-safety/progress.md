@@ -498,3 +498,29 @@ overlap is expected.
   deletion authority. Node policy, B3, OCI activation, product routing, and
   production command/output limits are unchanged. B2 and B3 remain locked for
   the required independent review.
+- Task 8.0B2 fix-round-8 independent re-review: CHANGES REQUIRED with zero
+  Critical, two Important, and one Minor finding. Revoked-lock recovery can
+  still commit and physically remove a path after an in-transaction hard-link
+  injection; a late exact birth result is discarded before failure-cleanup
+  identity, leaving the detached supervisor and target live; and generic POSIX
+  birth discovery unintentionally inherited the full startup window instead of
+  its prior one-second cap. Fix round 9 is authorized only for these findings
+  under `task-8.0b2-fix-round-9-brief.md`. B2 and B3 remain locked.
+- Task 8.0B2 fix round 9 implementation and controller verification are GREEN
+  pending fresh independent review. Recovery and retired-cleanup paths now
+  revalidate exact single-link coordination authority after revocation, before
+  commit, before callbacks, and at physical removal. A late exact process birth
+  is retained only as fenced failure-cleanup authority and can never become a
+  successful launch binding. Generic POSIX birth discovery again has its own
+  one-second absolute envelope, while Windows keeps its existing adaptive
+  15-second/three-attempt envelope inside the caller's earlier startup deadline.
+  Physical RED/revert/GREEN evidence covers all three guards. Current evidence:
+  affected portable/OS pressure 138 pass plus one expected POSIX-host skip,
+  compatibility 96/96, current Node and Node 22.13 lock groups 16/16 each,
+  type/lint/diff/policy GREEN, and one uninterrupted package gate with 1,418
+  total / 1,417 pass / zero fail or cancelled / one expected skip in 820.803
+  seconds; every chained product contract is green. Post-gate helpers are zero
+  and the same thirteen uncertain/unrelated roots remain with no deletion
+  authority. Node policy, B3, OCI activation, product routing, and production
+  task/command/model/output limits are unchanged. B2 and B3 remain locked for
+  the required independent review.
