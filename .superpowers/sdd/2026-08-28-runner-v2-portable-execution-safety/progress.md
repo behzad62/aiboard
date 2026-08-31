@@ -638,3 +638,13 @@ overlap is expected.
   788.256 seconds with every chained product contract green. Post-gate helper
   inventory is zero and the same twenty uncertain/historical roots remain; none
   was deleted. B2 and B3 remain locked for the required independent review.
+- Task 8.0B2 fix-round-13 independent review is APPROVED: zero Critical, zero
+  Important, and zero Minor findings. The reviewer independently reproduced the
+  forged-schema rejection with zero effects and byte-identical state; ran both
+  Node-line lock groups 33/33, cleanup/retry 4/4, portable channel 36/36, and
+  durable-tombstone recovery 1/1; and confirmed type/lint/diff, Node policy,
+  scope, helper, and unchanged twenty-root residue gates. The recovery-only
+  holder-delete exception is confined and removed before recovery effects. B2
+  is unlocked and B3 is eligible but has not started.
+
+**PHASE VERIFIED 100% COMPLETE — NEXT PHASE MAY BEGIN**

@@ -1527,3 +1527,31 @@ approve B2 or begin B3.
 - Fix round 13 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 13 independent review and B2 exit gate
+
+- Independent specification and code-quality review of exact range
+  `9bdbca00600be9e9d872fe7e9b4924a22fb3b63d..96386f9d400b7e6e8ed4375ff40a8453963aac71`
+  is APPROVED with zero Critical, zero Important, and zero Minor findings. B2
+  unlock is explicitly approved.
+- The reviewer independently ran current and Node 22.13 ownership-lock groups
+  33/33 each, the exact cleanup/retry group 4/4, complete portable channel
+  36/36, and exact durable-tombstone recovery 1/1. The prior forged-schema
+  exploit was reproduced and rejected read-only with zero external effects and
+  byte-identical database state.
+- Review confirmed complete canonical current/legacy/migrated authentication,
+  rejection of forged or extra ordinary-acquisition objects, confinement and
+  pre-effect removal of the revoked-recovery holder-delete exception, and
+  fail-closed exact publication cleanup. Generic atomic writes retain one
+  second; only durable `state.json` selects the 15-second adaptive ceiling.
+- Reviewer typecheck, targeted lint, `git diff --check`, exact Node-range, scope,
+  and hygiene audits are GREEN. There is no B3, OCI, routing, required-Job,
+  production command/model/output-limit, or exact Node patch-pin drift. Live
+  relevant helper inventory is zero and the B2 root inventory remains twenty
+  before/after with no deletion. A separate POSIX/macOS native host was not
+  available for an additional round-13 run; the changed Windows behavior and
+  portable contracts were exercised and accepted on the current Windows host.
+- Controller and independent evidence jointly satisfy every B2 exit criterion.
+  B3 is eligible but has not started.
+
+**PHASE VERIFIED 100% COMPLETE — NEXT PHASE MAY BEGIN**
