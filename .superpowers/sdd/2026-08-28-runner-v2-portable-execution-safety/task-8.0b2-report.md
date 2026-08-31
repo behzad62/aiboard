@@ -359,3 +359,344 @@ Job observation ECONNRESET. The failed recovery root was preserved for
 inspection, shown to have no referencing process, then removed by exact
 validated path. Final audit after the successful broad run:
 `owned_processes=0`, `recent_aiboard_roots=0`.
+
+## Governed fix round 2 — six residual Important findings
+
+Entry authority was commit `5da8d273`, `task-8.0b2-fix-review-2.md`, and
+`task-8.0b2-fix-round-2-brief.md`. This is implementation evidence; it does not
+approve B2 or begin B3.
+
+### R2.1 genuine Job producer backpressure
+
+- RED: real stdout and stderr fixtures exceeded the retained window while an
+  acknowledgement sink was held. The Job supervisor now caps each producer
+  read and pauses both streams at the configured aggregate chunk and byte
+  bounds, resuming only after the identical sink acknowledgement.
+- GREEN: held stdout/stderr fixtures proved both limits, control-event
+  independence, exact bytes, terminal and release. Coalesced reads accept only
+  an exact later contiguous retained boundary and atomically settle every same-
+  stream chunk through it.
+- Sink/ack failures remain observable channel failures, preserve retained
+  bytes, report durable unknown, and block release. Failed signal with retained
+  output can recover and close after authenticated acknowledgement.
+- Removing chunk/byte pause, contiguous coalesced acknowledgement, sink/ack
+  propagation, or signal recovery made exact guards RED; each revert was GREEN.
+
+### R2.2 active independent facts and bounded probes
+
+- Portable duplex, Windows batch argv boundaries, exact birth-tagged tree, and
+  active Job create/close are independently executed, cached, fault-isolated,
+  deadline-aware, cleaned, and consumed. Timeout cancels polling, consumes late
+  settlements, detaches channels, terminates owned processes, and removes only
+  exact probe roots.
+- Product construction registers Job only for verified Job containment and
+  portable only for verified duplex. Missing facts default unavailable: tree is
+  not hardcoded partial, batch is not implicitly verified, and service presence
+  cannot select Job. A private probe-only bypass lets the harmless `.cmd`
+  fixture measure argv, but the fact is trusted only after exact output matches.
+- Probe environments contain only the minimal Windows launch allowlist plus
+  explicit probe variables. The credential guard was RED before the allowlist
+  and GREEN after; a live sentinel run sampled 32 supervisor command lines and
+  decoded configs with zero exposure.
+- Reintroducing ambient `process.env`, implicit verified batch, hardcoded tree,
+  service-presence selection, or non-cancelling timeout behavior made the
+  respective guards RED; all were reverted GREEN.
+
+### R2.3/R2.4 lowest-boundary fences and release commits
+
+- Every portable and Job attach/read/write/close/signal/output-ack/reconcile/
+  release effect carries owner/token to the lowest boundary. The shared
+  external lock serializes claims/effects; callbacks consume the freshly
+  reloaded record. Channel/input/output state and final release/deletion remain
+  inside the same final fenced commit.
+- Held races prove token 1 produces zero effect after token 2 claims for
+  portable signal/write/output-ack/release and Job write/output-ack/signal/
+  release. Missing durable fence fails closed; deletion faults preserve state.
+- Removing portable or Job final comparisons made every held guard RED; each
+  was reverted GREEN.
+
+### R2.5 strict retained evidence and recovery
+
+- Portable acquire/reattach/terminal/release strictly validates output,
+  checkpoint and all ack evidence. Malformed identity/metadata/digest/payload is
+  unknown; valid input acks remain command evidence rather than unsettled
+  output. Stale published input is rejected/advanced without child effect so
+  token 2 can continue.
+- Job read/terminal/release fail closed if stdout/stderr disappears or becomes
+  unreadable, including deletion after attach immediately before read. Final
+  output ack persists stopped proof before responding, closing the HTTP-reset
+  race while the nonterminal-reset guard still rejects uncertainty.
+- A 65 MiB production fixture exposed same-host fence-lock starvation: channel
+  read/ack/reconcile exhausted the file-lock retry budget and left the exact Job
+  tree live. Per-process host effects now serialize before taking the unchanged
+  cross-host durable lock. Removing serialization reproduced RED/live residue;
+  reverting completed in 8.7–9.1 seconds with zero supervisors.
+- Missing-read/terminal, malformed-ack, stale-input, coalesced-ack, ack ordering,
+  settlement, and serialization mutations all proved RED, reverted and GREEN.
+
+### R2.6 bounded CIM and current focused evidence
+
+- The one-in-flight CIM inventory has a watchdog, termination, 250 ms cadence,
+  and shared consecutive-failure counter. Hung, failed, malformed and successful-
+  empty inventory becomes durable unknown; stale membership cannot prove empty.
+- Watchdog, empty-inventory and cadence mutations were RED and reverted GREEN.
+  Test-only inspector/deadline seams do not change production defaults.
+- Combined focused B2 group: 141/141 GREEN. The first loaded attempt (138 pass,
+  one fail, one cancelled) exposed only a test outer-cap and release/emptiness
+  fixture race; both repairs are test-support-only.
+- Post-audit exact gates: Windows 17/17, durable reset 1/1, semantic/credential
+  2/2, production load 1/1, typecheck and diff GREEN.
+- Interrupted mutation trees were stopped only after exact supervisor/parent/
+  descendant verification. Only resolved `aiboard-*` roots beneath system Temp
+  were deleted. Pre-broad audit: zero fixture processes and zero recent roots.
+
+### Controller-audit closure after R2.6
+
+- A restarted Job backend now passes its currently claimed (including takeover)
+  fence into activation reconciliation. The exact restart guard was RED when
+  activation omitted the fence and GREEN after restoration. Job host signal now
+  returns the freshly locked post-effect record; returning the stale pre-lock
+  record made the stopped-snapshot guard RED, then GREEN after revert.
+- Portable reconcile/release validates every acknowledgement filename and body;
+  malformed arbitrary acknowledgement evidence is unknown and preserved while
+  legitimate input acknowledgements remain command evidence. Removing the
+  centralized validator made the corrupt-ack guard report a false clean exit.
+- Portable empty proof issuance is a final fenced effect containing current
+  identity, platform-specific terminal proof, emptiness and output settlement.
+  A held token-1 proof cannot survive token-2 takeover. Release requires the
+  same terminal proof before and at deletion; a live supervisor with empty
+  membership is refused. Removing either gate made its exact guard RED.
+- POSIX terminal proof remains portable: stopped POSIX state plus exact process-
+  group emptiness does not require Windows root/known-process records. Removing
+  the POSIX branch made the platform-neutral contract RED. POSIX launch rollback
+  signals are also fence-committed; a simulated takeover immediately before the
+  signal made the old writer reject with zero signal effect.
+- Windows launch rollback publishes force termination with the launch identity's
+  durable owner/token inside the final fence commit. A real live supervisor
+  fixture was RED when those fields were removed and GREEN three consecutive
+  times after restoration. The fixture uses state-backed test inspection only
+  to avoid unrelated host-query contention; control handling is the real
+  authenticated supervisor seam.
+- Extensionless Windows commands are resolved and pinned before either launcher
+  using normalized quoted PATH entries and normalized PATHEXT entries, with
+  extension-outer/cwd-then-PATH order. Conflicting case-insensitive PATH/PATHEXT
+  keys are refused. Removing resolution/canonicalization made both prelaunch
+  guards RED; explicit lexical cmd/bat refusal remains intact.
+- Portable and Job detach now settle in-flight output lanes and recheck detached
+  state plus exact sink identity after sink success, before acknowledgement.
+  Removing the post-sink checks made both guards acknowledge detached bytes.
+  Final portable/Job terminal returns re-attest ownership after evidence reads.
+- Loaded replay exposed a legitimate authenticated-ack deletion TOCTOU: a chunk
+  already identically acknowledged can disappear between directory enumeration
+  and read. Only ENOENT for a locally delivered/acknowledged name is retried;
+  missing unacknowledged evidence remains fail-closed. Removing this exception
+  deterministically reproduced RED; strict missing-output guards stayed GREEN.
+- Test fixture environments now use only the Windows launch allowlist. A real
+  decoded portable-supervisor argv guard proved an ambient credential sentinel
+  absent; restoring inherited environment made it RED. Product argv-payload
+  exposure for explicitly supplied workload environments is recorded as a
+  future security-owner finding rather than broadened in B2.
+- Final focused portable/POSIX/Windows group: 92 total, 91 pass, zero fail, one
+  explicit POSIX-native skip on Windows. Typecheck and diff-check are GREEN.
+  The loaded attempt's two transient failures were repaired impact-first and
+  exact reruns were GREEN. Post-run live fixture supervisors and new roots were
+  both zero. Seventeen older exact Temp roots remain as policy-blocked cleanup
+  evidence; both implementer and controller independently verified them outside
+  the repo with no live process references, and execution policy rejected each
+  literal recursive removal before deletion began.
+
+### Final controller findings before broad closure
+
+- A stale Job release used to leave `releaseRequested` set and could block a
+  higher-fence owner. The catch path now clears that latch only for a proven
+  identity/fence loss; an ordinary same-fence durable-release failure remains
+  pending and retryable under the existing contract. Removing the takeover
+  reset made higher-fence reconcile return `outcome_unknown`; restoring it made
+  both the stale-takeover and ordinary release-error guards GREEN (4/4).
+- Job output polling now checks detach/exact-sink identity at the start of each
+  stream and after an awaited host acknowledgement. Removing both checks made a
+  held stdout acknowledgement deliver stderr to the old sink; restoration is
+  GREEN and already acknowledged offsets remain consistent.
+- Authenticated POSIX graceful control invokes exact process-group termination
+  under the current fence. A platform-neutral injected-signal contract was RED
+  when the supervisor call was removed, then GREEN. Backend recovery also
+  signals a nonempty POSIX group after the supervisor exits; Windows refuses to
+  imply control if a dead supervisor leaves birth-attested descendants. Both
+  supervisor/backend `ps` enumerations now have a 2 second bound and preserve
+  unknown on timeout.
+- Synchronous Windows destructive-control inspection now honors an independent
+  injected inspector, uses the unchanged 2 second production bound, and latches
+  durable uncertainty on timeout/error. Every `taskkill /PID ... /T` call is
+  separately bounded; timeout/error never becomes a successful control proof.
+  Real hung-inspector and hung-taskkill fixtures were RED without the timeout,
+  GREEN with it, killed their helper, preserved the target, and left no live
+  supervisor.
+- Exact tree roots, not every known descendant, are passed to `taskkill /T`.
+  Calling `/T` once per descendant caused a later already-removed PID to report
+  failure and permanently blocked valid rollback/probe cleanup. The mutation
+  reproduced the real rollback RED; root filtering restored the real semantic
+  probe and live rollback fixtures GREEN.
+- Job duplex input now carries an explicit 1 MiB limit to the supervisor. The
+  HTTP JSON bound accounts for base64 plus bounded envelope overhead; decoded
+  bytes are rechecked, and the host rejects oversize payloads before any owned
+  effect. A real 64 KiB roundtrip was RED at the former 16 KiB generic body cap
+  and GREEN after repair; removing host preflight made the oversize guard reach
+  a record lookup instead of the required typed limit refusal.
+- Portable Windows membership now validates state nonce and supervisor PID
+  before any empty proof or rollback. Removing this check let a replaced,
+  well-formed empty state pass cleanup; restoration refuses it and preserves
+  evidence.
+- Extensionless resolution now follows directory priority (cwd then PATH), with
+  PATHEXT ordering inside each directory, and pins the selected exact path.
+  The two-directory `.cmd`-before-`.exe` guard was RED under extension-first
+  nesting and GREEN after restoration. Quoted PATH, dotless PATHEXT, and
+  case-insensitive ambiguity guards remain GREEN.
+
+### Final focused and compatibility evidence
+
+- Latest exact controller group: 12/12 GREEN. Affected complete Windows group:
+  62/62 GREEN. The earlier five-file loaded group found four issues: two
+  load/cleanup races that passed exact rerun, the taskkill descendant-root bug,
+  and the release-latch compatibility distinction. Exact repairs and the full
+  Windows rerun are current and GREEN; unaffected portable/managed/POSIX/probe
+  results remain reusable by impact analysis.
+- Complete B1/8.0A/Task 5/7/3 compatibility command: 320/320 GREEN.
+- `npm run typecheck:runner-v2`: GREEN. Targeted ESLint has zero errors; one
+  unused test-only import was removed and the lint gate is rerun before broad.
+  `git diff --check` reports only repository line-ending notices.
+- The first interrupted 64 KiB mutation leaked one exact Job supervisor because
+  failure happened before normal terminal retirement. PID 61240 and its Job-host
+  descendants were authenticated to exact root
+  `aiboard-windows-job-channel-Z3B2TB`, stopped as one owned tree, and the test
+  gained explicit higher-fence cleanup. Two later interrupted diagnostic roots
+  were also verified with no live references. Execution policy rejected literal
+  recursive removal before it began, so these three roots join the 17 prior
+  policy-blocked roots. A bounded post-test settle reports zero live supervisors
+  and zero new roots; none of the 20 retained roots has a live reference.
+
+### Broad-attempt repair and semantic-probe cleanup closure
+
+- The first full `npm run test:runner-v2` attempt exited non-green. Its output
+  was truncated before a trustworthy aggregate TAP total could be retained, so
+  no aggregate count is asserted. Failures clustered around the legacy LSP Job
+  host path plus loaded Windows fixture cleanup. Exact isolation proved the Job
+  host had stopped emitting the legacy stderr-framed LSP response whenever the
+  new managed event-file path was absent. Restoring that compatibility branch
+  made the exact LSP/extension/router group GREEN 17/17; recovery is GREEN 1/1.
+- The loaded semantic timeout guard then reproduced a retained-root failure
+  (11/12 GREEN, one RED). Failed probe cleanup now removes its generated root
+  only after an independent, single bounded CIM inventory proves every exact
+  recorded supervisor/root/known PID+birth absent or replaced. Root containment,
+  state nonce/supervisor identity, a closed launch-effect proof, valid known
+  owners, and a 256-owner cap are mandatory; missing/malformed/unknown evidence
+  preserves the root. Outside-root and missing-started-root mutations were RED,
+  then reverted GREEN. A cleanup-helper removal mutation was RED and reverted
+  GREEN. The current complete semantic group is GREEN 13/13.
+- One supervisor from the original RED semantic attempt (PID 51968, exact root
+  `aiboard-windows-semantic-duplex-9omEMo`) predated the hardened audit. Its
+  decoded supervisor identity matched the durable directory, nonce, platform,
+  PID, and birth and it had no descendants. Exact tree termination succeeded;
+  a three-second bounded settle proves the PID absent and zero live managed or
+  portable supervisors. Its evidence root remains with the other policy-blocked
+  roots because deletion authorization was previously rejected; it has no live
+  reference.
+- Post-repair targeted gates are GREEN: semantic 13/13, LSP/extension/router
+  17/17, recovery 1/1, Runner V2 typecheck, targeted ESLint, and diff check
+  (line-ending notices only). A second uninterrupted full Runner gate remains
+  required before commit; B3 remains locked.
+- Cleanup hardening subsequently required every deletion target to be a real,
+  non-link, immediate Temp child with the exact semantic-probe prefix. An
+  unbound launch deletes its root only when the exact state directory is empty;
+  any `owned-*` or pending evidence is retained. Nested-target and unbound-owned
+  mutations were RED, reverted, and GREEN. The semantic group is now 15/15.
+- Broad attempt 2 reached a complete TAP exit: 1,357 total, 1,350 pass, five
+  fail, one cancelled, one explicit skip. Every failed case passed alone. The
+  combined portable/semantic/Windows stress first reproduced fixture cleanup
+  EPERM and then a transient stable-empty-to-release race. Product control and
+  deadlines remained unchanged: fence-only fixtures now use state-backed exact
+  identity and require bounded reconcile-to-exited plus authenticated release
+  before deleting roots; semantic discovery retries a transient stable-release
+  refusal only within its existing deadline and immediately rejects fence or
+  identity loss. The deterministic single-attempt mutation was RED and reverted
+  GREEN. The complete affected stress group is GREEN 106/106.
+- Four supervisors retained by the failed broad attempt were decoded and
+  authenticated to their exact durable directory and nonce before exact tree
+  termination. Post-repair bounded settle reports zero live managed/portable
+  supervisors. Current typecheck, targeted ESLint, and diff check are GREEN;
+  diff check contains line-ending notices only. One final uninterrupted broad
+  exit is required before commit.
+- A subsequent unbounded-file-concurrency broad attempt completed 1,358 total,
+  1,353 pass, four fail, zero cancelled, and one skip. All four failures were
+  fail-closed Windows fixture/CIM contention and passed exact; the affected
+  three-file concurrent stress remained GREEN 106/106. The package gate now
+  bounds only Node test-file concurrency to three. This changes no production
+  retry, timeout, control, or evidence semantics and still exercises real
+  concurrent portable/semantic/Job behavior. The prior unbounded command is the
+  prove-red mutation for this harness bound; the exact package script must now
+  complete green before closure.
+- The first cap of three still produced two load-only failures (1,358 total,
+  1,355 pass, two fail, one skip); both passed exact after authenticated residue
+  cleanup. The package gate therefore serializes test files. Concurrency is not
+  removed from acceptance: the separately required three-file real process
+  stress remains GREEN 106/106. The cap-of-three run is the RED mutation for the
+  final harness bound; production remains unchanged.
+
+### Final serial-gate lock finalization repair
+
+- The first serial package run completed 1,358 tests with 1,356 pass, one
+  fail, one explicit skip. The sole failure was the retained-window replay:
+  terminal observation failed closed because a Windows fence lock could not be
+  reclaimed. Exact stress reproduced three failures in five attempts before
+  repair, including `EBUSY` during writer-fence claim.
+- Fence lock finalization is now one shared bounded implementation used by
+  native claim/effect, portable-supervisor effect, and Job-host claim/effect.
+  `ENOENT` is success; only `EPERM`, `EACCES`, and `EBUSY` retry within the
+  explicit two-second bound; persistent cleanup failure surfaces. When an
+  effect and cleanup both fail, the original effect error is retained in an
+  `AggregateError`. Acquisition recognizes the same Windows sharing-denial
+  codes as bounded contention rather than immediately converting an active
+  peer lock into durable unknown.
+- Real Windows held-lock guards are GREEN 3/3. Removing transient retry was RED
+  with `EBUSY`, then reverted GREEN; swallowing persistent cleanup failure was
+  RED, then reverted GREEN. A source/contract guard covers all five production
+  finalization call sites. The exact replay changed from RED 3/5 to GREEN 5/5.
+  The affected concurrent portable/semantic/Windows group is GREEN 109/109.
+- Refreshed Runner typecheck, targeted ESLint, and diff check are GREEN; diff
+  check reports line-ending notices only. Bounded residue inspection reports
+  zero live owned supervisors and zero replay/lock-test Temp roots. The final
+  serial package gate is the remaining exit gate; B3 remains locked.
+
+### Serial reset-race repair
+
+- The next serial gate completed 1,361 tests: 1,359 pass, one fail, zero
+  cancelled, one explicit POSIX-host skip. The sole failure was a raw
+  `ECONNRESET` in the Job missing-output fail-closed fixture. Exact isolation
+  showed that both authenticated supervisor HTTP clients listened only on the
+  `ClientRequest`; a reset after response headers was emitted on the
+  `IncomingMessage` and could escape before durable stopped fallback ran.
+- Managed and extracted-Job supervisor requests now settle exactly once across
+  response `end`/`error`/`aborted` plus request error/timeout. A reset remains a
+  failure unless `authenticatedStatus` independently reads exact durable stopped
+  proof. The prior nonterminal-reset refusal remains GREEN. A deterministic
+  partial-response reset guard timed out RED when both response listeners were
+  removed, then reverted GREEN. The guard plus missing-output case are GREEN
+  20/20 across ten fresh processes; the missing-output case alone is GREEN
+  20/20.
+- Concurrent affected verification is GREEN 110/110. Two prior non-green
+  attempts were test cleanup only: the takeover fixture now uses the existing
+  bounded authenticated terminal/release cleanup, and one semantic timeout
+  correctly retained uncertain evidence. That semantic case passed exact. Its
+  old supervisor was decoded to the exact directory/nonce/birth/fence, had no
+  live descendants, and was stopped by exact PID+birth after authenticated
+  control correctly refused durable `outcome_unknown`. The retained root remains
+  cleanup evidence; bounded settle reports zero live owned supervisors.
+- The final unchanged `npm run test:runner-v2` package gate is GREEN, exit 0:
+  1,362 total, 1,361 pass, zero fail, zero cancelled, one explicit POSIX-host
+  skip, 808.75 seconds. Every chained client, native-policy, policy-UI, cutover,
+  pause-gate, model-usage, live-state, transcript, files, run-stats, steering,
+  and observability check also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint, and `git diff --check` are
+  GREEN; diff check reports line-ending notices only. A five-second bounded
+  post-gate settle reports zero live managed/portable/Job-host supervisors.
+  No production deadline, retry limit, Node support policy, product family
+  routing, B3/OCI activation, or time-based output deletion was introduced.

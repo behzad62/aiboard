@@ -65,7 +65,17 @@ export function createProductionOneShotCommandFixture(
     })
     : undefined;
   const nativeBackend = options.backend ?? (process.platform === "win32"
-    ? createWindowsProcessBackend({ jobObjects: { service: managed! } })
+    ? createWindowsProcessBackend({
+        jobObjects: { service: managed! },
+        // This Windows-only production-graph fixture is covered by the real
+        // active Job and argv tests before it requests the enhanced adapter.
+        semanticFacts: {
+          portableDuplex: "verified",
+          windowsBatchArgv: "verified",
+          exactTreeBirth: "partial",
+          jobContainment: "verified",
+        },
+      })
     : createPosixProcessBackend({ stateDirectory: join(root, "backend") }));
   const backend = options.backendDecorator ? options.backendDecorator(nativeBackend) : nativeBackend;
   const kernel = createSubprocessRuntimeKernel({

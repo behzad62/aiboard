@@ -16,6 +16,7 @@ export interface PortableChannelAuthority {
   readonly nonce: string;
   readonly fence: ProcessEffectFence;
   reattest(): "live" | "exited";
+  effect<T>(kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T>;
 }
 
 export interface PortableProcessChannelProviderOptions {
@@ -31,7 +32,7 @@ export function createPortableProcessChannelProvider(options: PortableProcessCha
   const pollIntervalMs = positive(options.pollIntervalMs);
   const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
     const channel = new PortableProcessChannel(options.authority(binding, fence), pollIntervalMs);
-    channel.validateForAttach();
+    await channel.validateForAttach();
     return channel;
   };
   return Object.freeze({
@@ -71,6 +72,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private readonly deliveredOutput = new Set<string>();
   private readonly terminalSinks = new Set<(result: unknown) => void>();
   private channelFailure?: Error;
+  private stateNeedsPersist = false;
 
   constructor(private readonly authority: PortableChannelAuthority, private readonly pollIntervalMs: number) {
     this.channelDirectory = join(authority.directory, "channel");
@@ -88,14 +90,13 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     const owned = new Uint8Array(payload);
     if (owned.byteLength !== input.byteLength || createHash("sha256").update(owned).digest("hex") !== input.digest)
       throw new Error("Portable channel write metadata does not match its payload.");
-    const commandSequence = this.nextCommand++;
-    this.nextWrite++;
+    const commandSequence = this.nextCommand;
     await this.command(commandSequence, {
       type: "write",
       byteLength: owned.byteLength,
       digest: input.digest,
       bytes: Buffer.from(owned).toString("base64"),
-    }, input.timeoutMs);
+    }, input.timeoutMs, { nextCommand: commandSequence + 1, nextWrite: this.nextWrite + 1, inputClosed: this.inputClosed });
     return { acknowledged: true, sequence: input.sequence };
   }
 
@@ -103,12 +104,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     this.assertAttached();
     this.reattest(true);
     if (this.inputClosed) return false;
-    const sequence = this.nextCommand++;
-    // Reserve closure before the effect. An unknown acknowledgement must never
-    // make later writes look replay-safe.
-    this.inputClosed = true;
-    this.persistInputState();
-    await this.command(sequence, { type: "close_input" }, 5_000);
+    const sequence = this.nextCommand;
+    await this.command(sequence, { type: "close_input" }, 5_000, { nextCommand: sequence + 1, nextWrite: this.nextWrite, inputClosed: true });
     return true;
   }
 
@@ -138,8 +135,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   async gracefulStop(): Promise<unknown> {
     this.assertAttached();
     this.reattest(true);
-    const sequence = this.nextCommand++;
-    await this.command(sequence, { type: "graceful_stop" }, 5_000);
+    const sequence = this.nextCommand;
+    await this.command(sequence, { type: "graceful_stop" }, 5_000, { nextCommand: sequence + 1, nextWrite: this.nextWrite, inputClosed: this.inputClosed });
     return { acknowledged: true };
   }
 
@@ -183,9 +180,13 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
   nextWriteSequence(): number { return this.nextWrite; }
   isInputClosed(): boolean { return this.inputClosed; }
-  validateForAttach(): void {
+  async validateForAttach(): Promise<void> {
     this.reattest(false);
-    this.outputFiles();
+    await this.authority.effect("attach", () => {
+      const output = this.outputFiles();
+      this.ackFiles(output);
+      if (this.stateNeedsPersist) this.persistInputState();
+    });
   }
 
   private scheduleOutput(): void {
@@ -202,7 +203,13 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         const acknowledgement = await sink(entry.metadata, entry.bytes);
         if (JSON.stringify(acknowledgement) !== JSON.stringify(entry.metadata))
           throw new Error("Portable output acknowledgement metadata mismatch.");
-        writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({ nonce: this.authority.nonce, metadata: entry.metadata }));
+        if (this.detached || sink !== this.outputSink) return;
+        await this.authority.effect("output_ack", () => writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
+          nonce: this.authority.nonce,
+          ownerId: this.authority.fence.ownerId,
+          fencingToken: this.authority.fence.fencingToken,
+          metadata: entry.metadata,
+        })));
         this.deliveredOutput.add(entry.name);
       }
     }).catch((error) => {
@@ -215,15 +222,21 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private outputFiles(): Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> {
     let names: string[];
     try { names = readdirSync(this.outputDirectory).sort(); }
-    catch { return []; }
+    catch (error) { throw new Error("Portable output evidence is missing or unreadable.", { cause: error }); }
     const entries: Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> = [];
     const checkpoint = this.outputCheckpoint();
     const expected = new Map<"stdout" | "stderr", { sequence: number; offset: number }>([["stdout", { sequence: checkpoint.stdout.sequence + 1, offset: checkpoint.stdout.endOffset }], ["stderr", { sequence: checkpoint.stderr.sequence + 1, offset: checkpoint.stderr.endOffset }]]);
     for (const name of names) {
       const filename = /^(stdout|stderr)-(\d{12})\.json$/.exec(name);
       if (!filename) throw new Error("Portable output filename is invalid.");
+      let raw: string;
+      try { raw = readFileSync(join(this.outputDirectory, name), "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" && this.deliveredOutput.has(name)) return [];
+        throw new Error("Portable output chunk is invalid.", { cause: error });
+      }
       try {
-        const value = JSON.parse(readFileSync(join(this.outputDirectory, name), "utf8"));
+        const value = JSON.parse(raw);
         if (value.nonce !== this.authority.nonce) throw new Error("Portable output nonce is invalid.");
         const bytes = Buffer.from(value.bytes, "base64");
         if (!validMetadata(value.metadata, bytes)) throw new Error("Portable output metadata or payload is invalid.");
@@ -240,24 +253,33 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     return entries;
   }
 
-  private async command(sequence: number, body: Record<string, unknown>, timeoutMs: number): Promise<void> {
-    this.persistInputState();
+  private ackFiles(output: Array<{ name: string; metadata: BackpressuredOutputMetadata }>): string[] {
+    return validatePortableAcknowledgementEvidence(this.ackDirectory, this.authority.nonce, output);
+  }
+
+  private async command(sequence: number, body: Record<string, unknown>, timeoutMs: number, nextState: { nextCommand: number; nextWrite: number; inputClosed: boolean }): Promise<void> {
     const name = `input-${String(sequence).padStart(12, "0")}.json`;
-    writeAtomic(join(this.inputDirectory, name), JSON.stringify({
-      nonce: this.authority.nonce,
-      ownerId: this.authority.fence.ownerId,
-      fencingToken: this.authority.fence.fencingToken,
-      sequence,
-      ...body,
-    }));
+    await this.authority.effect(body.type === "write" ? "write" : body.type === "close_input" ? "close" : "signal", () => {
+      this.persistInputState(nextState);
+      writeAtomic(join(this.inputDirectory, name), JSON.stringify({
+        nonce: this.authority.nonce,
+        ownerId: this.authority.fence.ownerId,
+        fencingToken: this.authority.fence.fencingToken,
+        sequence,
+        ...body,
+      }));
+    });
+    this.nextCommand = nextState.nextCommand;
+    this.nextWrite = nextState.nextWrite;
+    this.inputClosed = nextState.inputClosed;
     const deadline = Date.now() + timeoutMs;
     const ackPath = join(this.ackDirectory, name);
     while (Date.now() < deadline) {
       this.reattest(false);
       try {
         const ack = JSON.parse(readFileSync(ackPath, "utf8"));
-        if (ack.nonce === this.authority.nonce && ack.sequence === sequence && ack.status === "acknowledged") {
-          try { unlinkSync(ackPath); } catch {}
+        if (ack.nonce === this.authority.nonce && ack.ownerId === this.authority.fence.ownerId && ack.fencingToken === this.authority.fence.fencingToken && ack.sequence === sequence && ack.status === "acknowledged") {
+          await this.authority.effect("ack_consume", () => { try { unlinkSync(ackPath); } catch {} });
           return;
         }
         if (ack.status === "failed") throw new Error("Portable channel command failed.");
@@ -272,15 +294,21 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
 
   private terminal(): unknown | undefined {
-    if (this.channelFailure) return { state: "outcome_unknown" };
+    if (this.channelFailure) return { state: "outcome_unknown", detail: this.channelFailure.message };
     try {
       this.reattest(false);
       const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
       if (state.nonce !== this.authority.nonce) throw new Error("Portable channel identity mismatch.");
+      if (state.status === "stopped") {
+        const output = this.outputFiles();
+        const acknowledgements = this.ackFiles(output);
+        if (output.length > 0 || acknowledgements.some((name) => /^(stdout|stderr)-/.test(name))) return undefined;
+        this.reattest(false);
+      }
       return state.status === "stopped"
         ? { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) }
         : state.status === "outcome_unknown" ? { state: "outcome_unknown" } : undefined;
-    } catch { return undefined; }
+    } catch { return { state: "outcome_unknown" }; }
   }
 
   private reattest(requireLive: boolean): void {
@@ -298,15 +326,14 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       this.nextCommand = positive(value.nextCommand);
       this.nextWrite = positive(value.nextWrite);
       this.inputClosed = value.inputClosed === true;
-      if (value.fencingToken < this.authority.fence.fencingToken) this.persistInputState();
+      if (value.fencingToken < this.authority.fence.fencingToken) this.stateNeedsPersist = true;
     } catch (error) {
       if (existsSync(this.statePath())) throw error;
-      this.persistInputState();
+      this.stateNeedsPersist = true;
     }
   }
   private outputCheckpoint(): { stdout: { sequence: number; endOffset: number }; stderr: { sequence: number; endOffset: number } } {
     const path = join(this.channelDirectory, "output-checkpoint.json");
-    if (!existsSync(path)) return { stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } };
     try {
       const value = JSON.parse(readFileSync(path, "utf8"));
       if (value.nonce !== this.authority.nonce) throw new Error();
@@ -317,9 +344,37 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       return value;
     } catch { throw new Error("Portable output checkpoint is invalid."); }
   }
-  private persistInputState(): void {
-    writeAtomic(this.statePath(), JSON.stringify({ nonce: this.authority.nonce, ownerId: this.authority.fence.ownerId, fencingToken: this.authority.fence.fencingToken, nextCommand: this.nextCommand, nextWrite: this.nextWrite, inputClosed: this.inputClosed }));
+  private persistInputState(state = { nextCommand: this.nextCommand, nextWrite: this.nextWrite, inputClosed: this.inputClosed }): void {
+    writeAtomic(this.statePath(), JSON.stringify({ nonce: this.authority.nonce, ownerId: this.authority.fence.ownerId, fencingToken: this.authority.fence.fencingToken, ...state }));
+    this.stateNeedsPersist = false;
   }
+}
+
+export function validatePortableAcknowledgementEvidence(
+  acknowledgementDirectory: string,
+  nonce: string,
+  output: ReadonlyArray<{ name: string; metadata: BackpressuredOutputMetadata }>,
+): string[] {
+  let names: string[];
+  try { names = readdirSync(acknowledgementDirectory).sort(); }
+  catch (error) { throw new Error("Portable acknowledgement evidence is missing or unreadable.", { cause: error }); }
+  const retained = new Map(output.map((entry) => [entry.name, entry.metadata]));
+  for (const name of names) {
+    try {
+      const value = JSON.parse(readFileSync(join(acknowledgementDirectory, name), "utf8"));
+      if (value.nonce !== nonce || typeof value.ownerId !== "string" || value.ownerId.length === 0 ||
+          !Number.isSafeInteger(value.fencingToken) || value.fencingToken < 1) throw new Error();
+      const outputName = /^(stdout|stderr)-(\d{12})\.json$/.exec(name);
+      const inputName = /^input-(\d{12})\.json$/.exec(name);
+      if (outputName) {
+        const metadata = retained.get(name);
+        if (!metadata || JSON.stringify(value.metadata) !== JSON.stringify(metadata)) throw new Error();
+      } else if (inputName) {
+        if (value.sequence !== Number(inputName[1]) || !["acknowledged", "failed"].includes(value.status)) throw new Error();
+      } else throw new Error();
+    } catch (error) { throw new Error("Portable acknowledgement evidence is invalid.", { cause: error }); }
+  }
+  return names;
 }
 
 function validMetadata(value: unknown, bytes: Uint8Array): value is BackpressuredOutputMetadata {

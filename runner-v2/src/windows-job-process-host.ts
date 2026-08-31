@@ -1,12 +1,15 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isOwnedFenceLockContention, unlinkOwnedFenceLock } from "./owned-fence-lock.mjs";
+
 const PROTOCOL = "aiboard-managed-process/v1";
 const DEFAULT_DEADLINE_MS = 5_000;
+const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
 
 export interface WindowsJobOwnershipKey { readonly runId: string; readonly sessionId: string }
 export interface WindowsJobWriterFence { readonly ownerId: string; readonly fencingToken: number }
@@ -34,12 +37,12 @@ export interface WindowsJobProcessHost {
   signalOwned(processId: string, signal: "SIGTERM" | "SIGINT" | "SIGKILL", owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot>;
   reconcileOwned(processId: string, owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
   releaseOwned(processId: string, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
-  readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence): WindowsJobOutputRead;
+  readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence): WindowsJobOutputRead | Promise<WindowsJobOutputRead>;
   probeActiveJobCreateClose(): Promise<boolean>;
-  attachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey): Promise<WindowsJobChannelState>;
-  writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
-  closeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey): Promise<void>;
-  acknowledgeOwnedOutput?(processId: string, owner: WindowsJobOwnershipKey, stream: "stdout" | "stderr", endOffset: number): Promise<void>;
+  attachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
+  writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
+  closeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
+  acknowledgeOwnedOutput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, stream: "stdout" | "stderr", endOffset: number): Promise<void>;
   claimOwnedFence?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
 }
 export interface WindowsJobChannelState {
@@ -52,7 +55,11 @@ export interface WindowsJobProcessHostOptions {
   readonly stateDirectory: string; readonly platform?: NodeJS.Platform;
   readonly idFactory?: () => string; readonly clock?: () => string;
   readonly maxPollBytes?: number; readonly startDeadlineMs?: number; readonly stopDeadlineMs?: number;
+  readonly maxRetainedOutputChunks?: number; readonly maxRetainedOutputBytes?: number;
+  readonly maxRetainedOutputChunkBytes?: number;
+  readonly maxInputBytes?: number;
   readonly supervisorScriptPath?: string;
+  readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
 }
 
 interface SupervisorRecord { protocol: typeof PROTOCOL; token: string; statusPath: string; supervisorPid: number; port: number }
@@ -70,6 +77,7 @@ interface SupervisorStatus {
   protocol: typeof PROTOCOL; processId: string; supervisorPid: number; childPid: number; port: number;
   status: "starting" | "running" | "stopped" | "exited_unknown"; exitCode: number | null;
   signal: NodeJS.Signals | null; error: string | null; ownershipReleased: boolean; updatedAt: string;
+  retainedOutputChunks: number; retainedOutputBytes: number;
 }
 
 export class WindowsJobHostError extends Error {
@@ -85,8 +93,14 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly maxPollBytes: number;
   private readonly startDeadlineMs: number;
   private readonly stopDeadlineMs: number;
+  private readonly maxRetainedOutputChunks: number;
+  private readonly maxRetainedOutputBytes: number;
+  private readonly maxRetainedOutputChunkBytes: number;
+  private readonly maxInputBytes: number;
   private readonly supervisorScriptPath: string;
+  private readonly beforeFenceEffect?: WindowsJobProcessHostOptions["beforeFenceEffect"];
   private readonly records = new Map<string, HostRecord>();
+  private readonly effectTails = new Map<string, Promise<void>>();
   private readonly launchers = new Set<ChildProcess>();
 
   constructor(options: WindowsJobProcessHostOptions) {
@@ -97,7 +111,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
     this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_DEADLINE_MS;
     this.stopDeadlineMs = options.stopDeadlineMs ?? DEFAULT_DEADLINE_MS;
+    this.maxRetainedOutputChunks = options.maxRetainedOutputChunks ?? 16;
+    this.maxRetainedOutputBytes = options.maxRetainedOutputBytes ?? 256 * 1024;
+    this.maxRetainedOutputChunkBytes = options.maxRetainedOutputChunkBytes ?? 16 * 1024;
+    this.maxInputBytes = options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES;
+    if (!Number.isSafeInteger(this.maxInputBytes) || this.maxInputBytes < 1) throw new Error("Windows Job max input bytes must be positive.");
     this.supervisorScriptPath = options.supervisorScriptPath ?? join(dirname(fileURLToPath(import.meta.url)), "managed-process-supervisor.mjs");
+    this.beforeFenceEffect = options.beforeFenceEffect;
     mkdirSync(this.stateDirectory, { recursive: true });
     for (const name of readdirSync(this.stateDirectory)) {
       if (!name.endsWith(".json")) continue;
@@ -141,8 +161,15 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     try {
       await writeSupervisorConfig(launcher, JSON.stringify({
         processId, token, statusPath, stdoutPath: record.stdoutPath, stderrPath: record.stderrPath,
+        eventPath: join(processDirectory, "job-events.jsonl"),
+        recordPath: join(this.stateDirectory, `${processId}.json`),
         command: input.command, args: [...input.args], cwd: record.cwd,
         env: { ...input.environment }, stopDeadlineMs: this.stopDeadlineMs, interactive: input.interactive === true,
+        maxPollBytes: this.maxPollBytes,
+        maxRetainedOutputChunks: this.maxRetainedOutputChunks,
+        maxRetainedOutputBytes: this.maxRetainedOutputBytes,
+        maxRetainedOutputChunkBytes: this.maxRetainedOutputChunkBytes,
+        maxInputBytes: this.maxInputBytes,
       }));
       const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs);
       this.applyStatus(record, status);
@@ -158,20 +185,25 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
 
   async signalOwned(processId: string, signal: "SIGTERM" | "SIGINT" | "SIGKILL", owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot> {
     const record = this.ownedRecord(processId, owner); this.assertActive(record); this.assertCurrentFence(record, fence);
+    let stoppedRecord = record;
     let status = await this.authenticatedStatus(record);
     if (status.status !== "stopped") {
-      status = await supervisorRequest(record.supervisor, "/signal", "POST", { signal, deadlineMs: this.stopDeadlineMs }, this.stopDeadlineMs + 250);
-      this.assertStatusIdentity(record, status); this.applyStatus(record, status);
+      status = await this.withFenceEffect(record, fence, "signal", async (current) => {
+        const result = await supervisorRequest<SupervisorStatus>(current.supervisor, "/signal", "POST", { signal, deadlineMs: this.stopDeadlineMs, fence }, this.stopDeadlineMs + 250);
+        this.assertStatusIdentity(current, result); this.applyStatus(current, result); stoppedRecord = current; return result;
+      });
     }
     if (status.status !== "stopped") throw new WindowsJobHostError("process_stop_timeout", `Windows Job process ${processId} did not stop.`);
-    return this.snapshot(record);
+    return this.snapshot(stoppedRecord);
   }
 
   async reconcileOwned(processId: string, owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }> {
-    const record = this.ownedRecord(processId, owner); this.assertActive(record); this.assertCurrentFence(record, fence);
-    const status = await this.authenticatedStatus(record);
-    this.assertCurrentFence(this.ownedRecord(processId, owner), fence);
-    return { ...this.snapshot(record), ownershipReleased: status.ownershipReleased };
+    const record = this.ownedRecord(processId, owner); this.assertActive(record);
+    return await this.withFenceEffect(record, fence, "reconcile", async (current) => {
+      this.assertActive(current);
+      const status = await this.authenticatedStatus(current);
+      return { ...this.snapshot(current), ownershipReleased: status.ownershipReleased };
+    });
   }
 
   async releaseOwned(processId: string, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }> {
@@ -185,18 +217,27 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const confirmed = await this.authenticatedStatus(record);
     if (confirmed.status !== "stopped" || !confirmed.ownershipReleased)
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} terminal ownership changed before release.`);
-    this.assertCurrentFence(this.ownedRecord(processId, owner), fence);
-    const releasedAt = this.clock();
-    const candidate = { ...record, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
-    this.persist(candidate); this.records.set(processId, candidate);
-    return { ...this.snapshot(candidate), ownershipReleased: true };
+    return await this.withFenceEffect(record, fence, "release", async (current) => {
+      if (current.startedAt !== expectedStartedAt) throw new WindowsJobHostError("process_identity_mismatch", `Windows Job process ${processId} identity mismatch.`);
+      const final = await this.authenticatedStatus(current);
+      if (final.status !== "stopped" || !final.ownershipReleased)
+        throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} terminal ownership changed before release.`);
+      this.assertJobOutputSettled(current, final);
+      const releasedAt = this.clock();
+      const candidate = { ...current, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
+      this.persist(candidate); this.records.set(processId, candidate);
+      return { ...this.snapshot(candidate), ownershipReleased: true };
+    });
   }
 
-  readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence): WindowsJobOutputRead {
-    const record = this.ownedRecord(processId, owner); this.assertActive(record); this.assertCurrentFence(record, fence);
-    const stdout = unreadBytes(record.stdoutPath, offsets.stdout, this.maxPollBytes);
-    const stderr = unreadBytes(record.stderrPath, offsets.stderr, this.maxPollBytes);
-    return { stdout, stderr, next: { stdout: offsets.stdout + stdout.byteLength, stderr: offsets.stderr + stderr.byteLength } };
+  async readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence): Promise<WindowsJobOutputRead> {
+    const record = this.ownedRecord(processId, owner); this.assertActive(record);
+    return await this.withFenceEffect(record, fence, "read", async (current) => {
+      this.assertActive(current);
+      const stdout = unreadBytes(current.stdoutPath, offsets.stdout, this.maxPollBytes);
+      const stderr = unreadBytes(current.stderrPath, offsets.stderr, this.maxPollBytes);
+      return { stdout, stderr, next: { stdout: offsets.stdout + stdout.byteLength, stderr: offsets.stderr + stderr.byteLength } };
+    });
   }
 
   async probeActiveJobCreateClose(): Promise<boolean> {
@@ -207,47 +248,63 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     return spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, stdio: "ignore" }).status === 0;
   }
 
-  async attachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey): Promise<WindowsJobChannelState> {
+  async attachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState> {
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
-    if (!record.interactive) throw new WindowsJobHostError("process_control_unavailable", "Windows Job process has no interactive input channel.");
-    const status = await this.authenticatedStatus(record);
-    return {
-      nextSequence: record.nextInputSequence ?? 1,
-      inputClosed: record.inputClosed === true,
-      outputOffsets: { ...(record.outputOffsets ?? { stdout: 0, stderr: 0 }) },
-      outputSequences: { ...(record.outputSequences ?? { stdout: 0, stderr: 0 }) },
-      snapshot: { ...this.snapshot(record), ownershipReleased: status.ownershipReleased },
-    };
+    return await this.withFenceEffect(record, fence, "attach", async (current) => {
+      this.assertActive(current);
+      if (!current.interactive) throw new WindowsJobHostError("process_control_unavailable", "Windows Job process has no interactive input channel.");
+      const status = await this.authenticatedStatus(current);
+      return {
+        nextSequence: current.nextInputSequence ?? 1,
+        inputClosed: current.inputClosed === true,
+        outputOffsets: { ...(current.outputOffsets ?? { stdout: 0, stderr: 0 }) },
+        outputSequences: { ...(current.outputSequences ?? { stdout: 0, stderr: 0 }) },
+        snapshot: { ...this.snapshot(current), ownershipReleased: status.ownershipReleased },
+      };
+    });
   }
 
-  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
+  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
+    if (payload.byteLength > this.maxInputBytes) throw new WindowsJobHostError("process_control_unavailable", `Windows Job input exceeds the ${this.maxInputBytes}-byte limit.`);
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
-    await this.authenticatedStatus(record);
-    if (!record.interactive || record.inputClosed) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input is unavailable.");
-    if (sequence !== (record.nextInputSequence ?? 1)) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input sequence is stale.");
-    const acknowledged = await supervisorRequest<{ acknowledged: true; sequence: number }>(record.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64") }, this.stopDeadlineMs + 250);
-    if (acknowledged.acknowledged !== true || acknowledged.sequence !== sequence) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
-    record.nextInputSequence = sequence + 1; record.updatedAt = this.clock(); this.persist(record);
+    const acknowledged = await this.withFenceEffect(record, fence, "write", async (current) => {
+      this.assertActive(current);
+      await this.authenticatedStatus(current);
+      if (!current.interactive || current.inputClosed) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input is unavailable.");
+      if (sequence !== (current.nextInputSequence ?? 1)) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input sequence is stale.");
+      const result = await supervisorRequest<{ acknowledged: true; sequence: number }>(current.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64"), fence }, this.stopDeadlineMs + 250);
+      if (result.acknowledged !== true || result.sequence !== sequence) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
+      current.nextInputSequence = sequence + 1; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current); return result;
+    });
     return acknowledged;
   }
 
-  async closeOwnedInput(processId: string, owner: WindowsJobOwnershipKey): Promise<void> {
+  async closeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
-    await this.authenticatedStatus(record);
-    if (record.inputClosed) return;
-    await supervisorRequest<{ acknowledged: true }>(record.supervisor, "/close-input", "POST", undefined, this.stopDeadlineMs + 250);
-    record.inputClosed = true; record.updatedAt = this.clock(); this.persist(record);
+    await this.withFenceEffect(record, fence, "close", async (current) => {
+      this.assertActive(current);
+      await this.authenticatedStatus(current);
+      if (current.inputClosed) return;
+      await supervisorRequest<{ acknowledged: true }>(current.supervisor, "/close-input", "POST", { fence }, this.stopDeadlineMs + 250);
+      current.inputClosed = true; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current);
+    });
   }
 
-  async acknowledgeOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, stream: "stdout" | "stderr", endOffset: number): Promise<void> {
+  async acknowledgeOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, stream: "stdout" | "stderr", endOffset: number): Promise<void> {
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
-    await this.authenticatedStatus(record);
-    const offsets = record.outputOffsets ?? { stdout: 0, stderr: 0 };
-    if (!Number.isSafeInteger(endOffset) || endOffset < offsets[stream]) throw new WindowsJobHostError("process_control_unavailable", "Windows Job output acknowledgement is invalid.");
-    record.outputOffsets = { ...offsets, [stream]: endOffset };
-    const sequences = record.outputSequences ?? { stdout: 0, stderr: 0 };
-    record.outputSequences = { ...sequences, [stream]: sequences[stream] + 1 };
-    record.updatedAt = this.clock(); this.persist(record);
+    await this.withFenceEffect(record, fence, "output_ack", async (current) => {
+      this.assertActive(current);
+      await this.authenticatedStatus(current);
+      const offsets = current.outputOffsets ?? { stdout: 0, stderr: 0 };
+      if (!Number.isSafeInteger(endOffset) || endOffset < offsets[stream]) throw new WindowsJobHostError("process_control_unavailable", "Windows Job output acknowledgement is invalid.");
+      const acknowledged = await supervisorRequest<{ acknowledged: true; stream: "stdout" | "stderr"; endOffset: number }>(current.supervisor, "/ack-output", "POST", { stream, endOffset, fence }, this.stopDeadlineMs + 250);
+      if (acknowledged.acknowledged !== true || acknowledged.stream !== stream || acknowledged.endOffset !== endOffset)
+        throw new WindowsJobHostError("process_control_unavailable", "Windows Job supervisor output acknowledgement is invalid.");
+      current.outputOffsets = { ...offsets, [stream]: endOffset };
+      const sequences = current.outputSequences ?? { stdout: 0, stderr: 0 };
+      current.outputSequences = { ...sequences, [stream]: sequences[stream] + 1 };
+      current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current);
+    });
   }
 
   async claimOwnedFence(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
@@ -256,15 +313,19 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     let descriptor: number | undefined;
     for (let attempt = 0; attempt < 200; attempt += 1) {
       try { descriptor = openSync(lockPath, "wx", 0o600); break; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
+      catch (error) { if (!isOwnedFenceLockContention(error)) throw error; await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
     }
     if (descriptor === undefined) throw new WindowsJobHostError("process_control_unavailable", "Windows Job writer fence lock is unavailable.");
+    let primaryError: unknown;
     try {
       const record = this.ownedRecord(processId, owner);
       const current = record.currentFence;
       if (current && (fence.fencingToken < current.fencingToken || (fence.fencingToken === current.fencingToken && fence.ownerId !== current.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
       if (!current || fence.fencingToken > current.fencingToken) { record.currentFence = { ...fence }; record.updatedAt = this.clock(); this.persist(record); this.records.set(processId, record); }
-    } finally { closeSync(descriptor); unlinkSync(lockPath); }
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally { closeSync(descriptor); unlinkOwnedFenceLock(lockPath, { primaryError }); }
   }
 
   private async authenticatedStatus(record: HostRecord): Promise<SupervisorStatus> {
@@ -283,6 +344,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       }
       this.assertStatusIdentity(record, status);
     }
+    this.assertOutputEvidence(record, status);
+    if (status.status === "stopped") this.assertJobOutputSettled(record, status);
     this.applyStatus(record, status); return status;
   }
 
@@ -315,13 +378,69 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (status.protocol !== PROTOCOL || status.processId !== record.processId || status.supervisorPid !== record.supervisor.supervisorPid || (record.supervisor.port !== 0 && status.port !== record.supervisor.port))
       throw new WindowsJobHostError("process_control_unavailable", `Supervisor identity mismatch for ${record.processId}.`);
   }
+  private assertOutputEvidence(record: HostRecord, status: SupervisorStatus): void {
+    if (!Number.isSafeInteger(status.retainedOutputChunks) || status.retainedOutputChunks < 0 ||
+        !Number.isSafeInteger(status.retainedOutputBytes) || status.retainedOutputBytes < 0)
+      throw new WindowsJobHostError("process_control_unavailable", "Windows Job retained-output status is missing or invalid.");
+    for (const path of [record.stdoutPath, record.stderrPath]) {
+      let descriptor: number | undefined;
+      try { descriptor = openSync(path, "r"); fstatSync(descriptor); }
+      catch (error) { throw new WindowsJobHostError("process_control_unavailable", `Windows Job output evidence is missing or unreadable: ${error instanceof Error ? error.message : String(error)}`); }
+      finally { if (descriptor !== undefined) closeSync(descriptor); }
+    }
+  }
+  private assertJobOutputSettled(record: HostRecord, status: SupervisorStatus): void {
+    this.assertOutputEvidence(record, status);
+    if (status.retainedOutputChunks !== 0 || status.retainedOutputBytes !== 0)
+      throw new WindowsJobHostError("process_control_unavailable", "Windows Job retained output is unsettled.");
+    if (!record.interactive) return;
+    const offsets = record.outputOffsets ?? { stdout: 0, stderr: 0 };
+    for (const [stream, path] of [["stdout", record.stdoutPath], ["stderr", record.stderrPath]] as const) {
+      const descriptor = openSync(path, "r");
+      try {
+        if (fstatSync(descriptor).size !== offsets[stream])
+          throw new WindowsJobHostError("process_control_unavailable", "Windows Job accepted output acknowledgement is not durably recorded.");
+      } finally { closeSync(descriptor); }
+    }
+  }
   private assertActive(record: HostRecord): void {
     if (record.backendOwnershipReleasedAt) throw new WindowsJobHostError("process_backend_ownership_released", `Windows Job process ${record.processId} ownership was released.`);
   }
   private assertCurrentFence(record: HostRecord, fence: WindowsJobWriterFence | undefined): void {
-    if (!fence || !record.currentFence) return;
+    if (!record.currentFence && !fence) return;
+    if (!fence || !record.currentFence) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is unavailable.");
     if (fence.ownerId !== record.currentFence.ownerId || fence.fencingToken !== record.currentFence.fencingToken)
       throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
+  }
+  private async withFenceEffect<T>(record: HostRecord, fence: WindowsJobWriterFence | undefined, kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release", effect: (current: HostRecord) => Promise<T>): Promise<T> {
+    await this.beforeFenceEffect?.(kind);
+    const previous = this.effectTails.get(record.processId) ?? Promise.resolve();
+    let finishTurn!: () => void;
+    const turn = new Promise<void>((resolvePromise) => { finishTurn = resolvePromise; });
+    const tail = previous.then(() => turn);
+    this.effectTails.set(record.processId, tail);
+    await previous;
+    const lockPath = join(this.stateDirectory, `${record.processId}.fence.lock`);
+    let descriptor: number | undefined;
+    try {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        try { descriptor = openSync(lockPath, "wx", 0o600); break; }
+        catch (error) { if (!isOwnedFenceLockContention(error)) throw error; await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
+      }
+      if (descriptor === undefined) throw new WindowsJobHostError("process_control_unavailable", "Windows Job writer fence effect lock is unavailable.");
+      let primaryError: unknown;
+      try {
+        const current = this.ownedRecord(record.processId, record);
+        this.assertCurrentFence(current, fence);
+        return await effect(current);
+      } catch (error) {
+        primaryError = error;
+        throw error;
+      } finally { closeSync(descriptor); unlinkOwnedFenceLock(lockPath, { primaryError }); }
+    } finally {
+      finishTurn();
+      if (this.effectTails.get(record.processId) === tail) this.effectTails.delete(record.processId);
+    }
   }
   private snapshot(record: HostRecord): WindowsJobProcessSnapshot {
     return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes) };
@@ -359,11 +478,27 @@ async function waitForSupervisor(supervisor: SupervisorRecord, processId: string
 async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_DEADLINE_MS + 250): Promise<T> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<T>((resolvePromise, reject) => {
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
     const call = request({ hostname: "127.0.0.1", port: supervisor.port, path, method, headers: { authorization: `Bearer ${supervisor.token}`, ...(payload ? { "content-type": "application/json", "content-length": String(payload.byteLength) } : {}) }, timeout: timeoutMs }, (response) => {
       const chunks: Buffer[] = []; response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      response.once("end", () => { const text = Buffer.concat(chunks).toString("utf8"); if (response.statusCode !== 200) { reject(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`)); return; } try { resolvePromise(JSON.parse(text) as T); } catch (error) { reject(error); } });
+      response.once("error", fail);
+      response.once("aborted", () => fail(new Error("Supervisor response was aborted.")));
+      response.once("end", () => {
+        if (settled) return;
+        const text = Buffer.concat(chunks).toString("utf8");
+        if (response.statusCode !== 200) { fail(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`)); return; }
+        try { const parsed = JSON.parse(text) as T; settled = true; resolvePromise(parsed); } catch (error) { fail(error); }
+      });
     });
-    call.once("timeout", () => call.destroy(new Error("Supervisor request timed out."))); call.once("error", reject); if (payload) call.write(payload); call.end();
+    call.once("timeout", () => call.destroy(new Error("Supervisor request timed out.")));
+    call.once("error", fail);
+    if (payload) call.write(payload);
+    call.end();
   });
 }
 async function writeSupervisorConfig(launcher: ChildProcess, serialized: string): Promise<void> {
@@ -382,11 +517,11 @@ async function abortStartingSupervisor(launcher: ChildProcess, token: string, de
 }
 function unreadBytes(path: string, offset: number, maximum: number): Uint8Array {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Windows Job output offset is invalid.");
-  let descriptor: number; try { descriptor = openSync(path, "r"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Uint8Array(); throw error; }
+  const descriptor = openSync(path, "r");
   try { const size = fstatSync(descriptor).size; if (offset > size) throw new Error("Windows Job output offset exceeds durable length."); const buffer = Buffer.allocUnsafe(Math.min(maximum, size - offset)); const bytesRead = readSync(descriptor, buffer, 0, buffer.byteLength, offset); return buffer.subarray(0, bytesRead); }
   finally { closeSync(descriptor); }
 }
 function tail(path: string, maximum: number): string {
-  try { const bytes = readFileSync(path); return bytes.subarray(Math.max(0, bytes.byteLength - maximum)).toString("utf8"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return ""; throw error; }
+  const bytes = readFileSync(path);
+  return bytes.subarray(Math.max(0, bytes.byteLength - maximum)).toString("utf8");
 }

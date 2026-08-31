@@ -145,8 +145,9 @@ import {
   createProcessBackendRegistry,
 } from "./process-backend.js";
 import { createPosixProcessBackend } from "./posix-process-backend.js";
-import { probeProcessHostSemantics } from "./process-host-semantic-probes.js";
+import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
+import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
 import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
 import {
   createBoundedProcessOutputFactory,
@@ -258,6 +259,7 @@ export class NativeBuildFactory {
   private providerConfigsClosed = false;
   private browserBackendClosed = false;
   private closed = false;
+  private windowsProcessFactsPromise: Promise<ProcessHostSemanticFacts> | undefined;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
     this.artifacts = new ArtifactStore(join(options.stateDirectory, "artifacts"));
@@ -534,34 +536,30 @@ export class NativeBuildFactory {
         },
       },
     });
-    const windowsPortableBackend = process.platform === "win32"
-      ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable" })
-      : undefined;
-    const windowsFacts = process.platform === "win32" && windowsPortableBackend
-      ? await probeProcessHostSemantics({
-          portableDuplex: async () => typeof (windowsPortableBackend as { backpressuredChannelProvider?: unknown }).backpressuredChannelProvider === "function",
-          windowsBatchArgv: async () => {
-            try { return statSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")).isFile(); }
-            catch { return false; }
-          },
-          exactTreeBirth: async () => "partial",
+    const windowsFacts = process.platform === "win32"
+      ? await (this.windowsProcessFactsPromise ??= probeProcessHostSemantics({
+          ...createWindowsProcessSemanticProbeSource(),
           activeJobCreateClose: async () => await managedProcesses.probeActiveJobCreateClose(),
-        })
+        }))
       : undefined;
+    const windowsPortableBackend = process.platform === "win32" && windowsFacts
+      ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable", semanticFacts: windowsFacts })
+      : undefined;
+    const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
     const processBackends = process.platform === "win32"
       ? [
-          ...(windowsFacts?.jobContainment === "verified" ? [{
+          ...(windowsBackendKinds.has("job") ? [{
             stableAdapterId: "runner-windows-job-adapter-v1",
             backendId: "runner-windows-job-v1",
             codeIdentity: "runner-v2/windows-job-process-backend@1",
-            backend: new WindowsJobObjectProcessBackend(managedProcesses),
+            backend: new WindowsJobObjectProcessBackend(managedProcesses, windowsFacts!.windowsBatchArgv),
           }] : []),
-          {
+          ...(windowsBackendKinds.has("portable") ? [{
             stableAdapterId: "runner-windows-portable-adapter-v1",
             backendId: "runner-windows-supervisor-v1",
             codeIdentity: "runner-v2/windows-portable-process-backend@1",
             backend: windowsPortableBackend!,
-          },
+          }] : []),
         ]
       : [{
           stableAdapterId: "runner-posix-process-group-adapter-v1",

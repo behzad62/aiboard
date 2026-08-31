@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -113,6 +113,36 @@ test("POSIX validates birth identity before any group signal", async () => {
   }
 });
 
+test("POSIX signal reaches the owned group after the supervisor exits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-dead-signal-"));
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  let live = true;
+  const backend = createPosixProcessBackend({ stateDirectory: root, operations: {
+    inspectProcessBirth: () => ({ state: "absent" }),
+    listPosixGroup: () => live ? [9002] : [],
+    signal: (pid, signal) => { signals.push([pid, signal]); live = false; },
+  } });
+  try {
+    assert.deepEqual(await backend.signal(portableBinding(root, "supervisor-birth"), "terminate", fence), { state: "exited" });
+    assert.deepEqual(signals, [[-9001, "SIGTERM"]]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("POSIX terminal proof permits fenced empty verification and release without Windows tree records", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-terminal-contract-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeFileSync(join(root, "state.json"), JSON.stringify({ protocol: "aiboard-portable-process/v1", nonce: "contract-nonce", supervisorPid: 9001, revision: 2, handledControl: 0, status: "stopped", exitCode: 0, signal: null, launchEffect: "started", rootProcess: null, knownProcesses: [], error: null }));
+  writeFileSync(join(root, "channel/output-checkpoint.json"), JSON.stringify({ nonce: "contract-nonce", stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
+  const operations: NativeProcessOperations = { inspectProcessBirth: () => ({ state: "absent" }), listPosixGroup: () => [], signal: () => assert.fail("terminal contract must not signal") };
+  const backend = createPosixProcessBackend({ stateDirectory: root, operations });
+  const binding = portableBinding(root, "supervisor-birth");
+  try {
+    assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, true);
+    assert.deepEqual(await backend.release(binding, fence), { released: true });
+    assert.equal(existsSync(root), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("POSIX launch rollback kills the owned group and requires a stable empty discovery window", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-launch-rollback-"));
   const signals: Array<[number, NodeJS.Signals]> = [];
@@ -195,6 +225,41 @@ test("POSIX launch rollback signals an identity-proven owned group after its sup
   }
 });
 
+test("POSIX launch rollback rechecks the durable fence before signalling the owned group", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-cleanup-fence-"));
+  const original = { ownerId: "launch-owner", fencingToken: 1 } as const;
+  let enumerations = 0; const signals: number[] = [];
+  writeFileSync(join(root, "fence.json"), JSON.stringify({ nonce: "rollback-nonce", ...original }));
+  const operations: NativeProcessOperations = {
+    inspectProcessBirth: () => ({ state: "present", fingerprint: "supervisor-birth" }),
+    listPosixGroup: () => {
+      enumerations += 1;
+      if (enumerations === 1) writeFileSync(join(root, "fence.json"), JSON.stringify({ nonce: "rollback-nonce", ownerId: "takeover", fencingToken: 2 }));
+      return [9001];
+    },
+    signal: (pid) => { signals.push(pid); },
+  };
+  const backend = createPosixProcessBackend({ stateDirectory: root, operations });
+  const rollback = backend as unknown as { cleanupFailedLaunch(identity: { version: 1; backendId: string; nonce: string; directory: string; supervisorPid: number; supervisorBirth: string; fence: typeof original }): Promise<void> };
+  try {
+    await assert.rejects(rollback.cleanupFailedLaunch({ version: 1, backendId: "runner-posix-process-group-v1", nonce: "rollback-nonce", directory: root, supervisorPid: 9001, supervisorBirth: "supervisor-birth", fence: original }), /fence|stale|identity/i);
+    assert.deepEqual(signals, []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("portable POSIX graceful control signals the exact owned process group", async () => {
+  const { signalOwnedPosixGroup } = await import("../src/portable-process-posix-control.mjs");
+  const effects: Array<[number, NodeJS.Signals]> = [];
+  signalOwnedPosixGroup("terminate", (pid: number, signal: NodeJS.Signals) => { effects.push([pid, signal]); return true; }, 9001);
+  signalOwnedPosixGroup("force_terminate", (pid: number, signal: NodeJS.Signals) => { effects.push([pid, signal]); return true; }, 9001);
+  assert.deepEqual(effects, [[-9001, "SIGTERM"], [-9001, "SIGKILL"]]);
+  const source = await import("node:fs").then(({ readFileSync }) => readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), "utf8"));
+  assert.match(source, /withCurrentFenceEffect\(request\.ownerId, request\.fencingToken, \(\) => signalOwnedPosixGroup\(request\.action\)\)/);
+  assert.match(source, /spawnSync\("ps", \["-e", "-o", "pid=,pgid="\], \{ encoding: "utf8", timeout: 2_000 \}\)/);
+  const backendSource = await import("node:fs").then(({ readFileSync }) => readFileSync(join(process.cwd(), "runner-v2", "src", "native-process-backend.ts"), "utf8"));
+  assert.match(backendSource, /execFileSync\("ps", \["-e", "-o", "pid=,pgid="\], \{ encoding: "utf8", timeout: 2_000 \}\)/);
+});
+
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
 function request(args: string[]) {
   return {
@@ -214,10 +279,14 @@ function request(args: string[]) {
       issuedAt: new Date().toISOString(),
       access: [],
     },
-    environment: { ...process.env } as Record<string, string>,
+    environment: fixtureEnvironment(),
     outputOwnerId: "output",
     fence,
   };
+}
+function fixtureEnvironment(): Record<string, string> {
+  const allowed = new Set(["systemroot", "windir", "comspec", "path", "pathext", "temp", "tmp"]);
+  return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => allowed.has(key.toLowerCase()) && value !== undefined)) as Record<string, string>;
 }
 function bindingFor(launch: ProcessLaunchResult) {
   return {

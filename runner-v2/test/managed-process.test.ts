@@ -904,9 +904,11 @@ test("signal accepts durable stopped proof after the supervisor closes the respo
   const baseStatus = {
     protocol: "aiboard-managed-process/v1", processId: "close-race", supervisorPid: process.pid,
     childPid: 123, port: address.port, exitCode: 7, signal: null, error: null,
-    ownershipReleased: false, updatedAt: new Date().toISOString(),
+    ownershipReleased: false, retainedOutputChunks: 0, retainedOutputBytes: 0, updatedAt: new Date().toISOString(),
   };
   Object.assign(terminalStatus, { ...baseStatus, status: "stopped", ownershipReleased: true });
+  writeFileSync(join(state, "fake.stdout"), "");
+  writeFileSync(join(state, "fake.stderr"), "");
   writeFileSync(statusPath, `${JSON.stringify({ ...baseStatus, status: "running" })}\n`);
   writeFileSync(join(state, "close-race.json"), JSON.stringify({
     processId: "close-race", pid: 123, runId: "run_1", sessionId: "session_owner",
@@ -946,9 +948,11 @@ test("Windows Job reconciliation accepts exact durable stopped proof after a res
   const baseStatus = {
     protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid,
     childPid: 123, port: address.port, exitCode: 7, signal: null, error: null,
-    ownershipReleased: false, updatedAt: new Date().toISOString(),
+    ownershipReleased: false, retainedOutputChunks: 0, retainedOutputBytes: 0, updatedAt: new Date().toISOString(),
   };
   Object.assign(terminalStatus, { ...baseStatus, status: "stopped", ownershipReleased: true });
+  writeFileSync(join(state, "fake.stdout"), "");
+  writeFileSync(join(state, "fake.stderr"), "");
   writeFileSync(statusPath, `${JSON.stringify({ ...baseStatus, status: "running" })}\n`);
   writeFileSync(join(state, `${processId}.json`), JSON.stringify({
     processId, pid: 123, runId: "run_1", sessionId: "session_owner", command: "fixture",

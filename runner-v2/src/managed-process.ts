@@ -579,7 +579,7 @@ export class ManagedProcessService {
     owner: WindowsJobOwnershipKey,
     offsets: { readonly stdout: number; readonly stderr: number },
     fence?: WindowsJobWriterFence,
-  ): ManagedProcessOutputRead {
+  ): ManagedProcessOutputRead | Promise<ManagedProcessOutputRead> {
     return this.windowsJobHost.readOwnedOutput(processId, owner, offsets, fence);
   }
 
@@ -587,20 +587,20 @@ export class ManagedProcessService {
     return await this.windowsJobHost.probeActiveJobCreateClose();
   }
 
-  async attachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey): Promise<WindowsJobChannelState> {
-    return await this.windowsJobHost.attachOwnedChannel!(processId, owner);
+  async attachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState> {
+    return await this.windowsJobHost.attachOwnedChannel!(processId, owner, fence);
   }
 
-  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, sequence: number, payload: Uint8Array) {
-    return await this.windowsJobHost.writeOwnedInput!(processId, owner, sequence, payload);
+  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array) {
+    return await this.windowsJobHost.writeOwnedInput!(processId, owner, fence, sequence, payload);
   }
 
-  async closeOwnedInput(processId: string, owner: WindowsJobOwnershipKey): Promise<void> {
-    await this.windowsJobHost.closeOwnedInput!(processId, owner);
+  async closeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
+    await this.windowsJobHost.closeOwnedInput!(processId, owner, fence);
   }
 
-  async acknowledgeOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, stream: "stdout" | "stderr", endOffset: number): Promise<void> {
-    await this.windowsJobHost.acknowledgeOwnedOutput!(processId, owner, stream, endOffset);
+  async acknowledgeOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, stream: "stdout" | "stderr", endOffset: number): Promise<void> {
+    await this.windowsJobHost.acknowledgeOwnedOutput!(processId, owner, fence, stream, endOffset);
   }
 
   async claimOwnedFence(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
@@ -976,6 +976,12 @@ async function supervisorRequest(
 ): Promise<SupervisorStatus> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<SupervisorStatus>((resolvePromise, reject) => {
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
     const call = request(
       {
         hostname: "127.0.0.1",
@@ -996,22 +1002,27 @@ async function supervisorRequest(
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.once("error", fail);
+        response.once("aborted", () => fail(new Error("Supervisor response was aborted.")));
         response.once("end", () => {
+          if (settled) return;
           const text = Buffer.concat(chunks).toString("utf8");
           if (response.statusCode !== 200) {
-            reject(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`));
+            fail(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`));
             return;
           }
           try {
-            resolvePromise(JSON.parse(text) as SupervisorStatus);
+            const parsed = JSON.parse(text) as SupervisorStatus;
+            settled = true;
+            resolvePromise(parsed);
           } catch (error) {
-            reject(error);
+            fail(error);
           }
         });
       }
     );
     call.once("timeout", () => call.destroy(new Error("Supervisor request timed out.")));
-    call.once("error", reject);
+    call.once("error", fail);
     if (payload) call.write(payload);
     call.end();
   });

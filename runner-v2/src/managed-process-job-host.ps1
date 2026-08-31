@@ -326,7 +326,8 @@ public static class ManagedProcessJobHost
         string command,
         string[] arguments,
         string cwd,
-        IDictionary<string, string> environment)
+        IDictionary<string, string> environment,
+        string eventPath)
     {
         IntPtr job = IntPtr.Zero;
         IntPtr environmentBlock = IntPtr.Zero;
@@ -374,7 +375,7 @@ public static class ManagedProcessJobHost
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
             processInfo.hThread = IntPtr.Zero;
-            EmitLsp("started", processInfo.dwProcessId, null, ActiveProcesses(job), null);
+            EmitLsp(eventPath, "started", processInfo.dwProcessId, null, ActiveProcesses(job), null);
 
             bool rootExited = false;
             bool rootReported = false;
@@ -392,13 +393,13 @@ public static class ManagedProcessJobHost
                     uint active = ActiveProcesses(job);
                     if (active == 0)
                     {
-                        EmitLsp("natural_stopped", processInfo.dwProcessId, rootExitCode, 0, null);
+                        EmitLsp(eventPath, "natural_stopped", processInfo.dwProcessId, rootExitCode, 0, null);
                         return unchecked((int)rootExitCode);
                     }
                     if (!rootReported)
                     {
                         rootReported = true;
-                        EmitLsp("root_exited", processInfo.dwProcessId, rootExitCode, active, null);
+                        EmitLsp(eventPath, "root_exited", processInfo.dwProcessId, rootExitCode, active, null);
                     }
                 }
                 Thread.Sleep(25);
@@ -410,7 +411,7 @@ public static class ManagedProcessJobHost
             string detail = native == null
                 ? error.Message
                 : error.Message + " (Win32 " + native.NativeErrorCode + ")";
-            EmitLsp("error", processInfo.dwProcessId, null, 0, detail);
+            EmitLsp(eventPath, "error", processInfo.dwProcessId, null, 0, detail);
             return 1;
         }
         finally
@@ -672,13 +673,21 @@ public static class ManagedProcessJobHost
         Console.Out.Flush();
     }
 
-    private static void EmitLsp(string type, uint pid, uint? exitCode, uint active, string error)
+    private static void EmitLsp(string eventPath, string type, uint pid, uint? exitCode, uint active, string error)
     {
         string escaped = error == null ? "null" : "\"" + error.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-        Console.Error.WriteLine("@aiboard-lsp-job-host:{\"type\":\"" + type + "\",\"pid\":" + pid +
+        string line = "{\"type\":\"" + type + "\",\"pid\":" + pid +
             ",\"exitCode\":" + (exitCode.HasValue ? exitCode.Value.ToString() : "null") +
-            ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}");
-        Console.Error.Flush();
+            ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}";
+        if (String.IsNullOrWhiteSpace(eventPath))
+        {
+            Console.Error.WriteLine("@aiboard-lsp-job-host:" + line);
+            Console.Error.Flush();
+        }
+        else
+        {
+            File.AppendAllText(eventPath, line + Environment.NewLine, new UTF8Encoding(false));
+        }
     }
 
     private static void CheckHandle(IntPtr handle, string operation)
@@ -717,12 +726,17 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
             [string]$configuration.command,
             [string[]]@($configuration.args | ForEach-Object { [string]$_ }),
             [string]$configuration.cwd,
-            $environment
+            $environment,
+            [string]$configuration.eventPath
         )
         exit $exitCode
     } catch {
-        [Console]::Error.WriteLine('@aiboard-lsp-job-host:{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}')
-        [Console]::Error.Flush()
+        if ($null -ne $configuration -and -not [string]::IsNullOrWhiteSpace([string]$configuration.eventPath)) {
+            [IO.File]::AppendAllText([string]$configuration.eventPath, '{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}' + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        } else {
+            [Console]::Error.WriteLine('@aiboard-lsp-job-host:{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}')
+            [Console]::Error.Flush()
+        }
         exit 1
     }
 }

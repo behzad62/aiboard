@@ -1,11 +1,14 @@
 import { NativeOwnedProcessBackend } from "./native-process-backend.js";
 import type { NativeProcessOperations } from "./native-process-backend.js";
 import { createHash } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
+import { delimiter, dirname, extname, isAbsolute, resolve } from "node:path";
 
 import type { ProcessBackend, ProcessBackendBinding, ProcessEffectFence, ProcessLaunchRequest } from "./process-backend.js";
 import type { ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import type { WindowsJobProcessHost } from "./windows-job-process-host.js";
 import { createWindowsJobProcessChannelProvider } from "./windows-job-process-channel.js";
+import type { ProcessHostSemanticFact, ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 
 export interface WindowsProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -13,34 +16,52 @@ export interface WindowsProcessBackendOptions {
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
+  readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "reconcile" | "release") => void | Promise<void>;
   /** A caller may supply the existing authenticated Job supervisor as an optional enhancement. */
   readonly jobObjects?: "unavailable" | { readonly service: WindowsJobProcessHost };
+  readonly semanticFacts?: ProcessHostSemanticFacts;
 }
 export type WindowsJobProcessService = WindowsJobProcessHost;
 
+export class WindowsBatchLaunchUnavailableError extends Error {
+  readonly code = "windows_batch_argv_unverified";
+  constructor() {
+    super("Windows batch launch is unavailable because argv-boundary semantics were not verified.");
+    this.name = "WindowsBatchLaunchUnavailableError";
+  }
+}
+
 export class WindowsProcessBackend extends NativeOwnedProcessBackend {
+  private readonly windowsBatchArgv: ProcessHostSemanticFact;
   constructor(options: WindowsProcessBackendOptions = {}) {
+    const exactTreeBirth = options.semanticFacts?.exactTreeBirth ?? "unavailable";
     super({
       stateDirectory: options.stateDirectory,
       pollIntervalMs: options.pollIntervalMs,
       operations: options.operations,
       replayCapacityChunks: options.replayCapacityChunks,
       replayCapacityBytes: options.replayCapacityBytes,
+      beforeFenceEffect: options.beforeFenceEffect,
       platform: "windows",
       backendId: "runner-windows-supervisor-v1",
       capabilities: {
-        tree_termination: "partial",
+        tree_termination: exactTreeBirth === "verified" ? "enforced" : exactTreeBirth === "partial" ? "partial" : "unavailable",
         crash_cleanup: "unavailable",
-        verified_emptiness: "partial",
+        verified_emptiness: exactTreeBirth === "verified" ? "enforced" : exactTreeBirth === "partial" ? "partial" : "unavailable",
         write_confinement: "unavailable",
       },
     });
+    this.windowsBatchArgv = options.semanticFacts?.windowsBatchArgv ?? "unavailable";
+  }
+  override async launch(request: ProcessLaunchRequest): Promise<unknown> {
+    const pinned = assertWindowsBatchSemantics(request, this.windowsBatchArgv);
+    return await super.launch(pinned);
   }
 }
 
 export function createWindowsProcessBackend(options: WindowsProcessBackendOptions = {}): ProcessBackend {
-  return options.jobObjects && options.jobObjects !== "unavailable"
-    ? new WindowsJobObjectProcessBackend(options.jobObjects.service)
+  return options.jobObjects && options.jobObjects !== "unavailable" && options.semanticFacts?.jobContainment === "verified"
+    ? new WindowsJobObjectProcessBackend(options.jobObjects.service, options.semanticFacts?.windowsBatchArgv)
     : new WindowsProcessBackend(options);
 }
 
@@ -50,7 +71,10 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly controls = new Map<string, JobControlLane>();
   private readonly activations = new Map<string, Promise<JobControlLane>>();
   private readonly writerFences = new Map<string, ProcessEffectFence>();
-  constructor(private readonly service: WindowsJobProcessService) {}
+  constructor(
+    private readonly service: WindowsJobProcessService,
+    private readonly windowsBatchArgv: ProcessHostSemanticFact = "unavailable",
+  ) {}
   async probe(): Promise<unknown> {
     if (!(await this.service.probeActiveJobCreateClose()))
       throw new Error("Authenticated Windows Job Object enhancement is unavailable.");
@@ -68,6 +92,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     };
   }
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
+    request = assertWindowsBatchSemantics(request, this.windowsBatchArgv);
     const sessionId = request.intent.sessionId ?? request.intent.invocationId;
     const snapshot = await this.service.launchOwned({
       runId: request.intent.runId,
@@ -99,10 +124,10 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     await this.claimFence(identity, _fence);
     if (!this.service.attachOwnedChannel || !this.service.writeOwnedInput || !this.service.closeOwnedInput || !this.service.acknowledgeOwnedOutput || !this.service.claimOwnedFence) {
       for (;;) {
-        const { snapshot, deliveredOutput } = await this.control(identity, async () => {
+        const { snapshot, deliveredOutput } = await this.control(identity, _fence, async () => {
           await this.claimFence(identity, _fence);
           const offsets = this.offsets.get(identity.processId) ?? { stdout: 0, stderr: 0 };
-          const unread = this.service.readOwnedOutput(identity.processId, jobOwner(identity), offsets, _fence);
+          const unread = await this.service.readOwnedOutput(identity.processId, jobOwner(identity), offsets, _fence);
           for (const stream of ["stdout", "stderr"] as const) {
             if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
           }
@@ -143,14 +168,14 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, fence?: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
     await this.claimFence(identity, fence);
-    const snapshot = await this.control(identity, async () =>
+    const snapshot = await this.control(identity, fence, async () =>
       await this.service.signalOwned(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobOwner(identity), fence));
     return { state: snapshot.status === "stopped" ? "exited" : "running" };
   }
   async verifyEmpty(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
     await this.claimFence(identity, fence);
-    const snapshot = await this.control(identity, async () =>
+    const snapshot = await this.control(identity, fence, async () =>
       await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence));
     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
   }
@@ -161,7 +186,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     }
     try { await this.claimFence(identity, fence); } catch { return { state: "identity_mismatch" }; }
     try {
-      const snapshot = await this.control(identity, async () =>
+      const snapshot = await this.control(identity, fence, async () =>
         await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence));
       if (snapshot.startedAt !== identity.startedAt) return { state: "identity_mismatch" };
       if (snapshot.status === "running") return { state: "running" };
@@ -193,7 +218,13 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     try {
       await release;
     } catch (error) {
-      if (lane.release === release) lane.release = undefined;
+      if (lane.release === release) {
+        lane.release = undefined;
+        const currentFence = this.writerFences.get(processId);
+        if ((error as { code?: unknown })?.code === "process_identity_mismatch" ||
+            (fence && currentFence && (currentFence.ownerId !== fence.ownerId || currentFence.fencingToken !== fence.fencingToken)))
+          lane.releaseRequested = false;
+      }
       throw error;
     }
     return { released: true };
@@ -240,15 +271,15 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     this.writerFences.set(identity.processId, { ...exact });
   }
 
-  private async control<T>(identity: JobIdentity, action: () => Promise<T>): Promise<T> {
-    const lane = await this.ensureLane(identity);
+  private async control<T>(identity: JobIdentity, fence: ProcessEffectFence | undefined, action: () => Promise<T>): Promise<T> {
+    const lane = await this.ensureLane(identity, fence);
     if (lane.releaseRequested) throw new Error("Windows Job control was requested while release is pending.");
     const result = lane.tail.catch(() => undefined).then(action);
     lane.tail = result.then(() => undefined, () => undefined);
     return await result;
   }
 
-  private async ensureLane(identity: JobIdentity): Promise<JobControlLane> {
+  private async ensureLane(identity: JobIdentity, fence: ProcessEffectFence | undefined): Promise<JobControlLane> {
     const existing = this.controls.get(identity.processId);
     if (existing) {
       this.assertLaneIdentity(existing, identity);
@@ -257,7 +288,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     let activation = this.activations.get(identity.processId);
     if (!activation) {
       activation = (async () => {
-        const snapshot = await this.service.reconcileOwned(identity.processId, jobOwner(identity));
+        const snapshot = await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence);
         if (snapshot.startedAt !== identity.startedAt) throw new JobIdentityMismatchError("Windows Job startedAt identity mismatch.");
         return this.registerLane(identity);
       })();
@@ -296,6 +327,51 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       owned.birthDiscriminator !== identity.birthDiscriminator
     ) throw new JobIdentityMismatchError("Windows Job exact identity mismatch.");
   }
+}
+
+function assertWindowsBatchSemantics(request: ProcessLaunchRequest, fact: ProcessHostSemanticFact): ProcessLaunchRequest {
+  request = canonicalizeWindowsResolutionEnvironment(request);
+  const lexicalExtension = extname(request.intent.executable).toLowerCase();
+  if ((lexicalExtension === ".cmd" || lexicalExtension === ".bat") && fact !== "verified")
+    throw new WindowsBatchLaunchUnavailableError();
+  if (lexicalExtension) return request;
+  const resolved = resolveWindowsExecutable(request);
+  if (!resolved) return request;
+  const resolvedExtension = extname(resolved).toLowerCase();
+  if ((resolvedExtension === ".cmd" || resolvedExtension === ".bat") && fact !== "verified")
+    throw new WindowsBatchLaunchUnavailableError();
+  return { ...request, intent: { ...request.intent, executable: resolved } };
+}
+
+function resolveWindowsExecutable(request: ProcessLaunchRequest): string | undefined {
+  const executable = request.intent.executable;
+  const hasDirectory = isAbsolute(executable) || dirname(executable) !== ".";
+  const directories = hasDirectory
+    ? [request.intent.workingDirectory]
+    : [request.intent.workingDirectory, ...(request.environment.PATH ?? "").split(delimiter)
+      .map((entry) => entry.trim().replace(/^"|"$/g, "")).filter(Boolean)];
+  const extensions = (request.environment.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")
+    .map((entry) => entry.trim()).filter(Boolean).map((entry) => entry.startsWith(".") ? entry : `.${entry}`);
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = resolve(directory, `${executable}${extension}`);
+      try { if (existsSync(candidate) && statSync(candidate).isFile()) return candidate; } catch {}
+    }
+  }
+  return undefined;
+}
+
+function canonicalizeWindowsResolutionEnvironment(request: ProcessLaunchRequest): ProcessLaunchRequest {
+  const environment = { ...request.environment };
+  for (const canonical of ["PATH", "PATHEXT"] as const) {
+    const keys = Object.keys(environment).filter((key) => key.toLowerCase() === canonical.toLowerCase());
+    const values = new Set(keys.map((key) => environment[key]));
+    if (values.size > 1) throw new Error(`Windows launch environment has ambiguous ${canonical} entries.`);
+    for (const key of keys) delete environment[key];
+    const value = values.values().next().value as string | undefined;
+    if (value !== undefined) environment[canonical] = value;
+  }
+  return { ...request, environment };
 }
 
 interface JobControlLane {

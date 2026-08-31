@@ -257,6 +257,82 @@ overlap is expected.
   required identity re-attestation; and corrupt/unsettled output can be skipped
   or released fail-open. Governed repair round 1 is authorized automatically
   because all findings are within the approved B2 scope. B3 remains locked.
+- Task 8.0B2 fix round 2 is implementation-complete pending broad closure. The
+  six residual Important findings now have deterministic RED/revert/GREEN
+  coverage: real Job stdout/stderr producer backpressure; independently active
+  and consumed portable/batch/tree/Job facts; lowest-boundary atomic fencing;
+  final fenced release/deletion; strict portable/Job retained evidence; and a
+  watchdog/cadence/failure counter for asynchronous CIM. Controller audit also
+  closed ambient probe credential exposure, missing Job read evidence,
+  unavailable-by-default facts, active-Job-false fallback, final output-ack
+  ordering, and same-host fence-lock starvation under a 65 MiB load. Current
+  gates are B2 141/141, affected Windows 17/17, reset 1/1, semantic 2/2,
+  production load 1/1, typecheck/diff/residue green. B3 remains locked while
+  compatibility/static/full Runner gates run.
+- Task 8.0B2 fix round 2 controller-audit closure added current-fence Job
+  activation, post-effect Job snapshots, strict portable ack/terminal/release/
+  verify-empty linearization, authenticated launch rollback on Windows and
+  POSIX, pinned PATH/PATHEXT batch resolution, detach-safe output lanes, and
+  minimal fixture environments. Current focused result is 91 pass, zero fail,
+  one explicit POSIX-native Windows skip; typecheck/diff and new-residue gates
+  are green. Seventeen previously verified Temp roots remain only because local
+  execution policy rejected exact literal recursive removal; no supervisor or
+  descendant references them. B3 remains locked pending broad closure.
+- Final Task 8.0B2 controller fixes add takeover-safe Job release lanes,
+  detach-safe Job stream iteration, real fenced POSIX group control, bounded
+  POSIX enumeration and Windows CIM/taskkill control, bounded 1 MiB Job input,
+  exact portable state identity, post-supervisor control semantics, root-only
+  `/T` termination, and Windows directory-first/PATHEXT-inner resolution.
+  Current gates: exact 12/12, full Windows 62/62, compatibility 320/320,
+  typecheck GREEN, zero live supervisors/new roots after bounded settle. Twenty
+  exact interrupted Temp roots (17 prior plus 3 Job64 diagnostics) have no live
+  references but remain because execution policy rejected literal recursive
+  removal before deletion. B3 remains locked while final static/full Runner
+  closure runs.
+- Task 8.0B2 broad attempt 1 exited non-green without a trustworthy retained
+  aggregate count. Exact isolation repaired the R2-caused legacy LSP stderr
+  fallback (17/17 GREEN) and a loaded semantic-probe retained-root path. Probe
+  cleanup is now exact-root-contained, state/launch/identity validated, owner
+  capped, and independently birth-audited through one bounded inventory. Its
+  outside-root, missing-root, and removal mutations were RED/reverted/GREEN;
+  semantic is 13/13, recovery 1/1, typecheck/lint/diff GREEN, and bounded settle
+  is zero live supervisors. Broad restart remains the final locked gate.
+- Broad attempt 2 completed with 1,357 total / 1,350 pass / five fail / one
+  cancelled / one skip. All six affected cases were GREEN alone; combined load
+  reproduced fixture cleanup EPERM and semantic stable-release contention.
+  Test fixtures now require bounded exact terminal/release cleanup, while the
+  semantic probe retries transient stable release only inside its unchanged
+  deadline. Retry removal was RED/reverted/GREEN; affected stress is 106/106,
+  type/lint/diff GREEN, and bounded residue is zero. Final broad restart is in
+  progress; B3 remains locked.
+- The next unbounded broad completed 1,358 total / 1,353 pass / four fail / one
+  skip; every failure was fail-closed Windows host-fixture contention and exact
+  reruns were green. `test:runner-v2` now bounds only Node file concurrency to
+  three, while the separate real affected stress remains GREEN 106/106. The
+  unbounded run is the RED mutation; production deadlines and semantics are
+  unchanged. Final exact package-script exit is pending.
+- A file-concurrency cap of three still completed 1,358 total / 1,355 pass /
+  two fail / one skip; both failures passed exact. The package gate now
+  serializes files, while the mandatory real three-file concurrency stress stays
+  GREEN 106/106. The capped-three run is RED evidence for the final harness
+  bound; production behavior is unchanged.
+- The first serial broad completed 1,358 total / 1,356 pass / one fail / one
+  skip. Its sole retained-window failure reproduced exact 3/5 as Windows
+  `open("wx")` reported active lock contention as `EBUSY`. Shared bounded lock
+  acquisition/finalization now covers native claim/effect, portable supervisor
+  effect, and Job host claim/effect; transient-unlink removal and
+  persistent-error swallowing were each RED, reverted, and GREEN. Exact replay
+  is GREEN 5/5 and the affected real concurrent group is GREEN 109/109.
+  Typecheck/lint/diff are GREEN and bounded residue is zero. One final serial
+  package exit remains required; B3 remains locked.
+- A later serial gate completed 1,361 total / 1,359 pass / one fail / one skip.
+  Its raw post-header `ECONNRESET` exposed missing `IncomingMessage`
+  error/aborted settlement in both authenticated supervisor HTTP clients.
+  Requests now settle once and only accept a reset through independent durable
+  stopped proof. Listener removal was RED by timeout and reverted GREEN; reset
+  stress is 20/20 and affected concurrent stress is GREEN 110/110. Bounded
+  residue is zero live owned supervisors. One final serial package exit remains
+  required; B3 remains locked.
 
 ## Breaker rulings
 
@@ -277,3 +353,9 @@ overlap is expected.
   fit, persistence fails typed, the provider tombstone is not acknowledged, and
   selector ownership/listeners remain. This preserves the five-round breaker
   while refusing to waive durable cleanup evidence.
+- Final serial `npm run test:runner-v2` is GREEN: 1,362 total / 1,361 pass /
+  zero fail / zero cancelled / one explicit POSIX-host skip; all chained Runner
+  client/policy/UI/observability checks passed. Fresh post-gate typecheck,
+  targeted lint, diff check, and five-second residue settle are GREEN with zero
+  live owned supervisors. Fix Round 2 is implementation-verified and ready for
+  review; it does not approve B2 or unlock B3.

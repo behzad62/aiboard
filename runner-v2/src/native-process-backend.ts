@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,10 @@ import type {
   ProcessLaunchRequest,
 } from "./process-backend.js";
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
-import { createPortableProcessChannelProvider } from "./portable-process-channel.js";
+import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
+import { isOwnedFenceLockContention, unlinkOwnedFenceLock } from "./owned-fence-lock.mjs";
+
+const FENCE_LOCK_WAITER = new Int32Array(new SharedArrayBuffer(4));
 
 export interface NativeOwnedProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -23,6 +26,7 @@ export interface NativeOwnedProcessBackendOptions {
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
+  readonly beforeFenceEffect?: (kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "release") => void | Promise<void>;
 }
 export interface NativeProcessOperations {
   inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
@@ -202,6 +206,10 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
             if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
             return state === "live" ? "live" : "exited";
           },
+          effect: async (kind, effect) => {
+            await this.options.beforeFenceEffect?.(kind);
+            return commitOwnedFenceEffect(identity, fence, effect);
+          },
         };
       },
     });
@@ -233,17 +241,27 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const validation = this.validate(identity);
     if (validation === "mismatch") throw new Error("Owned process identity mismatch.");
     if (validation === "unknown") throw new Error("Owned process identity inspection is unavailable.");
-    if (validation === "exited") return this.signalState(await this.emptiness(identity));
+    if (validation === "exited") {
+      const remaining = await this.emptiness(identity);
+      if (remaining === "empty") return { state: "exited" };
+      if (remaining === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
+      if (remaining === "outcome_unknown") throw new Error("Owned process membership could not be verified after the supervisor exited.");
+      if (this.options.platform === "windows") throw new Error("Owned Windows supervisor exited before it could control its live descendants.");
+      const signal = action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM";
+      await this.fencedEffect(identity, _fence, "signal", () => this.operations.signal(-identity.supervisorPid, signal));
+      await delay(action === "force_terminate" ? 250 : 75);
+      return this.signalState(await this.waitForKnownEmptiness(identity));
+    }
     if (this.options.platform === "posix") {
       const signal = action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM";
-      this.operations.signal(-identity.supervisorPid, signal);
+      await this.fencedEffect(identity, _fence, "signal", () => this.operations.signal(-identity.supervisorPid, signal));
     } else {
       const beforeSignal = await this.waitForKnownEmptiness(identity);
       if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
       if (beforeSignal === "outcome_unknown") throw new Error("Owned descendant identity is unavailable.");
       const state = readState(identity.directory);
       const sequence = (state?.handledControl ?? 0) + 1;
-      writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action }), { mode: 0o600 });
+      await this.fencedEffect(identity, _fence, "signal", () => writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, ownerId: _fence!.ownerId, fencingToken: _fence!.fencingToken, sequence, action }), { mode: 0o600 }));
     }
     await delay(action === "force_terminate" ? 250 : 75);
     return this.signalState(await this.waitForKnownEmptiness(identity));
@@ -258,7 +276,22 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (validation === "unknown")
       return { empty: false, detail: "Owned process identity inspection is unavailable." };
     const emptiness = await this.emptiness(identity);
-    if (emptiness === "empty") return { empty: true, proofArtifactId: `native-empty:${identity.nonce}` };
+    if (emptiness === "empty") {
+      const stableValidation = this.validate(identity);
+      if ((stableValidation === "live" || stableValidation === "exited") && this.hasTerminalStoppedProof(identity)) {
+        try { assertPortableOutputSettled(identity); } catch { return { empty: false, detail: "Owned output evidence is unsettled or unavailable." }; }
+        try {
+          return await this.fencedEffect(identity, _fence, "verify_empty", () => {
+            const finalValidation = this.validate(identity);
+            if ((finalValidation !== "live" && finalValidation !== "exited") || !this.hasTerminalStoppedProof(identity) || this.emptiness(identity) !== "empty")
+              throw new OwnedProcessIdentityMismatchError("Owned process empty proof lost terminal identity attestation.");
+            assertPortableOutputSettled(identity);
+            return { empty: true, proofArtifactId: `native-empty:${identity.nonce}` };
+          });
+        } catch { return { empty: false, detail: "Owned process empty proof could not be fenced and re-attested." }; }
+      }
+      return { empty: false, detail: "Owned process lacks durable terminal proof." };
+    }
     return {
       empty: false,
       detail: emptiness === "nonempty"
@@ -287,10 +320,18 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (emptiness === "identity_mismatch") return { state: "identity_mismatch" };
     if (emptiness === "outcome_unknown") return { state: "outcome_unknown" };
     if (validation === "live" || emptiness === "nonempty") return { state: "running" };
+    try { assertPortableOutputSettled(identity); }
+    catch { return { state: "outcome_unknown" }; }
+    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
+    const finalValidation = this.validate(identity);
+    const finalState = readState(identity.directory);
+    if ((finalValidation !== "live" && finalValidation !== "exited") || !finalState || finalState.nonce !== identity.nonce ||
+        finalState.supervisorPid !== identity.supervisorPid || finalState.status !== "stopped" || this.emptiness(identity) !== "empty")
+      return { state: "outcome_unknown" };
     return {
       state: "exited",
-      ...(state.exitCode === null ? {} : { exitCode: state.exitCode }),
-      ...(state.signal ? { signal: state.signal } : {}),
+      ...(finalState.exitCode === null ? {} : { exitCode: finalState.exitCode }),
+      ...(finalState.signal ? { signal: finalState.signal } : {}),
     };
   }
 
@@ -302,19 +343,33 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const emptiness = await this.emptiness(identity);
     if (emptiness !== "empty")
       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
+    assertPortableOutputSettled(identity);
+    if (!this.hasTerminalStoppedProof(identity)) throw new Error("Cannot release ownership without durable terminal state proof.");
     const stableValidation = this.validate(identity);
     if (stableValidation === "mismatch" || stableValidation === "unknown") throw new Error("Cannot release ownership after supervisor birth changed.");
     const stableEmptiness = await this.emptiness(identity);
     if (stableEmptiness !== "empty") throw new Error("Cannot release ownership without stable verified emptiness.");
     assertPortableOutputSettled(identity);
-    this.outputOffsets.delete(identity.nonce);
-    rmSync(identity.directory, { recursive: true, force: true });
+    if (!this.hasTerminalStoppedProof(identity)) throw new Error("Cannot release ownership after durable terminal state changed.");
+    await this.fencedEffect(identity, _fence, "release", () => {
+      const finalValidation = this.validate(identity);
+      if ((finalValidation !== "live" && finalValidation !== "exited") || !this.hasTerminalStoppedProof(identity) || this.emptiness(identity) !== "empty")
+        throw new Error("Cannot release ownership without final terminal empty re-attestation.");
+      assertPortableOutputSettled(identity);
+      rmSync(identity.directory, { recursive: true, force: true });
+      this.outputOffsets.delete(identity.nonce);
+    });
     return { released: true };
   }
 
   private assertPlatform(): void {
     if (this.options.platform === "windows" ? process.platform !== "win32" : process.platform === "win32")
       throw new Error(`${this.options.platform} native process backend is unavailable on ${process.platform}.`);
+  }
+  private async fencedEffect<T>(identity: Identity, fence: ProcessEffectFence | undefined, kind: "signal" | "verify_empty" | "release", effect: () => T): Promise<T> {
+    if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
+    await this.options.beforeFenceEffect?.(kind);
+    return commitOwnedFenceEffect(identity, fence, effect);
   }
   private identity(binding: ProcessBackendBinding): Identity {
     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as Identity;
@@ -338,13 +393,14 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (inspection.state === "absent") return "exited";
     return sameProcessBirth(inspection.fingerprint, identity.supervisorBirth) ? "live" : "mismatch";
   }
-  private async emptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+  private emptiness(identity: Identity): "empty" | "nonempty" | "identity_mismatch" | "outcome_unknown" {
     if (this.options.platform === "posix") {
       const members = this.operations.listPosixGroup(identity.supervisorPid);
       return members === undefined ? "outcome_unknown" : members.length === 0 ? "empty" : "nonempty";
     }
     const state = readState(identity.directory);
     if (!state || !Array.isArray(state.knownProcesses)) return "outcome_unknown";
+    if (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid) return "identity_mismatch";
     if (state.status === "outcome_unknown" || state.launchEffect === "unknown") return "outcome_unknown";
     if (state.launchEffect === "not_started")
       return state.knownProcesses.length === 0 ? "empty" : "outcome_unknown";
@@ -399,7 +455,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       if (this.options.platform === "posix") {
         const members = this.operations.listPosixGroup(identity.supervisorPid);
         if (members === undefined) throw new Error("Launch cleanup could not enumerate the owned POSIX group.");
-        this.operations.signal(-identity.supervisorPid, "SIGKILL");
+        this.cleanupFenceEffect(identity, () => this.operations.signal(-identity.supervisorPid, "SIGKILL"));
       } else {
         await delay(Math.max(250, this.pollIntervalMs * 2));
         let before = await this.emptiness(identity);
@@ -412,12 +468,18 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows descendant inspection is unknown.");
         const state = readState(identity.directory);
         const sequence = (state?.handledControl ?? 0) + 1;
-        writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action: "force_terminate" }), { mode: 0o600 });
+        this.cleanupFenceEffect(identity, () => writeFileSync(join(identity.directory, "control.json"), JSON.stringify({
+          nonce: identity.nonce,
+          ownerId: identity.fence!.ownerId,
+          fencingToken: identity.fence!.fencingToken,
+          sequence,
+          action: "force_terminate",
+        }), { mode: 0o600 }));
       }
     } else if (this.options.platform === "posix") {
       const members = this.operations.listPosixGroup(identity.supervisorPid);
       if (members === undefined) throw new Error("Launch cleanup could not enumerate the owned POSIX group after its supervisor exited.");
-      if (members.length > 0) this.operations.signal(-identity.supervisorPid, "SIGKILL");
+      if (members.length > 0) this.cleanupFenceEffect(identity, () => this.operations.signal(-identity.supervisorPid, "SIGKILL"));
     } else {
       let remaining = await this.emptiness(identity);
       while (remaining === "outcome_unknown" && Date.now() < deadline) {
@@ -451,11 +513,17 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       throw launchBlocker(identity, "Launch cleanup preserved evidence because Windows emptiness was not proven before its deadline.");
     throw new Error("Launch cleanup did not produce verified emptiness before its deadline.");
   }
+  private cleanupFenceEffect<T>(identity: Identity, effect: () => T): T {
+    if (!identity.fence) return effect(); // Explicit legacy fixture compatibility; all current launches persist a fence.
+    return commitOwnedFenceEffect(identity, identity.fence, effect);
+  }
   private hasTerminalStoppedProof(identity: Identity): boolean {
     const state = readState(identity.directory);
     if (state?.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid ||
         state.status !== "stopped" || !Array.isArray(state.knownProcesses) ||
         !state.knownProcesses.every(validKnownProcess)) return false;
+    if (this.options.platform === "posix")
+      return state.launchEffect === "started" && state.rootProcess === null && state.knownProcesses.length === 0;
     if (state.launchEffect === "not_started") {
       return state.rootProcess === null && state.knownProcesses.length === 0;
     }
@@ -532,7 +600,7 @@ function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirt
 }
 function osPosixGroupMembers(groupId: number): number[] | undefined {
   try {
-    return execFileSync("ps", ["-e", "-o", "pid=,pgid="], { encoding: "utf8" })
+    return execFileSync("ps", ["-e", "-o", "pid=,pgid="], { encoding: "utf8", timeout: 2_000 })
       .split(/\r?\n/)
       .map((line) => line.trim().split(/\s+/).map(Number))
       .filter(([, pgid]) => pgid === groupId)
@@ -580,16 +648,18 @@ function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): voi
   if (!candidate.ownerId || !Number.isSafeInteger(candidate.fencingToken) || candidate.fencingToken < 1)
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence is invalid.");
   const path = join(identity.directory, "fence.json");
-  const lock = `${path}.lock`;
+  const lock = `${identity.directory}.fence.lock`;
   const deadline = Date.now() + 2_000;
   let descriptor: number | undefined;
   while (descriptor === undefined) {
     try { descriptor = openSync(lock, "wx", 0o600); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline)
+      if (!isOwnedFenceLockContention(error) || Date.now() >= deadline)
         throw new OwnedProcessIdentityMismatchError("Owned process writer fence claim is unavailable.");
+      Atomics.wait(FENCE_LOCK_WAITER, 0, 0, 5);
     }
   }
+  let primaryError: unknown;
   try {
     if (!existsSync(path) && !identity.fence) {
       const temporary = `${path}.${randomUUID()}.tmp`;
@@ -606,9 +676,39 @@ function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): voi
       writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
       renameSync(temporary, path);
     }
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
-    try { unlinkSync(lock); } catch {}
+    unlinkOwnedFenceLock(lock, { primaryError });
+  }
+}
+function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T): T {
+  const path = join(identity.directory, "fence.json");
+  const lock = `${identity.directory}.fence.lock`;
+  const deadline = Date.now() + 2_000;
+  let descriptor: number | undefined;
+  while (descriptor === undefined) {
+    try { descriptor = openSync(lock, "wx", 0o600); }
+    catch (error) {
+      if (!isOwnedFenceLockContention(error) || Date.now() >= deadline)
+        throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.");
+      Atomics.wait(FENCE_LOCK_WAITER, 0, 0, 5);
+    }
+  }
+  let primaryError: unknown;
+  try {
+    const current = readOwnedFence(path, identity);
+    if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+    return effect();
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    closeSync(descriptor);
+    unlinkOwnedFenceLock(lock, { primaryError });
   }
 }
 function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
@@ -617,21 +717,32 @@ function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
     if (value.nonce !== identity.nonce || typeof value.ownerId !== "string" || !Number.isSafeInteger(value.fencingToken)) throw new Error();
     return { ownerId: value.ownerId, fencingToken: value.fencingToken };
   } catch {
-    if (!existsSync(path) && identity.fence) return identity.fence;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence evidence is invalid.");
   }
 }
 function assertPortableOutputSettled(identity: Identity): void {
-  for (const relative of [join("channel", "output"), join("channel", "ack")]) {
-    const directory = join(identity.directory, relative);
-    let entries: string[];
-    try { entries = readdirSync(directory); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw new Error("Portable output ownership could not be inspected before release.");
+  const checkpointPath = join(identity.directory, "channel", "output-checkpoint.json");
+  try {
+    const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
+    if (checkpoint.nonce !== identity.nonce) throw new Error();
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (!Number.isSafeInteger(checkpoint[stream]?.sequence) || checkpoint[stream].sequence < 0 ||
+          !Number.isSafeInteger(checkpoint[stream]?.endOffset) || checkpoint[stream].endOffset < 0) throw new Error();
     }
-    if (entries.some((name) => relative.endsWith("output") || /^(stdout|stderr)-/.test(name)))
-      throw new Error("Portable output ownership is unsettled; release is refused.");
+  } catch (error) {
+    throw new Error("Portable output checkpoint evidence is missing or unreadable.", { cause: error });
   }
+  const outputDirectory = join(identity.directory, "channel", "output");
+  let outputEntries: string[];
+  try { outputEntries = readdirSync(outputDirectory); } catch (error) {
+    throw new Error("Portable output ownership evidence is missing or unreadable.", { cause: error });
+  }
+  if (outputEntries.length > 0) throw new Error("Portable output ownership is unsettled; release is refused.");
+  const acknowledgements = validatePortableAcknowledgementEvidence(
+    join(identity.directory, "channel", "ack"), identity.nonce, [],
+  );
+  if (acknowledgements.some((name) => /^(stdout|stderr)-/.test(name)))
+    throw new Error("Portable output ownership is unsettled; release is refused.");
 }
 function launchBlocker(identity: Identity, message: string): NativeProcessLaunchBlockedError {
   const state = readState(identity.directory);

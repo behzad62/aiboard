@@ -15,6 +15,15 @@ export interface ProcessHostSemanticFacts {
   readonly jobContainment: ProcessHostSemanticFact;
 }
 
+export type WindowsProcessBackendKind = "job" | "portable";
+
+export function selectWindowsProcessBackendKinds(facts: ProcessHostSemanticFacts): readonly WindowsProcessBackendKind[] {
+  return Object.freeze([
+    ...(facts.jobContainment === "verified" ? ["job" as const] : []),
+    ...(facts.portableDuplex === "verified" ? ["portable" as const] : []),
+  ]);
+}
+
 export async function probeProcessHostSemantics(
   source: ProcessHostSemanticProbeSource,
 ): Promise<ProcessHostSemanticFacts> {
