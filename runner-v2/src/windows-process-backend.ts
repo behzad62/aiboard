@@ -171,8 +171,14 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, fence?: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);
     await this.claimFence(identity, fence);
-    const snapshot = await this.control(identity, fence, async () =>
-      await this.service.signalOwned(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobOwner(identity), fence));
+    let snapshot;
+    try {
+      snapshot = await this.control(identity, fence, async () =>
+        await this.service.signalOwned(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobOwner(identity), fence));
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "process_output_unsettled_terminal") return { state: "exited" };
+      throw error;
+    }
     return { state: snapshot.status === "stopped" ? "exited" : "running" };
   }
   async verifyEmpty(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
@@ -270,6 +276,9 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     const exact = fence!;
     const current = this.writerFences.get(identity.processId);
     if (current && (exact.fencingToken < current.fencingToken || (exact.fencingToken === current.fencingToken && exact.ownerId !== current.ownerId))) throw new JobIdentityMismatchError("Windows Job writer fence is stale.");
+    // Every host effect still reloads and compares the durable fence. Repeating
+    // the external claim for an already-current writer adds no authority.
+    if (current && exact.fencingToken === current.fencingToken && exact.ownerId === current.ownerId) return;
     await this.service.claimOwnedFence?.(identity.processId, jobOwner(identity), exact);
     this.writerFences.set(identity.processId, { ...exact });
   }

@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -15,7 +16,7 @@ import {
   type WindowsJobProcessService,
 } from "../src/windows-process-backend.js";
 import { ManagedProcessService } from "../src/managed-process.js";
-import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, WindowsJobHostError } from "../src/windows-job-process-host.js";
 import { NativeProcessLaunchBlockedError, type NativeProcessOperations } from "../src/native-process-backend.js";
 import { probeProcessHostSemantics } from "../src/process-host-semantic-probes.js";
 import {
@@ -120,6 +121,108 @@ test("Windows Job durable release refuses stale post-release fence resurrection 
     await assert.rejects(host.reconcileOwned(processId, owner, higher), /released|inactive|ownership/i);
     assert.equal(existsSync(lockPath), false, "stale post-release callers must not recreate the coordination database");
     for (const suffix of ["-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("Windows Job exact release recovers a durable tombstone after SQLite holder finalization fails", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-release-recovery-"));
+  const processId = "job-release-recovery";
+  const ownedDirectory = join(root, processId);
+  mkdirSync(ownedDirectory, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const statusPath = join(ownedDirectory, "supervisor.jsonl");
+  const stdoutPath = join(ownedDirectory, "stdout.log");
+  const stderrPath = join(ownedDirectory, "stderr.log");
+  writeFileSync(stdoutPath, ""); writeFileSync(stderrPath, "");
+  writeFileSync(statusPath, `${JSON.stringify({
+    protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid, childPid: 0, port: 0,
+    status: "stopped", exitCode: 0, signal: null, error: null, ownershipReleased: true,
+    updatedAt: startedAt, retainedOutputChunks: 0, retainedOutputBytes: 0,
+  })}\n`);
+  writeFileSync(join(root, `${processId}.json`), JSON.stringify({
+    processId, runId: "run-release-recovery", sessionId: "session-release-recovery", pid: 0,
+    command: process.execPath, args: [], cwd: root, environmentKeys: [], startedAt, updatedAt: startedAt,
+    status: "stopped", exitCode: 0, signal: null, stdoutPath, stderrPath, interactive: true,
+    outputOffsets: { stdout: 0, stderr: 0 }, outputSequences: { stdout: 0, stderr: 0 },
+    supervisor: { protocol: "aiboard-managed-process/v1", token: "r".repeat(64), statusPath, supervisorPid: process.pid, port: 0 },
+    currentFence: fence,
+  }));
+  const owner = { runId: "run-release-recovery", sessionId: "session-release-recovery" };
+  const lockPath = join(root, `${processId}.fence.lock`);
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
+    await host.claimOwnedFence!(processId, owner, fence);
+    const fault = new DatabaseSync(lockPath);
+    fault.exec("CREATE TRIGGER injected_release_delete_fault BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'injected release holder finalization fault'); END;");
+    fault.close();
+    await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /fence.*lock|finalization|unavailable/i);
+    const releasedRecord = JSON.parse(readFileSync(join(root, `${processId}.json`), "utf8")) as { backendOwnershipReleasedAt?: string };
+    assert.match(releasedRecord.backendOwnershipReleasedAt ?? "", /\S/);
+    const retained = new DatabaseSync(lockPath);
+    assert.equal(Number(retained.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), 1);
+    retained.close();
+    await assert.rejects(host.releaseOwned(processId, owner, startedAt, { ownerId: "foreign", fencingToken: fence.fencingToken }), /fence|identity|stale/i);
+    await assert.rejects(host.releaseOwned(processId, { ...owner, sessionId: "foreign" }, startedAt, fence), /another session|owned/i);
+    await assert.rejects(host.releaseOwned(processId, owner, new Date(Date.parse(startedAt) + 1).toISOString(), fence), /identity mismatch/i);
+    const corrupt = new DatabaseSync(lockPath);
+    corrupt.prepare("UPDATE owned_fence_protocol SET version = 99").run(); corrupt.close();
+    await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /protocol|corrupt|foreign|unavailable/i);
+    assert.equal(existsSync(lockPath), true, "ambiguous protocol must preserve coordination evidence");
+    const restored = new DatabaseSync(lockPath);
+    restored.prepare("UPDATE owned_fence_protocol SET version = 1").run(); restored.close();
+    const terminalStatus = readFileSync(statusPath, "utf8");
+    writeFileSync(statusPath, `${JSON.stringify({
+      protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid, childPid: process.pid, port: 0,
+      status: "running", exitCode: null, signal: null, error: null, ownershipReleased: false,
+      updatedAt: startedAt, retainedOutputChunks: 0, retainedOutputBytes: 0,
+    })}\n`);
+    await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /terminal|released|unavailable/i);
+    assert.equal(existsSync(lockPath), true, "active nonreleased evidence must preserve coordination");
+    writeFileSync(statusPath, terminalStatus);
+    assert.equal((await host.releaseOwned(processId, owner, startedAt, fence)).ownershipReleased, true);
+    assert.equal(existsSync(lockPath), false);
+    for (const suffix of ["-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("Windows Job prequeued releases persist one tombstone and both retire exact coordination", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-release-race-"));
+  const processId = "job-release-race";
+  const ownedDirectory = join(root, processId);
+  mkdirSync(ownedDirectory, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const statusPath = join(ownedDirectory, "supervisor.jsonl");
+  const stdoutPath = join(ownedDirectory, "stdout.log");
+  const stderrPath = join(ownedDirectory, "stderr.log");
+  writeFileSync(stdoutPath, ""); writeFileSync(stderrPath, "");
+  writeFileSync(statusPath, `${JSON.stringify({
+    protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid, childPid: 0, port: 0,
+    status: "stopped", exitCode: 0, signal: null, error: null, ownershipReleased: true,
+    updatedAt: startedAt, retainedOutputChunks: 0, retainedOutputBytes: 0,
+  })}\n`);
+  const recordPath = join(root, `${processId}.json`);
+  writeFileSync(recordPath, JSON.stringify({
+    processId, runId: "run-release-race", sessionId: "session-release-race", pid: 0,
+    command: process.execPath, args: [], cwd: root, environmentKeys: [], startedAt, updatedAt: startedAt,
+    status: "stopped", exitCode: 0, signal: null, stdoutPath, stderrPath, interactive: true,
+    outputOffsets: { stdout: 0, stderr: 0 }, outputSequences: { stdout: 0, stderr: 0 },
+    supervisor: { protocol: "aiboard-managed-process/v1", token: "q".repeat(64), statusPath, supervisorPid: process.pid, port: 0 },
+    currentFence: fence,
+  }));
+  const owner = { runId: "run-release-race", sessionId: "session-release-race" };
+  const lockPath = join(root, `${processId}.fence.lock`);
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
+    const [first, second] = await Promise.all([
+      host.releaseOwned(processId, owner, startedAt, fence),
+      host.releaseOwned(processId, owner, startedAt, fence),
+    ]);
+    assert.equal(first.ownershipReleased, true); assert.equal(second.ownershipReleased, true);
+    const durable = JSON.parse(readFileSync(recordPath, "utf8")) as { backendOwnershipReleasedAt?: string };
+    assert.match(durable.backendOwnershipReleasedAt ?? "", /\S/);
+    assert.equal(existsSync(lockPath), false);
+    for (const suffix of ["-journal", "-wal", "-shm"]) assert.equal(existsSync(`${lockPath}${suffix}`), false);
+    await assert.rejects(host.reconcileOwned(processId, owner, fence), /released|inactive|ownership/i);
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
@@ -459,6 +562,40 @@ test("Windows birth inspection failure is unknown and cannot prove empty, releas
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Windows emptiness inspects every recorded birth in one bounded batch", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-batched-birth-"));
+  const stateDirectory = join(root, "identity"); mkdirSync(stateDirectory);
+  writePortableState(stateDirectory, {
+    launchEffect: "started",
+    rootProcess: { pid: 9002, birth: "owned-root-birth" },
+    knownProcesses: [
+      { pid: 9002, birth: "owned-root-birth" },
+      { pid: 9003, birth: "owned-child-birth" },
+    ],
+  });
+  const batches: number[][] = [];
+  const operations = {
+    inspectProcessBirth: (pid: number) => {
+      if (pid === 9001) return { state: "present", fingerprint: "supervisor-birth" } as const;
+      assert.fail(`per-process inspection escaped the bounded batch for ${pid}`);
+    },
+    inspectProcessBirths: (pids: readonly number[]) => {
+      batches.push([...pids]);
+      return new Map(pids.map((pid) => [pid, { state: "absent" } as const]));
+    },
+    listPosixGroup: () => undefined,
+    signal: () => undefined,
+  } satisfies NativeProcessOperations & {
+    inspectProcessBirths(pids: readonly number[], platform: "posix" | "windows"): ReadonlyMap<number, { readonly state: "absent" }>;
+  };
+  const backend = createWindowsProcessBackend({ stateDirectory: root, operations });
+  try {
+    const internal = backend as unknown as { emptiness(identity: ReturnType<typeof portableIdentity>): string };
+    assert.equal(internal.emptiness(portableIdentity(stateDirectory, "supervisor-birth")), "empty");
+    assert.deepEqual(batches, [[9002, 9003]]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("Windows cannot imply control when the supervisor exited with a live birth-attested descendant", async () => {
@@ -884,9 +1021,17 @@ test("Windows launch rollback authenticates force termination at the real live s
   const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as ReturnType<typeof portableIdentity> & { fence: ProcessEffectFence };
   const rollback = backend as unknown as { cleanupFailedLaunch(value: typeof identity): Promise<void> };
   try {
-    await rollback.cleanupFailedLaunch(identity);
+    let boundedBlocker: NativeProcessLaunchBlockedError | undefined;
+    try {
+      await rollback.cleanupFailedLaunch(identity);
+    } catch (error) {
+      assert.ok(error instanceof NativeProcessLaunchBlockedError, "bounded Windows inspection uncertainty must preserve exact cleanup evidence");
+      assert.equal(error.evidenceDirectory, identity.directory);
+      boundedBlocker = error;
+    }
     const state = await waitForPortableState(identity.directory, (value) => value.status === "stopped");
     assert.equal(state.handledControl, 1);
+    if (boundedBlocker) await rollback.cleanupFailedLaunch(identity);
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, true);
     await backend.release(binding, fence);
   } finally {
@@ -993,8 +1138,10 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
     grant: { ...jobRequest.grant, invocationId: "windows-job-native" },
   }));
   const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
+  const jobIdentity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { processId: string };
+  const hostRecord = JSON.parse(readFileSync(join(`${join(root, "state")}-job-host`, `${jobIdentity.processId}.json`), "utf8")) as { supervisor: { supervisorPid: number } };
+  const takeoverFence = { ownerId: "job-recovery", fencingToken: fence.fencingToken + 1 };
   try {
-    const takeoverFence = { ownerId: "job-recovery", fencingToken: fence.fencingToken + 1 };
     assert.equal(parseProcessReconciliation(await backend.reconcile(binding, takeoverFence)).state, "running");
     await assert.rejects(backend.signal(binding, "terminate", fence), /fence|identity/i);
     assert.deepEqual(
@@ -1017,10 +1164,13 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
     assert.equal((await observation as { state: string }).state, "exited");
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, takeoverFence)).empty, true);
   } finally {
-    await backend.signal(binding, "force_terminate", { ownerId: "job-recovery", fencingToken: fence.fencingToken + 1 }).catch(() => undefined);
+    await backend.signal(binding, "force_terminate", takeoverFence).catch(() => undefined);
+    await backend.release(binding, takeoverFence).catch(() => undefined);
     await service.stopRun("run").catch(() => undefined);
     service.close();
-    try { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); } catch {}
+    if (processIsAlive(hostRecord.supervisor.supervisorPid)) process.kill(hostRecord.supervisor.supervisorPid, "SIGKILL");
+    await waitForCondition(() => !processIsAlive(hostRecord.supervisor.supervisorPid));
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
 
@@ -1331,6 +1481,7 @@ test("Windows Job coalesced read acknowledges every exact retained chunk boundar
   const launch = parseProcessLaunchResult(await backend.launch({ ...outputRequest, intent: { ...outputRequest.intent, invocationId: "job-coalesced", workingDirectory: workspace }, grant: { ...outputRequest.grant, invocationId: "job-coalesced" } }));
   const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
   const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { processId: string };
+  const hostRecord = JSON.parse(readFileSync(join(stateDirectory, `${identity.processId}.json`), "utf8")) as { supervisor: { supervisorPid: number } };
   const statusPath = join(stateDirectory, identity.processId, "supervisor.jsonl");
   let channel: Awaited<ReturnType<ReturnType<WindowsJobObjectProcessBackend["backpressuredChannelProvider"]>["acquire"]>> | undefined;
   try {
@@ -1350,11 +1501,13 @@ test("Windows Job coalesced read acknowledges every exact retained chunk boundar
   } finally {
     await channel?.detach().catch(() => undefined);
     await backend.signal(binding, "force_terminate", fence).catch(() => undefined); await backend.release(binding, fence).catch(() => undefined);
+    if (processIsAlive(hostRecord.supervisor.supervisorPid)) process.kill(hostRecord.supervisor.supervisorPid, "SIGKILL");
+    await waitForCondition(() => !processIsAlive(hostRecord.supervisor.supervisorPid));
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
 
-test("Windows Job failed signal with retained output exits after recovery acknowledgement", { timeout: 30_000 }, async (t) => {
+test("Windows Job signal reports exact empty while retained output drains and exits after acknowledgement", { timeout: 30_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job retained signal fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-signal-retained-")); const stateDirectory = join(root, "state"); const workspace = join(root, "workspace"); mkdirSync(workspace);
   const host = createWindowsJobProcessHost({ stateDirectory, stopDeadlineMs: 500 }); const backend = new WindowsJobObjectProcessBackend(host);
@@ -1370,7 +1523,7 @@ test("Windows Job failed signal with retained output exits after recovery acknow
     channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
     channel.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); entered(); await barrier; return metadata; });
     await atSink;
-    await assert.rejects(backend.signal(binding, "force_terminate", fence), /close|deadline|timeout/i);
+    assert.deepEqual(parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence)), { state: "exited" });
     resume();
     await channel.waitForTerminal(); assert.equal(Buffer.concat(output).toString(), "h".repeat(131072)); await channel.detach(); channel = undefined;
     await backend.release(binding, fence);
@@ -1701,6 +1854,40 @@ test("Windows Job serializes ownership observation with cancellation control", a
   releaseReconciliation();
   assert.equal(parseProcessSignalResult(await cancellation).state, "exited");
   assert.deepEqual(parseProcessReconciliation(await observation), { state: "exited", exitCode: 143, signal: "SIGTERM" });
+});
+
+test("Windows Job cancellation accepts exact terminal state while retained output drains", async () => {
+  const processId = "job-terminal-output-drain";
+  const service: WindowsJobProcessService = {
+    probeActiveJobCreateClose: async () => true,
+    launchOwned: async () => { throw new Error("fixture does not launch"); },
+    readOwnedOutput: (_processId, _owner, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+    reconcileOwned: async () => stoppedJobSnapshot(processId),
+    signalOwned: async () => { throw new WindowsJobHostError("process_output_unsettled_terminal", "Windows Job retained output is unsettled."); },
+    releaseOwned: async () => stoppedJobSnapshot(processId),
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  assert.deepEqual(parseProcessSignalResult(await backend.signal(jobBinding(processId), "interrupt", fence)), { state: "exited" });
+});
+
+test("Windows Job cancellation fails closed without exact empty retained-output proof", async () => {
+  const processId = "job-terminal-output-ambiguous";
+  const base: WindowsJobProcessService = {
+    probeActiveJobCreateClose: async () => true,
+    launchOwned: async () => { throw new Error("fixture does not launch"); },
+    readOwnedOutput: (_processId, _owner, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+    reconcileOwned: async () => ({ ...stoppedJobSnapshot(processId), status: "running", exitCode: null, ownershipReleased: false }),
+    signalOwned: async () => { throw new WindowsJobHostError("process_control_unavailable", "Job membership remains active or ambiguous."); },
+    releaseOwned: async () => stoppedJobSnapshot(processId),
+  };
+  const backend = new WindowsJobObjectProcessBackend(base);
+  await assert.rejects(backend.signal(jobBinding(processId), "interrupt", fence), /active or ambiguous/i);
+
+  const descendantsActive = new WindowsJobObjectProcessBackend({
+    ...base,
+    signalOwned: async () => ({ ...stoppedJobSnapshot(processId), status: "running", exitCode: null, ownershipReleased: false }),
+  });
+  assert.deepEqual(parseProcessSignalResult(await descendantsActive.signal(jobBinding(processId), "interrupt", fence)), { state: "running" });
 });
 
 test("Windows Job shared activation rejects a different exact birth before service action", async () => {

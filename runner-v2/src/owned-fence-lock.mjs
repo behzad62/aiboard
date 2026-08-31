@@ -89,6 +89,76 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
   }
 }
 
+/**
+ * Retire coordination whose external authority has already durably revoked it.
+ * The caller's assertion is deliberately repeated inside the SQLite write
+ * transaction: a stale or foreign tombstone must never authorize lock removal.
+ */
+export async function recoverRevokedOwnedFenceLock(path, options = {}) {
+  path = resolve(path);
+  const previous = asynchronousTails.get(path) ?? Promise.resolve();
+  let finishTurn;
+  const turn = new Promise((resolvePromise) => { finishTurn = resolvePromise; });
+  const tail = previous.then(() => turn);
+  asynchronousTails.set(path, tail);
+  await previous;
+  try {
+    if (typeof options.assertRevoked !== "function")
+      throw new OwnedFenceLockUnavailableError("Owned fence revocation authority is unavailable.");
+    options.assertRevoked();
+    if (!existsSync(path)) {
+      removeRetiredProtocol(path);
+      return;
+    }
+    const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+    const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
+      throw new OwnedFenceLockUnavailableError("Owned fence revocation bounds are invalid.");
+    const deadline = Date.now() + deadlineMs;
+    let database;
+    let committed = false;
+    try {
+      database = new DatabaseSync(path);
+      database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
+      for (;;) {
+        try { database.exec("BEGIN IMMEDIATE"); break; }
+        catch (error) {
+          if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
+          Atomics.wait(waiter, 0, 0, retryDelayMs);
+        }
+      }
+      assertRecoverableProtocol(database);
+      options.assertRevoked();
+      const triggers = database.prepare("SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'trigger'").all();
+      for (const trigger of triggers) {
+        if (trigger.name === "owned_fence_acquisition_immutable") continue;
+        if (trigger.tableName !== "owned_fence_holder" || typeof trigger.sql !== "string" ||
+            !/\bBEFORE\s+DELETE\s+ON\s+owned_fence_holder\b/i.test(trigger.sql))
+          throw new OwnedFenceLockUnavailableError("Owned fence revocation metadata is corrupt or foreign.");
+        database.exec(`DROP TRIGGER ${quoteIdentifier(trigger.name)}`);
+      }
+      database.prepare("DELETE FROM owned_fence_holder").run();
+      database.prepare("DELETE FROM owned_fence_acquisition").run();
+      database.prepare("UPDATE owned_fence_protocol SET retired = 1 WHERE retired = 0").run();
+      const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
+      const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
+      const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
+      if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 || proposals !== 0 || holders !== 0)
+        throw new OwnedFenceLockUnavailableError("Owned fence revocation did not retire exact coordination state.");
+      database.exec("COMMIT");
+      committed = true;
+    } catch (error) {
+      rollbackQuietly(database);
+      throw normalizeUnavailable(error);
+    } finally { database?.close(); }
+    if (!committed) throw new OwnedFenceLockUnavailableError("Owned fence revocation commit is unavailable.");
+    removeRetiredProtocol(path);
+  } finally {
+    finishTurn();
+    if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
+  }
+}
+
 export function currentProcessBirthFingerprint() {
   cachedCurrentBirth ??= inspectProcessBirth(process.pid);
   if (cachedCurrentBirth.state !== "same")
@@ -349,10 +419,49 @@ function assertActiveProtocol(database) {
     throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
 }
 
+function assertRecoverableProtocol(database) {
+  const required = new Map([
+    ["owned_fence_protocol", ["version", "retired"]],
+    ["owned_fence_acquisition", ["acquisition_id", "holder_pid", "holder_birth"]],
+    ["owned_fence_holder", ["lock_key", "acquisition_id", "holder_pid", "holder_birth"]],
+  ]);
+  const objects = new Map(database.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => [row.name, row.type]));
+  if (objects.get("owned_fence_acquisition_immutable") !== "trigger")
+    throw new OwnedFenceLockUnavailableError("Owned fence revocation metadata is incomplete or invalid.");
+  for (const [table, columns] of required) {
+    if (objects.get(table) !== "table") throw new OwnedFenceLockUnavailableError("Owned fence revocation metadata is incomplete or invalid.");
+    const actual = database.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all().map((row) => row.name);
+    if (actual.length !== columns.length || actual.some((name, index) => name !== columns[index]))
+      throw new OwnedFenceLockUnavailableError("Owned fence revocation schema is corrupt or foreign.");
+  }
+  const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
+  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || ![0, 1].includes(protocol[0].retired))
+    throw new OwnedFenceLockUnavailableError("Owned fence revocation protocol is corrupt or foreign.");
+  const proposals = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_acquisition").all();
+  if (proposals.some((row) => typeof row.acquisitionId !== "string" || !/^[0-9a-f-]{36}$/i.test(row.acquisitionId) ||
+      !Number.isSafeInteger(Number(row.holderPid)) || Number(row.holderPid) < 1 || typeof row.holderBirth !== "string" || row.holderBirth.length === 0))
+    throw new OwnedFenceLockUnavailableError("Owned fence revocation proposals are corrupt or foreign.");
+  const holders = database.prepare(`
+    SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid, h.holder_birth AS holderBirth,
+           a.holder_pid AS proposalPid, a.holder_birth AS proposalBirth
+    FROM owned_fence_holder h LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
+  `).all();
+  if (holders.length > 1 || holders.some((row) => !validHolderRow(row)))
+    throw new OwnedFenceLockUnavailableError("Owned fence revocation holder is corrupt or foreign.");
+}
+
+function quoteIdentifier(value) { return `"${String(value).replaceAll('"', '""')}"`; }
+
 function removeRetiredProtocol(path) {
   const deadline = Date.now() + DEFAULT_DEADLINE_MS;
   for (;;) {
-    try { unlinkSync(path); return; }
+    try {
+      for (const candidate of [`${path}-journal`, `${path}-wal`, `${path}-shm`, path]) {
+        try { unlinkSync(candidate); }
+        catch (error) { if (error?.code !== "ENOENT") throw error; }
+      }
+      return;
+    }
     catch (error) {
       if (error?.code === "ENOENT") return;
       if (!["EPERM", "EACCES", "EBUSY"].includes(error?.code) || Date.now() >= deadline)

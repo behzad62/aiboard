@@ -23,8 +23,8 @@ let backend;
 let backendInput;
 let childExitResolve;
 let stopping = false;
+let interactiveTerminationRequested = false;
 let settled = false;
-let jobEmptyProof = false;
 let backendFailure;
 const retainedOutput = [];
 const outputOffsets = { stdout: 0, stderr: 0 };
@@ -53,6 +53,8 @@ const status = {
   signal: null,
   error: null,
   ownershipReleased: false,
+  jobEmptyProof: false,
+  terminationRequested: false,
   updatedAt: new Date().toISOString(),
 };
 
@@ -174,7 +176,7 @@ const server = createServer(async (request, response) => {
       // If this was the final retained chunk, persist exact terminal proof
       // before the acknowledgement lets the host begin re-attestation.
       tryMarkStopped();
-      json(response, 200, { acknowledged: true, stream: body.stream, endOffset: body.endOffset });
+      json(response, 200, { acknowledged: true, stream: body.stream, endOffset: body.endOffset, status });
     } catch (error) {
       json(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
@@ -193,7 +195,8 @@ const server = createServer(async (request, response) => {
     }
     await stopOwnedTree(body.signal, Number(body.deadlineMs) || config.stopDeadlineMs);
     json(response, 200, status);
-    server.close(() => process.exit(0));
+    if (status.status === "stopped") server.close(() => process.exit(0));
+    else stopping = false;
   } catch (error) {
     stopping = false;
     tryMarkStopped();
@@ -260,16 +263,21 @@ function launchWindowsJob() {
     lines.on("line", (line) => handleJobEvent(line));
   }
   backend.once("error", (error) => startupFailed(error));
+  backend.once("exit", () => {
+    // Process exit closes the Job host's kill-on-close handle even if bounded
+    // retained output keeps stdio pending. That is the exact empty proof.
+    status.jobEmptyProof = true;
+  });
   backend.once("close", (exitCode) => {
     if (config.interactive) pollInteractiveJobEvents();
     backendInput = undefined;
     if (settled) return;
-    if (jobEmptyProof) {
-      tryMarkStopped();
-      return;
-    }
     if (backendFailure) {
       startupFailed(backendFailure);
+      return;
+    }
+    if (status.jobEmptyProof) {
+      tryMarkStopped();
       return;
     }
     status.exitCode = exitCode;
@@ -328,7 +336,7 @@ function publishRetainedOutputStatus() {
 }
 
 function tryMarkStopped() {
-  if (!jobEmptyProof) return;
+  if (!status.jobEmptyProof) return;
   if (config.interactive && (!interactiveStdoutEnded || !interactiveStderrEnded)) return;
   if (retainedOutput.length > 0) {
     if (status.status !== "exited_unknown" || status.error !== "Windows Job output remains unsettled after the job became empty.") {
@@ -377,11 +385,11 @@ function handleJobEvent(line) {
   }
   if (event.type === "natural_stopped") {
     status.exitCode = event.exitCode;
-    jobEmptyProof = true;
+    status.jobEmptyProof = true;
     return;
   }
   if (event.type === "stopped") {
-    jobEmptyProof = true;
+    status.jobEmptyProof = true;
     return;
   }
   if (event.type === "error") {
@@ -431,12 +439,24 @@ async function stopOwnedTree(signal, requestedDeadline) {
   stopping = true;
   const deadlineMs = Math.max(250, Math.min(30_000, requestedDeadline || 5_000));
   if (config.interactive) {
-    // The interactive host dedicates its stdin to the child. Closing the host
-    // closes the authenticated Job handle, whose KILL_ON_JOB_CLOSE guarantee
-    // terminates every member; the close event below is therefore empty proof.
-    jobEmptyProof = true;
-    backend.kill(signal === "SIGKILL" ? "SIGKILL" : "SIGTERM");
-    if (!(await waitForExit(deadlineMs))) throw new Error("Interactive Windows Job did not close before the deadline.");
+    // The interactive host dedicates its stdin to the child. Its exact process
+    // exit closes the kill-on-close Job handle; the exit listener records proof.
+    if (!status.jobEmptyProof && !interactiveTerminationRequested) {
+      interactiveTerminationRequested = true;
+      status.terminationRequested = true;
+      persistStatus();
+      if (!backend.kill(signal === "SIGKILL" ? "SIGKILL" : "SIGTERM")) {
+        interactiveTerminationRequested = false;
+        status.terminationRequested = false;
+        persistStatus();
+        throw new Error("Interactive Windows Job termination request was not accepted.");
+      }
+    }
+    if (!status.jobEmptyProof && retainedOutput.length === 0)
+      await waitForExit(Math.min(250, deadlineMs));
+    // Do not wait here while holding the host's fence-effect lock: retained
+    // output acknowledgements need that lock to drain bounded stdio. Until the
+    // exact Job-host exit listener publishes empty proof this remains running.
     return;
   }
   if (!backendInput || backendInput.destroyed) {

@@ -187,8 +187,7 @@ test("portable retained window backpressures output and replays it after exact r
     unsubscribe();
     await reattached.channel.detach();
   } finally {
-    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
-    await backend.release(binding, fence).catch(() => undefined);
+    await cleanupPortableBackendFixture(backend, binding, fence);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
@@ -207,8 +206,7 @@ test("portable control and channel acquisition reject a stale writer fence befor
     const staleBinding = { ...binding, opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url") };
     await assert.rejects(backend.backpressuredChannelProvider().acquire(staleBinding, staleFence), /birth|identity|fence/i);
   } finally {
-    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
-    await backend.release(binding, fence).catch(() => undefined);
+    await cleanupPortableBackendFixture(backend, binding, fence);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });

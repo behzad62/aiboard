@@ -125,7 +125,6 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     this.outputTail = this.outputTail.then(async () => {
       const sink = this.sink;
       if (!sink || this.detached) return;
-      await this.authority.reattest();
       const unread = await this.authority.service.readOwnedOutput(this.authority.processId, this.authority.owner, this.offsets, this.authority.fence);
       for (const stream of ["stdout", "stderr"] as const) {
         if (this.detached || this.sink !== sink) return;

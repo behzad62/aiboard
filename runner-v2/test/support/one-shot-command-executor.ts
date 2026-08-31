@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -43,6 +43,7 @@ export interface ProductionOneShotCommandFixtureOptions {
   readonly leaseDurationMs?: number;
   readonly leaseHeartbeatMs?: number;
   readonly managedProcessStartDeadlineMs?: number;
+  readonly managedProcessCleanupDeadlineMs?: number;
   readonly backendDecorator?: (backend: ProcessBackend) => ProcessBackend;
 }
 
@@ -142,11 +143,48 @@ export function createProductionOneShotCommandFixture(
       await kernel.runtime.reconcileStartup();
       kernel.readOnlyStore.close();
       managed?.close();
+      await assertNoLiveManagedFixtureSupervisor(
+        root,
+        options.managedProcessCleanupDeadlineMs ?? options.managedProcessStartDeadlineMs ?? 15_000,
+      );
       rmSync(root, { recursive: true, force: true });
     },
   };
   t?.after(async () => await fixture.close());
   return fixture;
+}
+
+async function assertNoLiveManagedFixtureSupervisor(root: string, deadlineMs: number): Promise<void> {
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1)
+    throw new Error("Production fixture cleanup deadline must be a positive integer.");
+  const deadline = Date.now() + deadlineMs;
+  const hostDirectory = join(root, "managed-job-host");
+  let records: string[];
+  try { records = readdirSync(hostDirectory).filter((entry) => entry.endsWith(".json")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of records) {
+    let supervisorPid: number;
+    try {
+      const record = JSON.parse(readFileSync(join(hostDirectory, entry), "utf8")) as { supervisor?: { supervisorPid?: unknown } };
+      supervisorPid = Number(record.supervisor?.supervisorPid);
+    } catch { throw new Error(`Production fixture cleanup preserved unreadable managed evidence: ${entry}`); }
+    if (!Number.isSafeInteger(supervisorPid) || supervisorPid < 1)
+      throw new Error(`Production fixture cleanup preserved invalid managed identity: ${entry}`);
+    for (;;) {
+      try {
+        process.kill(supervisorPid, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") break;
+        throw error;
+      }
+      if (Date.now() >= deadline)
+        throw new Error(`Production fixture cleanup preserved live managed supervisor ${supervisorPid}.`);
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
+    }
+  }
 }
 
 /** Existing tests use Runner-internal grants but the full production runtime graph. */

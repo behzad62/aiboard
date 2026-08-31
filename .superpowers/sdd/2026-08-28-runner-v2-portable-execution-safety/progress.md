@@ -415,3 +415,19 @@ overlap is expected.
   remains live. Every earlier finding remains addressed. Governed fix round 5 is
   authorized only for these two gaps under `task-8.0b2-fix-round-5-brief.md`.
   B3 remains locked.
+- Task 8.0B2 fix round 5 implementation is complete pending independent review.
+  Exact Job-release retry now retires a lock stranded after durable release,
+  queued effects recheck the active tombstone at their transaction boundary,
+  and corrupt/foreign/active evidence remains fail-closed. Semantic cleanup now
+  uses a bounded full Windows process inventory and a single configurable
+  15-second absolute cleanup budget, detects literal and encoded unlisted root
+  references, and never signals uncertain/recycled processes. Final adversarial
+  work also closed the terminal-but-output-draining Job race without changing
+  the 25-second production command timeout or 256 KiB retained-output cap.
+  Current evidence: reviewer reproduction 57/57, affected concurrent 122/122,
+  compatibility 377 pass plus one explicit POSIX-host skip, Windows 70/70,
+  Node 22.13 and Node 24 locks 12/12 each, evidence 16/16, type/lint/static/diff
+  GREEN, and final serial package 1,393 total / 1,392 pass / zero fail or
+  cancelled / one explicit POSIX-host skip. No live helpers or new B2 roots
+  remain; two historical fail-closed roots are deliberately preserved outside
+  deletion authority. B2 remains locked and B3 has not started.

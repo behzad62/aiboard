@@ -25,5 +25,9 @@ export function inspectGenericPosixProcessBirth(
 ): { readonly state: "same"; readonly fingerprint: string } | { readonly state: "absent" | "unknown" };
 export function retryRetiredOwnedFenceCleanup(path: string, cleanup: () => void, options?: Pick<OwnedFenceLockOptions, "deadlineMs" | "retryDelayMs">): Promise<void>;
 export function retiredOwnedFenceCleanupAvailable(path: string): boolean;
+export function recoverRevokedOwnedFenceLock(
+  path: string,
+  options: Pick<OwnedFenceLockOptions, "deadlineMs" | "retryDelayMs"> & { readonly assertRevoked: () => void },
+): Promise<void>;
 export function withOwnedFenceLockSync<T>(path: string, effect: () => T, options?: OwnedFenceLockOptions): T;
 export function withOwnedFenceLock<T>(path: string, effect: () => T | Promise<T>, options?: OwnedFenceLockOptions): Promise<T>;

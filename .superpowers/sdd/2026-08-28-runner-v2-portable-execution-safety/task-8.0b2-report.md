@@ -886,3 +886,82 @@ approve B2 or begin B3.
   live managed/portable supervisors = 0 and exact B2-prefix roots = 0. No B3,
   OCI-family activation, production deadline change, or Node patch pin was made.
   B2 remains locked for fresh independent review.
+
+## Fix round 5 implementation evidence
+
+- R5.1 now treats an exact durable Job release record as a revocation tombstone
+  that still requires coordination retirement. The injected post-record SQLite
+  finalization failure remains observable on the first release; exact retry
+  validates schema, ownership key, process identity, writer fence, and released
+  state, revokes the otherwise-live holder, rejects/removes queued proposals,
+  closes the database, and removes its DB/journal/WAL/SHM authority. Removing
+  that recovery retained the holder and residue (RED); reverting it is GREEN.
+  Two releases queued before the first commit persist exactly one release effect,
+  while the second performs only governed cleanup. Calls queued behind release
+  refuse at the final active-state transaction boundary. Corrupt, foreign,
+  wrong-session/run/process/fence, and active-record cases preserve evidence and
+  refuse forced retirement.
+- R5.2 replaces recorded-PID-only closure with one bounded global Windows
+  inventory containing PID, exact birth, parent, executable, and full command
+  line. Literal and base64/base64url normalized-root references are detected,
+  including unlisted processes. Only the exact PID/birth/nonce/encoded-root
+  supervisor can be stopped; recycled recorded children and unlisted referrers
+  are never signalled. A real unlisted-referrer fixture preserves the root while
+  that process is live and removes it only after the referrer exits. Removing
+  the global-reference check made the deletion guard RED; revert is GREEN.
+  Timeout, malformed/truncated inventory, inaccessible command-line evidence,
+  and unresolved references all fail closed and preserve the root.
+- Windows birth inspection is batched, `ESRCH` remains the only fast absence
+  proof, and temporal descendant decisions use current birth evidence. The
+  cleanup operation uses one caller-configurable absolute budget, shared by
+  inventory, authenticated stop, and recheck rather than resetting a timeout at
+  each step. Its portable default is 15 seconds; a deterministic guard observes
+  remaining budgets `100 -> 90 -> 80 -> 70 -> 60`, and an exhausted budget never
+  invokes `taskkill`. No build-task limit, product command deadline, or retry cap
+  was raised or introduced.
+- Final adversarial review found a separate terminal/output race exposed by the
+  existing 65 MiB evidence guard: the durable Job could be terminal while its
+  output pipe was still draining. Durable `jobEmptyProof`,
+  `terminationRequested`, and output-ack status now distinguish process-tree
+  emptiness from completed output settlement. Status reattestation and the
+  fenced evidence read are fused into one durable lock turn, while the host
+  still reloads and compares the durable writer fence for every effect. This
+  preserves the 256 KiB retained window and unchanged 25,000 ms production
+  command timeout. Before the throughput repair the command reached
+  67,174,407 of 68,157,454 expected stdout bytes at the deadline (RED). Diagnostic
+  64 KiB and 256 KiB chunk-size mutations remained RED/worse and were reverted.
+  The unchanged-cap/deadline implementation is GREEN in 18.25 seconds; its
+  higher-fence takeover, missing-evidence, producer-backpressure, coalesced-ack,
+  terminal-settlement, and sink-failure neighbours are GREEN 8/8, and the full
+  evidence file is GREEN 16/16.
+- The unchanged reviewer reproduction is GREEN 57/57. Node 24.18 and the policy
+  floor Node 22.13 lock groups are GREEN 12/12 each. Affected concurrent process
+  host/channel/backend coverage is GREEN 122/122. B1/8.0A/Task 5/7/3
+  compatibility is GREEN: 378 total, 377 pass, zero fail, and one explicit
+  POSIX-host skip. The Windows Runner group is GREEN 70/70, including an exact
+  replay of one load-sensitive portable descendant cleanup case. Semantic
+  cleanup targeting is GREEN 6/6.
+- The final uninterrupted serial `npm run test:runner-v2` gate exited 0:
+  1,393 total, 1,392 pass, zero fail, zero cancelled, and one explicit POSIX-host
+  skip in 783.215 seconds. Every chained Runner client, native-policy, policy-UI,
+  cutover, pause-gate, model-usage, live-discussion, transcript, native-files,
+  run-stats, steering, and observability check passed. Fresh Runner typecheck,
+  targeted ESLint, `git diff --check`, Node-policy/pin, actor/dependency, raw
+  process, and product-routing/B3 static audits are GREEN. The Node policy
+  remains exactly `>=22.13.0 <23 || >=24.0.0 <25`; no exact Node patch pin,
+  family migration, OCI activation, or B3 change was added.
+- No live managed, portable, or Job helper remains, and the gates created no new
+  B2 roots. Governed cleanup removed the one historical deletion-authorized
+  semantic fixture. Two older B2 roots remain intentionally preserved because
+  their durable outcomes are fail-closed/uncertain: one portable write-effect
+  root with `outcome_unknown`, and one Job root with `exited_unknown`. Every
+  recorded PID is absent and a current global audit finds no literal or encoded
+  reference, but the evidence does not meet deletion authority. A separate old
+  failed production fixture is likewise outside B2 deletion authority. Manual
+  exact-root removal attempts were blocked before execution by host policy; no
+  alternate-shell bypass was attempted. Thus the bounded settle finishes with
+  zero live helpers, zero new roots, and zero deletion-authorized B2 residue,
+  while correctly retaining unrelated/uncertain evidence.
+- Fix round 5 implementation and verification are complete. B2 remains locked
+  until a fresh independent scoped review reports zero Critical and Important
+  findings. B3 has not started.

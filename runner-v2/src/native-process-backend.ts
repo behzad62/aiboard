@@ -30,6 +30,8 @@ export interface NativeOwnedProcessBackendOptions {
 }
 export interface NativeProcessOperations {
   inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
+  /** Optional bounded snapshot used to avoid one host-tool process per recorded Windows member. */
+  inspectProcessBirths?(pids: readonly number[], platform: "posix" | "windows"): ReadonlyMap<number, ProcessBirthInspection> | undefined;
   listPosixGroup(groupId: number): readonly number[] | undefined;
   signal(pid: number, signal: NodeJS.Signals): void;
 }
@@ -434,10 +436,17 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       !validKnownProcess(state.rootProcess) ||
       !state.knownProcesses.some((process) => process.pid === state.rootProcess!.pid && process.birth === state.rootProcess!.birth)
     ) return "outcome_unknown";
+    const pids = state.knownProcesses.map(({ pid }) => pid);
+    const inspections = this.operations.inspectProcessBirths
+      ? this.operations.inspectProcessBirths(pids, "windows")
+      : undefined;
+    if (this.operations.inspectProcessBirths && !inspections) return "outcome_unknown";
     let live = false;
     for (const process of state.knownProcesses) {
       if (!Number.isSafeInteger(process.pid) || !process.birth) return "outcome_unknown";
-      const inspection = this.operations.inspectProcessBirth(process.pid, "windows");
+      const inspection = inspections?.get(process.pid) ?? (
+        this.operations.inspectProcessBirths ? { state: "unknown" } : this.operations.inspectProcessBirth(process.pid, "windows")
+      );
       if (inspection.state === "unknown") return "outcome_unknown";
       if (inspection.state === "absent") continue;
       if (!sameProcessBirth(inspection.fingerprint, process.birth)) return "identity_mismatch";
@@ -595,6 +604,8 @@ function readState(directory: string): SupervisorState | undefined {
 function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection {
   try {
     if (platform === "windows") {
+      try { process.kill(pid, 0); }
+      catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? { state: "absent" } : { state: "unknown" }; }
       const result = execFileSync("powershell.exe", [
         "-NoLogo",
         "-NoProfile",
@@ -623,6 +634,46 @@ function osProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirt
     return result ? { state: "present", fingerprint: result } : { state: "absent" };
   } catch { return { state: "unknown" }; }
 }
+function osProcessBirths(pids: readonly number[], platform: "posix" | "windows"): ReadonlyMap<number, ProcessBirthInspection> | undefined {
+  if (platform !== "windows" || pids.length < 1 || pids.length > 256 || pids.some((pid) => !Number.isSafeInteger(pid) || pid < 1)) return undefined;
+  try {
+    const result = new Map<number, ProcessBirthInspection>();
+    const live: number[] = [];
+    for (const pid of pids) {
+      try { process.kill(pid, 0); live.push(pid); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") return undefined;
+        result.set(pid, { state: "absent" });
+      }
+    }
+    if (live.length === 0) return result;
+    const ids = live.join(",");
+    const output = execFileSync("powershell.exe", [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `$ErrorActionPreference='Stop';foreach($processId in @(${ids})){try{$p=Get-Process -Id $processId -ErrorAction Stop;if($null-eq$p-or$null-eq$p.StartTime){"VANISHED|$processId"}else{"$($p.Id)|$($p.StartTime.ToUniversalTime().ToString('o'))"}}catch{if($_.FullyQualifiedErrorId.StartsWith('NoProcessFoundForGivenId,')){"VANISHED|$processId"}else{throw}}}`,
+    ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+    const requested = new Set(live);
+    for (const pid of live) result.set(pid, { state: "absent" });
+    for (const line of output.split(/\r?\n/).filter(Boolean)) {
+      const separator = line.indexOf("|");
+      if (line.startsWith("VANISHED|")) {
+        const pid = Number(line.slice(separator + 1));
+        if (!requested.has(pid)) return undefined;
+        try { process.kill(pid, 0); return undefined; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") return undefined; }
+        continue;
+      }
+      const pid = Number(line.slice(0, separator));
+      const birth = line.slice(separator + 1);
+      if (separator < 1 || !requested.has(pid) || !birth || result.get(pid)?.state === "present") return undefined;
+      result.set(pid, { state: "present", fingerprint: normalizeProcessBirth(birth) });
+    }
+    return result;
+  } catch { return undefined; }
+}
 function osPosixGroupMembers(groupId: number): number[] | undefined {
   try {
     return execFileSync("ps", ["-e", "-o", "pid=,pgid="], { encoding: "utf8", timeout: 2_000 })
@@ -639,6 +690,7 @@ function pidAlive(pid: number): boolean {
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 const DEFAULT_OPERATIONS: NativeProcessOperations = {
   inspectProcessBirth: osProcessBirth,
+  inspectProcessBirths: osProcessBirths,
   listPosixGroup: osPosixGroupMembers,
   signal: (pid, signal) => process.kill(pid, signal),
 };
