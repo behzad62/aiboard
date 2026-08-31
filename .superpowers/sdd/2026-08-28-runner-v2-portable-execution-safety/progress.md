@@ -550,3 +550,32 @@ overlap is expected.
   remain with no deletion authority. Node
   policy, B3, OCI activation, routing, and production limits are unchanged. B2
   and B3 remain locked for the required independent review.
+- Task 8.0B2 fix-round-10 independent re-review: CHANGES REQUIRED with zero
+  Critical, three Important, and zero Minor findings. The review reproduced a
+  provisional-create race that can delete a foreign main file, in-place main
+  and sidecar rewrites across the final revocation callback that retain stable
+  filesystem identity, and cross-attempt laundering of a previously uncertain
+  sidecar. R10.1 and the other single-attempt identity/link guards are accepted.
+  Fix round 11 is authorized only for atomic provisional creation,
+  mutation-sensitive final validation, and durable no-sidecar physical cleanup
+  under `task-8.0b2-fix-round-11-brief.md`. B2 and B3 remain locked.
+- Task 8.0B2 fix round 11 implementation and controller verification are GREEN
+  pending fresh independent review. Missing lock creation now uses a portable
+  create-exclusive reservation whose open-handle and path snapshots must match
+  before SQLite opens it; authority-refusal cleanup can remove only that exact,
+  unchanged attempt-created file. Final cleanup carries stable identity plus
+  mutation-sensitive change-time, modification-time, and size facts, repeats
+  revocation, revalidates the exact retired protocol, and then rechecks before
+  unlink. Any remaining journal/WAL/SHM path is durable uncertainty: recovery,
+  retry, availability, and physical cleanup preserve it and the main database.
+  Four reviewer reproductions were RED together; a separated provisional
+  mutation fault injection was also RED, reverted, and GREEN. Current evidence:
+  exact guards 5/5; lock groups 25/25 on current Node and Node 22.13; affected
+  portable/OS matrix 156 pass plus one expected POSIX-host skip; managed/runtime
+  compatibility 87/87; type/lint/diff/policy GREEN; and one uninterrupted
+  exact-current package gate with 1,427 total / 1,426 pass / zero fail or
+  cancelled / one expected skip in 880.896 seconds, with every chained product
+  contract green. Post-gate owned helpers are zero and the same eleven broad
+  historical fail-closed/unrelated roots remain; none was deleted. Node policy,
+  B3, OCI activation, routing, Job optionality, and production limits are
+  unchanged. B2 and B3 remain locked for the required independent review.

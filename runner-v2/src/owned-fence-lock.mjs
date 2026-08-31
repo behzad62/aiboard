@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -114,6 +114,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
     options.assertRevoked();
     const pathIdentity = assertCoordinationPath(path, true);
     if (!pathIdentity) return;
+    assertNoProtocolSidecars(path, pathIdentity);
     const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
     const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
     if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
@@ -160,9 +161,10 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
       throw normalizeUnavailable(error);
     } finally { database?.close(); }
     if (!committed) throw new OwnedFenceLockUnavailableError("Owned fence revocation commit is unavailable.");
-    const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId, true);
+    const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
     options.assertRevoked();
-    removeRetiredProtocol(path, removalAuthority);
+    revalidateProtocolRemovalAuthority(path, removalAuthority);
+    removeProtocolPath(path, removalAuthority);
   } finally {
     finishTurn();
     if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
@@ -184,6 +186,7 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
     throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup bounds are invalid.");
   const pathIdentity = assertCoordinationPath(path);
+  assertNoProtocolSidecars(path, pathIdentity);
   const deadline = Date.now() + deadlineMs;
   let database;
   try {
@@ -214,7 +217,8 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
     rollbackQuietly(database);
     throw normalizeUnavailable(error);
   } finally { database?.close(); }
-  assertCoordinationPathIdentity(path, pathIdentity);
+  const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
+  revalidateProtocolRemovalAuthority(path, removalAuthority);
   cleanup();
 }
 
@@ -223,9 +227,10 @@ export function retiredOwnedFenceCleanupAvailable(path) {
   const authorityId = coordinationAuthorityId(path);
   let database;
   try {
-    assertCoordinationPath(path);
+    const pathIdentity = assertCoordinationPath(path);
+    assertNoProtocolSidecars(path, pathIdentity);
     database = new DatabaseSync(path, { readOnly: true });
-    assertCoordinationPath(path);
+    assertCoordinationPathSnapshot(path, pathIdentity);
     assertProtocolColumns(database, PROTOCOL_COLUMNS, "Owned fence retired-cleanup metadata is incomplete or invalid.");
     const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
     const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
@@ -295,22 +300,35 @@ function acquire(path, options) {
 }
 
 function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority) {
-  const mayInitialize = !existsSync(path);
   for (;;) {
     let database;
     let pathIdentity;
+    let provisionalSnapshot;
+    let mayInitialize = false;
     let authorityRefused = false;
     let transactionOpen = false;
     try {
-      const beforeOpenIdentity = assertCoordinationPath(path, true);
+      let beforeOpenIdentity = assertCoordinationPath(path, true);
+      if (!beforeOpenIdentity) {
+        provisionalSnapshot = reserveProtocolPath(path);
+        if (!provisionalSnapshot) {
+          if (Date.now() >= deadline)
+            throw new OwnedFenceLockUnavailableError("Owned fence provisional coordination creation remained contested.");
+          Atomics.wait(waiter, 0, 0, retryDelayMs);
+          continue;
+        }
+        beforeOpenIdentity = provisionalSnapshot;
+        mayInitialize = true;
+        if (assertAuthority) {
+          try { assertAuthority(); }
+          catch (error) { authorityRefused = true; throw error; }
+        }
+        assertCoordinationPathSnapshot(path, provisionalSnapshot);
+      }
       database = new DatabaseSync(path);
       pathIdentity = assertCoordinationPath(path);
-      if (beforeOpenIdentity && !samePathIdentity(beforeOpenIdentity, pathIdentity))
+      if (mayInitialize ? !samePathSnapshot(provisionalSnapshot, pathIdentity) : !samePathIdentity(beforeOpenIdentity, pathIdentity))
         throw new OwnedFenceLockUnavailableError("Owned fence coordination path changed while it was opened.");
-      if (mayInitialize && assertAuthority) {
-        try { assertAuthority(); }
-        catch (error) { authorityRefused = true; throw error; }
-      }
       database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
       database.exec("BEGIN IMMEDIATE");
       transactionOpen = true;
@@ -382,8 +400,8 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
       try { database?.close(); } catch {}
       if (mayInitialize && authorityRefused) {
         try {
-          const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId, false);
-          removeRetiredProtocol(path, removalAuthority);
+          const removalAuthority = Object.freeze({ authorityId, mainSnapshot: provisionalSnapshot });
+          removeProtocolPath(path, removalAuthority);
         } catch (cleanupError) {
           throw new AggregateError([error, cleanupError], "Owned fence authority refusal and coordination cleanup both failed.", { cause: error });
         }
@@ -538,16 +556,23 @@ function coordinationAuthorityId(path) {
   return createHash("sha256").update(`aiboard-owned-fence-path/v1\0${normalized}`).digest("hex");
 }
 
+function regularFileSnapshot(status, subject) {
+  if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1n)
+    throw new OwnedFenceLockUnavailableError(`${subject} is aliased, linked, or invalid.`);
+  return Object.freeze({
+    device: status.dev.toString(),
+    inode: status.ino.toString(),
+    birthtimeNs: status.birthtimeNs.toString(),
+    changeTimeNs: status.ctimeNs.toString(),
+    modifiedTimeNs: status.mtimeNs.toString(),
+    size: status.size.toString(),
+  });
+}
+
 function readRegularPathIdentity(path, allowMissing, subject) {
   try {
     const status = lstatSync(path, { bigint: true });
-    if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1n)
-      throw new OwnedFenceLockUnavailableError(`${subject} is aliased, linked, or invalid.`);
-    return Object.freeze({
-      device: status.dev.toString(),
-      inode: status.ino.toString(),
-      birthtimeNs: status.birthtimeNs.toString(),
-    });
+    return regularFileSnapshot(status, subject);
   } catch (error) {
     if (allowMissing && error?.code === "ENOENT") return;
     if (error instanceof OwnedFenceLockUnavailableError) throw error;
@@ -567,6 +592,11 @@ function samePathIdentity(left, right) {
   return left?.device === right?.device && left?.inode === right?.inode && left?.birthtimeNs === right?.birthtimeNs;
 }
 
+function samePathSnapshot(left, right) {
+  return samePathIdentity(left, right) && left?.changeTimeNs === right?.changeTimeNs &&
+    left?.modifiedTimeNs === right?.modifiedTimeNs && left?.size === right?.size;
+}
+
 function assertCoordinationPathIdentity(path, expected) {
   const current = assertCoordinationPath(path);
   if (!expected || !samePathIdentity(current, expected))
@@ -574,11 +604,31 @@ function assertCoordinationPathIdentity(path, expected) {
   return current;
 }
 
-function assertSidecarPathIdentity(path, expected) {
-  const current = assertSidecarPath(path);
-  if (!expected || !samePathIdentity(current, expected))
-    throw new OwnedFenceLockUnavailableError("Owned fence coordination sidecar identity was replaced or disappeared.");
+function assertCoordinationPathSnapshot(path, expected) {
+  const current = assertCoordinationPath(path);
+  if (!expected || !samePathSnapshot(current, expected))
+    throw new OwnedFenceLockUnavailableError("Owned fence coordination path changed, was replaced, or disappeared.");
   return current;
+}
+
+function reserveProtocolPath(path) {
+  let descriptor;
+  try {
+    descriptor = openSync(path, "wx", 0o600);
+    const handleSnapshot = regularFileSnapshot(fstatSync(descriptor, { bigint: true }), "Owned fence provisional coordination file");
+    const pathSnapshot = assertCoordinationPath(path);
+    if (!samePathSnapshot(handleSnapshot, pathSnapshot))
+      throw new OwnedFenceLockUnavailableError("Owned fence provisional coordination identity changed during exclusive creation.");
+    closeSync(descriptor);
+    descriptor = undefined;
+    return pathSnapshot;
+  } catch (error) {
+    if (error?.code === "EEXIST") return;
+    if (error instanceof OwnedFenceLockUnavailableError) throw error;
+    throw new OwnedFenceLockUnavailableError("Owned fence provisional coordination creation is unavailable.", { cause: error });
+  } finally {
+    if (descriptor !== undefined) try { closeSync(descriptor); } catch {}
+  }
 }
 
 function tableColumns(database, table) {
@@ -596,62 +646,71 @@ function assertProtocolColumns(database, expected, message) {
 
 function quoteIdentifier(value) { return `"${String(value).replaceAll('"', '""')}"`; }
 
-function captureProtocolRemovalAuthority(path, expectedMainIdentity, authorityId, requireRetired) {
-  assertCoordinationPathIdentity(path, expectedMainIdentity);
-  if (requireRetired) {
-    let database;
-    try {
-      database = new DatabaseSync(path, { readOnly: true });
-      assertCoordinationPathIdentity(path, expectedMainIdentity);
-      assertRecoverableProtocol(database, authorityId);
-      const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-      const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-      const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-      if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
-          protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
-        throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is active, foreign, or incomplete.");
-      assertCoordinationPathIdentity(path, expectedMainIdentity);
-    } catch (error) { throw normalizeUnavailable(error); }
-    finally { database?.close(); }
+function assertRetiredProtocol(database, authorityId) {
+  assertRecoverableProtocol(database, authorityId);
+  const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
+  const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
+  const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
+  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
+      protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
+    throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is active, foreign, or incomplete.");
+}
+
+function assertNoProtocolSidecars(path, mainSnapshot) {
+  for (const suffix of PROTOCOL_SIDECAR_SUFFIXES) {
+    assertCoordinationPathSnapshot(path, mainSnapshot);
+    if (assertSidecarPath(`${path}${suffix}`, true))
+      throw new OwnedFenceLockUnavailableError("Owned fence coordination sidecar is present and remains uncertain.");
+    assertCoordinationPathSnapshot(path, mainSnapshot);
   }
-  const sidecars = PROTOCOL_SIDECAR_SUFFIXES.map((suffix) => {
+}
+
+function captureProtocolRemovalAuthority(path, expectedMainIdentity, authorityId) {
+  const preValidationSnapshot = assertCoordinationPathIdentity(path, expectedMainIdentity);
+  assertNoProtocolSidecars(path, preValidationSnapshot);
+  let database;
+  try {
+    database = new DatabaseSync(path, { readOnly: true });
     assertCoordinationPathIdentity(path, expectedMainIdentity);
-    const sidecarPath = `${path}${suffix}`;
-    const identity = assertSidecarPath(sidecarPath, true);
+    assertRetiredProtocol(database, authorityId);
     assertCoordinationPathIdentity(path, expectedMainIdentity);
-    return Object.freeze({ path: sidecarPath, identity });
-  });
-  assertCoordinationPathIdentity(path, expectedMainIdentity);
+  } catch (error) { throw normalizeUnavailable(error); }
+  finally { database?.close(); }
+  const mainSnapshot = assertCoordinationPathIdentity(path, expectedMainIdentity);
+  assertNoProtocolSidecars(path, mainSnapshot);
+  assertCoordinationPathSnapshot(path, mainSnapshot);
   return Object.freeze({
     authorityId,
-    mainIdentity: expectedMainIdentity,
-    sidecars: Object.freeze(sidecars),
+    mainSnapshot,
   });
 }
 
-function removeRetiredProtocol(path, authority) {
+function revalidateProtocolRemovalAuthority(path, authority) {
+  if (!authority || authority.authorityId !== coordinationAuthorityId(path))
+    throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is missing or foreign.");
+  assertCoordinationPathSnapshot(path, authority.mainSnapshot);
+  assertNoProtocolSidecars(path, authority.mainSnapshot);
+  let database;
+  try {
+    database = new DatabaseSync(path, { readOnly: true });
+    assertCoordinationPathSnapshot(path, authority.mainSnapshot);
+    assertRetiredProtocol(database, authority.authorityId);
+    assertCoordinationPathSnapshot(path, authority.mainSnapshot);
+  } catch (error) { throw normalizeUnavailable(error); }
+  finally { database?.close(); }
+  assertCoordinationPathSnapshot(path, authority.mainSnapshot);
+  assertNoProtocolSidecars(path, authority.mainSnapshot);
+}
+
+function removeProtocolPath(path, authority) {
   const deadline = Date.now() + DEFAULT_DEADLINE_MS;
   for (;;) {
     try {
       if (!authority || authority.authorityId !== coordinationAuthorityId(path))
         throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is missing or foreign.");
-      for (const sidecar of authority.sidecars) {
-        assertCoordinationPathIdentity(path, authority.mainIdentity);
-        const current = assertSidecarPath(sidecar.path, true);
-        if (!current) continue;
-        if (!sidecar.identity || !samePathIdentity(current, sidecar.identity))
-          throw new OwnedFenceLockUnavailableError("Owned fence coordination sidecar appeared or was replaced after authority capture.");
-        assertCoordinationPathIdentity(path, authority.mainIdentity);
-        assertSidecarPathIdentity(sidecar.path, sidecar.identity);
-        try { unlinkSync(sidecar.path); }
-        catch (error) { if (error?.code !== "ENOENT") throw error; }
-      }
-      for (const suffix of PROTOCOL_SIDECAR_SUFFIXES) {
-        assertCoordinationPathIdentity(path, authority.mainIdentity);
-        if (assertSidecarPath(`${path}${suffix}`, true))
-          throw new OwnedFenceLockUnavailableError("Owned fence coordination sidecar changed during physical retirement.");
-      }
-      assertCoordinationPathIdentity(path, authority.mainIdentity);
+      assertCoordinationPathSnapshot(path, authority.mainSnapshot);
+      assertNoProtocolSidecars(path, authority.mainSnapshot);
+      assertCoordinationPathSnapshot(path, authority.mainSnapshot);
       try { unlinkSync(path); }
       catch (error) {
         if (error?.code === "ENOENT")
@@ -671,13 +730,13 @@ function removeRetiredProtocol(path, authority) {
 
 function retireProtocol(path, options, pathIdentity, authorityId) {
   try {
-    const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId, true);
+    const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
+    revalidateProtocolRemovalAuthority(path, removalAuthority);
     if (typeof options.retireAuthority === "function") {
-      assertCoordinationPathIdentity(path, pathIdentity);
       options.retireAuthority();
       return;
     }
-    removeRetiredProtocol(path, removalAuthority);
+    removeProtocolPath(path, removalAuthority);
   } catch (error) {
     throw new OwnedFenceAuthorityRetirementError("Owned fence authority retirement failed after its durable commit.", { cause: error });
   }

@@ -1258,3 +1258,74 @@ approve B2 or begin B3.
 - Fix round 10 controller verification is complete. B2 remains locked until a
   fresh independent scoped review reports zero Critical and Important findings.
   B3 has not started.
+
+## Fix round 10 independent review
+
+- The fresh review reports zero Critical, three Important, and zero Minor
+  findings. B2 unlock is refused.
+- A deterministic pre-open race proved that a foreign file can appear after the
+  missing-path decision and be removed as if this attempt created it.
+- Separated main and sidecar reproductions proved that in-place writes across
+  the final revocation callback retain the round-10 stable identity and can be
+  deleted. The exact retired database therefore needs mutation-sensitive
+  revalidation after that callback.
+- A two-attempt reproduction proved that a late sidecar preserved by the first
+  recovery is re-snapshotted and deleted by a later recovery. Sidecar
+  uncertainty must be durable and cannot be inferred away on retry.
+- R10.1 is closed. The other single-attempt replacement, disappearance,
+  symbolic-link, hard-link, and new-sidecar guards are accepted. BigInt identity
+  passed on Node 24.18 and 22.13, Windows backend compatibility passed 80/80,
+  static checks are green, and no policy drift or review residue was found.
+- Fix round 11 is bounded by `task-8.0b2-fix-round-11-brief.md`. B2 and B3 remain
+  locked.
+
+## Fix round 11 implementation evidence
+
+- The four separated reviewer reproductions were RED against round 10: the
+  foreign pre-open race removed its sentinel, in-place main and sidecar rewrites
+  completed without rejection, and a second recovery deleted the sidecar that
+  the first attempt had preserved. The group reported 0/4 in 1.006 seconds.
+  After repair, a mutation that deliberately replaced the captured provisional
+  snapshot with a post-callback snapshot made only its exact guard RED; reverting
+  restored the final exact group to GREEN 5/5 in 0.593 seconds.
+- R11.1 replaces the pre-open existence decision with portable `wx`
+  create-exclusive reservation. The open descriptor and path must both be a
+  regular, non-symbolic, single-link file with the same identity and captured
+  snapshot before and immediately after SQLite opens it. A foreign winner is
+  treated only as an existing path. Authority refusal can unlink only the exact
+  unchanged attempt-created reservation, and repeated contention shares the
+  existing bounded lock deadline instead of spinning or adding a task limit.
+- R11.2 separates stable identity (device, inode/file index, birth time) from a
+  mutation-sensitive snapshot (change time, modification time, and size). After
+  SQLite closes, physical cleanup captures the exact retired database snapshot,
+  repeats the external revocation assertion, verifies that snapshot again,
+  reopens read-only to revalidate the exact retired protocol and empty
+  proposal/holder sets, then rechecks immediately before unlink. In-place main
+  mutation now fails closed and preserves the current path.
+- R11.3 never derives sidecar deletion authority from a filename or a later
+  observation. Any remaining `-journal`, `-wal`, or `-shm` path blocks recovery
+  before SQLite can consume it, blocks retired-cleanup retry/availability, and
+  blocks physical main removal. Regular, symbolic, hard-linked, rewritten,
+  replaced, and newly appeared sidecars are preserved with the main database on
+  every attempt. Normal retirement with no sidecar remains residue-free.
+- The exact-current ownership-lock module is GREEN 25/25 in 5.033 seconds. The
+  affected portable/process matrix is GREEN: 157 total, 156 pass, zero fail,
+  and one explicit POSIX-live-fixture skip on Windows in 131.390 seconds.
+  Managed-process and subprocess-runtime compatibility is GREEN 87/87 in
+  20.314 seconds. The minimum Node 22.13 lock group is independently GREEN
+  25/25 in 4.737 seconds.
+- The final exact-current uninterrupted `npm run test:runner-v2` gate exits
+  zero: 1,427 total, 1,426 pass, zero fail or cancelled, and one explicit
+  POSIX-host skip in 880.896 seconds. Every chained Runner client, native
+  policy, policy UI, cutover, pause-gate, model-usage, live-state, transcript,
+  native-files, run-stats, steering, and observability contract also passed.
+- Fresh post-gate Runner typecheck, targeted ESLint, `git diff --check`, scope,
+  and Node-range audits are GREEN. Node remains
+  `>=22.13.0 <23 || >=24.0.0 <25`; it is not pinned to an exact patch. Process
+  inventory reports zero owned portable, managed, Job-host, or lock-holder
+  helpers. The broad B2 root inventory was eleven before and after the package
+  gate; all are historical fail-closed/unrelated evidence, no new root was
+  created, and no uncertain evidence was deleted.
+- Fix round 11 controller verification is complete. B2 remains locked until a
+  fresh independent scoped review reports zero Critical and Important findings.
+  B3 has not started.

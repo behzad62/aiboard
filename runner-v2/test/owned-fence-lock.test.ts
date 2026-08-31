@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -389,6 +390,56 @@ test("revoked-lock recovery rejects a hard link added inside its transaction", {
   }
 });
 
+test("provisional initialization never removes a foreign file that wins the missing-path race", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-init-race-"));
+  const lockPath = join(root, "fence.sqlite");
+  const sentinel = "foreign-preexisting-content";
+  const originalOpenSync = fs.openSync;
+  let injected = false;
+  let authorityChecks = 0;
+  try {
+    fs.openSync = ((candidate, flags, mode) => {
+      if (!injected && candidate === lockPath && flags === "wx") {
+        writeFileSync(lockPath, sentinel);
+        injected = true;
+      }
+      return originalOpenSync(candidate, flags, mode);
+    }) as typeof fs.openSync;
+    syncBuiltinESMExports();
+    const moduleUrl = new URL("../src/owned-fence-lock.mjs", import.meta.url);
+    moduleUrl.searchParams.set("init-race", `${Date.now()}-${Math.random()}`);
+    const isolated = await import(moduleUrl.href) as typeof import("../src/owned-fence-lock.mjs");
+    assert.throws(() => isolated.withOwnedFenceLockSync(lockPath, () => undefined, {
+      holderBirth: "review-birth",
+      assertAuthority: () => { authorityChecks += 1; throw new Error("authority-refused"); },
+    }), /database|metadata|unavailable/i);
+    assert.equal(injected, true);
+    assert.equal(authorityChecks, 0, "a foreign race winner is an existing path, never a provisional initialization");
+    assert.equal(existsSync(lockPath), true, "a foreign race winner must remain present");
+    assert.equal(readFileSync(lockPath, "utf8"), sentinel, "a foreign race winner must remain byte-identical");
+  } finally {
+    fs.openSync = originalOpenSync;
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("provisional authority refusal preserves an in-place mutation of its reservation", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-init-mutation-"));
+  const lockPath = join(root, "fence.sqlite");
+  const sentinel = "foreign-provisional-mutation-must-remain";
+  try {
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => undefined, {
+      holderBirth: "review-birth",
+      assertAuthority: () => {
+        writeFileSync(lockPath, sentinel);
+        throw new Error("authority-refused-after-mutation");
+      },
+    }), /cleanup both failed|changed|unavailable/i);
+    assert.equal(readFileSync(lockPath, "utf8"), sentinel, "mutation must revoke provisional deletion authority");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 test("revoked-lock recovery preserves an unowned sidecar when the main authority is absent", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-absent-main-sidecar-"));
   const lockPath = join(root, ".fence.lock");
@@ -423,6 +474,27 @@ test("physical retirement rejects a replaced captured main identity", async () =
     }), /identity|replacement|coordination path|unavailable/i);
     assert.equal(assertions, 3, "physical cleanup must reassert revocation after capturing retired authority");
     assert.equal(readFileSync(lockPath, "utf8"), foreignMain, "cleanup must preserve a replacement main path");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("physical retirement rejects an in-place main rewrite across final revocation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-main-rewrite-"));
+  const lockPath = join(root, ".fence.lock");
+  const foreignMain = "foreign-main-rewrite-must-remain";
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 3) writeFileSync(lockPath, foreignMain);
+      },
+    }), /changed|mutation|coordination path|unavailable/i);
+    assert.equal(assertions, 3);
+    assert.equal(readFileSync(lockPath, "utf8"), foreignMain, "cleanup must preserve an in-place rewritten main path");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
@@ -470,6 +542,56 @@ test("physical retirement rejects a sidecar that appears after authority capture
     assert.equal(assertions, 3);
     assert.equal(readFileSync(sidecarPath, "utf8"), "late-foreign-sidecar");
     assert.equal(existsSync(lockPath), true, "a post-capture sidecar must preserve the retired main authority");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("physical retirement rejects a sidecar before final revocation can rewrite it in place", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-sidecar-rewrite-"));
+  const lockPath = join(root, ".fence.lock");
+  const sidecarPath = `${lockPath}-wal`;
+  const foreignSidecar = "foreign-sidecar-rewrite-must-remain";
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 2) writeFileSync(sidecarPath, "captured-sidecar");
+        if (assertions === 3) writeFileSync(sidecarPath, foreignSidecar);
+      },
+    }), /sidecar|changed|mutation|unavailable/i);
+    assert.equal(assertions, 2, "a remaining sidecar must block cleanup before the final external callback");
+    assert.equal(readFileSync(sidecarPath, "utf8"), "captured-sidecar", "cleanup must preserve sidecar bytes without authorizing a rewrite boundary");
+    assert.equal(existsSync(lockPath), true, "uncertain sidecar bytes must preserve the retired main authority");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("a sidecar made uncertain by one recovery remains uncertain on every later recovery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retired-durable-uncertainty-"));
+  const lockPath = join(root, ".fence.lock");
+  const sidecarPath = `${lockPath}-wal`;
+  const sentinel = "uncertain-sidecar-must-never-be-laundered";
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => undefined, {
+      retireAfterEffect: true,
+      retireAuthority: () => { throw new Error("retain retired protocol"); },
+    }), /authority retirement failed after its durable commit/);
+    let assertions = 0;
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => {
+        assertions += 1;
+        if (assertions === 3) writeFileSync(sidecarPath, sentinel);
+      },
+    }), /sidecar|appeared|changed|unavailable/i);
+    assert.equal(readFileSync(sidecarPath, "utf8"), sentinel);
+    await assert.rejects(recoverRevokedOwnedFenceLock(lockPath, {
+      assertRevoked: () => undefined,
+    }), /sidecar|uncertain|unavailable/i);
+    assert.equal(readFileSync(sidecarPath, "utf8"), sentinel, "a later attempt must not promote uncertainty into deletion authority");
+    assert.equal(existsSync(lockPath), true, "durable sidecar uncertainty must preserve the retired main authority");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
