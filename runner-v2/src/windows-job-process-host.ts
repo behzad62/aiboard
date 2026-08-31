@@ -5,10 +5,11 @@ import { request } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { isOwnedFenceLockContention, unlinkOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 
 const PROTOCOL = "aiboard-managed-process/v1";
 const DEFAULT_DEADLINE_MS = 5_000;
+const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 2_000;
 const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
 
 export interface WindowsJobOwnershipKey { readonly runId: string; readonly sessionId: string }
@@ -59,6 +60,8 @@ export interface WindowsJobProcessHostOptions {
   readonly maxRetainedOutputChunkBytes?: number;
   readonly maxInputBytes?: number;
   readonly supervisorScriptPath?: string;
+  /** Test seam for the optional active Job probe; product uses the real PowerShell create/close command. */
+  readonly activeJobProbe?: { readonly executable: string; readonly arguments: readonly string[]; readonly deadlineMs?: number };
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
 }
 
@@ -98,6 +101,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly maxRetainedOutputChunkBytes: number;
   private readonly maxInputBytes: number;
   private readonly supervisorScriptPath: string;
+  private readonly activeJobProbe?: WindowsJobProcessHostOptions["activeJobProbe"];
   private readonly beforeFenceEffect?: WindowsJobProcessHostOptions["beforeFenceEffect"];
   private readonly records = new Map<string, HostRecord>();
   private readonly effectTails = new Map<string, Promise<void>>();
@@ -117,6 +121,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.maxInputBytes = options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES;
     if (!Number.isSafeInteger(this.maxInputBytes) || this.maxInputBytes < 1) throw new Error("Windows Job max input bytes must be positive.");
     this.supervisorScriptPath = options.supervisorScriptPath ?? join(dirname(fileURLToPath(import.meta.url)), "managed-process-supervisor.mjs");
+    this.activeJobProbe = options.activeJobProbe;
     this.beforeFenceEffect = options.beforeFenceEffect;
     mkdirSync(this.stateDirectory, { recursive: true });
     for (const name of readdirSync(this.stateDirectory)) {
@@ -245,7 +250,17 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
     if (!existsSync(this.supervisorScriptPath) || !existsSync(jobHost)) return false;
     const command = "$ErrorActionPreference='Stop';$s='using System;using System.Runtime.InteropServices;public static class P{[DllImport(\"kernel32.dll\",CharSet=CharSet.Unicode,SetLastError=true)]public static extern IntPtr CreateJobObject(IntPtr a,string n);[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);}';Add-Type -TypeDefinition $s;$h=[P]::CreateJobObject([IntPtr]::Zero,$null);if($h -eq [IntPtr]::Zero){exit 1};if(-not [P]::CloseHandle($h)){exit 1}";
-    return spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, stdio: "ignore" }).status === 0;
+    const executable = this.activeJobProbe?.executable ?? "powershell.exe";
+    const args = this.activeJobProbe?.arguments ?? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command];
+    const deadlineMs = this.activeJobProbe?.deadlineMs ?? DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS;
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) return false;
+    const result = spawnSync(executable, [...args], {
+      windowsHide: true,
+      stdio: "ignore",
+      timeout: deadlineMs,
+      killSignal: "SIGKILL",
+    });
+    return result.status === 0 && !result.error;
   }
 
   async attachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState> {
@@ -310,22 +325,17 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   async claimOwnedFence(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
     if (!fence.ownerId || !Number.isSafeInteger(fence.fencingToken) || fence.fencingToken < 1) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is invalid.");
     const lockPath = join(this.stateDirectory, `${processId}.fence.lock`);
-    let descriptor: number | undefined;
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      try { descriptor = openSync(lockPath, "wx", 0o600); break; }
-      catch (error) { if (!isOwnedFenceLockContention(error)) throw error; await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
-    }
-    if (descriptor === undefined) throw new WindowsJobHostError("process_control_unavailable", "Windows Job writer fence lock is unavailable.");
-    let primaryError: unknown;
     try {
-      const record = this.ownedRecord(processId, owner);
-      const current = record.currentFence;
-      if (current && (fence.fencingToken < current.fencingToken || (fence.fencingToken === current.fencingToken && fence.ownerId !== current.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
-      if (!current || fence.fencingToken > current.fencingToken) { record.currentFence = { ...fence }; record.updatedAt = this.clock(); this.persist(record); this.records.set(processId, record); }
+      await withOwnedFenceLock(lockPath, async () => {
+        const record = this.ownedRecord(processId, owner);
+        const current = record.currentFence;
+        if (current && (fence.fencingToken < current.fencingToken || (fence.fencingToken === current.fencingToken && fence.ownerId !== current.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
+        if (!current || fence.fencingToken > current.fencingToken) { record.currentFence = { ...fence }; record.updatedAt = this.clock(); this.persist(record); this.records.set(processId, record); }
+      });
     } catch (error) {
-      primaryError = error;
-      throw error;
-    } finally { closeSync(descriptor); unlinkOwnedFenceLock(lockPath, { primaryError }); }
+      if (error instanceof WindowsJobHostError) throw error;
+      throw new WindowsJobHostError("process_control_unavailable", `Windows Job writer fence lock is unavailable: ${String(error)}`);
+    }
   }
 
   private async authenticatedStatus(record: HostRecord): Promise<SupervisorStatus> {
@@ -421,22 +431,15 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.effectTails.set(record.processId, tail);
     await previous;
     const lockPath = join(this.stateDirectory, `${record.processId}.fence.lock`);
-    let descriptor: number | undefined;
     try {
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        try { descriptor = openSync(lockPath, "wx", 0o600); break; }
-        catch (error) { if (!isOwnedFenceLockContention(error)) throw error; await new Promise((resolvePromise) => setTimeout(resolvePromise, 5)); }
-      }
-      if (descriptor === undefined) throw new WindowsJobHostError("process_control_unavailable", "Windows Job writer fence effect lock is unavailable.");
-      let primaryError: unknown;
-      try {
+      return await withOwnedFenceLock(lockPath, async () => {
         const current = this.ownedRecord(record.processId, record);
         this.assertCurrentFence(current, fence);
         return await effect(current);
-      } catch (error) {
-        primaryError = error;
-        throw error;
-      } finally { closeSync(descriptor); unlinkOwnedFenceLock(lockPath, { primaryError }); }
+      }, { retireAfterEffect: kind === "release" });
+    } catch (error) {
+      if (error instanceof WindowsJobHostError) throw error;
+      throw new WindowsJobHostError("process_control_unavailable", `Windows Job writer fence effect lock is unavailable: ${String(error)}`);
     } finally {
       finishTurn();
       if (this.effectTails.get(record.processId) === tail) this.effectTails.delete(record.processId);

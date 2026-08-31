@@ -17,7 +17,6 @@ import {
 import { ManagedProcessService } from "../src/managed-process.js";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { NativeProcessLaunchBlockedError, type NativeProcessOperations } from "../src/native-process-backend.js";
-import { unlinkOwnedFenceLock } from "../src/owned-fence-lock.mjs";
 import { probeProcessHostSemantics } from "../src/process-host-semantic-probes.js";
 import {
   parseProcessEmptyVerification,
@@ -30,73 +29,14 @@ import {
   type ProcessEffectFence,
 } from "../src/process-backend.js";
 
-function lockHolderEnvironment(lock: string): NodeJS.ProcessEnv {
-  return {
-    NODE_ENV: "test",
-    SystemRoot: process.env.SystemRoot,
-    PATH: process.env.PATH,
-    AIBOARD_TEST_LOCK: lock,
-  };
-}
-
-test("portable fence lock cleanup retries a transient Windows sharing denial", { timeout: 10_000 }, async (t) => {
-  if (process.platform !== "win32") { t.skip("Windows sharing-denial fixture requires Windows."); return; }
-  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-fence-unlink-"));
-  const lock = join(root, "effect.lock");
-  writeFileSync(lock, "lock");
-  const holder = spawn("powershell.exe", [
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-    "$f=[IO.File]::Open($env:AIBOARD_TEST_LOCK,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);[Console]::Out.WriteLine('READY');Start-Sleep -Milliseconds 300;$f.Dispose()",
-  ], { env: lockHolderEnvironment(lock), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("lock holder did not become ready")), 3_000);
-      holder.once("error", reject);
-      holder.stdout.once("data", () => { clearTimeout(timer); resolve(); });
-    });
-    unlinkOwnedFenceLock(lock);
-    assert.equal(existsSync(lock), false);
-  } finally {
-    if (holder.exitCode === null) holder.kill();
-    await new Promise<void>((resolve) => holder.exitCode === null ? holder.once("exit", () => resolve()) : resolve());
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
-});
-
-test("portable fence lock cleanup fails closed on a persistent Windows sharing denial", { timeout: 10_000 }, async (t) => {
-  if (process.platform !== "win32") { t.skip("Windows sharing-denial fixture requires Windows."); return; }
-  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-fence-unlink-"));
-  const lock = join(root, "effect.lock");
-  writeFileSync(lock, "lock");
-  const holder = spawn("powershell.exe", [
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-    "$f=[IO.File]::Open($env:AIBOARD_TEST_LOCK,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);[Console]::Out.WriteLine('READY');Start-Sleep -Milliseconds 300;$f.Dispose()",
-  ], { env: lockHolderEnvironment(lock), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("lock holder did not become ready")), 3_000);
-      holder.once("error", reject);
-      holder.stdout.once("data", () => { clearTimeout(timer); resolve(); });
-    });
-    assert.throws(
-      () => unlinkOwnedFenceLock(lock, { deadlineMs: 25, retryDelayMs: 5 }),
-      /lock cleanup is unavailable/i,
-    );
-    assert.equal(existsSync(lock), true);
-  } finally {
-    if (holder.exitCode === null) holder.kill();
-    await new Promise<void>((resolve) => holder.exitCode === null ? holder.once("exit", () => resolve()) : resolve());
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
-});
-
-test("portable and Job fence owners use bounded fail-closed lock finalization", () => {
+test("portable and Job fence owners share the crash-recoverable exact-identity lock authority", () => {
   const native = readFileSync(join(process.cwd(), "runner-v2", "src", "native-process-backend.ts"), "utf8");
   const supervisor = readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), "utf8");
   const job = readFileSync(join(process.cwd(), "runner-v2", "src", "windows-job-process-host.ts"), "utf8");
-  assert.equal((native.match(/unlinkOwnedFenceLock\(lock, \{ primaryError \}\)/g) ?? []).length, 2);
-  assert.equal((supervisor.match(/unlinkOwnedFenceLock\(lock, \{ primaryError \}\)/g) ?? []).length, 1);
-  assert.equal((job.match(/unlinkOwnedFenceLock\(lockPath, \{ primaryError \}\)/g) ?? []).length, 2);
+  assert.equal((native.match(/withOwnedFenceLockSync\(lock,/g) ?? []).length, 2);
+  assert.equal((supervisor.match(/withOwnedFenceLockSync\(lock,/g) ?? []).length, 1);
+  assert.equal((job.match(/withOwnedFenceLock\(lockPath,/g) ?? []).length, 2);
+  for (const source of [native, supervisor, job]) assert.doesNotMatch(source, /openSync\(lock(?:Path)?,\s*["']wx["']/);
 });
 
 test("Windows Job supervisor request classifies a partial response reset through durable stopped proof", { timeout: 10_000 }, async () => {
@@ -643,6 +583,11 @@ test("Windows destructive control bounds a hung fresh inspector and never signal
   assert.ok(child.pid);
   try {
     const running = await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess);
+    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
+      nonce,
+      holderPid: child.pid,
+      holderBirth: windowsBirth(child.pid!),
+    }));
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "force_terminate" }));
     const unknown = await waitForPortableState(directory, (value) => value.handledControl === 1 && value.status === "outcome_unknown");
@@ -656,6 +601,15 @@ test("Windows destructive control bounds a hung fresh inspector and never signal
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
+
+function windowsBirth(pid: number): string {
+  const output = execFileSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
+  ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+  assert.match(output, /\S/);
+  return output.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
+}
 
 test("Windows destructive control bounds taskkill and treats timeout as durable uncertainty", { timeout: 30_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows taskkill watchdog fixture requires Windows."); return; }
@@ -672,6 +626,11 @@ test("Windows destructive control bounds taskkill and treats timeout as durable 
   assert.ok(child.pid);
   try {
     const running = await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess);
+    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
+      nonce,
+      holderPid: child.pid,
+      holderBirth: windowsBirth(child.pid!),
+    }));
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "force_terminate" }));
     const unknown = await waitForPortableState(directory, (value) => value.handledControl === 1 && value.status === "outcome_unknown");
@@ -823,6 +782,9 @@ test("Windows launch rollback preserves an immediate blocker when the supervisor
     await assert.rejects(backend.release(retainedBinding, fence), /non-empty/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(`${root}.fence.lock`, { force: true, maxRetries: 30, retryDelay: 50 });
+    assert.equal(existsSync(root), false);
+    assert.equal(existsSync(`${root}.fence.lock`), false);
   }
 });
 

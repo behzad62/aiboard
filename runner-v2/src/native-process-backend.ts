@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,9 +13,7 @@ import type {
 } from "./process-backend.js";
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
-import { isOwnedFenceLockContention, unlinkOwnedFenceLock } from "./owned-fence-lock.mjs";
-
-const FENCE_LOCK_WAITER = new Int32Array(new SharedArrayBuffer(4));
+import { withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
 export interface NativeOwnedProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -145,6 +143,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         supervisorBirth,
         fence: Object.freeze({ ...request.fence }),
       };
+      writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid: child.pid, holderBirth: supervisorBirth }), { mode: 0o600 });
       const state = await this.waitForState(directory, nonce, child.pid, 5_000);
       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
@@ -206,9 +205,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
             if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
             return state === "live" ? "live" : "exited";
           },
-          effect: async (kind, effect) => {
-            await this.options.beforeFenceEffect?.(kind);
-            return commitOwnedFenceEffect(identity, fence, effect);
+          effect: (kind, effect) => {
+            const preparation = this.options.beforeFenceEffect?.(kind);
+            return preparation
+              ? Promise.resolve(preparation).then(() => commitOwnedFenceEffectAsync(identity, fence, effect))
+              : commitOwnedFenceEffectAsync(identity, fence, effect);
           },
         };
       },
@@ -369,7 +370,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private async fencedEffect<T>(identity: Identity, fence: ProcessEffectFence | undefined, kind: "signal" | "verify_empty" | "release", effect: () => T): Promise<T> {
     if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
     await this.options.beforeFenceEffect?.(kind);
-    return commitOwnedFenceEffect(identity, fence, effect);
+    return await commitOwnedFenceEffectAsync(identity, fence, effect, kind === "release");
   }
   private identity(binding: ProcessBackendBinding): Identity {
     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as Identity;
@@ -649,66 +650,57 @@ function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): voi
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence is invalid.");
   const path = join(identity.directory, "fence.json");
   const lock = `${identity.directory}.fence.lock`;
-  const deadline = Date.now() + 2_000;
-  let descriptor: number | undefined;
-  while (descriptor === undefined) {
-    try { descriptor = openSync(lock, "wx", 0o600); }
-    catch (error) {
-      if (!isOwnedFenceLockContention(error) || Date.now() >= deadline)
-        throw new OwnedProcessIdentityMismatchError("Owned process writer fence claim is unavailable.");
-      Atomics.wait(FENCE_LOCK_WAITER, 0, 0, 5);
-    }
-  }
-  let primaryError: unknown;
   try {
-    if (!existsSync(path) && !identity.fence) {
-      const temporary = `${path}.${randomUUID()}.tmp`;
-      writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
-      renameSync(temporary, path);
-      return;
-    }
-    const current = readOwnedFence(path, identity);
-    if (candidate.fencingToken < current.fencingToken ||
-        (candidate.fencingToken === current.fencingToken && candidate.ownerId !== current.ownerId))
-      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale.");
-    if (candidate.fencingToken > current.fencingToken) {
-      const temporary = `${path}.${randomUUID()}.tmp`;
-      writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
-      renameSync(temporary, path);
-    }
+    withOwnedFenceLockSync(lock, () => {
+      if (!existsSync(path) && !identity.fence) {
+        const temporary = `${path}.${randomUUID()}.tmp`;
+        writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
+        renameSync(temporary, path);
+        return;
+      }
+      const current = readOwnedFence(path, identity);
+      if (candidate.fencingToken < current.fencingToken ||
+          (candidate.fencingToken === current.fencingToken && candidate.ownerId !== current.ownerId))
+        throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale.");
+      if (candidate.fencingToken > current.fencingToken) {
+        const temporary = `${path}.${randomUUID()}.tmp`;
+        writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
+        renameSync(temporary, path);
+      }
+    });
   } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
-    unlinkOwnedFenceLock(lock, { primaryError });
+    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
+    throw new OwnedProcessIdentityMismatchError("Owned process writer fence claim is unavailable.", { cause: error });
   }
 }
 function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T): T {
   const path = join(identity.directory, "fence.json");
   const lock = `${identity.directory}.fence.lock`;
-  const deadline = Date.now() + 2_000;
-  let descriptor: number | undefined;
-  while (descriptor === undefined) {
-    try { descriptor = openSync(lock, "wx", 0o600); }
-    catch (error) {
-      if (!isOwnedFenceLockContention(error) || Date.now() >= deadline)
-        throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.");
-      Atomics.wait(FENCE_LOCK_WAITER, 0, 0, 5);
-    }
-  }
-  let primaryError: unknown;
   try {
-    const current = readOwnedFence(path, identity);
-    if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
-      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
-    return effect();
+    return withOwnedFenceLockSync(lock, () => {
+      const current = readOwnedFence(path, identity);
+      if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
+        throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+      return effect();
+    });
   } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
-    closeSync(descriptor);
-    unlinkOwnedFenceLock(lock, { primaryError });
+    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
+    throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
+  }
+}
+async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, retireAfterEffect = false): Promise<T> {
+  const path = join(identity.directory, "fence.json");
+  const lock = `${identity.directory}.fence.lock`;
+  try {
+    return await withOwnedFenceLock(lock, () => {
+      const current = readOwnedFence(path, identity);
+      if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
+        throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+      return effect();
+    }, { retireAfterEffect });
+  } catch (error) {
+    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
+    throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
 function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {

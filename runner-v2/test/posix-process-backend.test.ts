@@ -92,7 +92,7 @@ test("POSIX contracts fail closed on enumeration errors and failed quiescence", 
     await backend.signal(binding, "force_terminate", fence);
     assert.deepEqual(signals, [[-9001, "SIGTERM"], [-9001, "SIGKILL"]]);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeFixtureRoot(root);
   }
 });
 
@@ -109,7 +109,7 @@ test("POSIX validates birth identity before any group signal", async () => {
     await assert.rejects(backend.signal(portableBinding(root, "owned-birth"), "terminate", fence), /identity/i);
     assert.deepEqual(signals, []);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeFixtureRoot(root);
   }
 });
 
@@ -125,7 +125,7 @@ test("POSIX signal reaches the owned group after the supervisor exits", async ()
   try {
     assert.deepEqual(await backend.signal(portableBinding(root, "supervisor-birth"), "terminate", fence), { state: "exited" });
     assert.deepEqual(signals, [[-9001, "SIGTERM"]]);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixtureRoot(root); }
 });
 
 test("POSIX terminal proof permits fenced empty verification and release without Windows tree records", async () => {
@@ -140,7 +140,7 @@ test("POSIX terminal proof permits fenced empty verification and release without
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, true);
     assert.deepEqual(await backend.release(binding, fence), { released: true });
     assert.equal(existsSync(root), false);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixtureRoot(root); }
 });
 
 test("POSIX launch rollback kills the owned group and requires a stable empty discovery window", async () => {
@@ -183,7 +183,7 @@ test("POSIX launch rollback kills the owned group and requires a stable empty di
     assert.deepEqual(signals, [[-9001, "SIGKILL"]]);
     assert.ok(postSignalChecks >= 10, `expected stable empty polling, observed ${postSignalChecks} checks`);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeFixtureRoot(root);
   }
 });
 
@@ -221,7 +221,7 @@ test("POSIX launch rollback signals an identity-proven owned group after its sup
     });
     assert.deepEqual(signals, [[-9001, "SIGKILL"]]);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeFixtureRoot(root);
   }
 });
 
@@ -244,7 +244,7 @@ test("POSIX launch rollback rechecks the durable fence before signalling the own
   try {
     await assert.rejects(rollback.cleanupFailedLaunch({ version: 1, backendId: "runner-posix-process-group-v1", nonce: "rollback-nonce", directory: root, supervisorPid: 9001, supervisorBirth: "supervisor-birth", fence: original }), /fence|stale|identity/i);
     assert.deepEqual(signals, []);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { removeFixtureRoot(root); }
 });
 
 test("portable POSIX graceful control signals the exact owned process group", async () => {
@@ -261,6 +261,12 @@ test("portable POSIX graceful control signals the exact owned process group", as
 });
 
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
+function removeFixtureRoot(root: string): void {
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  rmSync(`${root}.fence.lock`, { force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
+  assert.equal(existsSync(`${root}.fence.lock`), false);
+}
 function request(args: string[]) {
   return {
     intent: {

@@ -1,31 +1,352 @@
-import { unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
+const PROTOCOL_VERSION = 1;
+const DEFAULT_DEADLINE_MS = 2_000;
+const DEFAULT_RETRY_DELAY_MS = 5;
 const waiter = new Int32Array(new SharedArrayBuffer(4));
-const TRANSIENT_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const asynchronousTails = new Map();
+let cachedCurrentBirth;
 
-export function isOwnedFenceLockContention(error) {
-  return error?.code === "EEXIST" || TRANSIENT_CODES.has(error?.code);
+export class OwnedFenceLockUnavailableError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "OwnedFenceLockUnavailableError";
+  }
 }
 
-export function unlinkOwnedFenceLock(path, options = {}) {
-  const deadline = Date.now() + (options.deadlineMs ?? 2_000);
-  const retryDelayMs = options.retryDelayMs ?? 5;
+export function withOwnedFenceLockSync(path, effect, options = {}) {
+  path = resolve(path);
+  const context = acquire(path, options);
+  let effectError;
+  let retired = false;
+  try {
+    beginEffect(context);
+    let result;
+    try { result = effect(); }
+    catch (error) { effectError = error; }
+    retired = finalizeEffect(context, effectError, options.retireAfterEffect === true);
+    if (effectError !== undefined) throw effectError;
+    return result;
+  } catch (error) {
+    rollbackQuietly(context.database);
+    if (effectError !== undefined && error !== effectError) {
+      throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
+    }
+    throw error;
+  } finally {
+    context.database.close();
+    if (retired) removeRetiredProtocol(path);
+  }
+}
+
+export async function withOwnedFenceLock(path, effect, options = {}) {
+  path = resolve(path);
+  const previous = asynchronousTails.get(path) ?? Promise.resolve();
+  let finishTurn;
+  const turn = new Promise((resolvePromise) => { finishTurn = resolvePromise; });
+  const tail = previous.then(() => turn);
+  asynchronousTails.set(path, tail);
+  await previous;
+  try {
+    const context = acquire(path, options);
+    let effectError;
+    let retired = false;
+    try {
+      beginEffect(context);
+      let result;
+      try {
+        result = effect();
+        if (result && typeof result.then === "function") result = await result;
+      }
+      catch (error) { effectError = error; }
+      retired = finalizeEffect(context, effectError, options.retireAfterEffect === true);
+      if (effectError !== undefined) throw effectError;
+      return result;
+    } catch (error) {
+      rollbackQuietly(context.database);
+      if (effectError !== undefined && error !== effectError) {
+        throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
+      }
+      throw error;
+    } finally {
+      context.database.close();
+      if (retired) removeRetiredProtocol(path);
+    }
+  } finally {
+    finishTurn();
+    if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
+  }
+}
+
+export function currentProcessBirthFingerprint() {
+  cachedCurrentBirth ??= inspectProcessBirth(process.pid);
+  if (cachedCurrentBirth.state !== "same")
+    throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
+  return cachedCurrentBirth.fingerprint;
+}
+
+function acquire(path, options) {
+  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
+    throw new OwnedFenceLockUnavailableError("Owned fence lock bounds are invalid.");
+  const deadline = Date.now() + deadlineMs;
+  const holderPid = options.holderPid ?? process.pid;
+  const holderBirth = options.holderBirth ?? currentProcessBirthFingerprint();
+  if (!Number.isSafeInteger(holderPid) || holderPid < 1 || typeof holderBirth !== "string" || holderBirth.length === 0)
+    throw new OwnedFenceLockUnavailableError("Owned fence holder identity is invalid.");
+  const acquisitionId = randomUUID();
+  const database = openProtocol(path, deadline, retryDelayMs);
+  const context = {
+    database, acquisitionId, holderPid, holderBirth, deadline, retryDelayMs,
+    inspectHolder: options.inspectHolder ?? defaultInspectHolder,
+    afterClaim: options.afterClaim,
+  };
+  let proposalInserted = false;
+  try {
+    while (!proposalInserted) {
+      try {
+        database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)")
+          .run(acquisitionId, holderPid, holderBirth);
+        proposalInserted = true;
+      } catch (error) {
+        if (!isBusy(error) || Date.now() >= deadline)
+          throw isBusy(error)
+            ? new OwnedFenceLockUnavailableError(`Owned fence lock remains held by an exact live holder${describeHolder(database)}.`, { cause: error })
+            : error;
+        Atomics.wait(waiter, 0, 0, retryDelayMs);
+      }
+    }
+    for (;;) {
+      if (tryClaim(context)) { context.afterClaim?.(); return context; }
+      if (Date.now() >= deadline)
+        throw new OwnedFenceLockUnavailableError("Owned fence lock remains held by an exact live holder.");
+      Atomics.wait(waiter, 0, 0, retryDelayMs);
+    }
+  } catch (error) {
+    if (!proposalInserted) {
+      database.close();
+      throw normalizeUnavailable(error);
+    }
+    try { database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId); }
+    catch (cleanupError) {
+      database.close();
+      throw new AggregateError([error, cleanupError], "Owned fence acquisition and proposal cleanup both failed.", { cause: error });
+    }
+    database.close();
+    throw normalizeUnavailable(error);
+  }
+}
+
+function openProtocol(path, deadline, retryDelayMs) {
+  const mayInitialize = !existsSync(path);
+  for (;;) {
+    let database;
+    try {
+      database = new DatabaseSync(path);
+      database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
+      const objects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
+      const required = ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable"];
+      if (!mayInitialize && required.some((name) => !objects.has(name)))
+        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is incomplete or invalid.");
+      if (mayInitialize) database.exec(`
+        CREATE TABLE IF NOT EXISTS owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)));
+        CREATE TABLE IF NOT EXISTS owned_fence_acquisition(
+          acquisition_id TEXT PRIMARY KEY NOT NULL,
+          holder_pid INTEGER NOT NULL,
+          holder_birth TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS owned_fence_holder(
+          lock_key TEXT PRIMARY KEY NOT NULL CHECK(lock_key = 'owned'),
+          acquisition_id TEXT UNIQUE NOT NULL,
+          holder_pid INTEGER NOT NULL,
+          holder_birth TEXT NOT NULL,
+          FOREIGN KEY(acquisition_id) REFERENCES owned_fence_acquisition(acquisition_id)
+        );
+        CREATE TRIGGER IF NOT EXISTS owned_fence_acquisition_immutable
+        BEFORE UPDATE ON owned_fence_acquisition
+        BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END;
+      `);
+      const version = database.prepare("SELECT version FROM owned_fence_protocol").all();
+      if (version.length === 0) database.prepare("INSERT INTO owned_fence_protocol(version, retired) VALUES (?, 0)").run(PROTOCOL_VERSION);
+      else if (version.length !== 1 || version[0].version !== PROTOCOL_VERSION)
+        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is invalid.");
+      const protocol = database.prepare("SELECT retired FROM owned_fence_protocol").get();
+      if (!protocol || protocol.retired !== 0)
+        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
+      database.exec("PRAGMA foreign_keys=ON;");
+      return database;
+    } catch (error) {
+      try { database?.close(); } catch {}
+      if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
+      Atomics.wait(waiter, 0, 0, retryDelayMs);
+    }
+  }
+}
+
+function tryClaim(context) {
+  const { database, acquisitionId, holderPid, holderBirth, inspectHolder } = context;
+  try {
+    database.exec("BEGIN IMMEDIATE");
+  } catch (error) {
+    if (isBusy(error)) return false;
+    throw error;
+  }
+  try {
+    assertActiveProtocol(database);
+    const row = database.prepare(`
+      SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
+             h.holder_birth AS holderBirth, a.holder_pid AS proposalPid,
+             a.holder_birth AS proposalBirth
+      FROM owned_fence_holder h
+      LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
+      WHERE h.lock_key = 'owned'
+    `).get();
+    if (!row) {
+      insertHolder(database, acquisitionId, holderPid, holderBirth);
+      database.exec("COMMIT");
+      return true;
+    }
+    if (!validHolderRow(row))
+      throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
+    if (row.acquisitionId === acquisitionId) { database.exec("COMMIT"); return true; }
+    const inspection = inspectHolder(Number(row.holderPid), String(row.holderBirth));
+    if (inspection === "same") { database.exec("ROLLBACK"); return false; }
+    if (inspection !== "absent" && inspection !== "birth_mismatch")
+      throw new OwnedFenceLockUnavailableError("Owned fence holder inspection is unavailable or uncertain.");
+    const update = database.prepare(`
+      UPDATE owned_fence_holder
+      SET acquisition_id = ?, holder_pid = ?, holder_birth = ?
+      WHERE lock_key = 'owned' AND acquisition_id = ? AND holder_pid = ? AND holder_birth = ?
+    `).run(acquisitionId, holderPid, holderBirth, row.acquisitionId, row.holderPid, row.holderBirth);
+    if (Number(update.changes) !== 1)
+      throw new OwnedFenceLockUnavailableError("Owned fence stale-holder election changed concurrently.");
+    database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(row.acquisitionId);
+    database.exec("COMMIT");
+    return true;
+  } catch (error) {
+    rollbackQuietly(database);
+    throw error;
+  }
+}
+
+function insertHolder(database, acquisitionId, holderPid, holderBirth) {
+  database.prepare("INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', ?, ?, ?)")
+    .run(acquisitionId, holderPid, holderBirth);
+}
+
+function beginEffect(context) {
+  const { database, acquisitionId, holderPid, holderBirth, deadline, retryDelayMs } = context;
+  for (;;) {
+    try { database.exec("BEGIN IMMEDIATE"); break; }
+    catch (error) {
+      if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
+      Atomics.wait(waiter, 0, 0, retryDelayMs);
+    }
+  }
+  assertActiveProtocol(database);
+  const row = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_holder WHERE lock_key = 'owned'").get();
+  if (!row || row.acquisitionId !== acquisitionId || Number(row.holderPid) !== holderPid || row.holderBirth !== holderBirth) {
+    rollbackQuietly(database);
+    throw new OwnedFenceLockUnavailableError("Owned fence acquisition identity changed before the effect boundary.");
+  }
+}
+
+function finalizeEffect(context, primaryError, retireAfterEffect) {
+  const { database, acquisitionId } = context;
+  try {
+    const removed = database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
+    if (Number(removed.changes) !== 1)
+      throw new OwnedFenceLockUnavailableError("Owned fence holder finalization lost its exact acquisition identity.");
+    database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
+    if (retireAfterEffect && primaryError === undefined) {
+      database.prepare("DELETE FROM owned_fence_acquisition").run();
+      database.prepare("UPDATE owned_fence_protocol SET retired = 1 WHERE retired = 0").run();
+    }
+    database.exec("COMMIT");
+    return retireAfterEffect && primaryError === undefined;
+  } catch (error) {
+    rollbackQuietly(database);
+    const cleanupError = normalizeUnavailable(error);
+    if (primaryError !== undefined)
+      throw new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError });
+    throw cleanupError;
+  }
+}
+
+function assertActiveProtocol(database) {
+  const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
+  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 0)
+    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
+}
+
+function removeRetiredProtocol(path) {
+  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
   for (;;) {
     try { unlinkSync(path); return; }
     catch (error) {
       if (error?.code === "ENOENT") return;
-      if (!TRANSIENT_CODES.has(error?.code) || Date.now() >= deadline) {
-        const cleanupError = new Error("Owned writer fence lock cleanup is unavailable.", { cause: error });
-        if (options.primaryError !== undefined) {
-          throw new AggregateError(
-            [options.primaryError, cleanupError],
-            "Owned writer fence effect and lock cleanup both failed.",
-            { cause: options.primaryError },
-          );
-        }
-        throw cleanupError;
-      }
-      Atomics.wait(waiter, 0, 0, retryDelayMs);
+      if (!["EPERM", "EACCES", "EBUSY"].includes(error?.code) || Date.now() >= deadline)
+        throw new OwnedFenceLockUnavailableError("Retired owned fence protocol cleanup is unavailable.", { cause: error });
+      Atomics.wait(waiter, 0, 0, DEFAULT_RETRY_DELAY_MS);
     }
   }
+}
+
+function validHolderRow(row) {
+  return typeof row.acquisitionId === "string" && /^[0-9a-f-]{36}$/i.test(row.acquisitionId) &&
+    Number.isSafeInteger(Number(row.holderPid)) && Number(row.holderPid) > 0 &&
+    typeof row.holderBirth === "string" && row.holderBirth.length > 0 &&
+    Number(row.proposalPid) === Number(row.holderPid) && row.proposalBirth === row.holderBirth;
+}
+
+function defaultInspectHolder(pid, birth) {
+  const inspection = inspectProcessBirth(pid);
+  if (inspection.state === "absent") return "absent";
+  if (inspection.state !== "same") return "unknown";
+  return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
+}
+
+function inspectProcessBirth(pid) {
+  try {
+    if (process.platform === "win32") {
+      const output = execFileSync("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
+      ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
+      if (output === "ABSENT") return { state: "absent" };
+      if (output.startsWith("PRESENT:") && output.length > 8) return { state: "same", fingerprint: normalizeBirth(output.slice(8)) };
+      return { state: "unknown" };
+    }
+    if (process.platform === "linux") {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const close = stat.lastIndexOf(")");
+        const start = stat.slice(close + 2).split(" ")[19];
+        return start ? { state: "same", fingerprint: `proc-start:${start}` } : { state: "unknown" };
+      } catch (error) { return error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" }; }
+    }
+    const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim();
+    return output ? { state: "same", fingerprint: output } : { state: "absent" };
+  } catch { return { state: "unknown" }; }
+}
+
+function sameBirth(left, right) { return normalizeBirth(left) === normalizeBirth(right); }
+function normalizeBirth(value) { return value.replace(/(\.\d{6})\d+(Z)$/, "$1$2"); }
+function rollbackQuietly(database) { try { database.exec("ROLLBACK"); } catch {} }
+function isBusy(error) { return /database is locked|database table is locked|SQLITE_BUSY/i.test(String(error?.message ?? error)); }
+function normalizeUnavailable(error) {
+  return error instanceof OwnedFenceLockUnavailableError
+    ? error
+    : new OwnedFenceLockUnavailableError("Owned fence lock protocol is unavailable or invalid.", { cause: error });
+}
+function describeHolder(database) {
+  try {
+    const row = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid FROM owned_fence_holder WHERE lock_key = 'owned'").get();
+    return row ? ` (PID ${String(row.holderPid)}, acquisition ${String(row.acquisitionId)})` : "";
+  } catch { return ""; }
 }

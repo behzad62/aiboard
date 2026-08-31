@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isOwnedFenceLockContention, unlinkOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 import { signalOwnedPosixGroup } from "./portable-process-posix-control.mjs";
 
 const config = JSON.parse(Buffer.from(process.argv[2] ?? "", "base64url").toString("utf8"));
@@ -14,6 +14,7 @@ const stderrPath = join(config.directory, "stderr.log");
 const childGoPath = join(config.directory, "child-go");
 const childStatusPath = join(config.directory, "child-status.json");
 const fencePath = join(config.directory, "fence.json");
+const lockHolderPath = join(config.directory, "lock-holder.json");
 const channelDirectory = join(config.directory, "channel");
 const channelOutputDirectory = join(channelDirectory, "output");
 const channelInputDirectory = join(channelDirectory, "input");
@@ -265,28 +266,16 @@ function publishChannelInputAck(command, status, reason) {
 
 function withCurrentFenceEffect(ownerId, fencingToken, effect) {
   const lock = `${config.directory}.fence.lock`;
-  const deadline = Date.now() + 2_000;
-  let descriptor;
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-  while (descriptor === undefined) {
-    try { descriptor = openSync(lock, "wx", 0o600); }
-    catch (error) {
-      if (!isOwnedFenceLockContention(error) || Date.now() >= deadline) throw new Error("Portable fence effect boundary is unavailable.");
-      Atomics.wait(waiter, 0, 0, 5);
-    }
-  }
-  let primaryError;
   try {
-    const fence = readCurrentFence();
-    if (!fence || fence.ownerId !== ownerId || fence.fencingToken !== fencingToken) throw new Error("Portable fence is stale at the effect boundary.");
-    return effect();
-  } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
-    closeSync(descriptor);
-    unlinkOwnedFenceLock(lock, { primaryError });
-  }
+    const holder = JSON.parse(readFileSync(lockHolderPath, "utf8"));
+    if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
+      throw new Error("Portable fence holder identity is invalid.");
+    return withOwnedFenceLockSync(lock, () => {
+      const fence = readCurrentFence();
+      if (!fence || fence.ownerId !== ownerId || fence.fencingToken !== fencingToken) throw new Error("Portable fence is stale at the effect boundary.");
+      return effect();
+    }, { holderPid: holder.holderPid, holderBirth: holder.holderBirth });
+  } catch (error) { throw new Error(`Portable fence effect boundary is unavailable: ${String(error)}`, { cause: error }); }
 }
 
 function writeAtomic(destination, value) {

@@ -251,9 +251,9 @@ test("portable write paused before its effect cannot overwrite takeover state or
     assert.equal(readFileSync(join(identity.directory, "channel", "client-state.json"), "utf8"), takeoverState);
   } finally {
     resume(); await old.detach(); await recovered.detach();
-    await backend.signal(binding, "force_terminate", higher).catch(() => undefined);
-    await backend.release(binding, higher).catch(() => undefined);
+    await cleanupPortableBackendFixture(backend, binding, higher);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    assert.equal(existsSync(root), false);
   }
 });
 

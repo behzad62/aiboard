@@ -73,11 +73,18 @@ test("evidence family production graph scrubs inherited secrets and survives out
   const previous = process.env[secretName];
   process.env[secretName] = "must-not-reach-evidence-child";
   const graph = createProductionOneShotCommandFixture(t, { artifacts });
+  let observedCommandTimeoutMs: number | undefined;
+  const guardedExecution = {
+    execute: async (request: Parameters<typeof graph.execution.execute>[0]) => {
+      observedCommandTimeoutMs = request.timeoutMs;
+      return await graph.execution.execute(request);
+    },
+  };
   const broker = new ToolBroker({
     permissionProfile: "full", workspacePath: fixture.workspace,
-    executionGrants: graph.executionGrants, toolTimeoutMs: 30_000,
+    executionGrants: graph.executionGrants, toolTimeoutMs: 60_000,
   });
-  for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: graph.execution })) broker.register(tool);
+  for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: guardedExecution })) broker.register(tool);
   try {
     const result = await broker.invoke({
       type: "tool_call", callId: "evidence-production-large", name: "run_evidence_command",
@@ -87,6 +94,7 @@ test("evidence family production graph scrubs inherited secrets and survives out
       },
     }, { runId: "run_1", sessionId: "worker_session", actor: { role: "worker", id: "worker_1" } });
     assert.equal(result.isError, false, result.error?.message ?? "evidence command unexpectedly failed");
+    assert.equal(observedCommandTimeoutMs, 25_000, "the test-only broker wrapper must not raise the production command deadline");
     const record = jsonValue(result) as { fact: { stdoutArtifactHash: string; outputLossy: boolean; disclosure: string } };
     const output = await artifacts.get(record.fact.stdoutArtifactHash);
     assert.equal(output.includes(Buffer.from("must-not-reach-evidence-child")), false);

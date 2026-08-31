@@ -32,6 +32,15 @@ function source(
   };
 }
 
+async function waitUntilProcessAbsent(pid: number, deadlineMs: number): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return; throw error; }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 test("process host semantic facts are independent, immutable, and preserve partial states", async () => {
   const facts = await probeProcessHostSemantics(source({
     portableDuplex: true,
@@ -81,6 +90,54 @@ test("Job verification requires the active create-and-close probe result", async
   });
   assert.equal(activeCalls, 1);
   assert.equal(facts.jobContainment, "unavailable");
+});
+
+test("a hung optional active Job probe is killed without blocking verified portable facts", { timeout: 10_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("The real child watchdog fixture requires Windows."); return; }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-watchdog-"));
+  const pidPath = join(root, "probe.pid");
+  const host = createWindowsJobProcessHost({
+    stateDirectory: join(root, "state"),
+    activeJobProbe: {
+      executable: process.execPath,
+      arguments: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(pidPath)},String(process.pid));setInterval(()=>{},1000)`],
+      deadlineMs: 100,
+    },
+  } as Parameters<typeof createWindowsJobProcessHost>[0] & {
+    activeJobProbe: { executable: string; arguments: string[]; deadlineMs: number };
+  });
+  try {
+    const startedAt = Date.now();
+    const facts = await probeProcessHostSemantics({
+      portableDuplex: async () => true,
+      windowsBatchArgv: async () => true,
+      exactTreeBirth: async () => "partial",
+      activeJobCreateClose: async () => await host.probeActiveJobCreateClose(),
+    });
+    assert.ok(Date.now() - startedAt < 2_000, "the optional Job fact must settle within its own watchdog");
+    assert.deepEqual(facts, {
+      portableDuplex: "verified",
+      windowsBatchArgv: "verified",
+      exactTreeBirth: "partial",
+      jobContainment: "unavailable",
+    });
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    await waitUntilProcessAbsent(pid, 2_000);
+    assert.throws(() => process.kill(pid, 0), (error: NodeJS.ErrnoException) => error.code === "ESRCH");
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("the healthy active Job probe still verifies real create-and-close semantics", async (t) => {
+  if (process.platform !== "win32") { t.skip("The active Job fixture requires Windows."); return; }
+  const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-healthy-"));
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory });
+    assert.equal(await host.probeActiveJobCreateClose(), true);
+  } finally {
+    rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
 });
 
 test("live Windows construction consumes semantic facts and keeps portable fallback after active Job failure", () => {

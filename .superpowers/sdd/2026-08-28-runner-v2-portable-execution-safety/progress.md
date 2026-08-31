@@ -367,3 +367,22 @@ overlap is expected.
   Temp roots. All six preceding Important findings are confirmed addressed.
   Governed fix round 3 is authorized for only these three gaps under
   `task-8.0b2-fix-round-3-brief.md`. B3 remains locked.
+- Task 8.0B2 fix round 3 now bounds the optional active Job probe, replaces all
+  three anonymous fence-lock paths with one SQLite exact PID/birth/acquisition
+  protocol, atomically retires queued contenders, and closes historical plus
+  passing-fixture B2 residue. Current gates: lock 9/9, portable 29/29, Windows
+  64/64, affected concurrent 125/125, required serial compatibility 387 pass /
+  one explicit POSIX-host skip, type/lint/static/diff GREEN, and zero exact B2
+  roots/live owned helpers. Final serial Runner package gate, post-gate residue,
+  final report, and commit remain; B2/B3 stay locked.
+- Task 8.0B2 fix round 3 final verification is GREEN. The initial serial gate
+  was RED at two test-harness boundaries: a 30-second evidence broker wrapper
+  expired after command mechanics completed at about 44.3 seconds, and a
+  portable fixture swallowed its authenticated cleanup. The evidence wrapper
+  is now test-only 60 seconds while explicitly asserting the unchanged 25-second
+  production command timeout; its file is GREEN 16/16. Cleanup-helper removal
+  is RED and revert is GREEN with zero inventory. The final uninterrupted
+  package gate is GREEN: 1,377 total / 1,376 pass / zero fail / zero cancelled /
+  one explicit POSIX-host skip. Post-gate typecheck, targeted lint, static/diff,
+  three-second helper settle, and exact B2-root inventory are GREEN/zero. B2
+  remains locked for independent review and B3 has not started.

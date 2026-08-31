@@ -700,3 +700,118 @@ approve B2 or begin B3.
   post-gate settle reports zero live managed/portable/Job-host supervisors.
   No production deadline, retry limit, Node support policy, product family
   routing, B3/OCI activation, or time-based output deletion was introduced.
+
+## Fix round 3 — optional probe, recoverable fence authority, and zero residue
+
+### R3.1 optional active Job probe
+
+- The real Job create/close probe now has its own explicit 2 second watchdog;
+  the injected real-child fixture uses a 100 ms bound, proves the child absent,
+  and returns only `jobContainment: unavailable` while portable duplex and
+  batch argv remain `verified` and exact tree/birth remains independently
+  `partial`. Healthy real create/close remains verified.
+- Watchdog mutation: multiplying the injected bound by 30 was RED in 3.01 s at
+  the assertion that the optional fact must settle under 2 s. Reverted exact
+  hung+healthy probes are GREEN 2/2. No factory registration, family routing,
+  product deadline, or portable fallback changed.
+
+### R3.2 shared crash-recoverable fence authority
+
+- Native controller claim/effect, portable-supervisor effect, and extracted Job
+  host claim/effect now use one SQLite DELETE-journal protocol. The durable
+  immutable acquisition contains a random UUID, exact PID, and exact birth.
+  `BEGIN IMMEDIATE` serializes election and spans the actual lowest-boundary
+  effect; current protocol/acquisition identity is rechecked inside the final
+  transaction. Busy handling is bounded by the existing 2 second fence bound.
+- A dead or birth-mismatched exact holder can be atomically replaced; a live or
+  uncertain holder is never stolen. Partial/zero-byte/corrupt schema, corrupt
+  holder joins, replacement between claim and effect, persistent finalization,
+  and immutable-acquisition mutation all fail closed. The declaration uses
+  `node:sqlite`, available under the unchanged declared Node >=22.13 and Node 24
+  support; no exact patch pin was added.
+- Release retires the protocol in the same final transaction. It removes every
+  queued proposal, and claim/effect both recheck `version` and `retired`.
+  Waiting contenders therefore close without effect; the retired DB is removed
+  only after close, with DELETE mode leaving no journal/WAL/SHM sidecar. The
+  deterministic preinserted-contender race was RED before these checks (the
+  retiring process failed and authority could resurrect). Removing proposal
+  settlement plus active-protocol checks was RED again because the contender
+  exited success instead of refusal; revert is GREEN 1/1 with one effect and
+  zero DB/sidecars.
+- Required mutation evidence: stale recovery removal made the real crash guard
+  RED; replacement/final identity removal was RED before the final boundary;
+  acquisition mutability was RED before the immutable trigger; ignoring exact
+  birth made the retained-live-holder guard perform a second effect (RED) and
+  reverted GREEN. Full lock group is GREEN 9/9, including real process crash,
+  live contention window, two-process reclaim election, corrupt/uncertain
+  evidence, birth mismatch, ambiguous finalization, replacement, immutability,
+  and retirement race.
+- Loaded portable replay exposed a same-process sync/async starvation: an
+  unnecessary async wrapper yielded while the SQLite writer transaction was
+  open, so synchronous re-attestation could not allow finalization to run.
+  Exact replay was RED 0/1. Only genuine thenables are now awaited and local
+  async acquisitions queue by resolved lock path; exact replay and full portable
+  channel are GREEN 1/1 and 29/29.
+
+### R3.3 exact fixture and historical residue closure
+
+- The bounded inventory considers only real, non-link, immediate Temp children
+  in the closed B2 prefix set and explicitly excludes the production default.
+  It bounds recursive evidence, owner count/input size, and process inventory;
+  validates nonce, launch state, PID/birth, and encoded/raw command-line
+  references; and deletes only absent or exact birth-mismatched ownership.
+- Controller-authorized temporal mismatch rules are narrow and guarded: an
+  enumerated descendant born before its durable root is impossible ownership,
+  and a birthless recorded PID whose current birth is later than the last
+  durable record update is PID reuse. Those rules removed only the two exact
+  named historical roots after all real root/supervisor/post-root references
+  were absent; Edge and Python were not signalled. Historical inventory then
+  reached zero.
+- Empty coordination DB residue is retired atomically under `BEGIN IMMEDIATE`
+  only after exact schema/version and zero holder/proposal validation; corrupt
+  evidence remains. Passing Windows and POSIX fake-owner fixtures initially
+  left one and then eight sibling DBs (the required cleanup-removal RED proof).
+  Exact `finally` cleanup/assertions plus the retirement audit removed them;
+  reruns are Windows exact 1/1 and POSIX 9 pass/one explicit host skip with
+  inventory `[]`.
+- Current concurrent affected gate is GREEN 125/125 across residue, real crash
+  locks, semantic probes, portable channel, and Windows portable/Job tests.
+  Complete Windows is GREEN 64/64. Required compatibility first showed one
+  load-only 30 s process-tool timeout at concurrency three; it passed exact and
+  its complete file 8/8. The required serial compatibility rerun is GREEN:
+  388 total, 387 pass, zero fail/cancelled, one explicit POSIX-host skip.
+  Post-gate exact B2 inventory and live owned-helper count are both zero.
+- Runner typecheck, targeted ESLint, static actor/dependency/raw-lock/Node-pin/
+  product-routing checks, and diff check are GREEN (line-ending notices only).
+  The final uninterrupted serial package gate and post-gate report/commit are
+  still required. B2 remains locked and B3 has not started.
+
+### Round 3 final broad gate and cleanup evidence
+
+- The first serial package gate completed 1,377 tests: 1,374 pass, two fail,
+  zero cancelled, and one explicit POSIX-host skip. One failure was the
+  evidence-family test-only broker wrapper expiring at 30 seconds after the
+  command mechanics had completed; exact replay completed in about 44.3
+  seconds. The wrapper-only 30-second bound is retained as the RED mutation.
+  Its focused bound is now 60 seconds, while the test captures and explicitly
+  asserts that the production command timeout remains exactly 25,000 ms. Exact
+  replay is GREEN in about 44.2 seconds and the complete evidence file is GREEN
+  16/16. No product timeout, retry, global suite timeout, or operation semantic
+  changed.
+- The other first-gate failure was a Windows fixture cleanup `EPERM` after the
+  authenticated portable write-takeover behavior had passed. Removing the
+  established authenticated cleanup helper reproduced the retained-root RED;
+  reverting the helper is GREEN 1/1 in about 8.1 seconds with exact inventory
+  `[]`. This changed fixture cleanup only and did not add time-based deletion.
+- The final uninterrupted serial `npm run test:runner-v2` package gate is
+  GREEN, exit 0: 1,377 total, 1,376 pass, zero fail, zero cancelled, and one
+  explicit POSIX-host skip, in 974.37 seconds. Every chained Runner client,
+  native-policy, policy-UI, cutover, pause-gate, model-usage, live-state,
+  transcript, files, run-stats, steering, and observability check also passed.
+- The immediate and three-second-settled post-gate helper inventories are both
+  zero, and the closed-prefix B2 Temp inventory is exactly `[]`. Fresh Runner
+  typecheck, targeted ESLint, static actor/dependency/raw-lock/Node-policy/
+  product-routing checks, and `git diff --check` are GREEN; diff check reports
+  line-ending notices only. No SQLite DB, journal, WAL, SHM, supervisor, Job
+  host, or closed-prefix fixture root remains. B2 remains locked for independent
+  review, and B3 has not started.
