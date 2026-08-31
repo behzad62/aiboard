@@ -407,3 +407,11 @@ overlap is expected.
   zero fail or cancelled / one explicit POSIX-host skip. Post-settle live helper
   and exact B2-root inventories are both zero. B2 remains locked; B3 has not
   started.
+- Task 8.0B2 fix-round-4 independent re-review: CHANGES REQUIRED with zero
+  Critical and two Important residual gaps. A Job release can persist its
+  released tombstone then fail SQLite finalization, after which retry returns
+  early and strands the live lock; semantic cleanup inventories only recorded
+  PIDs and can delete a root while an unlisted command-line-referencing process
+  remains live. Every earlier finding remains addressed. Governed fix round 5 is
+  authorized only for these two gaps under `task-8.0b2-fix-round-5-brief.md`.
+  B3 remains locked.
