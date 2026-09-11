@@ -10,9 +10,9 @@ import type {
   LanguageIntelligenceProvider,
   PositionQuery,
 } from "../src/language-intelligence.js";
-import { RepositoryIntelligence } from "../src/repository-intelligence.js";
+import { RepositoryIntelligence } from "./support/git-fixture.js";
 import { ToolBroker } from "../src/tool-broker.js";
-import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
+import { TypeScriptIntelligence } from "./support/git-fixture.js";
 
 test("code.* tools preserve their contracts while dispatching through a generic provider", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-language-provider-"));

@@ -1,3 +1,5 @@
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash } from "node:crypto";
 
 import type {
@@ -156,6 +158,8 @@ export interface VerifierWorkspaceProvider {
 }
 
 export interface NativeVerifierRuntimeOptions {
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
   router: RuntimeRouter;
   candidates: readonly AgentRuntimeCandidate[];
   models: ReadonlyMap<string, AgentModel>;
@@ -391,6 +395,7 @@ export class NativeVerifierRuntime {
     }
 
     const broker = createInspectionTools({
+      git: this.options.git, executionGrants: this.options.executionGrants,
       workspacePath: workspace.path,
       artifacts: this.options.artifacts,
       evidenceStore: this.options.evidenceStore,
@@ -560,6 +565,8 @@ export function verifierModelAttribution(
 }
 
 function createInspectionTools(input: {
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
   workspacePath: string;
   artifacts: ArtifactStore;
   evidenceStore: EvidenceStore;
@@ -569,21 +576,23 @@ function createInspectionTools(input: {
   lifecycleTool?: NativeTool<unknown>;
 }): ToolBroker {
   const broker = new ToolBroker({
+    git: input.git, executionGrants: input.executionGrants,
     permissionProfile: "guarded",
     workspacePath: input.workspacePath,
     artifacts: input.artifacts,
     clock: input.clock,
     ...(input.ledger ? { ledger: input.ledger } : {}),
   });
-  const repository = new RepositoryIntelligence();
+  const repository = new RepositoryIntelligence(input.git ? (request) => input.git!.current().run(request) : undefined);
   const tools = [
     ...createFilesystemTools({
       artifacts: input.artifacts,
       repository,
     }),
-    ...createGitTools(),
+    ...createGitTools(input.git),
     ...createArtifactTools(input.artifacts),
     ...createEvidenceTools({
+      git: input.git,
       store: input.evidenceStore,
       artifacts: input.artifacts,
       taskId: "verifier",

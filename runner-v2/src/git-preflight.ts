@@ -68,19 +68,12 @@ export interface BoundedGitCommandExecutorOptions {
 }
 
 const DEFAULT_MINIMUM_VERSION = "2.39.0";
-const DEFAULT_EXECUTION_DEADLINE_MS = 30_000;
-const DEFAULT_TERMINATION_DEADLINE_MS = 15_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 
-export async function executeGitCommand(
-  command: string,
-  args: readonly string[]
-): Promise<GitCommandResult> {
-  return await createBoundedGitCommandExecutor({
-    executionDeadlineMs: DEFAULT_EXECUTION_DEADLINE_MS,
-    terminationDeadlineMs: DEFAULT_TERMINATION_DEADLINE_MS,
-    environment: process.env,
-  })(command, args);
+/** Compatibility helper with explicit closed Runner-owned execution. */
+export async function executeGitCommand(command: string, args: readonly string[], execute: GitCommandExecutor): Promise<GitCommandResult> {
+  if (typeof execute !== "function") throw new Error("An explicit Runner-owned Git execution context is required.");
+  return await execute(command, args);
 }
 
 export function createBoundedGitCommandExecutor(
@@ -210,9 +203,10 @@ export function createBoundedGitCommandExecutor(
 }
 
 export async function checkGit(
-  execute: GitCommandExecutor = executeGitCommand,
+  execute: GitCommandExecutor,
   options: GitPreflightOptions = {}
 ): Promise<GitPreflightResult> {
+  if (typeof execute !== "function") return missingGit();
   const minimumVersion = options.minimumVersion ?? DEFAULT_MINIMUM_VERSION;
   const result = await execute("git", ["--version"]);
   if (result.exitCode !== 0) return missingGit();

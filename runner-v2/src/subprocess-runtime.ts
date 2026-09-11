@@ -143,6 +143,9 @@ class GrantVault {
   }
 }
 export interface SubprocessInvocation {
+  /** Invocation-local observer, never durable/replayed; callback failure is a
+   * normal observed-effect failure and cannot certify partial output. */
+  readonly onOutput?: (stream: OutputStream, bytes: Uint8Array) => void;
   readonly intent: ExecutionInvocationIntent;
   readonly grantId: string;
   readonly ambientEnvironment: Readonly<Record<string, string | undefined>>;
@@ -233,6 +236,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ...(request.deadline
           ? { deadline: request.deadline.toISOString() }
           : {}),
+        ...(request.onOutput ? { liveOutputObservation: true } : {}),
         signalPresent: request.signal !== undefined,
         signalInitiallyAborted: request.signal?.aborted ?? false,
       },
@@ -613,7 +617,10 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       (fence) =>
         selected.backend.observe(
           binding,
-          (stream, bytes) => output.write(stream, bytes, fence),
+          async (stream, bytes) => {
+            await output.write(stream, bytes, fence);
+            request.onOutput?.(stream, new Uint8Array(bytes));
+          },
           fence,
         ),
     );
@@ -1938,6 +1945,7 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
       "ambientEnvironment",
       "explicitEnvironment",
       "credentialGrantId",
+      "onOutput",
       "signal",
       "deadline",
     ]),
@@ -1964,6 +1972,8 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
     o.credentialGrantId === undefined
       ? undefined
       : safeText(o.credentialGrantId, "credentialGrantId");
+  const onOutput = o.onOutput;
+  if (onOutput !== undefined && typeof onOutput !== "function") throw new Error("Invocation output observer is invalid.");
   const signal = o.signal === undefined ? undefined : o.signal;
   if (signal !== undefined && !(signal instanceof AbortSignal))
     throw new Error("Invocation signal is invalid.");
@@ -1979,6 +1989,7 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
     ambientEnvironment,
     ...(explicitEnvironment ? { explicitEnvironment } : {}),
     ...(credentialGrantId ? { credentialGrantId } : {}),
+    ...(onOutput ? { onOutput: onOutput as NonNullable<SubprocessInvocation["onOutput"]> } : {}),
     ...(signal ? { signal } : {}),
     ...(deadline ? { deadline: new Date(deadline) } : {}),
   });

@@ -1,3 +1,4 @@
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
@@ -62,6 +63,7 @@ export interface ToolAuditRecord {
 }
 
 export interface ToolBrokerOptions {
+  git?: RunGitExecutionContext;
   permissionProfile: PermissionProfile;
   workspacePath: string;
   approve?: (request: ToolApprovalRequest) => Promise<boolean>;
@@ -89,6 +91,7 @@ interface InvocationDecision {
 class ToolTimeoutError extends Error {}
 
 export class ToolBroker implements AgentToolRuntime {
+  private readonly git?: RunGitExecutionContext;
   private readonly registry = new ToolRegistry();
   private readonly permissionProfile: PermissionProfile;
   private readonly workspacePath: string;
@@ -107,6 +110,7 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly extensionIds = new Map<string, string>();
 
   constructor(options: ToolBrokerOptions) {
+    this.git = options.git;
     this.permissionProfile = options.permissionProfile;
     this.workspacePath = resolve(options.workspacePath);
     this.approve = options.approve;
@@ -381,7 +385,9 @@ export class ToolBroker implements AgentToolRuntime {
         actor: context.actor,
         toolName: tool.definition.name,
         callId,
-        permissionProfile: this.permissionProfile,
+        // Tool approval policy may be read-only/guarded (e.g. verifier), while
+        // execution retains the actual owner-selected run isolation profile.
+        permissionProfile: this.git?.permissionProfile ?? this.permissionProfile,
         workspacePath: this.workspacePath,
         access: (access.paths?.length
           ? access.paths.map((entry) => ({
@@ -406,7 +412,10 @@ export class ToolBroker implements AgentToolRuntime {
             this.decisions.get(callId)?.decision === "approved"),
         signal,
       });
-      const execution = tool.execute(input, { ...toolContext, signal, executionGrant });
+      const invocationContext = { ...toolContext, signal, executionGrant };
+      const execution = this.git
+        ? this.git.withCall(invocationContext, () => tool.execute(input, invocationContext))
+        : tool.execute(input, invocationContext);
       const timeoutResult = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           timeoutController.abort();

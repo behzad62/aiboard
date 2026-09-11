@@ -13,8 +13,7 @@ import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
 import {
-  runGit,
-  runGitBytes,
+  unavailableGitRunner,
   type GitBinaryRunner,
   type GitCommandOptions,
 } from "./git-command.js";
@@ -177,8 +176,8 @@ export class IntegrationManager {
     this.baselineRevision = options.baselineRevision;
     this.initializationMode = options.initializationMode ?? "active";
     this.branch = `refs/heads/aiboard/${this.runSegment}/integration`;
-    this.execute = options.execute ?? runGit;
-    this.executeBytes = options.executeBytes ?? runGitBytes;
+    this.execute = options.execute ?? unavailableGitRunner;
+    this.executeBytes = options.executeBytes ?? unavailableGitRunner;
     this.afterProjectApplyJournalWritten = options.afterProjectApplyJournalWritten;
     this.afterProjectRefAdvanced = options.afterProjectRefAdvanced;
     this.afterProjectBranchAdvanced = options.afterProjectBranchAdvanced;

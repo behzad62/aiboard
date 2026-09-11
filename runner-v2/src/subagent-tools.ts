@@ -1,3 +1,4 @@
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
@@ -48,6 +49,7 @@ interface ReturnSubagentInput {
 }
 
 export interface SubagentToolsOptions {
+  git?: RunGitExecutionContext;
   model: AgentModel;
   subagentModelForSession?: (sessionId: string) => AgentModel;
   runId: string;
@@ -160,6 +162,7 @@ function spawnSubagentTool(
       }
 
       const broker = new ToolBroker({
+        git: options.git,
         permissionProfile: options.permissionProfile,
         workspacePath: options.workspacePath,
         artifacts: options.artifacts,
@@ -169,7 +172,7 @@ function spawnSubagentTool(
           : {}),
         ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
       });
-      const repository = new RepositoryIntelligence();
+      const repository = new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined);
       const language = options.language ?? new TypeScriptIntelligence(repository);
       for (const tool of createFilesystemTools({
         artifacts: options.artifacts,
@@ -221,13 +224,14 @@ function spawnSubagentTool(
           broker.register(tool);
         }
       }
-      for (const tool of createGitTools()) {
+      for (const tool of createGitTools(options.git)) {
         if (readOnly ? tool.definition.readOnly : tool.definition.name !== "git.commit") {
           broker.register(tool);
         }
       }
       if (!readOnly && options.evidenceStore) {
         for (const tool of createEvidenceTools({
+      git: options.git,
           store: options.evidenceStore,
           artifacts: options.artifacts,
           taskId: options.taskId,

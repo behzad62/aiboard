@@ -131,3 +131,25 @@ test("Git joins runtime completion before releasing its exact authorization", as
   finally { release(); await pending; }
   assert.equal(f.state.released, true);
 });
+
+
+for (const variant of ["complete", "incomplete", "short", "over-bound"] as const) {
+  test(`Git live capture ${variant} preserves exact bytes without falsifying diagnostic storage`, async () => {
+    const bytes = Buffer.alloc(192 * 1024 + 3);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256;
+    const f = fixture(bytes);
+    const output = f.state.outcome.process.output.map((entry) => ({ ...entry,
+      tail: "diagnostic display is not binary authority", spillArtifactId: undefined,
+      spillBytes: 0, lossyBytes: entry.totalBytes, truncated: entry.stream === "stdout" }));
+    f.state.outcome = { ...f.state.outcome, process: { ...f.state.outcome.process, output },
+      capturedOutput: { complete: variant !== "incomplete", stdout: variant === "short" ? bytes.subarray(1) : bytes, stderr: new Uint8Array() } };
+    const request = { cwd, args: ["cat-file", "blob", "fixture"], maxOutputBytes: variant === "over-bound" ? 128 * 1024 : 256 * 1024 };
+    if (variant === "complete") {
+      const result = await f.runner.runBytes(request);
+      assert.deepEqual(result.stdout, bytes);
+      assert.equal(f.state.outcome.process.output[0]!.lossyBytes, bytes.length);
+      assert.equal(f.calls.includes("get"), false, "the complete live transport cannot claim a missing disk artifact");
+    } else await assert.rejects(f.runner.runBytes(request), (error: unknown) => error instanceof GitCommandError && error.code === "output_limit");
+    assert.equal(f.state.released, true);
+  });
+}

@@ -11,12 +11,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
 
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { runGit } from "../src/git-command.js";
-import {
-  NoTaskChangesError,
-  WorkspaceManager,
-} from "../src/workspace-manager.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { runGit } from "./support/git-fixture.js";
+import { NoTaskChangesError } from "../src/workspace-manager.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
 
 test("task worktrees isolate concurrent edits and create attributable commits", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-workspaces-"));

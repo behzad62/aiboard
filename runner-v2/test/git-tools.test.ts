@@ -5,11 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { ToolResult } from "../src/agent-contracts.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { createGitTools } from "../src/git-tools.js";
-import { runGit } from "../src/git-command.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { createGitTools } from "./support/git-fixture.js";
+import { runGit } from "./support/git-fixture.js";
 import { ToolBroker } from "../src/tool-broker.js";
-import { WorkspaceManager } from "../src/workspace-manager.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
 
 test("task-safe Git tools inspect and commit only the worker branch", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-git-tools-"));

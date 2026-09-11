@@ -11,7 +11,7 @@ import type {
   FinalVerificationCommand,
   FinalVerificationRuntimeSmokeInput,
 } from "./final-verification-runtime.js";
-import { runGit, type GitCommandOptions } from "./git-command.js";
+import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   FinalVerificationPortAuthority,
@@ -196,7 +196,7 @@ export async function inspectFinalVerificationExecutionProfile(options: {
   reservePort?: () => Promise<FinalVerificationPortLease>;
 }): Promise<FinalVerificationExecutionProfile> {
   const repositoryRoot = resolve(options.repositoryRoot);
-  const execute = options.execute ?? runGit;
+  const execute = options.execute ?? unavailableGitRunner;
   const git = async (args: readonly string[]) => await execute({ cwd: repositoryRoot, args } as GitCommandOptions);
   const [head, status] = await Promise.all([
     git(["rev-parse", "--verify", "HEAD^{commit}"]),

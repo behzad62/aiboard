@@ -1,8 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import type { ArtifactStore } from "./artifact-store.js";
+import { ArtifactStore } from "./artifact-store.js";
+import type { GitCommandRunner } from "./git-runtime-runner.js";
 import { BoundedOutputSpool } from "./bounded-output-spool.js";
 import { createChildEnvironmentFactory } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -136,12 +138,18 @@ export interface ExecutionHostRunBinding {
   close(): Promise<void>;
 }
 
+export type ExecutionHostGitInspectionInput = Omit<ExecutionHostRunBindingInput, "capabilityContract"> & {
+  readonly capabilityContract?: RunnerCapabilityContract;
+};
+
 export interface ExecutionHost {
   readonly hostId: string;
   readonly artifacts: ArtifactStore;
   readonly managedProcesses: ManagedProcessService;
   readonly internalProcesses: RunnerInternalProcessKernel;
   bindRun(input: ExecutionHostRunBindingInput): Promise<ExecutionHostRunBinding>;
+  /** Transient read-only run-owned inspection, with no write to historical state. */
+  withGitInspection<T>(input: ExecutionHostGitInspectionInput, inspect: (git: GitCommandRunner) => Promise<T>): Promise<T>;
   activeRunIds(): readonly string[];
   filteredEnvironmentSource(): Readonly<Record<string, string>>;
   close(): Promise<void>;
@@ -177,6 +185,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       : process.platform === "win32" ? "linux" : process.platform,
   });
   const bindings = new Map<string, ExecutionHostRunBinding | symbol>();
+  const inspectionOperations = new Set<Promise<unknown>>();
+  const inspectionOwners = new Set<() => Promise<void>>();
   const reservation = Symbol("execution-host-binding-reservation");
   let closed = false;
   let closeComplete = false;
@@ -237,6 +247,56 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         throw error;
       }
     },
+    withGitInspection<T>(input: ExecutionHostGitInspectionInput, inspect: (git: GitCommandRunner) => Promise<T>): Promise<T> {
+      if (closed) return Promise.reject(new Error("ExecutionHost is closed."));
+      const runId = safeSegment(input.runId);
+      if (!["full", "project", "guarded"].includes(input.permissionProfile)) return Promise.reject(new Error("Git inspection profile is invalid."));
+      // This is a fresh query descriptor, not a claim that an old Build had a
+      // current active capability contract. Runtime/provider attestation remains
+      // mandatory for any new Git process inside the query.
+      const digest = createHash("sha256").update(JSON.stringify({ kind: "run-git-inspection-v1", runId,
+        permissionProfile: input.permissionProfile, capabilitiesConfig: input.capabilitiesConfig })).digest("hex");
+      const operation = (async () => {
+        // Runtime files and output artifacts are new query-owned state. Original
+        // historical databases and configured capability code are never reopened
+        // for writes merely to display Git history.
+        const root = await mkdtemp(join(tmpdir(), "aiboard-git-inspection-"));
+        const queryProcesses = new ManagedProcessService({ stateDirectory: join(root, "managed"),
+          platform: platform === "windows" ? "win32" : process.platform === "win32" ? "linux" : process.platform });
+        let binding: ExecutionHostRunBinding | undefined;
+        let released = false;
+        const cleanup = async () => {
+          if (released) return;
+          await binding?.close();
+          queryProcesses.close();
+          released = true;
+          inspectionOwners.delete(cleanup);
+        };
+        inspectionOwners.add(cleanup);
+        let failed = false; let primary: unknown; let result: T | undefined;
+        try {
+          binding = await createRunBinding({ hostId, runId, projectRoot, stateDirectory,
+            runtimeRoot: join(root, "runtime"), permissionProfile: input.permissionProfile,
+            capabilityContractDigest: digest, capabilitiesConfig: input.capabilitiesConfig,
+            ambientEnvironment, artifacts: new ArtifactStore(join(root, "artifacts")), managedProcesses: queryProcesses, platform,
+            resolveWindowsFacts: async () => {
+              if (options.processHostFacts) return options.processHostFacts;
+              return await (windowsFactsPromise ??= probeProcessHostSemantics({ ...createWindowsProcessSemanticProbeSource(),
+                activeJobCreateClose: async () => await queryProcesses.probeActiveJobCreateClose() }));
+            }, onClosed: () => undefined });
+          if (closed) throw new Error("ExecutionHost closed before historical Git inspection.");
+          result = await inspect(binding.git.lifecycle("inspection"));
+        } catch (error) { failed = true; primary = error; }
+        try { await cleanup(); }
+        catch (error) { throw new AggregateError(failed ? [primary, error] : [error], `Historical Git query cleanup is unverified; retain ${root}.`); }
+        if (failed) throw primary;
+        await rm(root, { recursive: true });
+        return result!;
+      })();
+      inspectionOperations.add(operation);
+      void operation.finally(() => inspectionOperations.delete(operation)).catch(() => undefined);
+      return operation;
+    },
     activeRunIds() {
       return Object.freeze([...bindings.entries()]
         .filter(([, value]) => value !== reservation)
@@ -252,6 +312,13 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       closed = true;
       const attempt = (async () => {
         const failures: unknown[] = [];
+        // In-flight readers settle with their retained owners before the host
+        // closes the shared environment/backend graph. Callback failure is not
+        // cleanup failure; unresolved owners below retain their own blocker.
+        await Promise.allSettled([...inspectionOperations]);
+        for (const cleanup of [...inspectionOwners]) {
+          try { await cleanup(); } catch (error) { failures.push(error); }
+        }
         const active = [...bindings.values()].filter(
           (value): value is ExecutionHostRunBinding => value !== reservation,
         );
@@ -285,6 +352,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
 }
 
 interface CreateRunBindingInput {
+  readonly runtimeRoot?: string;
   readonly hostId: string;
   readonly runId: string;
   readonly projectRoot: string;
@@ -307,7 +375,7 @@ interface CreateRunBindingInput {
 }
 
 async function createRunBinding(input: CreateRunBindingInput): Promise<ExecutionHostRunBinding> {
-  const runRoot = join(input.stateDirectory, "builds", runnerRunStateSegment(input.runId));
+  const runRoot = input.runtimeRoot ?? join(input.stateDirectory, "builds", runnerRunStateSegment(input.runId));
   await mkdir(runRoot, { recursive: true });
   const bindingId = `execution-binding-${randomUUID()}`;
   const constructionCleanups: Array<() => void | Promise<void>> = [];

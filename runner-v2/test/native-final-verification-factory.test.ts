@@ -7,10 +7,10 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { createArchitectTools } from "../src/architect-tools.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { FinalVerificationProfileAuthority } from "../src/final-verification-profile.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { FinalVerificationProfileAuthority } from "./support/git-fixture.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
-import { NativeBuildFactory } from "../src/native-build-factory.js";
+import { NativeBuildFactory } from "./support/git-fixture.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";

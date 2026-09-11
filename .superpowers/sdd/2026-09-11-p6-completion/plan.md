@@ -7,7 +7,7 @@ Canonical sources: docs/superpowers/plans/2026-08-26-runner-v2-robust-build-impr
 | Step | Purpose / Definition of Done | State |
 | --- | --- | --- |
 | B3 close-out | Audit original B3.1-B3.4 and exact accepted source/real integration; preserve historical exclusions; explicit8.0B exit unlocks8.1 | VERIFIED at7f6fbcb1; b3-closeout-proof.json |
-| 8.1 Git | Explicit injected runtime-backed Git runner, exact run/call/grant scope, binary/typed/error compatibility, no ambient/global/raw fallback; all production owners wired and focused tests/faults | IN PROGRESS: host integration verified; production callers pending |
+| 8.1 Git | Explicit injected runtime-backed Git runner, exact run/call/grant scope, binary/typed/error compatibility, no ambient/global/raw fallback; all production owners wired and focused tests/faults | VERIFIED:605/605 Windows affected checks;91/91 actual Linux contracts;15 material guards; Task8.2 eligible |
 | 8.2 MCP | Attested lazy exact-agent/run/envelope sessions, bounded protocol, fresh per-call authority/restart limits, discovery and cleanup; compatibility tests/faults | PENDING |
 | 8.3 LSP | Shared session lifecycle; exact authority from code/filesystem diagnostics; framing/restart/attestation/cancellation preserved; focused tests/faults | PENDING |
 | 8.4 managed | Portable shared-session facade; extracted Job host cannot depend on facade; distinct start/stop/poll cancellation; durable compatibility and cleanup tests | PENDING |
@@ -24,3 +24,7 @@ Environment: existing Windows linked worktree on codex/runner-v2-robust-build, N
 ## Reconnected checkpoint â€” 2026-09-11
 
 Windows Snapshot, PowerShell and direct file reads are available. The previous host-integration patch was already applied, with a genuine missing-host-Git RED recorded; do not apply it again. Host wiring and the binary output path now pass the real integration test. Final current graph95/95, typecheck/lint0, eight material faults detected/restored. See reconnected-final-verification.json and reconnected-progress.md. Some long PowerShell calls timed out while their owned processes completed; terminal receipts, not those transport timeout messages, determine test outcomes. No caller migration, new commit, publication or next-family completion is implied.
+
+## Task8.1 accepted — 2026-09-11
+
+Foundation committed first as7e814765. Caller migration is verified; see task8-1-final/report.md and task8-1-gate.json. Next is8.2 MCP, not P6.5. P6 remains in progress. Controller self-review accepted the original8.1 requirements; independent external review is not required. Source367/367, Windows605/605, Linux91/91, static checks0, no accepted-run native resource retained. One closed no-launch diagnostic is preserved with empty process/session tables. Protected222 unrelated files remain unchanged.

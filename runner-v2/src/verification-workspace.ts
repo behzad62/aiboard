@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
 
-import { runGit, type GitCommandOptions } from "./git-command.js";
+import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import { parseWorktreeAssociations } from "./worktree-state.js";
 
@@ -100,7 +100,7 @@ export class VerificationWorkspaceManager {
     this.targetRevision = options.targetRevision;
     this.integrationRevision = options.integrationRevision;
     this.integrationManager = options.integrationManager;
-    this.execute = options.execute ?? runGit;
+    this.execute = options.execute ?? unavailableGitRunner;
   }
 
   get path(): string {

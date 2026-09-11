@@ -5,16 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
-import {
-  createChangeSet,
-} from "../src/change-set.js";
+import { createChangeSet } from "./support/git-fixture.js";
 import type {
   AcceptanceCriterion,
   CriterionEvidenceLink,
 } from "../src/acceptance-contracts.js";
 import type { EvidenceRecord } from "../src/evidence-store.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { WorkspaceManager } from "../src/workspace-manager.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
 
 test("change sets require exact current criterion evidence mappings", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-change-set-contract-"));

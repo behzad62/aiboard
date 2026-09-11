@@ -26,7 +26,9 @@ import type { CapabilityRegistry } from "./capability-registry.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { assembleContextWithExtensions } from "./extension-runtime.js";
-import { runGit } from "./git-command.js";
+import { requireGitRunner } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
+import type { GitRunner } from "./git-repository.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { discoverProjectInstructions } from "./project-context.js";
 import {
@@ -57,6 +59,7 @@ import type {
 } from "./provider-call-retry.js";
 
 export interface NativeWorkerDriverOptions {
+  git?: RunGitExecutionContext;
   schedulerStore: SchedulerStore;
   router: RuntimeRouter;
   health: ProviderHealthRegistry;
@@ -283,6 +286,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           ? { managedProcesses: this.options.managedProcesses }
           : {}),
         ...(this.options.execution ? { execution: this.options.execution } : {}),
+        ...(this.options.git ? { git: this.options.git } : {}),
         ...(this.options.executionGrants
           ? { executionGrants: this.options.executionGrants }
           : {}),
@@ -461,7 +465,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         targetPath: workspacePath,
       }),
       this.options.skillCatalog.discover(),
-      snapshotRepository(workspacePath),
+      snapshotRepository(workspacePath, requireGitRunner(this.options.git).lifecycle("inspection").run),
     ]);
     const skills = await selectedSkills(
       this.options.skillCatalog,
@@ -598,10 +602,10 @@ export function shouldFailoverWorkerFailure(failure: ProviderFailure): boolean {
   return failure.kind !== "invalid_request" && failure.kind !== "cancelled";
 }
 
-async function snapshotRepository(workspacePath: string): Promise<string> {
+async function snapshotRepository(workspacePath: string, execute: GitRunner): Promise<string> {
   const [head, status] = await Promise.all([
-    runGit({ cwd: workspacePath, args: ["rev-parse", "HEAD"] }),
-    runGit({ cwd: workspacePath, args: ["status", "--porcelain=v1"] }),
+    execute({ cwd: workspacePath, args: ["rev-parse", "HEAD"] }),
+    execute({ cwd: workspacePath, args: ["status", "--porcelain=v1"] }),
   ]);
   return `HEAD ${head.stdout.trim()}\n${status.stdout || "working tree clean"}`;
 }

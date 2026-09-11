@@ -26,6 +26,8 @@ import type {
 } from "./subprocess-runtime.js";
 
 export interface OneShotCommandRequest {
+  /** Private bounded live bytes for protocol-like callers (Git). Not durable. */
+  readonly captureOutputBytes?: number;
   readonly executable: string;
   readonly arguments: readonly string[];
   readonly workingDirectory: string;
@@ -82,6 +84,7 @@ export function createBoundedProcessOutputFactory(input: {
 }
 
 export interface OneShotCommandResult {
+  readonly capturedOutput?: Readonly<{ stdout: Uint8Array; stderr: Uint8Array; complete: boolean }>;
   readonly process: GenericProcessResult;
   readonly enforcement:
     | "write_confinement_exact_grant"
@@ -114,6 +117,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
   const clock = options.clock ?? (() => new Date());
   return Object.freeze({
     async execute(request: OneShotCommandRequest): Promise<OneShotCommandResult> {
+      const capture = request.captureOutputBytes === undefined ? undefined : boundedLiveOutput(request.captureOutputBytes);
       let opaqueGrant = request.context.executionGrant;
       let internalGrant = false;
       if (!opaqueGrant && request.context.runnerInternal === true) {
@@ -206,6 +210,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
         runtimeGrantIssued = true;
         process = await options.runtime.invoke({
           intent: launchIntent,
+          ...(capture ? { onOutput: capture.write } : {}),
           grantId: claims.grantId,
           ambientEnvironment: options.permissionProfile === "full"
             ? options.ambientEnvironment
@@ -218,6 +223,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
         });
         return {
           process,
+          ...(capture ? { capturedOutput: capture.result(process) } : {}),
           enforcement: selection.enforcement,
           disclosure: selection.disclosure,
           ...(selection.enforcement === "write_confinement_exact_grant"
@@ -264,4 +270,29 @@ function safeInvocationId(runId: string, sessionId: string, callId: string): str
 
 function commandError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
+}
+
+
+/** Bounded ephemeral transport capture. Disk loss is still reported separately.
+ * Overflow keeps draining; it never kills a workload or returns partial success.
+ */
+function boundedLiveOutput(maximum: number) {
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 128 * 1024 * 1024)
+    throw new Error("Command output capture bound must be from 1 to 134217728 bytes.");
+  const chunks: Record<"stdout" | "stderr", Buffer[]> = { stdout: [], stderr: [] };
+  const totals = { stdout: 0, stderr: 0 };
+  let overflow = false;
+  return {
+    write(stream: "stdout" | "stderr", bytes: Uint8Array): void {
+      totals[stream] += bytes.byteLength;
+      if (totals.stdout + totals.stderr > maximum) overflow = true;
+      if (!overflow && bytes.byteLength) chunks[stream].push(Buffer.from(bytes));
+    },
+    result(process: GenericProcessResult) {
+      const complete = !overflow && process.output.length === 2 && (["stdout", "stderr"] as const).every((stream) =>
+        process.output.filter((entry) => entry.stream === stream).length === 1 &&
+        process.output.find((entry) => entry.stream === stream)!.totalBytes === totals[stream]);
+      return Object.freeze({ stdout: Buffer.concat(chunks.stdout), stderr: Buffer.concat(chunks.stderr), complete });
+    },
+  };
 }

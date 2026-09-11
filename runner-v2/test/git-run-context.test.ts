@@ -1,3 +1,4 @@
+import { ToolBroker } from "../src/tool-broker.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
@@ -122,4 +123,87 @@ test("closed run and missing ToolBroker authority never fall back to stateless G
   assert.throws(() => f.git.forCall(f.context), /closed/);
   await assert.rejects(f.git.lifecycle("inspection").run({ cwd: f.project, args: ["status"] }), /closed/);
   assert.equal(f.requests.length, 0);
+}));
+
+
+test("nested repository Git reads retain separate call identity across asynchronous interleaving", async (t) => use(t, async (f) => {
+  const other = { ...f.context, callId: "other-call", sessionId: "other-worker" };
+  other.executionGrant = await f.grants.issue({ ...other, callId: other.callId!, toolName: other.toolName!, permissionProfile: "project",
+    workspacePath: f.project, access: [{ path: f.project, mode: "write" }], externalApproved: false, destructiveApproved: false, networkApproved: false });
+  let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+  const first = f.git.withCall(f.context, async () => { await held; await f.git.current().run({ cwd: f.project, args: ["status"] }); });
+  try { await f.git.withCall(other, async () => { await Promise.resolve(); await f.git.current().run({ cwd: f.project, args: ["diff"] }); }); }
+  finally { release(); await first; }
+  assert.deepEqual(f.claims.map((value) => value.sessionId), ["other-worker", "worker-session"]);
+  assert.throws(() => f.git.current(), /call|context|authority/i);
+  await f.grants.revoke(other.executionGrant!, "completed");
+}));
+
+test("evidence revision read and its command share one original call without consuming it twice", async (t) => use(t, async (f) => {
+  await f.git.forCall(f.context).run({ cwd: f.project, args: ["rev-parse", "HEAD"] });
+  await f.git.executeForCall(f.context, { executable: "declared-evidence-command", arguments: ["test"], workingDirectory: f.project, timeoutMs: 1000 });
+  assert.equal(f.requests.length, 2); assert.equal(f.requests[1]!.executable, "declared-evidence-command");
+  assert.notEqual(f.claims[0]!.grantId, f.claims[1]!.grantId);
+  for (const claims of f.claims) { assert.equal(claims.sessionId, f.context.sessionId); assert.deepEqual(claims.actor, f.context.actor); }
+  assert.equal(f.grants.activeSnapshots().length, 1);
+  await f.grants.revoke(f.context.executionGrant!, "completed");
+  await assert.rejects(f.git.executeForCall(f.context, { executable: "declared-evidence-command", arguments: [], workingDirectory: f.project, timeoutMs: 1000 }), /closed|revoked/i);
+  assert.equal(f.requests.length, 2);
+}));
+
+test("scoped nested Git reads never manufacture lifecycle authority when no call is active", async (t) => use(t, async (f) => {
+  assert.throws(() => f.git.current(), /call|context|authority/i);
+  assert.equal(f.requests.length, 0); assert.equal(f.grants.activeSnapshots()[0]!.state, "issued");
+}));
+
+
+test("run-owned workspace cleanup permits its required exact ref inventory", async (t) => use(t, async (f) => {
+  await f.git.lifecycle("cleanup").run({ cwd: f.project, args: ["for-each-ref", "--format=%(refname)", "refs/heads/aiboard/exact/tasks/"] });
+  assert.equal(f.requests.length, 1); assert.equal(f.claims[0]!.actor.id, "git:cleanup");
+}));
+
+test("historical inspection cannot reinterpret an admitted read verb as a ref mutation", async (t) => use(t, async (f) => {
+  for (const args of [["branch", "-D", "owned"], ["symbolic-ref", "HEAD", "refs/heads/other"], ["symbolic-ref", "--delete", "HEAD"]])
+    await assert.rejects(f.git.lifecycle("inspection").run({ cwd: f.project, args }), /purpose|command|inspection/i);
+  assert.equal(f.requests.length, 0);
+}));
+
+
+test("actual ToolBroker carries exact per-call Git authority without changing guarded approval policy", async (t) => use(t, async (f) => {
+  const broker = new ToolBroker({ permissionProfile: "guarded", workspacePath: f.project, executionGrants: f.grants, git: f.git });
+  let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
+  broker.register({
+    definition: { name: "repo.read", description: "controlled repository inspection", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+    validate: (value) => ({ ok: true, value }),
+    execute: async (_value, context) => {
+      if (context.sessionId === "first-reader") { entered(); await pending; }
+      const result = await f.git.current().run({ cwd: f.project, args: ["status"] });
+      return { isError: false, content: [{ type: "text", text: result.stdout }] };
+    },
+  });
+  broker.register({
+    definition: { name: "repo.publish", description: "external operation denied by guarded", inputSchema: { type: "object" }, readOnly: false, effect: "external" },
+    validate: (value) => ({ ok: true, value }), assessAccess: () => ({ capability: "repo.publish", external: true }),
+    execute: async () => assert.fail("run isolation profile must not override guarded tool approval"),
+  });
+  const base = { runId: f.runId, actor: { role: "worker" as const, id: "broker-worker" }, workspacePath: f.project };
+  const first = broker.invoke({ type: "tool_call", callId: "first", name: "repo.read", arguments: {} }, { ...base, sessionId: "first-reader" });
+  await started;
+  try {
+    const second = await broker.invoke({ type: "tool_call", callId: "second", name: "repo.read", arguments: {} }, { ...base, sessionId: "second-reader" });
+    assert.equal(second.isError, false);
+  } finally { release(); }
+  assert.equal((await first).isError, false);
+  assert.deepEqual(f.claims.map((claim) => claim.sessionId), ["second-reader", "first-reader"]);
+  for (const claim of f.claims) {
+    assert.equal(claim.permissionProfile, "project", "exact execution profile comes from the owning run");
+    assert.deepEqual(claim.actor, base.actor); assert.equal(claim.toolName, "repo.read");
+    assert.deepEqual(claim.access, [{ canonicalPath: f.project, mode: "read" }]);
+  }
+  assert.equal(f.grants.activeSnapshots().length, 1, "both broker parents and every command child are revoked");
+  const denied = await broker.invoke({ type: "tool_call", callId: "denied", name: "repo.publish", arguments: {} }, { ...base, sessionId: "first-reader" });
+  assert.equal(denied.isError, true); assert.equal(denied.error?.code, "approval_required");
+  assert.equal(f.requests.length, 2);
+  assert.throws(() => f.git.current(), /call|context|authority/i);
 }));

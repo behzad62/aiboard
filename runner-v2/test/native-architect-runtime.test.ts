@@ -13,14 +13,8 @@ import { CapabilityRegistry } from "../src/capability-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
-import {
-  NativeArchitectRuntime,
-  PlanOnlyInspectionRuntime,
-  architectInspectionWorkspace,
-  architectModelAttribution,
-  loadArchitectReviewSubmission,
-  prioritizedArchitectCapabilities,
-} from "../src/native-architect-runtime.js";
+import { PlanOnlyInspectionRuntime, architectInspectionWorkspace, architectModelAttribution, loadArchitectReviewSubmission, prioritizedArchitectCapabilities } from "../src/native-architect-runtime.js";
+import { NativeArchitectRuntime } from "./support/git-fixture.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { createMcpTools, type McpManager } from "../src/mcp-tools.js";

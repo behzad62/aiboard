@@ -840,3 +840,12 @@ After reconnection, the existing integration-test RED was found already applied.
 Current final gate: 95/95 tests, including real Git binary round-trip and cleanup, zero failures/cancellations/skips; all203 source bindings match. Typecheck and changed-source lint exit0. Seven binary material faults and the parent-callback fault were detected and exactly restored. The preceding broader graph passed226/226 before the final narrowly scoped callback repair; it is not mislabeled as a later rerun. All67 final-gate exact acquisitions are absent after their successful fixture finalizers. Unrelated222 files, HEAD and index remain unchanged. No new commit/publication.
 
 Detailed current checkpoint: `../2026-09-11-p6-completion/reconnected-progress.md`, `reconnected-final-verification.json` and `reconnected-wrapper-ledger.json`. Next: complete production Git caller migration and retire the ambient/raw fallback before 8.2 MCP. P6 and later-phase gates remain open/locked respectively; historical uncertain diagnostics remain excluded from arbitrary cleanup.
+
+
+## 2026-09-11 — Task8.1 Git accepted
+
+Foundation was committed first as7e814765. The explicit caller migration is now verified against original8.1 requirements: all production Git owners injected; no raw/ambient/global fallback; original typed/binary/allowFailure behavior; original grant/run/call/cleanup semantics; bounded exact live output; transient historical inspection; real CLI bootstrap and strict refusal.
+
+Current Windows affected graph605/605 across56 files, source367/367 stable, actual Linux portable contracts91/91, all15 material faults detected and exact-restored, final typecheck/Runner lint/diff0. Accepted acquisitions662:661 absent and one closed no-launch diagnostic with empty tables; no native workload retained. Linux label-verified container exited0 and was removed after copying diagnostics. Historical uncertain resources remain separate, not force-cleaned. Protected222 unrelated files preserved.
+
+Controller self-review accepted under the owner's waiver of external review. Read ../2026-09-11-p6-completion/task8-1-final/report.md, final-verification.json and task8-1-gate.json. **Next:8.2 MCP.** P6.4e/Task8 and P6 are not complete; no8.2 execution or P6.5/P6.6/P7 unlock occurred.

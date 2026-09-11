@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -8,7 +9,7 @@ import { createExecutionCommandGrantScope, type ExecutionCommandGrantScope,
   type ExecutionGrantAuthority, type ExecutionGrantBinding, type OpaqueExecutionGrant } from "./execution-grants.js";
 import type { GitCommandOptions } from "./git-command.js";
 import { createRuntimeGitCommandRunner, type GitCommandAuthorization, type GitCommandRunner } from "./git-runtime-runner.js";
-import type { OneShotCommandExecutor, OneShotCommandResult } from "./one-shot-command-executor.js";
+import type { OneShotCommandExecutor, OneShotCommandRequest, OneShotCommandResult } from "./one-shot-command-executor.js";
 
 export type GitLifecyclePurpose = "baseline" | "workspace" | "integration" | "verification" | "inspection" | "cleanup";
 
@@ -16,6 +17,10 @@ export type GitLifecyclePurpose = "baseline" | "workspace" | "integration" | "ve
  * extension context. Families get only a call-scoped runner, not its authority.
  */
 export interface RunGitExecutionContext {
+  readonly permissionProfile: PermissionProfile;
+  withCall<T>(context: ToolExecutionContext, operation: () => Promise<T>): Promise<T>;
+  current(): GitCommandRunner;
+  executeForCall(context: ToolExecutionContext, request: Omit<OneShotCommandRequest, "context">): Promise<OneShotCommandResult>;
   forCall(context: ToolExecutionContext): GitCommandRunner;
   lifecycle(purpose: GitLifecyclePurpose): GitCommandRunner;
 }
@@ -44,21 +49,21 @@ interface CallScope {
 // Closed trusted mechanics, not a generic pre-run process purpose. Model-facing
 // Git still uses its ToolBroker grant. Task9 owns additional indirect-execution
 // hardening; this boundary already denies network verbs for internal mechanics.
-const INSPECTION = new Set(["rev-parse", "symbolic-ref", "status", "show", "diff", "ls-files", "ls-tree", "log", "cat-file", "rev-list", "merge-base", "diff-tree", "branch"]);
-const MECHANICAL = new Set([...INSPECTION, "init", "read-tree", "add", "write-tree", "commit-tree", "update-ref", "reset", "worktree", "checkout", "switch", "commit", "merge", "merge-tree", "cherry-pick", "clean", "apply", "mktree", "update-index"]);
+const INSPECTION = new Set(["rev-parse", "symbolic-ref", "status", "show", "diff", "ls-files", "ls-tree", "log", "cat-file", "rev-list", "merge-base", "diff-tree", "for-each-ref"]);
+const MECHANICAL = new Set([...INSPECTION, "branch", "init", "read-tree", "add", "write-tree", "commit-tree", "update-ref", "reset", "worktree", "checkout", "switch", "commit", "merge", "merge-tree", "cherry-pick", "clean", "apply", "mktree", "update-index"]);
 const PURPOSES = new Set<GitLifecyclePurpose>(["baseline", "workspace", "integration", "verification", "inspection", "cleanup"]);
 
 export function createRunGitExecutionContext(input: RunGitExecutionContextOptions): RunGitExecutionContext {
   if (!input.runId.trim()) throw new Error("Run Git authority requires a run identity.");
   const roots = gitWorkingRootsForRun(input.projectRoot, input.stateDirectory, input.runId);
   const calls = new WeakMap<object, CallScope>();
+  const activeCall = new AsyncLocalStorage<ToolExecutionContext>();
   const runner = (authorize: (options: Readonly<GitCommandOptions>) => Promise<GitCommandAuthorization>) => createRuntimeGitCommandRunner({
     runId: input.runId, executable: input.executable ?? "git", timeoutMs: input.timeoutMs ?? 30_000,
     execution: input.execution, artifacts: input.artifacts, authorize,
     ...(input.observe ? { observe: input.observe } : {}),
   });
-  return Object.freeze({
-    forCall(context: ToolExecutionContext): GitCommandRunner {
+  const ownedCallFor = (context: ToolExecutionContext): CallScope => {
       input.assertOpen();
       if (context.runId !== input.runId || !context.callId?.trim() || !context.toolName?.trim() || !context.executionGrant) {
         throw new Error("Git requires the exact run/call ToolBroker grant authority.");
@@ -71,19 +76,50 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
         call = { binding, grant: context.executionGrant, ...(context.signal ? { signal: context.signal } : {}) };
         calls.set(context.executionGrant as object, call);
       }
-      const ownedCall = call;
-      return runner(async (options) => {
-        input.assertOpen();
-        const scope = await (ownedCall.scope ??= createExecutionCommandGrantScope({
-          authority: input.executionGrants, parentGrant: ownedCall.grant, binding: ownedCall.binding,
-          ...(ownedCall.signal ? { signal: ownedCall.signal } : {}),
-        }));
-        const workingDirectory = await scope.authorizeDirectory(options.cwd);
-        input.assertOpen();
-        const command = scope.next();
-        return Object.freeze({ workingDirectory, context: Object.freeze({ ...command.binding,
-          executionGrant: command.grant, signal: command.signal }), release: command.release });
-      });
+      return call;
+  };
+  const authorizeCall = async (ownedCall: CallScope, directory: string): Promise<GitCommandAuthorization> => {
+    input.assertOpen();
+    const scope = await (ownedCall.scope ??= createExecutionCommandGrantScope({
+      authority: input.executionGrants, parentGrant: ownedCall.grant, binding: ownedCall.binding,
+      ...(ownedCall.signal ? { signal: ownedCall.signal } : {}),
+    }));
+    const workingDirectory = await scope.authorizeDirectory(directory);
+    input.assertOpen();
+    const command = scope.next();
+    return Object.freeze({ workingDirectory, context: Object.freeze({ ...command.binding,
+      executionGrant: command.grant, signal: command.signal }), release: command.release });
+  };
+  const forCall = (context: ToolExecutionContext): GitCommandRunner => {
+    const ownedCall = ownedCallFor(context);
+    return runner((options) => authorizeCall(ownedCall, options.cwd));
+  };
+  return Object.freeze({
+    permissionProfile: input.permissionProfile,
+    forCall,
+    withCall<T>(context: ToolExecutionContext, operation: () => Promise<T>): Promise<T> {
+      // Run-local async context: concurrent workers cannot overwrite a global
+      // current runner. It retains the original nonserializable call grant.
+      ownedCallFor(context);
+      const fixed = Object.freeze({ ...context, actor: Object.freeze({ ...context.actor }) });
+      return activeCall.run(fixed, operation);
+    },
+    current(): GitCommandRunner {
+      const context = activeCall.getStore();
+      if (!context) throw new Error("A current exact Git call context is required.");
+      return forCall(context);
+    },
+    async executeForCall(context: ToolExecutionContext, request: Omit<OneShotCommandRequest, "context">): Promise<OneShotCommandResult> {
+      const fixed = Object.freeze({ ...request, arguments: Object.freeze([...request.arguments]),
+        ...(request.explicitEnvironment ? { explicitEnvironment: Object.freeze({ ...request.explicitEnvironment }) } : {}) });
+      const authorization = await authorizeCall(ownedCallFor(context), fixed.workingDirectory);
+      let failed = false; let primary: unknown; let result: OneShotCommandResult | undefined;
+      try { result = await input.execution.execute({ ...fixed, workingDirectory: authorization.workingDirectory!, context: authorization.context }); }
+      catch (error) { failed = true; primary = error; }
+      try { await authorization.release(); }
+      catch (error) { throw new AggregateError(failed ? [primary, error] : [error], "Call command authorization cleanup failed."); }
+      if (failed) throw primary;
+      return result!;
     },
     lifecycle(purpose: GitLifecyclePurpose): GitCommandRunner {
       if (!PURPOSES.has(purpose)) throw new Error("Git lifecycle purpose is not permitted.");
@@ -92,6 +128,9 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
         if (!(purpose === "inspection" ? INSPECTION : MECHANICAL).has(options.args[0]!)) {
           throw new Error("Git command is outside this closed lifecycle purpose.");
         }
+        if (purpose === "inspection" && options.args[0] === "symbolic-ref" &&
+            (options.args.includes("--delete") || options.args.includes("-d") || options.args.slice(1).filter((argument) => !argument.startsWith("-")).length !== 1))
+          throw new Error("Git inspection cannot mutate a symbolic ref.");
         const workingDirectory = await ownedDirectory(options.cwd, roots);
         input.assertOpen();
         const binding: ExecutionGrantBinding = Object.freeze({ runId: input.runId,

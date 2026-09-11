@@ -5,16 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { IntegrationManager } from "../src/integration-manager.js";
-import {
-  FinalVerificationDiagnosticsArchive,
-  OwnedFinalVerificationCleanup,
-  retireInvalidatedFinalVerificationGeneration,
-  validateOwnedFinalVerificationCleanupReceipt,
-} from "../src/final-verification-cleanup.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { IntegrationManager } from "./support/git-fixture.js";
+import { OwnedFinalVerificationCleanup, retireInvalidatedFinalVerificationGeneration, validateOwnedFinalVerificationCleanupReceipt } from "../src/final-verification-cleanup.js";
+import { FinalVerificationDiagnosticsArchive } from "./support/git-fixture.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
-import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
 
 test("failed verification diagnostics archive dirty files before exact cleanup", async () => {

@@ -3246,3 +3246,14 @@ test("exhaustive durable-state by reconcile-outcome matrix is fail-closed", asyn
     }
   }
 });
+
+
+test("subprocess live output observation uses the actual backend bytes without persisting its callback", async () => {
+  const f = fixture(); const observed: Uint8Array[] = [];
+  const result = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {},
+    onOutput: (stream, bytes) => { assert.equal(stream, "stdout"); observed.push(new Uint8Array(bytes)); } });
+  assert.equal(result.cleanup.state, "verified_empty");
+  assert.equal(Buffer.concat(observed).toString(), "child");
+  assert.equal(Object.hasOwn(f.store.readByInvocation("invoke-1")!, "onOutput"), false);
+  f.store.close();
+});

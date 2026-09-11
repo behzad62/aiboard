@@ -9,15 +9,9 @@ import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-cont
 import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import {
-  NativeWorkerDriver,
-  recoverableWorkerSuspension,
-  workerContinuationMessages,
-  shouldFailoverWorkerFailure,
-  shouldAutoContinueWorker,
-  workerModelAttribution,
-} from "../src/native-worker-driver.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution } from "../src/native-worker-driver.js";
+import { NativeWorkerDriver } from "./support/git-fixture.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
@@ -29,7 +23,7 @@ import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { WorkerAssignment } from "../src/task-scheduler.js";
-import { WorkspaceManager } from "../src/workspace-manager.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
 import {
   resolveWorkerSessionId,
   standardWorkerId,

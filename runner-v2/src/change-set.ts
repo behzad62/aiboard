@@ -8,7 +8,8 @@ import {
   type CriterionEvidenceLink,
 } from "./acceptance-contracts.js";
 import type { EvidenceRecord } from "./evidence-store.js";
-import { runGit } from "./git-command.js";
+import { requireGitRunner } from "./git-command.js";
+import type { GitRunner } from "./git-repository.js";
 import type { TaskCommit } from "./workspace-manager.js";
 
 export interface ExternalEffectReference {
@@ -38,6 +39,7 @@ export interface ChangeSet {
 }
 
 export interface CreateChangeSetOptions {
+  execute?: GitRunner;
   workspacePath: string;
   taskCommit: TaskCommit;
   artifacts: ArtifactStore;
@@ -105,7 +107,7 @@ export async function createChangeSet(
     if (effect.artifactHash) assertArtifactHash(effect.artifactHash);
   }
 
-  const diff = await runGit({
+  const diff = await requireGitRunner(options.execute)({
     cwd: options.workspacePath,
     args: [
       "diff",

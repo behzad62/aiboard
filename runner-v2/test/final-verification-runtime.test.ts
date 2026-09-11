@@ -12,16 +12,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { runGit } from "../src/git-command.js";
-import { IntegrationManager } from "../src/integration-manager.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { runGit } from "./support/git-fixture.js";
+import { IntegrationManager } from "./support/git-fixture.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
-import {
-  FinalVerificationRuntime,
-  type FinalVerificationCommand,
-  type FinalVerificationPlan,
-} from "../src/final-verification-runtime.js";
-import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { type FinalVerificationCommand, type FinalVerificationPlan } from "../src/final-verification-runtime.js";
+import { FinalVerificationRuntime } from "./support/git-fixture.js";
+import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { createProductionOneShotCommandFixture, createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 

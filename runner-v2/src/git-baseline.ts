@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 
-import { runGit } from "./git-command.js";
+import { requireGitRunner } from "./git-command.js";
 import { inspectRepository, type GitRunner } from "./git-repository.js";
 
 const DEFAULT_MAX_UNTRACKED_BYTES = 100 * 1024 * 1024;
@@ -53,7 +53,7 @@ export interface GitBaseline {
 export async function captureGitBaseline(
   options: CaptureGitBaselineOptions
 ): Promise<GitBaseline> {
-  const execute = options.execute ?? runGit;
+  const execute = requireGitRunner(options.execute);
   const maxBytes =
     options.maxUntrackedFileBytes ?? DEFAULT_MAX_UNTRACKED_BYTES;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {

@@ -8,7 +8,8 @@ import type {
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { CommandEvidenceFact, EvidenceStore } from "./evidence-store.js";
-import { runGit } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
+import type { GitRunner } from "./git-repository.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
 import {
   outputFor,
@@ -24,6 +25,7 @@ interface RunEvidenceInput {
 }
 
 export interface EvidenceToolsOptions {
+  git?: RunGitExecutionContext;
   store: EvidenceStore;
   artifacts: ArtifactStore;
   taskId: string;
@@ -80,14 +82,14 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       try {
         const cwd = await containedDirectory(context.workspacePath, input.cwd);
         const startedAt = clock();
-        const revision = await gitRevision(cwd);
+        const revision = options.git ? await gitRevision(cwd, options.git.forCall(context).run) : undefined;
         if (!options.execution || !context.callId) {
           return failure(
             "process_runtime_unavailable",
             "The shared subprocess runtime is unavailable for this evidence command.",
           );
         }
-        const execution = await options.execution.execute({
+        const commandRequest: Parameters<OneShotCommandExecutor["execute"]>[0] = {
           executable: input.command,
           arguments: input.args,
           workingDirectory: cwd,
@@ -102,7 +104,10 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
             ...(context.executionGrant ? { executionGrant: context.executionGrant } : {}),
             ...(context.signal ? { signal: context.signal } : {}),
           },
-        });
+        };
+        const execution = options.git
+          ? await options.git.executeForCall(context, commandRequest)
+          : await options.execution.execute(commandRequest);
         const finishedAt = clock();
         const stdoutOutput = outputFor(execution.process, "stdout");
         const stderrOutput = outputFor(execution.process, "stderr");
@@ -250,12 +255,12 @@ async function containedDirectory(workspace: string, cwdInput: string): Promise<
   return canonical;
 }
 
-async function gitRevision(cwd: string): Promise<string | undefined> {
+async function gitRevision(cwd: string, execute: GitRunner): Promise<string | undefined> {
   try {
-    const result = await runGit({ cwd, args: ["rev-parse", "--verify", "HEAD"] });
+    const result = await execute({ cwd, args: ["rev-parse", "--verify", "HEAD"], allowFailure: true });
     return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw error;
   }
 }
 

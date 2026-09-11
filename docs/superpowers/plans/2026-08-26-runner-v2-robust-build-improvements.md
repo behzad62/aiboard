@@ -1192,7 +1192,9 @@ clean publication commit. P6.3 is resolved by the owner's approval of the
 portable-core, capability-selected design. The execution status as of
 2026-09-06 is recorded in the portable execution-safety and cleanup packet reports:
 
-> **Current checkpoint, 2026-09-11: P6 remains IN PROGRESS; cleanup-coordination C1–C5 is VERIFIED and its Task 8.0B3/P6.4e handback is UNBLOCKED. The final complete Runner graph passed 2,264 tests with zero failures plus all 12 configured client commands; the Windows POSIX-only skip is covered by the actual Linux 21/21 gate. Source binding, Runner static checks and owner-authorized self-review passed. This is not B3/P6 completion or a P6.5/P6.6/P7 unlock. The cleanup SDD packet's closure-2026-09-11/phase-c-final-report.md and closure-acceptance-proof.json own the exact result and preserved historical exceptions.**
+> **Current checkpoint, 2026-09-11: P6 remains IN PROGRESS. C1–C5, packet8.0B/B3 and Task8.1 Git are VERIFIED. Next is Task8.2 MCP, followed by8.3 LSP,8.4 managed,8.5 launch audit and Tasks9–12/P6 exit. Task8.1 passed605/605 current Windows checks,91/91 actual Linux contract checks,15 material guards, static/source/resource verification and owner-authorized controller review. This does not unlock P6.5/P6.6/P7. The P6 packet task8-1-final/report.md and task8-1-gate.json own this exact result.**
+
+> **Preserved C-only checkpoint, 2026-09-11: P6 remains IN PROGRESS; cleanup-coordination C1–C5 is VERIFIED and its Task 8.0B3/P6.4e handback is UNBLOCKED. The final complete Runner graph passed 2,264 tests with zero failures plus all 12 configured client commands; the Windows POSIX-only skip is covered by the actual Linux 21/21 gate. Source binding, Runner static checks and owner-authorized self-review passed. This is not B3/P6 completion or a P6.5/P6.6/P7 unlock. The cleanup SDD packet's closure-2026-09-11/phase-c-final-report.md and closure-acceptance-proof.json own the exact result and preserved historical exceptions.**
 
 Preserved earlier checkpoint:
 

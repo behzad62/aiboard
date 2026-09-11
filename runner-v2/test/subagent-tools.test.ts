@@ -12,7 +12,7 @@ import type { LanguageIntelligenceProvider } from "../src/language-intelligence.
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
-import { createSubagentTools } from "../src/subagent-tools.js";
+import { createSubagentTools } from "./support/git-fixture.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
 test("read-only subagents expose no workspace mutation tools and are concurrency-safe", async () => {

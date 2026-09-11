@@ -19,26 +19,18 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { captureGitBaseline } from "../src/git-baseline.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { createRunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
-import { IntegrationManager } from "../src/integration-manager.js";
-import {
-  FinalVerificationDiagnosticsArchive,
-  OwnedFinalVerificationCleanup,
-  validateOwnedFinalVerificationCleanupReceipt,
-} from "../src/final-verification-cleanup.js";
-import { FinalVerificationProfileAuthority } from "../src/final-verification-profile.js";
+import { IntegrationManager } from "./support/git-fixture.js";
+import { OwnedFinalVerificationCleanup, validateOwnedFinalVerificationCleanupReceipt } from "../src/final-verification-cleanup.js";
+import { FinalVerificationDiagnosticsArchive } from "./support/git-fixture.js";
+import { FinalVerificationProfileAuthority } from "./support/git-fixture.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
-import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
-import {
-  classifyNativeBuildRecoveryError,
-  NativeBuildFactory,
-  NativeBuildRuntimeInitializationError,
-  preflightRecoveredRunnerCapabilities,
-  preflightRunnerCapabilities,
-} from "../src/native-build-factory.js";
+import { VerificationWorkspaceManager } from "./support/git-fixture.js";
+import { classifyNativeBuildRecoveryError, NativeBuildRuntimeInitializationError, preflightRecoveredRunnerCapabilities, preflightRunnerCapabilities } from "../src/native-build-factory.js";
+import { NativeBuildFactory } from "./support/git-fixture.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import { createLiveMcpStatusRegistry } from "../src/mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -57,7 +49,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { deriveFinalVerificationFailure, rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
-import { runWorkerTask } from "../src/worker-runtime.js";
+import { runWorkerTask } from "./support/git-fixture.js";
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import {
   toolInvocationFingerprint,
@@ -2856,8 +2848,19 @@ function ownedBackendSupervisorPids(stateDirectory: string, runId: string): numb
       runId?: unknown;
       pid?: unknown;
       supervisor?: { supervisorPid?: unknown };
+      backendOwnershipReleasedAt?: unknown;
+      status?: unknown;
     };
     if (record.runId !== runId) return [];
+    // The same host now retains completed one-shot Git records alongside live
+    // MCP records. Only a durable release marker removes a record from this
+    // ownership census; never filter by current numeric PID liveness.
+    if (record.backendOwnershipReleasedAt !== undefined) {
+      assert.equal(typeof record.backendOwnershipReleasedAt, "string");
+      assert.ok(Number.isFinite(Date.parse(record.backendOwnershipReleasedAt as string)));
+      assert.equal(record.status, "stopped");
+      return [];
+    }
     return [record.pid, record.supervisor?.supervisorPid]
       .filter((pid): pid is number => Number.isSafeInteger(pid) && Number(pid) > 0);
   });
@@ -2972,3 +2975,20 @@ function toolTurn(callId: string, name: string, arguments_: unknown): ModelTurn 
     stopReason: "tool_calls",
   };
 }
+
+
+test("MCP ownership census excludes only durably released Git records", () => {
+  const root = mkdtempSync(join(tmpdir(), "p6-git-mcp-census-"));
+  const directory = join(root, "managed-processes-job-host"); mkdirSync(directory);
+  let passed = false;
+  try {
+    writeFileSync(join(directory, "released-git.json"), JSON.stringify({ runId: "run-census", pid: 101, supervisor: { supervisorPid: 102 }, status: "stopped", backendOwnershipReleasedAt: "2026-09-11T00:00:00.000Z" }));
+    writeFileSync(join(directory, "live-mcp.json"), JSON.stringify({ runId: "run-census", pid: 201, supervisor: { supervisorPid: 202 }, status: "running" }));
+    writeFileSync(join(directory, "unverified-stop.json"), JSON.stringify({ runId: "run-census", pid: 301, supervisor: { supervisorPid: 302 }, status: "stopped" }));
+    writeFileSync(join(directory, "other-run.json"), JSON.stringify({ runId: "other-run", pid: 401, supervisor: { supervisorPid: 402 }, status: "running" }));
+    assert.deepEqual(ownedBackendSupervisorPids(root, "run-census").sort((a,b) => a-b), [201, 202, 301, 302]);
+    writeFileSync(join(directory, "contradictory-release.json"), JSON.stringify({ runId: "run-census", pid: 501, status: "running", backendOwnershipReleasedAt: "2026-09-11T00:00:00.000Z" }));
+    assert.throws(() => ownedBackendSupervisorPids(root, "run-census"), /stopped/);
+    passed = true;
+  } finally { if (passed) rmSync(root, { recursive: true }); }
+});

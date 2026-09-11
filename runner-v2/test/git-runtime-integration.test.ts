@@ -34,6 +34,12 @@ test("real run-owned Git preserves binary bytes and closes exact nested command 
     assert.match(stored.stdout.trim(), /^[a-f0-9]{40,64}$/);
     const read = await git.runBytes({ cwd: project, args: ["cat-file", "blob", stored.stdout.trim()] });
     assert.deepEqual(read.stdout, bytes);
+    const large = Buffer.alloc(192 * 1024 + 7);
+    for (let i = 0; i < large.length; i++) large[i] = i % 256;
+    await writeFile(join(project, "large.bin"), large);
+    const largeObject = await git.run({ cwd: project, args: ["hash-object", "-w", "large.bin"] });
+    const largeRead = await git.runBytes({ cwd: project, args: ["cat-file", "blob", largeObject.stdout.trim()], maxOutputBytes: 256 * 1024 });
+    assert.deepEqual(largeRead.stdout, large, "full binary output above the display tail remains byte-exact");
     assert.equal(run.executionGrants.activeSnapshots().length, 1, "completed command grants must be released, leaving only ToolBroker's parent");
     await run.executionGrants.revoke(grant, "completed");
     await assert.rejects(git.run({ cwd: project, args: ["status"] }), /revoked|closed/i);

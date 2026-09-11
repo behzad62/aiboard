@@ -1,5 +1,7 @@
 ### Task 8: P6.4e — Route managed, LSP, MCP, Git, and local-provider processes
 
+> **Current execution checkpoint — 2026-09-11:** packet8.0B/B3 and **Task8.1 Git are VERIFIED**. The current56-file Windows affected graph passed605/605, actual Linux contract commands passed91/91, all367 source inputs matched, and controller self-review/static/resource gates passed. **Next: Task8.2 MCP.** Task8 as a whole, P6.4e and P6 remain in progress; P6.5/P6.6/P7 are not unlocked. Current proof: `.superpowers/sdd/2026-09-11-p6-completion/task8-1-final/report.md` and `task8-1-gate.json`. This supersedes earlier checkpoints below for execution routing, not their historical evidence.
+
 **Canonical authority:**
 
 - `docs/superpowers/plans/2026-08-28-runner-v2-portable-execution-safety.md`,

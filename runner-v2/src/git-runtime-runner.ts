@@ -42,6 +42,7 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
       if (authorization.context.runId !== input.runId) throw new Error("Git command run authority does not match its owning runtime.");
       const executed = await input.execution.execute({
         executable: input.executable,
+        captureOutputBytes: Math.min(options.maxOutputBytes!, 128 * 1024 * 1024),
         arguments: options.args,
         workingDirectory: authorization.workingDirectory ?? options.cwd,
         ...(options.env ? { explicitEnvironment: options.env } : {}),
@@ -61,8 +62,13 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
           process.output.reduce((total, stream) => total + stream.totalBytes, 0) > maximum) {
         throw outputError(maximum);
       }
-      const stdout = await exactOutput(process.output.find((stream) => stream.stream === "stdout")!, input.artifacts, maximum);
-      const stderr = await exactOutput(process.output.find((stream) => stream.stream === "stderr")!, input.artifacts, maximum);
+      const capture = executed.capturedOutput;
+      if (capture && (!capture.complete || !(capture.stdout instanceof Uint8Array) || !(capture.stderr instanceof Uint8Array) ||
+          capture.stdout.byteLength !== process.output.find((stream) => stream.stream === "stdout")!.totalBytes ||
+          capture.stderr.byteLength !== process.output.find((stream) => stream.stream === "stderr")!.totalBytes ||
+          capture.stdout.byteLength + capture.stderr.byteLength > maximum)) throw outputError(maximum);
+      const stdout = capture ? Buffer.from(capture.stdout) : await exactOutput(process.output.find((stream) => stream.stream === "stdout")!, input.artifacts, maximum);
+      const stderr = capture ? Buffer.from(capture.stderr) : await exactOutput(process.output.find((stream) => stream.stream === "stderr")!, input.artifacts, maximum);
       result = { exitCode: process.exitCode!, stdout, stderr: stderr.toString("utf8") };
       if (result.exitCode !== 0 && !options.allowFailure) {
         const text = { ...result, stdout: result.stdout.toString("utf8") };

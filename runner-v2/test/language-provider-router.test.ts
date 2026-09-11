@@ -22,9 +22,9 @@ import {
   LanguageProviderRouter,
   LanguageProviderRoutingError,
 } from "../src/language-provider-router.js";
-import { RepositoryIntelligence } from "../src/repository-intelligence.js";
+import { RepositoryIntelligence } from "./support/git-fixture.js";
 import type { ConfiguredLanguageServer } from "../src/runner-capabilities-config.js";
-import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
+import { TypeScriptIntelligence } from "./support/git-fixture.js";
 
 const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
 

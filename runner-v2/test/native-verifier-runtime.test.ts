@@ -11,7 +11,7 @@ import type {
 } from "../src/agent-contracts.js";
 import type { AgentLoopCheckpoint } from "../src/agent-loop.js";
 import { ArtifactStore } from "../src/artifact-store.js";
-import { NativeVerifierRuntime } from "../src/native-verifier-runtime.js";
+import { NativeVerifierRuntime } from "./support/git-fixture.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import {
   RuntimeRouter,

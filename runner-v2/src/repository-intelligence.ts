@@ -1,7 +1,8 @@
 import { lstat, open, readdir } from "node:fs/promises";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 
-import { runGit } from "./git-command.js";
+import { unavailableGitRunner } from "./git-command.js";
+import type { GitRunner } from "./git-repository.js";
 
 export type RepositoryGitState =
   | "tracked"
@@ -78,6 +79,7 @@ const DEFAULT_MAX_ENTRIES = 20_000;
 const MAX_CLASSIFICATION_PREFIX_BYTES = 4 * 1024;
 
 export class RepositoryIntelligence {
+  constructor(private readonly execute: GitRunner = unavailableGitRunner) {}
   async snapshot(
     root: string,
     options: RepositorySnapshotOptions = {},
@@ -92,7 +94,7 @@ export class RepositoryIntelligence {
     );
     throwIfAborted(signal);
 
-    const repositoryCheck = await runGit({
+    const repositoryCheck = await this.execute({
       cwd: workspaceRoot,
       args: ["rev-parse", "--is-inside-work-tree"],
       allowFailure: true,
@@ -107,8 +109,9 @@ export class RepositoryIntelligence {
     }
 
     const states = new Map<string, RepositoryGitState>();
-    await collectGitPaths(workspaceRoot, ["ls-files", "-z"], "tracked", states);
+    await collectGitPaths(this.execute, workspaceRoot, ["ls-files", "-z"], "tracked", states);
     await collectGitPaths(
+      this.execute,
       workspaceRoot,
       ["ls-files", "-z", "--others", "--exclude-standard"],
       "untracked",
@@ -116,6 +119,7 @@ export class RepositoryIntelligence {
     );
     if (options.includeIgnored === true) {
       await collectGitPaths(
+      this.execute,
         workspaceRoot,
         ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
         "ignored",
@@ -298,12 +302,13 @@ function sortedRecord(input: Record<string, number>): Record<string, number> {
 }
 
 async function collectGitPaths(
+  execute: GitRunner,
   root: string,
   args: string[],
   state: RepositoryGitState,
   target: Map<string, RepositoryGitState>,
 ): Promise<void> {
-  const result = await runGit({
+  const result = await execute({
     cwd: root,
     args,
     maxOutputBytes: 8 * 1024 * 1024,

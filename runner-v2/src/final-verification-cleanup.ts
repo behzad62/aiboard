@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import { runGit, type GitCommandOptions } from "./git-command.js";
+import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import type { VerificationWorkspaceManager } from "./verification-workspace.js";
 import { redactSensitiveText, redactSensitiveValue } from "./sensitive-redaction.js";
@@ -165,7 +165,7 @@ export class FinalVerificationDiagnosticsArchive implements FinalVerificationDia
     execute?: GitRunner;
   }) {
     this.stateDirectory = resolve(options.stateDirectory);
-    this.execute = options.execute ?? runGit;
+    this.execute = options.execute ?? unavailableGitRunner;
   }
 
   async persist(input: FinalVerificationDiagnosticsInput): Promise<string> {

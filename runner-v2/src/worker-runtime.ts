@@ -1,3 +1,4 @@
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
@@ -64,6 +65,7 @@ import {
 } from "./worker-lifecycle-tools.js";
 
 export interface RunWorkerTaskOptions {
+  git?: RunGitExecutionContext;
   model: AgentModel;
   subagentModelForSession?: (sessionId: string) => AgentModel;
   runId: string;
@@ -149,6 +151,7 @@ export async function runWorkerTask(
   }
 
   const broker = new ToolBroker({
+    git: options.git,
     permissionProfile: options.permissionProfile,
     workspacePath: options.workspace.path,
     artifacts: options.artifacts,
@@ -158,7 +161,7 @@ export async function runWorkerTask(
       : {}),
     ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
   });
-  const repository = new RepositoryIntelligence();
+  const repository = new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined);
   const language = options.language ?? new TypeScriptIntelligence(repository);
   for (const tool of createFilesystemTools({
     artifacts: options.artifacts,
@@ -209,9 +212,10 @@ export async function runWorkerTask(
       broker.register(tool);
     }
   }
-  for (const tool of createGitTools()) broker.register(tool);
+  for (const tool of createGitTools(options.git)) broker.register(tool);
   if (options.evidenceStore) {
     for (const tool of createEvidenceTools({
+      git: options.git,
       store: options.evidenceStore,
       artifacts: options.artifacts,
       taskId: options.taskId,
@@ -241,6 +245,7 @@ export async function runWorkerTask(
     })) broker.register(tool);
   }
   for (const tool of createSubagentTools({
+    git: options.git,
     model: options.model,
     ...(options.subagentModelForSession
       ? { subagentModelForSession: options.subagentModelForSession }
@@ -332,6 +337,7 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      execute: options.git?.lifecycle("inspection").run,
       workspacePath: options.workspace.path,
       taskCommit: commit,
       artifacts: options.artifacts,

@@ -14,15 +14,15 @@ import type {
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { ManagedProcessService } from "../src/managed-process.js";
-import { WorkspaceManager } from "../src/workspace-manager.js";
-import { runWorkerTask } from "../src/worker-runtime.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
+import { runWorkerTask } from "./support/git-fixture.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 class ScriptedModel implements AgentModel {

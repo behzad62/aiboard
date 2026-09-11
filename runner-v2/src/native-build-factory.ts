@@ -1,3 +1,5 @@
+import { requireGitRunner } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
@@ -259,6 +261,8 @@ export interface NativeBuildRuntimeConstructionHooks {
 }
 
 export interface NativeBuildFactoryOptions {
+  /** Explicit injected owner for non-CLI embeddings/tests; never a raw fallback. */
+  gitForRun?: (spec: NativeBuildSpec) => RunGitExecutionContext;
   projectRoot: string;
   stateDirectory: string;
   providerConfigs: ProviderConfigStore;
@@ -451,7 +455,9 @@ export class NativeBuildFactory {
     }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_isolation");
     initializationStage = "capabilities";
+    const gitContext = executionHostBinding?.git ?? this.options.gitForRun?.(spec);
     const runCapabilities = await createNativeRunCapabilities({
+      git: gitContext,
       config: {
         ...capabilitiesConfig,
         extensions: runnerCapabilitySnapshotExtensionDirectories(
@@ -552,6 +558,7 @@ export class NativeBuildFactory {
     );
     initializationStage = "workspace_manager";
     const workspaceManager = new WorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("workspace").run,
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
@@ -561,6 +568,8 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("workspace_manager");
     initializationStage = "integration_workspace";
     const integrationManager = new IntegrationManager({
+      execute: requireGitRunner(gitContext).lifecycle("integration").run,
+      executeBytes: requireGitRunner(gitContext).lifecycle("integration").runBytes,
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
@@ -572,6 +581,7 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("integration_workspace");
     initializationStage = "verification_workspace";
     const verificationWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
@@ -581,6 +591,7 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("verification_workspace");
     initializationStage = "independent_verifier_workspace";
     const verifierWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
@@ -606,6 +617,7 @@ export class NativeBuildFactory {
       closeBrowserRun: (runId) => this.browserBackend.closeRun(runId),
       workspaceManager: verificationWorkspace,
       diagnostics: new FinalVerificationDiagnosticsArchive({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
         stateDirectory: this.options.stateDirectory,
         runId: spec.runId,
         workspaceManager: verificationWorkspace,
@@ -750,6 +762,7 @@ export class NativeBuildFactory {
     );
     initializationStage = "runtime_drivers";
     const workerDriver = new NativeWorkerDriver({
+      git: gitContext,
       schedulerStore,
       router: workerRouter,
       health,
@@ -785,6 +798,8 @@ export class NativeBuildFactory {
         : {}),
     });
     const architectDriver = new NativeArchitectRuntime({
+      git: gitContext,
+      executionGrants,
       schedulerStore,
       router: architectRouter,
       health,
@@ -820,6 +835,8 @@ export class NativeBuildFactory {
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
     });
     const nativeVerifier = new NativeVerifierRuntime({
+      git: gitContext,
+      executionGrants,
       router: verifierRouter,
       candidates,
       models,
@@ -940,6 +957,7 @@ export class NativeBuildFactory {
     const finalVerificationDriver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
         const verification = new FinalVerificationRuntime({
+          git: requireGitRunner(gitContext).lifecycle("verification").run,
           workspaceManager: verificationWorkspace,
           artifacts: this.artifacts,
           evidenceStore,
@@ -1010,6 +1028,7 @@ export class NativeBuildFactory {
       },
       finalVerificationProfileFor: async (targetRevision) =>
         await finalVerificationProfiles.inspectAndPersist({
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
           repositoryRoot: integrationManager.path,
           targetRevision,
         }),
@@ -1176,14 +1195,6 @@ export class NativeBuildFactory {
         await cleanupSettledNativeBuild(
           async () => {
             await this.liveManagedProcesses().stopRun(spec.runId);
-            if (ownedExecutionHostBindingCleanup &&
-                !ownedExecutionHostBindingCleanup.isComplete()) {
-              await this.options.runtimeConstructionHooks?.beforeCleanup?.(
-                "execution_host_binding",
-              );
-              await ownedExecutionHostBindingCleanup.close();
-              constructionResources.completeHandleStage("execution_host_binding");
-            }
           },
           [
             () => runCapabilities.close(),
@@ -1194,6 +1205,12 @@ export class NativeBuildFactory {
           ],
           spec.runId
         );
+        // Git-dependent workspace cleanup must finish before its host/grants close.
+        if (ownedExecutionHostBindingCleanup && !ownedExecutionHostBindingCleanup.isComplete()) {
+          await this.options.runtimeConstructionHooks?.beforeCleanup?.("execution_host_binding");
+          await ownedExecutionHostBindingCleanup.close();
+          constructionResources.completeHandleStage("execution_host_binding");
+        }
       },
       close: async () => {
         if (closed) return;
@@ -1417,6 +1434,12 @@ export class NativeBuildFactory {
       let integrationManager: IntegrationManager | undefined;
       const historicalIntegrationManager = (): IntegrationManager => {
         integrationManager ??= new IntegrationManager({
+          execute: (request) => this.options.executionHost
+            ? this.options.executionHost.withGitInspection({ runId: spec.runId, permissionProfile: spec.permissionProfile, capabilityContract: spec.capabilityContract!, capabilitiesConfig: this.capabilitiesConfig() }, (git) => git.run(request))
+            : requireGitRunner(this.options.gitForRun?.(spec)).lifecycle("inspection").run(request),
+          executeBytes: (request) => this.options.executionHost
+            ? this.options.executionHost.withGitInspection({ runId: spec.runId, permissionProfile: spec.permissionProfile, capabilityContract: spec.capabilityContract!, capabilitiesConfig: this.capabilitiesConfig() }, (git) => git.runBytes(request))
+            : requireGitRunner(this.options.gitForRun?.(spec)).lifecycle("inspection").runBytes(request),
           repositoryRoot: this.options.projectRoot,
           stateDirectory: this.options.stateDirectory,
           runId: spec.runId,
@@ -1897,6 +1920,7 @@ function aggregateConstructionFailure(
 }
 
 export interface RunnerCapabilityPreflightOptions {
+  git?: RunGitExecutionContext;
   config: RunnerCapabilitiesConfig;
   projectDirectory: string;
   stateDirectory: string;
@@ -2020,7 +2044,7 @@ async function createNativeRunCapabilities(
     commandSearchDirectory: options.projectDirectory,
   });
   const builtInLanguage = new TypeScriptIntelligence(
-    new RepositoryIntelligence(),
+    new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined),
   );
   let extensions: LoadedRunnerExtensions | undefined;
   let registry: CapabilityRegistry | undefined;

@@ -1,14 +1,15 @@
+import { cliRootCaptureArgs, forwardCliRootRecords } from "./support/cli-root-capture.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runGit } from "../src/git-command.js";
+import { runGit } from "./support/git-fixture.js";
 
 interface Readiness {
   protocolVersion: number;
@@ -40,6 +41,13 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
     assert.equal(firstStart.readiness.projectPath, projectPath);
     assert.equal(firstStart.readiness.stateDirectory, stateDirectory);
 
+    const refused = await fetch(`${firstStart.readiness.url}/v2/runs`, {
+      method: "POST", headers: headers(), body: JSON.stringify({ runId: "strict-no-provider", projectPath,
+        permissionProfile: "project", idempotencyKey: "strict-no-provider" }),
+    });
+    assert.equal(refused.status, 412, await refused.clone().text());
+    assert.equal((await refused.json() as { code: string }).code, "isolation_capability_unavailable");
+    assert.equal(existsSync(join(projectPath, ".git")), false, "strict bootstrap must not fall back to host Git");
     const created = await createRun(firstStart.readiness.url, projectPath);
     assert.match(String(created.baselineRevision), /^[a-f0-9]{40,64}$/);
     assert.equal(
@@ -111,7 +119,7 @@ async function startRunner(
 }> {
   const child = spawn(
     process.execPath,
-    [
+    cliRootCaptureArgs([
       tsxPath,
       cliPath,
       "--project",
@@ -122,9 +130,10 @@ async function startRunner(
       "0",
       "--token",
       token,
-    ],
+    ], undefined, "tsx"),
     { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
   );
+  forwardCliRootRecords(child.stderr);
   const diagnostics: string[] = [];
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => diagnostics.push(chunk));
@@ -166,7 +175,7 @@ async function createRun(
     body: JSON.stringify({
       runId: "run_1",
       projectPath,
-      permissionProfile: "project",
+      permissionProfile: "full",
       idempotencyKey: "create:run_1",
     }),
   });

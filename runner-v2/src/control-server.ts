@@ -1,3 +1,4 @@
+import { ExecutionIsolationError } from "./execution-isolation-provider.js";
 import { timingSafeEqual } from "node:crypto";
 import {
   createServer,
@@ -22,7 +23,7 @@ import {
   type NativeBuildSpec,
 } from "./build-spec.js";
 import { assertBudgetLimits } from "./budget-policy.js";
-import { checkGit, type GitPreflightResult } from "./git-preflight.js";
+import { type GitPreflightResult } from "./git-preflight.js";
 import type {
   ProviderConfigStore,
   RunnerProviderConfig,
@@ -164,7 +165,10 @@ export class ControlServer {
     if (!options.token) throw new Error("Control server token is required.");
     this.supervisor = options.supervisor;
     this.token = options.token;
-    this.gitPreflight = options.checkGit ?? (() => checkGit());
+    this.gitPreflight = options.checkGit ?? (async () => ({
+      available: false, version: null, code: "git_missing",
+      reason: "An explicit Runner-owned Git preflight is required.",
+    }));
     this.bootstrapRun = options.bootstrapRun;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
     this.builds = options.builds;
@@ -1162,6 +1166,11 @@ function readAfterSequence(url: URL): number {
 
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable") {
+    // Only the trusted typed failure is projected, never exception details or
+    // an arbitrary object's code. The requested profile is not downgraded.
+    return new HttpError(412, error.code, "The requested execution isolation capability is unavailable.");
+  }
   const message = error instanceof Error ? error.message : "Unknown error.";
   if (/^Unknown run /.test(message)) return new HttpError(404, "run_not_found", message);
   if (/^Unknown build runtime /.test(message)) {

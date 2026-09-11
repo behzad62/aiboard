@@ -20,7 +20,8 @@ import type {
   CommandEvidenceFact,
   EvidenceStore,
 } from "./evidence-store.js";
-import { runGit } from "./git-command.js";
+import { unavailableGitRunner } from "./git-command.js";
+import type { GitRunner } from "./git-repository.js";
 import {
   outputFor,
   type OneShotCommandExecutor,
@@ -140,6 +141,7 @@ export type FinalVerificationRevisionSource =
   | (() => string | Promise<string>);
 
 export interface FinalVerificationRuntimeOptions {
+  git?: GitRunner;
   workspaceManager: VerificationWorkspaceManager;
   artifacts: ArtifactStore;
   evidenceStore?: EvidenceStore;
@@ -334,6 +336,7 @@ export class FinalVerificationRuntime {
   private readonly maximumDomBytes: number;
   private readonly validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
   private readonly execution?: OneShotCommandExecutor;
+  private readonly git: GitRunner;
   private runOrdinal = 0;
 
   constructor(options: FinalVerificationRuntimeOptions) {
@@ -341,6 +344,7 @@ export class FinalVerificationRuntime {
     if (options.taskId !== undefined && !options.taskId.trim()) {
       throw new Error("Final verification taskId is required.");
     }
+    this.git = options.git ?? unavailableGitRunner;
     this.workspaceManager = options.workspaceManager;
     this.artifacts = options.artifacts;
     this.evidenceStore = options.evidenceStore;
@@ -593,7 +597,7 @@ export class FinalVerificationRuntime {
 
     for (const [index, command] of input.commands.entries()) {
       validateCommand(command, check.category, index, this.maximumTimeoutMs);
-      const startState = await repositoryState(input.workspace.path);
+      const startState = await repositoryState(input.workspace.path, this.git);
       const startedAt = this.clock();
       const execution = await executeCommand(
         command,
@@ -611,7 +615,7 @@ export class FinalVerificationRuntime {
         },
       );
       const finishedAt = this.clock();
-      const endState = await repositoryState(input.workspace.path);
+      const endState = await repositoryState(input.workspace.path, this.git);
       const [stdoutArtifact, stderrArtifact] = await Promise.all([
         artifactForFinalOutput(this.artifacts, execution, "stdout", `${check.category} ${command.label} stdout`),
         artifactForFinalOutput(this.artifacts, execution, "stderr", `${check.category} ${command.label} stderr`),
@@ -707,7 +711,7 @@ export class FinalVerificationRuntime {
   ): Promise<string | undefined> {
     const command = provisioning.command;
     validateCommand(command, "build", 0, 600_000);
-    const startState = await repositoryState(workspace.path);
+    const startState = await repositoryState(workspace.path, this.git);
     const execution = await executeCommand(
       command,
       workspace.path,
@@ -723,7 +727,7 @@ export class FinalVerificationRuntime {
         callId: `provision:${workspace.targetRevision}:${invocationKey}`,
       },
     );
-    const endState = await repositoryState(workspace.path);
+    const endState = await repositoryState(workspace.path, this.git);
     if (startState.revision !== workspace.targetRevision || endState.revision !== workspace.targetRevision) {
       return "Dependency provisioning crossed the exact integration revision boundary.";
     }
@@ -757,7 +761,7 @@ export class FinalVerificationRuntime {
     validateRuntimeSmoke(smoke, this.maximumTimeoutMs);
 
     const startedAt = this.clock();
-    const startState = await repositoryState(input.workspace.path);
+    const startState = await repositoryState(input.workspace.path, this.git);
     let observation: FinalVerificationManagedProcessObservation | undefined;
     let readinessSatisfied = false;
     let cleanupSucceeded = false;
@@ -811,7 +815,7 @@ export class FinalVerificationRuntime {
     }
 
     const finishedAt = this.clock();
-    const endState = await repositoryState(input.workspace.path);
+    const endState = await repositoryState(input.workspace.path, this.git);
     if (input.signal?.aborted && !cancelled) cancelled = true;
     const stdoutArtifact = await this.artifacts.put(
       Buffer.from(observation?.stdout ?? ""),
@@ -915,7 +919,7 @@ export class FinalVerificationRuntime {
     const browser = this.browserSession;
     const sessionId = `${this.runId}:${this.taskId}`;
     const startedAt = this.clock();
-    const startState = await repositoryState(input.workspace.path);
+    const startState = await repositoryState(input.workspace.path, this.git);
     let serverObservation: FinalVerificationManagedProcessObservation | undefined;
     if (browserInput.server) {
       if (!this.managedProcess) {
@@ -1103,7 +1107,7 @@ export class FinalVerificationRuntime {
     }
 
     const finishedAt = this.clock();
-    const endState = await repositoryState(input.workspace.path);
+    const endState = await repositoryState(input.workspace.path, this.git);
     if (input.signal?.aborted && !cancelled) cancelled = true;
     if (cancelled) input.base.issues.push(`browser ${browserInput.label} navigation was cancelled.`);
     if (timedOut) input.base.issues.push(`browser ${browserInput.label} verification timed out.`);
@@ -1450,10 +1454,10 @@ function validateCommand(
   }
 }
 
-async function repositoryState(cwd: string): Promise<RepositoryStateResult> {
+async function repositoryState(cwd: string, execute: GitRunner): Promise<RepositoryStateResult> {
   const [head, status] = await Promise.all([
-    runGit({ cwd, args: ["rev-parse", "--verify", "HEAD^{commit}"] }),
-    runGit({ cwd, args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"] }),
+    execute({ cwd, args: ["rev-parse", "--verify", "HEAD^{commit}"] }),
+    execute({ cwd, args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"] }),
   ]);
   const revision = head.stdout.trim();
   if (!isRevision(revision)) throw new Error(`Unable to determine verification revision in ${cwd}.`);

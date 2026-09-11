@@ -11,16 +11,12 @@ import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserConsoleEvent, BrowserNetworkEvent } from "../src/browser-tools.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { IntegrationManager } from "../src/integration-manager.js";
-import {
-  FinalVerificationRuntime,
-  type FinalVerificationBrowserInput,
-  type FinalVerificationBrowserSession,
-  type FinalVerificationPlan,
-} from "../src/final-verification-runtime.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { IntegrationManager } from "./support/git-fixture.js";
+import { type FinalVerificationBrowserInput, type FinalVerificationBrowserSession, type FinalVerificationPlan } from "../src/final-verification-runtime.js";
+import { FinalVerificationRuntime } from "./support/git-fixture.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
-import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 
 test("browser verification records complete URL, DOM, screenshot, and event facts", async () => {
   const fixture = await createFixture("complete");

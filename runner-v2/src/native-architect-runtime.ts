@@ -1,3 +1,5 @@
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
@@ -77,6 +79,8 @@ import type {
 } from "./provider-call-retry.js";
 
 export interface NativeArchitectRuntimeOptions {
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
   schedulerStore: SchedulerStore;
   router: RuntimeRouter;
   health: ProviderHealthRegistry;
@@ -208,6 +212,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       }
     }
     const extras = new ToolBroker({
+      git: this.options.git, executionGrants: this.options.executionGrants,
       permissionProfile: this.options.permissionProfile ?? "project",
       workspacePath: this.options.projectRoot,
       artifacts: this.options.artifacts,
@@ -216,7 +221,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         ? { approve: (approval) => this.options.permissions!.requestTool(approval) }
         : {}),
     });
-    const repository = new RepositoryIntelligence();
+    const repository = new RepositoryIntelligence(this.options.git ? (request) => this.options.git!.current().run(request) : undefined);
     const language = this.options.language ?? new TypeScriptIntelligence(repository);
     for (const tool of createFilesystemTools({
       artifacts: this.options.artifacts,
@@ -234,10 +239,11 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
     for (const tool of createSessionTools(this.options.sessions)) extras.register(tool);
-    for (const tool of createGitTools()) {
+    for (const tool of createGitTools(this.options.git)) {
       if (tool.definition.readOnly) extras.register(tool);
     }
     for (const tool of createEvidenceTools({
+      git: this.options.git,
       store: this.options.evidenceStore,
       artifacts: this.options.artifacts,
       taskId: "architect",

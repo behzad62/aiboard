@@ -9,14 +9,10 @@ import test from "node:test";
 
 import { createArchitectTools } from "../src/architect-tools.js";
 import type { FinalVerificationBrowserPolicy } from "../src/final-verification-browser-policy.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { IntegrationManager } from "../src/integration-manager.js";
-import {
-  assertFinalVerificationExecutionProfile,
-  cloneFinalVerificationExecutionProfile,
-  finalVerificationProfileDigest,
-  FinalVerificationProfileAuthority,
-} from "../src/final-verification-profile.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { IntegrationManager } from "./support/git-fixture.js";
+import { assertFinalVerificationExecutionProfile, cloneFinalVerificationExecutionProfile, finalVerificationProfileDigest } from "../src/final-verification-profile.js";
+import { FinalVerificationProfileAuthority } from "./support/git-fixture.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
 import { rebuildSchedulerProjection, type SchedulerStore } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";

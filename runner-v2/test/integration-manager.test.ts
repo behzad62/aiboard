@@ -16,12 +16,12 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 
 import { ArtifactStore } from "../src/artifact-store.js";
-import { createChangeSet } from "../src/change-set.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { runGit } from "../src/git-command.js";
+import { createChangeSet } from "./support/git-fixture.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { runGit } from "./support/git-fixture.js";
 import type { GitRunner } from "../src/git-repository.js";
-import { IntegrationManager } from "../src/integration-manager.js";
-import { WorkspaceManager } from "../src/workspace-manager.js";
+import { IntegrationManager } from "./support/git-fixture.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
 
 test("change sets integrate serially and retries do not duplicate commits", async () => {
   const fixture = await createFixture("ordered");

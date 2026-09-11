@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { RepositoryIntelligence } from "../src/repository-intelligence.js";
+import { RepositoryIntelligence } from "./support/git-fixture.js";
 
 test("repository snapshots follow Git ignore rules and classify retained files", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-repository-intelligence-"));

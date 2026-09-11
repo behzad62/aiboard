@@ -11,16 +11,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { IntegrationManager } from "../src/integration-manager.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { IntegrationManager } from "./support/git-fixture.js";
 import { ManagedProcessService } from "../src/managed-process.js";
-import {
-  FinalVerificationRuntime,
-  type FinalVerificationPlan,
-  type FinalVerificationRuntimeSmokeInput,
-} from "../src/final-verification-runtime.js";
+import { type FinalVerificationPlan, type FinalVerificationRuntimeSmokeInput } from "../src/final-verification-runtime.js";
+import { FinalVerificationRuntime } from "./support/git-fixture.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
-import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 test("runtime smoke waits for health, records endpoint/output facts, and releases its port", async (t) => {

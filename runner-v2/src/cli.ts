@@ -8,7 +8,7 @@ import type { BuildStepResult } from "./build-runtime.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { createExecutionHost } from "./execution-host.js";
 import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
-import { captureGitBaseline } from "./git-baseline.js";
+import { captureRunGitBaseline } from "./git-bootstrap.js";
 import {
   classifyNativeBuildRecoveryError,
   NativeBuildFactory,
@@ -216,7 +216,10 @@ async function main(): Promise<void> {
             `project_mismatch: Runner is bound to ${options.projectPath}.`
           );
         }
-        const baseline = await captureGitBaseline({
+        const baseline = await captureRunGitBaseline({
+          host: executionHost,
+          permissionProfile: input.permissionProfile,
+          capabilitiesConfig,
           projectPath: options.projectPath,
           stateDirectory: options.stateDirectory,
           runId: input.runId,

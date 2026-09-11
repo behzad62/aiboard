@@ -10,11 +10,12 @@ import type { ToolExecutionOutput } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
-import { FinalVerificationRuntime, type FinalVerificationCommandFact } from "../src/final-verification-runtime.js";
+import { type FinalVerificationCommandFact } from "../src/final-verification-runtime.js";
+import { FinalVerificationRuntime } from "./support/git-fixture.js";
 import type { ProcessBackend } from "../src/process-backend.js";
 import { createProcessTools } from "../src/process-tools.js";
 import { ToolBroker } from "../src/tool-broker.js";
-import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
+import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { createProductionOneShotCommandFixture } from "./support/one-shot-command-executor.js";
 
 type Family = "process" | "evidence" | "final-verification";

@@ -1,5 +1,7 @@
 # Runner V2 Portable Execution Safety Implementation Plan
 
+> **Current execution checkpoint — 2026-09-11:** packet8.0B/B3 and **Task8.1 Git are VERIFIED**. The current56-file Windows affected graph passed605/605, actual Linux contract commands passed91/91, all367 source inputs matched, and controller self-review/static/resource gates passed. **Next: Task8.2 MCP.** Task8 as a whole, P6.4e and P6 remain in progress; P6.5/P6.6/P7 are not unlocked. Current proof: `.superpowers/sdd/2026-09-11-p6-completion/task8-1-final/report.md` and `task8-1-gate.json`. This supersedes earlier checkpoints below for execution routing, not their historical evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to execute this plan task by task. Check every
@@ -35,7 +37,7 @@ Actions Windows/Linux/macOS matrices.
 
 ## Non-negotiable execution doctrine
 
-**Current checkpoint, 2026-09-11: cleanup-coordination C1–C5 is VERIFIED.**
+**Preserved C-only checkpoint, 2026-09-11: cleanup-coordination C1–C5 is VERIFIED.**
 The final complete Runner graph passed 2,264 tests with zero failures, plus all
 12 configured client commands. Its one Windows POSIX-only skip is covered by
 the exact actual-Linux test (Linux gate 21/21). All 361 source inputs stayed
@@ -472,7 +474,7 @@ their targeted regressions are green, and no fixture process/spill remains.
 - [ ] LSP and MCP retain JSON-RPC/stdio framing, backpressure, protocol timeouts,
   restart limits, executable attestation, and graceful protocol shutdown; their
   OS process lifecycle is shared. Availability follows semantic capabilities.
-- [ ] Git retains its typed runner interface; execution moves to the shared
+- [x] Git retains its typed runner interface; execution moves to the shared
   runtime now, with indirect-execution hardening owned by Task 9.
 - [ ] Configured local provider children, if any, use the same environment,
   bounds, ownership, cancellation, and cleanup. Account/network transports that
