@@ -149,6 +149,10 @@ export type ProcessOutputStream = "stdout" | "stderr";
 export interface ProcessOutputDisposition {
   readonly stream: ProcessOutputStream;
   readonly tail: string;
+  /** Exact bounded bytes, distinct from the UTF8/loss-marked display. Legacy
+   * records omit both fields; missing raw bytes are never reconstructed. */
+  readonly tailBytesBase64?: string;
+  readonly tailByteLength?: number;
   readonly totalBytes: number;
   readonly truncated: boolean;
   readonly spillArtifactId?: string;
@@ -414,13 +418,30 @@ export function parseProcessCleanupStatus(value: unknown): ProcessCleanupStatus 
 export function parseProcessOutputDisposition(value: unknown): ProcessOutputDisposition {
   const object = closedObject(value, [
     "stream", "tail", "totalBytes", "truncated", "spillArtifactId",
-    "spillBytes", "lossyBytes",
+    "spillBytes", "lossyBytes", "tailBytesBase64", "tailByteLength",
   ], "process output disposition");
+  const totalBytes = nonNegativeInteger(object.totalBytes, "totalBytes");
+  const truncated = requiredBoolean(object.truncated, "truncated");
+  let exactTail: { tailBytesBase64: string; tailByteLength: number } | undefined;
+  if (object.tailBytesBase64 !== undefined || object.tailByteLength !== undefined) {
+    const encoded = object.tailBytesBase64;
+    const length = nonNegativeInteger(object.tailByteLength, "tailByteLength");
+    // Bound before decoding. These are the shared 128KiB raw tail, not another
+    // unbounded output buffer and not a claim that private spill succeeded.
+    if (typeof encoded !== "string" || length > 128 * 1024 ||
+        encoded.length > 4 * Math.ceil(128 * 1024 / 3) || length > totalBytes ||
+        truncated !== (length < totalBytes)) throw new Error("Exact output tail bounds are invalid.");
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.length !== length || bytes.toString("base64") !== encoded)
+      throw new Error("Exact output tail encoding is invalid.");
+    exactTail = { tailBytesBase64: encoded, tailByteLength: length };
+  }
   return {
     stream: requiredEnum(object.stream, ["stdout", "stderr"], "process output stream"),
     tail: requiredString(object.tail, "tail", true),
-    totalBytes: nonNegativeInteger(object.totalBytes, "totalBytes"),
-    truncated: requiredBoolean(object.truncated, "truncated"),
+    ...exactTail,
+    totalBytes,
+    truncated,
     ...optionalStringProperty(object, "spillArtifactId"),
     spillBytes: nonNegativeInteger(object.spillBytes, "spillBytes"),
     lossyBytes: nonNegativeInteger(object.lossyBytes, "lossyBytes"),

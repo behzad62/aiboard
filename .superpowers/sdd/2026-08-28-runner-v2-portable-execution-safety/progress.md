@@ -829,3 +829,14 @@ Current queue: B3 review/repair remains active; no B3 or P6 exit is issued.
 Next eligible action requires owner direction: extend the repair budget for
 the retained cleanup/fence failure; separately decide exact exceptional cleanup
 of the recordless old CLI process chain. Do not start 8.1, P6.5 or P7.
+
+
+## 2026-09-11 — P6 continuation after C commit and MCP reconnection
+
+Base: `7f6fbcb15c67dfe87984131c1d208636056611e9`. Owner resumed P6 task by task and retained controller self-review. B3 close-out is recorded in `../2026-09-11-p6-completion/b3-closeout.md` and `b3-closeout-proof.json`; original B3 requirements were checked against the C-accepted source and native evidence. Packet 8.1 Git is active, not complete.
+
+After reconnection, the existing integration-test RED was found already applied. The run-owned host Git context is now wired. Real native testing exposed discarded exact tail bytes when private diagnostic spill is unavailable; bounded canonical raw-tail metadata now survives the shared/durable result without falsifying spill loss or accepting truncated output. Self-review also corrected early removal of the command-scope parent cleanup callback, so ToolBroker joins pending cleanup and receives its retained failure.
+
+Current final gate: 95/95 tests, including real Git binary round-trip and cleanup, zero failures/cancellations/skips; all203 source bindings match. Typecheck and changed-source lint exit0. Seven binary material faults and the parent-callback fault were detected and exactly restored. The preceding broader graph passed226/226 before the final narrowly scoped callback repair; it is not mislabeled as a later rerun. All67 final-gate exact acquisitions are absent after their successful fixture finalizers. Unrelated222 files, HEAD and index remain unchanged. No new commit/publication.
+
+Detailed current checkpoint: `../2026-09-11-p6-completion/reconnected-progress.md`, `reconnected-final-verification.json` and `reconnected-wrapper-ledger.json`. Next: complete production Git caller migration and retire the ambient/raw fallback before 8.2 MCP. P6 and later-phase gates remain open/locked respectively; historical uncertain diagnostics remain excluded from arbitrary cleanup.

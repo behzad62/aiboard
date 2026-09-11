@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
@@ -112,6 +112,8 @@ interface GrantRecord {
   readonly authority: object;
   readonly claims: ConsumedExecutionGrantClaims;
   readonly clock: () => Date;
+  /** Kernel-only parentage; never projected into persisted/model-facing values. */
+  readonly parent?: GrantRecord;
   state: "issued" | "consumed" | "revoked";
   revocationReason?: ExecutionGrantRevocationReason;
   isolationReserved: boolean;
@@ -120,6 +122,7 @@ interface GrantRecord {
 
 const GRANTS = new WeakMap<object, GrantRecord>();
 const CONSUMED_CLAIMS = new WeakMap<object, GrantRecord>();
+const AUTHORITIES = new WeakMap<ExecutionGrantAuthority, Readonly<{ identity: object; owned: Set<object> }>>();
 
 export function createExecutionGrantAuthority(
   options: ExecutionGrantAuthorityOptions = {},
@@ -133,7 +136,7 @@ export function createExecutionGrantAuthority(
   const authorityIdentity = Object.freeze({});
   let issuanceEpoch = 0;
 
-  return Object.freeze({
+  const authority: ExecutionGrantAuthority = Object.freeze({
     async issue(request: ExecutionGrantIssueRequest): Promise<OpaqueExecutionGrant> {
       const epoch = issuanceEpoch;
       if (request.signal?.aborted) throw grantError("grant_revoked");
@@ -189,6 +192,9 @@ export function createExecutionGrantAuthority(
         owned.delete(grant as object);
         throw grantError("grant_expired");
       }
+      // A parent may have been revoked before its asynchronous cleanup callback
+      // reaches this child. Do not let that scheduling gap authorize execution.
+      if (record.parent) assertCurrentGrantRecord(record.parent);
       if (!sameBinding(record.claims, expected)) {
         record.state = "revoked";
         record.revocationReason = "mismatch";
@@ -233,6 +239,8 @@ export function createExecutionGrantAuthority(
         .map((record) => deepFreeze({ ...cloneClaims(record.claims), state: record.state }));
     },
   });
+  AUTHORITIES.set(authority, { identity: authorityIdentity, owned });
+  return authority;
 }
 
 function canonicalCredentialNames(value: readonly string[] | undefined): readonly string[] {
@@ -268,6 +276,7 @@ export function reserveConsumedExecutionGrantForIsolation(
   assertRunnerConsumedExecutionGrantClaims(claims);
   const record = CONSUMED_CLAIMS.get(claims as object)!;
   if (record.state === "revoked" || record.isolationReserved) throw grantError("grant_consumed");
+  if (record.parent) assertCurrentGrantRecord(record.parent);
   record.isolationReserved = true;
 }
 
@@ -310,11 +319,129 @@ export function assertCurrentConsumedExecutionGrantClaims(
 ): ConsumedExecutionGrantClaims {
   assertRunnerConsumedExecutionGrantClaims(value);
   const record = CONSUMED_CLAIMS.get(value as object)!;
+  assertCurrentGrantRecord(record);
+  return value;
+}
+
+function assertCurrentGrantRecord(record: GrantRecord): void {
   if (record.state === "revoked") throw grantError("grant_revoked");
   if (Date.parse(record.claims.expiresAt) <= record.clock().getTime()) {
     throw grantError("grant_expired");
   }
-  return value;
+  if (record.parent) assertCurrentGrantRecord(record.parent);
+}
+
+export interface ExecutionCommandInvocationGrant {
+  readonly grant: OpaqueExecutionGrant;
+  readonly binding: ExecutionGrantBinding;
+  readonly signal: AbortSignal;
+  readonly expiresAt: string;
+  release(): Promise<void>;
+}
+
+export interface ExecutionCommandGrantScope {
+  next(): ExecutionCommandInvocationGrant;
+  authorizeDirectory(path: string): Promise<string>;
+  close(): Promise<void>;
+}
+
+/** Runner-private delegation of ONE authorized operation into its bounded Git
+ * command sequence. The family supplies no child rights, actor, run, expiry or
+ * environment. The ToolBroker parent is consumed once, never reissued/revoked
+ * here. Each child is same-issuer, same-envelope and no longer lived than parent.
+ */
+export async function createExecutionCommandGrantScope(input: Readonly<{
+  authority: ExecutionGrantAuthority;
+  parentGrant: OpaqueExecutionGrant;
+  binding: ExecutionGrantBinding;
+  signal?: AbortSignal;
+}>): Promise<ExecutionCommandGrantScope> {
+  if (input.signal?.aborted) throw grantError("grant_revoked");
+  const issuer = AUTHORITIES.get(input.authority);
+  if (!issuer) throw grantError("grant_forged");
+  const parent = trustedRecord(input.parentGrant, issuer.identity)!;
+  let depth = 0;
+  for (let current: GrantRecord | undefined = parent; current; current = current.parent) {
+    if (++depth > 8) throw new ExecutionGrantError("grant_escalation", "Command grant delegation depth is exhausted.");
+  }
+  const claims = input.authority.consume(input.parentGrant, input.binding);
+  reserveConsumedExecutionGrantForIsolation(claims);
+  const abort = new AbortController();
+  const active = new Set<() => Promise<void>>();
+  let ordinal = 0; let closed = false;
+  let closePromise: Promise<void> | undefined;
+  let expiration: ReturnType<typeof setTimeout> | undefined;
+  let disposeParent = () => undefined as void;
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closed = true; abort.abort();
+    if (expiration) { clearTimeout(expiration); expiration = undefined; }
+    input.signal?.removeEventListener("abort", cancel);
+    closePromise = (async () => {
+      const results = await Promise.allSettled([...active].map((release) => release()));
+      const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason as unknown] : []);
+      if (failures.length > 0) throw new AggregateError(failures, "Command scope cleanup remains unverified.");
+      // Caller cancellation may start cleanup before ToolBroker revokes its
+      // parent. Retain this join/error path until actual success; otherwise the
+      // parent could report completion while child cleanup is pending or failed.
+      disposeParent();
+    })();
+    return closePromise;
+  };
+  // The promise remains owned by closePromise and is rethrown to explicit close;
+  // event dispatch must not create an unhandled rejection during cancellation.
+  const cancel = () => { void close().catch(() => undefined); };
+  const registration = await registerConsumedExecutionGrantRevoker(claims, close);
+  disposeParent = registration.dispose;
+  if (!registration.registered || input.signal?.aborted) {
+    await close();
+    throw grantError("grant_revoked");
+  }
+  input.signal?.addEventListener("abort", cancel, { once: true });
+  expiration = setTimeout(cancel, Math.max(0, Date.parse(claims.expiresAt) - parent.clock().getTime()));
+  expiration.unref?.();
+  return Object.freeze({
+    next(): ExecutionCommandInvocationGrant {
+      if (closed) throw new ExecutionGrantError("grant_revoked", "Command grant scope is closed.");
+      assertCurrentConsumedExecutionGrantClaims(claims);
+      if (ordinal >= 1024) throw new ExecutionGrantError("grant_escalation", "Command grant invocation bound is exhausted.");
+      const callId = `git-command-${createHash("sha256").update(`${claims.grantId}\0${++ordinal}`).digest("hex")}`;
+      const childBinding = cloneBinding({ ...claims, callId });
+      const childClaims = deepFreeze({
+        ...cloneClaims(claims, true), ...childBinding,
+        grantId: `execution-grant-${randomUUID()}`,
+        issuedAt: parent.clock().toISOString(),
+        // Retain the parent's exact expiry, never a fresh TTL.
+        expiresAt: claims.expiresAt,
+        nonce: randomBytes(16).toString("hex"),
+      }) as ConsumedExecutionGrantClaims;
+      const grant = {} as OpaqueExecutionGrant;
+      Object.defineProperty(grant, RUNNER_OPAQUE_GRANT, { value: true });
+      Object.freeze(grant);
+      GRANTS.set(grant, { authority: issuer.identity, claims: childClaims, clock: parent.clock,
+        parent, state: "issued", isolationReserved: false, revokers: new Set() });
+      issuer.owned.add(grant as object);
+      let releasePromise: Promise<void> | undefined;
+      const release = (): Promise<void> => {
+        if (releasePromise) return releasePromise;
+        releasePromise = input.authority.revoke(grant, "cleanup").then(() => { active.delete(release); });
+        return releasePromise;
+      };
+      active.add(release);
+      return Object.freeze({ grant, binding: childBinding, signal: abort.signal, expiresAt: childClaims.expiresAt, release });
+    },
+    async authorizeDirectory(path: string): Promise<string> {
+      if (closed) throw new ExecutionGrantError("grant_revoked", "Command grant scope is closed.");
+      assertCurrentConsumedExecutionGrantClaims(claims);
+      const directory = await canonicalExistingDirectory(path);
+      assertCurrentConsumedExecutionGrantClaims(claims);
+      if (closed || !claims.access.some((entry) => contained(entry.canonicalPath, directory))) {
+        throw new ExecutionGrantError("grant_escalation", "Git working directory is outside the original call access.");
+      }
+      return directory;
+    },
+    close,
+  });
 }
 
 async function canonicalizeAccess(

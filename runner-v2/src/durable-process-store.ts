@@ -2349,6 +2349,8 @@ function parseOutput(value: unknown): ProcessOutputDisposition[] {
       new Set([
         "stream",
         "tail",
+        "tailBytesBase64",
+        "tailByteLength",
         "totalBytes",
         "truncated",
         "spillArtifactId",

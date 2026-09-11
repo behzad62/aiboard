@@ -2095,6 +2095,8 @@ function outputDisposition(
     return parseProcessOutputDisposition({
       stream: plain.stream,
       tail: plain.tail,
+      ...(plain.tailBytesBase64 === undefined && plain.tailByteLength === undefined
+        ? {} : { tailBytesBase64: plain.tailBytesBase64, tailByteLength: plain.tailByteLength }),
       totalBytes: plain.totalBytes,
       truncated: plain.truncated,
       ...(plain.spillArtifactId === undefined

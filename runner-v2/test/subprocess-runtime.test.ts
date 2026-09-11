@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -8,6 +8,8 @@ import { spawn } from "node:child_process";
 import { inspect } from "node:util";
 
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
+import { ArtifactStore } from "../src/artifact-store.js";
+import { createBoundedProcessOutputFactory } from "../src/one-shot-command-executor.js";
 import type { ExecutionInvocationIntent } from "../src/execution-safety-contracts.js";
 import {
   createProcessBackendRegistration,
@@ -475,6 +477,44 @@ async function seedRecoverable(
   }
   assert.equal(f.store.readByInvocation("invoke-1")?.state, target);
 }
+
+for (const mode of ["memory", "sqlite"] as const) test(`subprocess ${mode} preserves exact binary tail through real spool and durable result`, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "p6-binary-output-"));
+  t.diagnostic(`acquired synthetic process/output fixture: ${root}`);
+  const project = join(root, "project"); await mkdir(project);
+  const backend = new Backend(); const clock = new Clock();
+  const bytes = Buffer.from([0, 255, 254, 128, 13, 10]);
+  backend.observe = async (_binding, output) => { await output("stdout", bytes); return { state: "exited", exitCode: 0 }; };
+  const state = mode === "memory" ? { kind: "memory" as const } : { kind: "sqlite" as const, path: join(root, "state.sqlite") };
+  const key = Buffer.alloc(32, 81);
+  const kernel = createSubprocessRuntimeKernel({ state, stateKey: key, clock, registry: backendRegistry(backend),
+    environments: createChildEnvironmentFactory({ credentialResolver: { consume: () => assert.fail("no credential grant") }, now: () => clock.now() }),
+    outputs: createBoundedProcessOutputFactory({ spillRoot: join(root, "spool"), projectRoot: project, artifacts: new ArtifactStore(join(root, "artifacts")) }),
+    escalationGraceMs: [10, 20],
+  });
+  let succeeded = false; let originalStoreClosed = false;
+  try {
+    kernel.grantsController.issue(grantValue());
+    const result = await kernel.runtime.invoke({ intent: { ...intent(), workingDirectory: project }, grantId: "grant-invoke-1", ambientEnvironment: {} });
+    const stdout = result.output.find((item) => item.stream === "stdout")!;
+    assert.equal(stdout.tailByteLength, bytes.length);
+    assert.equal(stdout.tailBytesBase64, bytes.toString("base64"));
+    assert.equal(result.cleanup.state, "verified_empty");
+    assert.deepEqual(kernel.readOnlyStore.readByInvocation("invoke-1")!.output, result.output);
+    kernel.readOnlyStore.close();
+    originalStoreClosed = true;
+    if (mode === "sqlite") {
+      const reopened = runtimeFor(state, key, backend, clock, new Outputs());
+      try { assert.deepEqual(reopened.readOnlyStore.readByInvocation("invoke-1")!.output, result.output); }
+      finally { reopened.readOnlyStore.close(); }
+    }
+    succeeded = true;
+  } finally {
+    if (!originalStoreClosed) kernel.readOnlyStore.close();
+    if (succeeded) { await rm(root, { recursive: true }); t.diagnostic(`closed synthetic store/output; removed exact fixture: ${root}`); }
+    else t.diagnostic(`closed store; diagnostic evidence retained: ${root}`);
+  }
+});
 
 test("caller can provide only an opaque grant id and forged grant/result fields are rejected", async () => {
   const { runtime, backend, grants } = fixture();

@@ -6,6 +6,7 @@ import type { ArtifactStore } from "./artifact-store.js";
 import { BoundedOutputSpool } from "./bounded-output-spool.js";
 import { createChildEnvironmentFactory } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
+import { createRunGitExecutionContext, type RunGitExecutionContext } from "./git-run-context.js";
 import {
   createExecutionGrantAuthority,
   type ExecutionGrantAuthority,
@@ -114,6 +115,7 @@ export interface ExecutionHostRecoveryResult {
 export interface ExecutionHostRunBinding {
   readonly runId: string;
   readonly runRoot: string;
+  readonly git: RunGitExecutionContext;
   readonly commandExecution: OneShotCommandExecutor;
   readonly executionGrants: ExecutionGrantAuthority;
   readonly sessionAuthority: SessionAuthority;
@@ -387,9 +389,21 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     let streamingStoreClosed = false;
     let subprocessStoreClosed = false;
 
+    const git = createRunGitExecutionContext({
+      runId: input.runId,
+      projectRoot: input.projectRoot,
+      stateDirectory: input.stateDirectory,
+      permissionProfile: input.permissionProfile,
+      execution: commandExecution,
+      executionGrants,
+      artifacts: input.artifacts,
+      assertOpen: () => { if (closed) throw new Error("ExecutionHost run binding is closed."); },
+    });
+
     const binding: ExecutionHostRunBinding = Object.freeze({
       runId: input.runId,
       runRoot,
+      git,
       commandExecution,
       executionGrants,
       sessionAuthority,

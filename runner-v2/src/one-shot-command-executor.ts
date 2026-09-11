@@ -11,6 +11,7 @@ import type {
 } from "./execution-safety-contracts.js";
 import type {
   ExecutionGrantAuthority,
+  ExecutionGrantBinding,
   OpaqueExecutionGrant,
 } from "./execution-grants.js";
 import type {
@@ -30,7 +31,8 @@ export interface OneShotCommandRequest {
   readonly workingDirectory: string;
   readonly explicitEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly timeoutMs: number;
-  readonly context: Pick<ToolExecutionContext, "runId" | "sessionId" | "actor" | "signal"> & {
+  readonly context: Pick<ToolExecutionContext, "runId" | "sessionId" | "signal"> & {
+    readonly actor: ExecutionGrantBinding["actor"];
     readonly callId: string;
     readonly toolName: string;
     readonly taskId?: string;

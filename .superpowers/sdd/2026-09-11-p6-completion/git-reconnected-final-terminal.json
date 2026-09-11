@@ -1,0 +1,27 @@
+{
+  "id": "git-reconnected-final",
+  "startedAt": "2026-09-11T11:50:46.895805+00:00",
+  "finishedAt": "2026-09-11T11:51:39.581627+00:00",
+  "wrapperPid": 47892,
+  "testPid": 58640,
+  "exitCode": 0,
+  "sourcesUnchanged": true,
+  "sourceFiles": 203,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/execution-command-grant-scope.test.ts",
+    "runner-v2/test/execution-grants.test.ts",
+    "runner-v2/test/execution-isolation-provider.test.ts",
+    "runner-v2/test/process-output-binary-tail.test.ts"
+  ]
+}
