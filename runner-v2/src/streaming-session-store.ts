@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { parseEvidenceContinuation, type EvidenceContinuation } from "./evidence-continuation.js";
 
 export type StreamingSessionStoreErrorCode =
   | "invalid_record"
@@ -27,7 +28,7 @@ export class StreamingSessionStoreError extends Error {
 }
 
 export const STREAMING_SESSION_RECORD_KIND = "runner.streaming-session" as const;
-export const STREAMING_SESSION_RECORD_VERSION = 3 as const;
+export const STREAMING_SESSION_RECORD_VERSION = 4 as const;
 
 export type StreamingSessionState =
   | "pending_transfer"
@@ -96,7 +97,93 @@ export interface StreamingSessionEffect {
   readonly acknowledgedAt?: string;
   readonly blockedAt?: string;
   readonly cleanupProvenance?: StreamingSessionCleanupProvenance;
+  readonly progress?: AdoptedCleanupProgress;
 }
+
+export type AdoptedCleanupResourceKind =
+  | "workload_quiescence"
+  | "retained_output_settlement"
+  | "evidence"
+  | "channel_detach"
+  | "backend_release"
+  | "isolation_release";
+export type AdoptedCleanupResourceStatus = "pending" | "in_flight" | "verified" | "blocked";
+export type AdoptedCleanupBlockerCode =
+  | "workload_outcome_unknown"
+  | "output_settlement_unavailable"
+  | "evidence_continuation_unavailable"
+  | "evidence_finalization_failed"
+  | "channel_detach_failed"
+  | "backend_release_reconciliation_required"
+  | "isolation_release_failed"
+  | "cleanup_deadline_expired"
+  | "cleanup_deadline_before_effect"
+  | "cleanup_effect_outcome_unknown"
+  | "cleanup_authority_unavailable";
+export interface AdoptedCleanupBlocker {
+  readonly code: AdoptedCleanupBlockerCode;
+  readonly message: string;
+}
+export interface AdoptedCleanupAttempt {
+  readonly attemptId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly startedAt: string;
+  readonly deadlineAt: string;
+}
+export interface AdoptedCleanupEvidenceReference {
+  readonly kind: "same_runtime_finalization" | "bounded_output_manifest";
+  readonly digest: string;
+  readonly lossy: boolean;
+  readonly lossReason?: "evidence_write_failed" | "bounded_output_loss";
+}
+export interface AdoptedCleanupResourceFact {
+  readonly resource: AdoptedCleanupResourceKind;
+  readonly identity: string;
+  readonly status: AdoptedCleanupResourceStatus;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly attempts: number;
+  readonly attempt?: AdoptedCleanupAttempt;
+  readonly blocker?: AdoptedCleanupBlocker;
+  readonly verifiedAt?: string;
+  readonly evidence?: AdoptedCleanupEvidenceReference;
+}
+export interface AdoptedCleanupProgress {
+  readonly resources: readonly AdoptedCleanupResourceFact[];
+}
+
+export function deriveAdoptedCleanupAttemptId(input: Readonly<{
+  effectId: string;
+  resource: AdoptedCleanupResourceKind;
+  ordinal: number;
+  ownerId: string;
+  fencingToken: number;
+}>): string {
+  const digest = createHash("sha256").update(JSON.stringify([
+    "runner.adopted-cleanup-attempt.v1",
+    input.effectId,
+    input.resource,
+    input.ordinal,
+    input.ownerId,
+    input.fencingToken,
+  ])).digest("hex");
+  return `cleanup-attempt:${digest}`;
+}
+
+export const ADOPTED_CLEANUP_BLOCKER_MESSAGES: Readonly<Record<AdoptedCleanupBlockerCode, string>> = Object.freeze({
+  workload_outcome_unknown: "Workload quiescence could not be verified.",
+  output_settlement_unavailable: "Retained output settlement could not be verified.",
+  evidence_continuation_unavailable: "Durable evidence continuation is unavailable.",
+  evidence_finalization_failed: "Evidence finalization failed.",
+  channel_detach_failed: "Streaming channel detach failed.",
+  backend_release_reconciliation_required: "Backend release requires reconciliation.",
+  isolation_release_failed: "Isolation release failed.",
+  cleanup_deadline_expired: "Cleanup deadline expired.",
+  cleanup_deadline_before_effect: "Cleanup deadline expired before effect issuance.",
+  cleanup_effect_outcome_unknown: "Cleanup effect outcome is unknown.",
+  cleanup_authority_unavailable: "Cleanup authority is unavailable.",
+});
 
 /** Immutable origin plus every one-step durable re-fence of a cleanup effect. */
 export interface StreamingSessionCleanupProvenance {
@@ -129,7 +216,7 @@ export interface StreamingSessionHistoryEntry {
 
 export interface StreamingSessionRecord {
   readonly recordKind: typeof STREAMING_SESSION_RECORD_KIND;
-  readonly schemaVersion: 0 | 1 | 2 | typeof STREAMING_SESSION_RECORD_VERSION;
+  readonly schemaVersion: 0 | 1 | 2 | 3 | typeof STREAMING_SESSION_RECORD_VERSION;
   readonly revision: number;
   readonly sessionId: string;
   readonly ownerId: string;
@@ -137,7 +224,7 @@ export interface StreamingSessionRecord {
   readonly leaseExpiresAt: string;
   readonly runId: string;
   readonly agentSessionId: string;
-  readonly actor: Readonly<{ role: "architect" | "worker" | "system" | "user"; id: string }>;
+  readonly actor: Readonly<{ role: "architect" | "worker" | "system" | "user" | "runner_internal"; id: string }>;
   readonly toolName: string;
   readonly callId: string;
   readonly envelope: StreamingSessionEnvelope;
@@ -241,6 +328,7 @@ export interface HostCleanupResourceFact {
   readonly fencingToken: number;
   readonly attempts: number;
   readonly failure?: HostCleanupFailure;
+  readonly evidence?: AdoptedCleanupEvidenceReference;
 }
 export interface HostLaunchEffect {
   readonly effectId: string;
@@ -265,7 +353,7 @@ export interface HostLaunchRecord {
   readonly sessionId: string;
   readonly runId: string;
   readonly agentSessionId: string;
-  readonly actor: Readonly<{ role: "architect" | "worker" | "system" | "user"; id: string }>;
+  readonly actor: Readonly<{ role: "architect" | "worker" | "system" | "user" | "runner_internal"; id: string }>;
   readonly toolName: string;
   readonly callId: string;
   readonly ownerId: string;
@@ -288,6 +376,7 @@ export interface StreamingSessionKernelWriter extends StreamingSessionStoreWrite
   commitAdoption(input: StreamingSessionAdoptionInput): Readonly<{ launch: Readonly<HostLaunchRecord>; session: Readonly<StreamingSessionRecord> }>;
   claimOutputCheckpoint(record: unknown): Readonly<{ record: Readonly<OutputCheckpointRecord>; won: boolean }>;
   claimHostOutputCheckpoint(command: unknown): Readonly<{ host: Readonly<HostLaunchRecord>; record: Readonly<OutputCheckpointRecord>; won: boolean }>;
+  bootstrapHostCleanupOutputCheckpoint(command: unknown): Readonly<{ host: Readonly<HostLaunchRecord>; record: Readonly<OutputCheckpointRecord>; won: boolean }>;
   applyOutputCheckpoint(command: unknown): Readonly<OutputCheckpointRecord>;
   deleteOutputCheckpoint(command: unknown): void;
   takeoverAdoptedWithOutput(command: unknown): Readonly<{ session: Readonly<StreamingSessionRecord>; output: Readonly<OutputCheckpointRecord> }>;
@@ -316,10 +405,11 @@ export interface OutputStreamCheckpoint {
 }
 export interface OutputCheckpointRecord {
   readonly recordKind: typeof OUTPUT_CHECKPOINT_RECORD_KIND;
-  readonly schemaVersion: typeof OUTPUT_CHECKPOINT_RECORD_VERSION;
+  readonly schemaVersion: 1 | 2;
   readonly revision: number; readonly sessionId: string; readonly ownerId: string; readonly fencingToken: number;
   readonly capacity: number; readonly outcome: "active" | "outcome_unknown";
   readonly streams: readonly OutputStreamCheckpoint[];
+  readonly continuation?: EvidenceContinuation;
 }
 
 export interface SqliteStreamingSessionStoreOptions extends StreamingSessionStoreOptions {
@@ -381,8 +471,10 @@ export function createInMemoryStreamingSessionStore(
       const sessionId = requiredText(input.sessionId, "sessionId");
       const current = records.get(sessionId);
       if (!current) throw new StreamingSessionStoreError("invalid_record", "Streaming session is unknown.");
-      const next = applyStreamingSessionCommand(current, input, maxEffectsPerRecord);
+      const next = applyStreamingSessionCommand(current, input, maxEffectsPerRecord, outputCheckpoints.get(sessionId));
+      const deleteOutput = settledSessionEvidenceCheckpoint(next, outputCheckpoints.get(sessionId));
       records.set(sessionId, next);
+      if (deleteOutput) outputCheckpoints.delete(sessionId);
       return cloneRecord(next);
     },
   });
@@ -511,9 +603,14 @@ export function openSqliteStreamingSessionStore(
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
       const input = commandRecord(command, "streaming session command");
       const sessionId = requiredText(input.sessionId, "sessionId");
+      const terminalTransaction = input.type === "acknowledge_cleanup" || input.type === "observe_finalized_evidence";
+      if (terminalTransaction) database.exec("BEGIN IMMEDIATE");
+      try {
       const current = read(sessionId);
       if (!current) throw new StreamingSessionStoreError("invalid_record", "Streaming session is unknown.");
-      const next = applyStreamingSessionCommand(current, input, maxEffectsPerRecord);
+      const checkpoint = terminalTransaction ? readSqliteOutputCheckpoint(database, integrityKey, sessionId) : undefined;
+      const next = applyStreamingSessionCommand(current, input, maxEffectsPerRecord, checkpoint);
+      const deleteOutput = settledSessionEvidenceCheckpoint(next, checkpoint);
       const recordJson = JSON.stringify(next);
       const integrity = createHmac("sha256", integrityKey).update(recordJson).digest("hex");
       const result = database.prepare(
@@ -522,7 +619,10 @@ export function openSqliteStreamingSessionStore(
       if (result.changes !== 1) {
         throw new StreamingSessionStoreError("revision_conflict", "Streaming session revision is stale.");
       }
+      if (deleteOutput) database.prepare("DELETE FROM streaming_output_checkpoints WHERE session_id = ? AND revision = ?").run(sessionId, checkpoint!.revision);
+      if (terminalTransaction) database.exec("COMMIT");
       return cloneRecord(next);
+      } catch (error) { if (terminalTransaction) database.exec("ROLLBACK"); throw error; }
     },
   });
   const store: StreamingSessionStore = Object.freeze({
@@ -556,7 +656,7 @@ export function openSqliteStreamingSessionStore(
   const kernel = { store } as StreamingSessionStoreKernel;
   Object.defineProperty(kernel, STORE_WRITER, { value: writer });
   Object.defineProperty(kernel, KERNEL_WRITER, {
-    value: createSqliteHostLaunchWriter(database, integrityKey, writer, maxHostLaunchRecords, maxRecords, maxOutputCheckpointRecords, readOnly, options.adoptionFault),
+    value: createSqliteHostLaunchWriter(database, integrityKey, writer, maxHostLaunchRecords, maxRecords, maxOutputCheckpointRecords, readOnly, options.adoptionFault, read),
   });
   return Object.freeze(kernel);
 }
@@ -602,7 +702,7 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
     );
   }
   if (record.schemaVersion !== STREAMING_SESSION_RECORD_VERSION &&
-      record.schemaVersion !== 2 && record.schemaVersion !== 1 && record.schemaVersion !== 0) {
+      record.schemaVersion !== 3 && record.schemaVersion !== 2 && record.schemaVersion !== 1 && record.schemaVersion !== 0) {
     throw new StreamingSessionStoreError(
       record.state === "released" ? "unsupported_version" : "unsupported_active_version",
       "Streaming session schema version is unsupported.",
@@ -625,7 +725,7 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
   parseEnvelope(record.envelope);
   parseLease(record.lease);
   parseBackendBinding(record.backendBinding);
-  const cleanupCreationAuthority = record.schemaVersion === STREAMING_SESSION_RECORD_VERSION
+  const cleanupCreationAuthority = (record.schemaVersion as number) >= 3
     ? parseCleanupCreationAuthority(record.cleanupCreationAuthority)
     : undefined;
   const history = parseHistory(record.history);
@@ -637,6 +737,17 @@ export function parseStreamingSessionRecord(value: unknown): Readonly<StreamingS
       "Active version-2 cleanup evidence has no independently verifiable creation authority.",
     );
   }
+  if (record.schemaVersion === 3 && record.state !== "released" &&
+      effects.some((effect) => effect.kind === "cleanup" && effect.owner === "session_authority")) {
+    return parseStreamingSessionRecord({
+      ...record,
+      schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+      effects: effects.map((effect) => effect.kind === "cleanup"
+        ? { ...effect, progress: { resources: beginAdoptedCleanupResources(record as unknown as StreamingSessionRecord) } }
+        : effect),
+    });
+  }
+  assertAdoptedCleanupProgress(record as unknown as StreamingSessionRecord, effects);
   assertStateCombination(record as Partial<StreamingSessionRecord>, effects, cleanupCreationAuthority);
   assertHistoryForState(history, record.state as StreamingSessionState, record.revision as number);
   return deepFreeze(structuredClone(record)) as Readonly<StreamingSessionRecord>;
@@ -767,9 +878,10 @@ function parseBackendBinding(value: unknown): void {
     ]),
     "streaming session backend binding",
   );
-  for (const field of ["registryId", "backendId", "implementationGeneration", "opaqueIdentity"] as const) {
+  for (const field of ["registryId", "backendId", "implementationGeneration"] as const) {
     requiredText(binding[field], `backendBinding.${field}`);
   }
+  requiredOpaqueBackendIdentity(binding.opaqueIdentity);
   for (const field of ["implementationDigest", "attestationDigest"] as const) {
     if (typeof binding[field] !== "string" || !/^[a-f0-9]{64}$/i.test(binding[field])) {
       throw new StreamingSessionStoreError("invalid_record", `Streaming session backend ${field} is invalid.`);
@@ -863,7 +975,7 @@ function parseEffects(
   for (const entry of value) {
     const allowed = new Set([
       "effectId", "kind", "status", "owner", "fencingToken", "createdAt", "acknowledgedAt", "blockedAt",
-      "cleanupProvenance",
+      "cleanupProvenance", "progress",
     ]);
     assertExactKeys(entry, allowed, "streaming session effect");
     const effect = entry as Record<string, unknown>;
@@ -898,6 +1010,12 @@ function parseEffects(
     if (effect.cleanupProvenance !== undefined) parseCleanupProvenance(effect.cleanupProvenance);
     if (schemaVersion < 2 && effect.cleanupProvenance !== undefined) {
       throw new StreamingSessionStoreError("invalid_state", "Legacy streaming-session effects cannot carry cleanup provenance.");
+    }
+    if (effect.progress !== undefined) {
+      if (schemaVersion !== STREAMING_SESSION_RECORD_VERSION || effect.kind !== "cleanup") {
+        throw new StreamingSessionStoreError("invalid_effect", "Only current cleanup effects can carry durable progress.");
+      }
+      parseAdoptedCleanupProgress(effect.progress);
     }
     if (effectIds.has(effect.effectId as string)) {
       throw new StreamingSessionStoreError("invalid_effect", "Streaming session effect id is duplicated.");
@@ -975,6 +1093,264 @@ function parseCleanupProvenance(value: unknown): StreamingSessionCleanupProvenan
     assertTimestamp(takeover.at, "cleanupProvenance.takeover.at");
   }
   return value as StreamingSessionCleanupProvenance;
+}
+
+const ADOPTED_CLEANUP_RESOURCE_ORDER: readonly AdoptedCleanupResourceKind[] = Object.freeze([
+  "workload_quiescence",
+  "retained_output_settlement",
+  "evidence",
+  "channel_detach",
+  "backend_release",
+  "isolation_release",
+]);
+
+function parseAdoptedCleanupProgress(value: unknown): AdoptedCleanupProgress {
+  assertExactKeys(value, new Set(["resources"]), "adopted cleanup progress");
+  const progress = value as Record<string, unknown>;
+  assertRequiredKeys(progress, new Set(["resources"]), "adopted cleanup progress");
+  if (!Array.isArray(progress.resources) || progress.resources.length !== ADOPTED_CLEANUP_RESOURCE_ORDER.length) {
+    throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup progress must contain the exact resource set.");
+  }
+  const resources = progress.resources.map((entry, index) => parseAdoptedCleanupResource(entry, ADOPTED_CLEANUP_RESOURCE_ORDER[index]!));
+  return Object.freeze({ resources: Object.freeze(resources) });
+}
+
+function parseAdoptedCleanupResource(
+  value: unknown,
+  expectedResource: AdoptedCleanupResourceKind,
+): AdoptedCleanupResourceFact {
+  assertExactKeys(value, new Set([
+    "resource", "identity", "status", "ownerId", "fencingToken", "attempts", "attempt", "blocker",
+    "verifiedAt", "evidence",
+  ]), "adopted cleanup resource fact");
+  const fact = value as Record<string, unknown>;
+  assertRequiredKeys(fact, new Set(["resource", "identity", "status", "ownerId", "fencingToken", "attempts"]), "adopted cleanup resource fact");
+  if (fact.resource !== expectedResource || !ADOPTED_CLEANUP_RESOURCE_ORDER.includes(fact.resource as AdoptedCleanupResourceKind)) {
+    throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup resource is missing, duplicated, extra, or out of order.");
+  }
+  cleanupIdentity(fact.identity);
+  if (!["pending", "in_flight", "verified", "blocked"].includes(fact.status as string)) {
+    throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup resource status is invalid.");
+  }
+  const ownerId = requiredText(fact.ownerId, "cleanup resource ownerId");
+  const fencingToken = requiredPositiveInteger(fact.fencingToken, "cleanup resource fencingToken");
+  const attempts = requiredNonNegativeInteger(fact.attempts, "cleanup resource attempts");
+  const attempt = fact.attempt === undefined ? undefined : parseAdoptedCleanupAttempt(fact.attempt);
+  const blocker = fact.blocker === undefined ? undefined : parseAdoptedCleanupBlocker(fact.blocker);
+  const verifiedAt = fact.verifiedAt === undefined ? undefined : requiredTimestamp(fact.verifiedAt, "cleanup verifiedAt");
+  const evidence = fact.evidence === undefined ? undefined : parseAdoptedCleanupEvidenceReference(fact.evidence);
+  if (fact.status === "pending" && (attempt || blocker || verifiedAt || evidence || attempts !== 0 && attempts < 1)) {
+    throw new StreamingSessionStoreError("invalid_effect", "Pending cleanup resource carries terminal or in-flight evidence.");
+  }
+  if (fact.status === "in_flight" && (!attempt || blocker || verifiedAt || evidence || attempts < 1 ||
+      attempt.ownerId !== ownerId || attempt.fencingToken !== fencingToken)) {
+    throw new StreamingSessionStoreError("invalid_effect", "In-flight cleanup resource attempt is invalid.");
+  }
+  const retainsReconciliationAttempt = blocker !== undefined && retainsCleanupAttempt(blocker.code);
+  if (fact.status === "blocked" && (!blocker || verifiedAt || evidence ||
+      (attempts < 1 && blocker.code !== "cleanup_deadline_before_effect") ||
+      (attempt !== undefined) !== retainsReconciliationAttempt)) {
+    throw new StreamingSessionStoreError("invalid_effect", "Blocked cleanup resource evidence is invalid.");
+  }
+  if (fact.status === "verified" && (attempt || blocker || !verifiedAt || attempts < 1 ||
+      (fact.resource === "evidence" ? !evidence : Boolean(evidence)))) {
+    throw new StreamingSessionStoreError("invalid_effect", "Verified cleanup resource proof is invalid.");
+  }
+  return Object.freeze({
+    resource: fact.resource as AdoptedCleanupResourceKind,
+    identity: fact.identity as string,
+    status: fact.status as AdoptedCleanupResourceStatus,
+    ownerId,
+    fencingToken,
+    attempts,
+    ...(attempt ? { attempt } : {}),
+    ...(blocker ? { blocker } : {}),
+    ...(verifiedAt ? { verifiedAt } : {}),
+    ...(evidence ? { evidence } : {}),
+  });
+}
+
+function parseAdoptedCleanupAttempt(value: unknown): AdoptedCleanupAttempt {
+  assertExactKeys(value, new Set(["attemptId", "ownerId", "fencingToken", "startedAt", "deadlineAt"]), "adopted cleanup attempt");
+  const attempt = value as Record<string, unknown>;
+  assertRequiredKeys(attempt, new Set(["attemptId", "ownerId", "fencingToken", "startedAt", "deadlineAt"]), "adopted cleanup attempt");
+  const startedAt = requiredTimestamp(attempt.startedAt, "cleanup attempt startedAt");
+  const deadlineAt = requiredTimestamp(attempt.deadlineAt, "cleanup attempt deadlineAt");
+  if (Date.parse(deadlineAt) < Date.parse(startedAt)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup attempt deadline precedes its start.");
+  return Object.freeze({
+    attemptId: requiredText(attempt.attemptId, "cleanup attemptId"),
+    ownerId: requiredText(attempt.ownerId, "cleanup attempt ownerId"),
+    fencingToken: requiredPositiveInteger(attempt.fencingToken, "cleanup attempt fencingToken"),
+    startedAt,
+    deadlineAt,
+  });
+}
+
+function parseAdoptedCleanupBlocker(value: unknown): AdoptedCleanupBlocker {
+  assertExactKeys(value, new Set(["code", "message"]), "adopted cleanup blocker");
+  const blocker = value as Record<string, unknown>;
+  assertRequiredKeys(blocker, new Set(["code", "message"]), "adopted cleanup blocker");
+  if (!Object.hasOwn(ADOPTED_CLEANUP_BLOCKER_MESSAGES, blocker.code as PropertyKey) ||
+      blocker.message !== ADOPTED_CLEANUP_BLOCKER_MESSAGES[blocker.code as AdoptedCleanupBlockerCode]) {
+    throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup blocker is not a bounded Runner category.");
+  }
+  return Object.freeze({ code: blocker.code as AdoptedCleanupBlockerCode, message: blocker.message as string });
+}
+
+function isRetryableCleanupBlocker(code: AdoptedCleanupBlockerCode): boolean {
+  return code !== "workload_outcome_unknown" &&
+    code !== "evidence_continuation_unavailable" &&
+    code !== "evidence_finalization_failed" &&
+    code !== "cleanup_effect_outcome_unknown" &&
+    code !== "backend_release_reconciliation_required" &&
+    code !== "cleanup_deadline_expired";
+}
+
+function retainsCleanupAttempt(code: AdoptedCleanupBlockerCode): boolean {
+  return code === "cleanup_deadline_expired" || code === "cleanup_effect_outcome_unknown" ||
+    code === "evidence_continuation_unavailable" || code === "backend_release_reconciliation_required";
+}
+
+function parseAdoptedCleanupEvidenceReference(value: unknown): AdoptedCleanupEvidenceReference {
+  assertExactKeys(value, new Set(["kind", "digest", "lossy", "lossReason"]), "adopted cleanup evidence reference");
+  const evidence = value as Record<string, unknown>;
+  assertRequiredKeys(evidence, new Set(["kind", "digest", "lossy"]), "adopted cleanup evidence reference");
+  if ((evidence.kind !== "same_runtime_finalization" && evidence.kind !== "bounded_output_manifest") ||
+      typeof evidence.digest !== "string" || !/^[a-f0-9]{64}$/i.test(evidence.digest) ||
+      typeof evidence.lossy !== "boolean" ||
+      (evidence.lossReason !== undefined && evidence.lossReason !== "evidence_write_failed" && evidence.lossReason !== "bounded_output_loss") ||
+      (evidence.lossy !== (evidence.lossReason !== undefined))) {
+    throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup evidence reference is invalid.");
+  }
+  return Object.freeze({
+    kind: evidence.kind as AdoptedCleanupEvidenceReference["kind"],
+    digest: evidence.digest.toLowerCase(),
+    lossy: evidence.lossy,
+    ...(evidence.lossReason ? { lossReason: evidence.lossReason as AdoptedCleanupEvidenceReference["lossReason"] } : {}),
+  });
+}
+
+function assertAdoptedCleanupProgress(
+  record: Readonly<StreamingSessionRecord>,
+  effects: readonly StreamingSessionEffect[],
+): void {
+  const cleanup = effects.find((effect) => effect.kind === "cleanup");
+  if (record.schemaVersion !== STREAMING_SESSION_RECORD_VERSION) {
+    if (effects.some((effect) => effect.progress !== undefined)) throw new StreamingSessionStoreError("invalid_effect", "Legacy cleanup cannot carry current progress.");
+    return;
+  }
+  if (!cleanup) return;
+  if (cleanup.owner !== "session_authority") {
+    if (cleanup.progress) throw new StreamingSessionStoreError("invalid_effect", "Provider cleanup cannot carry adopted cleanup progress.");
+    return;
+  }
+  if (!cleanup.progress) throw new StreamingSessionStoreError("invalid_effect", "Current cleanup is missing durable progress.");
+  const progress = parseAdoptedCleanupProgress(cleanup.progress);
+  const expected = deriveAdoptedCleanupResourceDefinitions(record);
+  const validProofOwners = cleanupProofOwners(cleanup);
+  const authorityAtByProofOwner = new Map<string, number>();
+  const provenance = cleanup.cleanupProvenance;
+  if (provenance) {
+    authorityAtByProofOwner.set(
+      `${provenance.originOwnerId}\0${provenance.originFencingToken}`,
+      assertTimestamp(cleanup.createdAt, "cleanup.createdAt"),
+    );
+    for (const takeover of provenance.takeovers) {
+      authorityAtByProofOwner.set(
+        `${takeover.toOwnerId}\0${takeover.toFencingToken}`,
+        assertTimestamp(takeover.at, "cleanupProvenance.takeover.at"),
+      );
+    }
+  }
+  const currentAuthorityAt = authorityAtByProofOwner.get(`${record.ownerId}\0${record.fencingToken}`);
+  if (cleanup.blockedAt !== undefined && (currentAuthorityAt === undefined ||
+      assertTimestamp(cleanup.blockedAt, "cleanup.blockedAt") < currentAuthorityAt)) {
+    throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup blocker predates its current authority.");
+  }
+  for (let index = 0; index < expected.length; index += 1) {
+    const fact = progress.resources[index]!;
+    const definition = expected[index]!;
+    if ((fact.status !== "pending" || fact.attempts > 0) &&
+        progress.resources.slice(0, index).some((previous) => previous.status !== "verified")) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource progress precedes prerequisite verification.");
+    }
+    if (fact.blocker?.code === "cleanup_deadline_before_effect" &&
+        (fact.attempt || record.state !== "cleanup_blocked" || cleanup.status !== "blocked" || !cleanup.blockedAt)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Unissued cleanup expiry is not an exact blocked disposition.");
+    }
+    if (fact.resource !== definition.resource || fact.identity !== definition.identity) {
+      throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup resource identity differs from immutable session authority.");
+    }
+    const proofOwner = `${fact.ownerId}\0${fact.fencingToken}`;
+    if (!validProofOwners.has(proofOwner)) throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup fact has foreign proof ownership.");
+    const factAuthorityAt = authorityAtByProofOwner.get(proofOwner);
+    if (factAuthorityAt === undefined) throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup fact has no authority chronology.");
+    if ((fact.status === "pending" || fact.status === "blocked") &&
+        (fact.ownerId !== record.ownerId || fact.fencingToken !== record.fencingToken)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Unresolved cleanup resource is not fenced to the current owner.");
+    }
+    if (fact.attempt && (
+      !validProofOwners.has(`${fact.attempt.ownerId}\0${fact.attempt.fencingToken}`) ||
+      Date.parse(fact.attempt.startedAt) < (authorityAtByProofOwner.get(`${fact.attempt.ownerId}\0${fact.attempt.fencingToken}`) ?? Infinity) ||
+      fact.attempt.attemptId !== deriveAdoptedCleanupAttemptId({
+        effectId: cleanup.effectId,
+        resource: fact.resource,
+        ordinal: fact.attempts,
+        ownerId: fact.attempt.ownerId,
+        fencingToken: fact.attempt.fencingToken,
+      })
+    )) {
+      throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup attempt is not bound to its durable authority and ordinal.");
+    }
+    if (fact.verifiedAt !== undefined && Date.parse(fact.verifiedAt) < factAuthorityAt) {
+      throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup verification predates its current authority.");
+    }
+  }
+  if (record.state === "released" && progress.resources.some((resource) => resource.status !== "verified")) {
+    throw new StreamingSessionStoreError("invalid_effect", "Released cleanup contains an unverified resource.");
+  }
+}
+
+function cleanupProofOwners(effect: Readonly<StreamingSessionEffect>): ReadonlySet<string> {
+  const owners = new Set<string>();
+  const provenance = effect.cleanupProvenance;
+  if (!provenance) return owners;
+  owners.add(`${provenance.originOwnerId}\0${provenance.originFencingToken}`);
+  for (const takeover of provenance.takeovers) owners.add(`${takeover.toOwnerId}\0${takeover.toFencingToken}`);
+  return owners;
+}
+
+export function deriveAdoptedCleanupResourceDefinitions(
+  record: Pick<StreamingSessionRecord, "sessionId" | "backendBinding" | "lease">,
+): readonly Readonly<{ resource: AdoptedCleanupResourceKind; identity: string }>[] {
+  const backendIdentity = record.backendBinding.opaqueIdentity;
+  return Object.freeze([
+    Object.freeze({ resource: "workload_quiescence", identity: `workload:${backendIdentity}` }),
+    Object.freeze({ resource: "retained_output_settlement", identity: `output:${record.sessionId}:${backendIdentity}` }),
+    Object.freeze({ resource: "evidence", identity: `evidence:${record.sessionId}` }),
+    Object.freeze({ resource: "channel_detach", identity: `channel:${record.sessionId}:${backendIdentity}` }),
+    Object.freeze({ resource: "backend_release", identity: `backend:${record.backendBinding.registryId}:${record.backendBinding.backendId}:${backendIdentity}` }),
+    Object.freeze({ resource: "isolation_release", identity: `isolation:${record.lease.providerId}:${record.lease.leaseId}:${record.lease.invocationId}:${record.lease.providerIdentity}` }),
+  ]);
+}
+
+function beginAdoptedCleanupResources(
+  record: Pick<StreamingSessionRecord, "sessionId" | "backendBinding" | "lease" | "ownerId" | "fencingToken">,
+): readonly AdoptedCleanupResourceFact[] {
+  return Object.freeze(deriveAdoptedCleanupResourceDefinitions(record).map((definition) => Object.freeze({
+    ...definition,
+    status: "pending" as const,
+    ownerId: record.ownerId,
+    fencingToken: record.fencingToken,
+    attempts: 0,
+  })));
+}
+
+function cleanupIdentity(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0") || value.length > 128 * 1_024) {
+    throw new StreamingSessionStoreError("invalid_record", "Adopted cleanup resource identity is invalid.");
+  }
+  return value;
 }
 
 function assertStateCombination(
@@ -1139,7 +1515,7 @@ function assertHistoryForState(
     backend_unavailable: ["cleanup_pending", "outcome_unknown"],
     outcome_unknown: ["cleanup_pending"],
     cleanup_pending: ["cleanup_blocked", "released"],
-    cleanup_blocked: [],
+    cleanup_blocked: ["cleanup_pending"],
     released: [],
   };
   for (let index = 1; index < history.length; index += 1) {
@@ -1215,14 +1591,47 @@ function cloneRecord(value: Readonly<StreamingSessionRecord>): Readonly<Streamin
   return parseStreamingSessionRecord(value);
 }
 
-/**
- * Applies a single fenced state transition. Both storage backends call this
- * exact reducer so durability cannot change the authority state machine.
- */
+/** Shared preflight and transactional guard for observing immutable evidence. */
+export function validateFinalizedEvidenceObservation(
+  current: Readonly<StreamingSessionRecord>, checkpoint: Readonly<OutputCheckpointRecord> | undefined,
+  input: Record<string, unknown>,
+): AdoptedCleanupEvidenceReference {
+  assertExactKeys(input, new Set(["type", "sessionId", "ownerId", "fencingToken", "expectedRevision", "effectId", "resourceIdentity", "checkpoint", "at", "deadlineAt"]), "finalized evidence observation");
+  const at = assertTimestamp(input.at, "at");
+  if (input.type !== "observe_finalized_evidence" || input.sessionId !== current.sessionId ||
+      input.ownerId !== current.ownerId || input.fencingToken !== current.fencingToken || input.expectedRevision !== current.revision ||
+      at >= Date.parse(current.leaseExpiresAt) || at >= assertTimestamp(input.deadlineAt, "deadlineAt")) {
+    throw new StreamingSessionStoreError("invalid_effect", "Finalized evidence observation authority is stale.");
+  }
+  const cleanup = current.effects.find((effect) => effect.kind === "cleanup");
+  const facts = cleanup?.progress?.resources;
+  const fact = facts?.find((candidate) => candidate.resource === "evidence");
+  if (current.state !== "cleanup_blocked" || current.cleanupOwner !== "session_authority" ||
+      cleanup?.status !== "blocked" || cleanup.effectId !== input.effectId ||
+      !fact || fact.identity !== input.resourceIdentity || fact.ownerId !== current.ownerId || fact.fencingToken !== current.fencingToken ||
+      fact.status !== "blocked" || fact.blocker?.code !== "evidence_finalization_failed" || fact.attempt ||
+      facts!.slice(0, 2).some((candidate) => candidate.status !== "verified")) {
+    throw new StreamingSessionStoreError("invalid_effect", "Finalized evidence observation requires exact terminal evidence and verified predecessors.");
+  }
+  if (!checkpoint || checkpoint.sessionId !== current.sessionId || checkpoint.ownerId !== current.ownerId ||
+      checkpoint.fencingToken !== current.fencingToken || checkpoint.outcome !== "active" ||
+      canonicalJson(checkpoint) !== canonicalJson(input.checkpoint) || !checkpoint.continuation?.finalized ||
+      checkpoint.streams.some((stream) => stream.accepted.length > 0 || stream.consumingIntent) ||
+      checkpoint.continuation.positions.some((position) => canonicalJson(position.last) !==
+        canonicalJson(checkpoint.streams.find((stream) => stream.stream === position.stream)?.lastConsumed ?? null))) {
+    throw new StreamingSessionStoreError("invalid_effect", "Finalized evidence observation requires the exact settled checkpoint.");
+  }
+  const final = checkpoint.continuation.finalized;
+  return { kind: "bounded_output_manifest", digest: final.manifestHash, lossy: final.lossy,
+    ...(final.lossy ? { lossReason: "bounded_output_loss" as const } : {}) };
+}
+
+/** Both backends apply this exact reducer under their authenticated writer. */
 function applyStreamingSessionCommand(
   current: Readonly<StreamingSessionRecord>,
   input: Record<string, unknown>,
   maxEffectsPerRecord: number,
+  checkpoint?: Readonly<OutputCheckpointRecord>,
 ): Readonly<StreamingSessionRecord> {
   if (![
     "acknowledge_transfer",
@@ -1232,6 +1641,13 @@ function applyStreamingSessionCommand(
     "mark_cleanup_blocked",
     "mark_disposition",
     "begin_stopping",
+    "renew_lease",
+    "retry_cleanup",
+    "begin_cleanup_resource",
+    "expire_cleanup_resource",
+    "settle_cleanup_resource",
+    "observe_finalized_evidence",
+    "retry_cleanup_resource",
     "takeover",
     "acknowledge_cleanup",
   ].includes(input.type as string)) {
@@ -1255,13 +1671,15 @@ function applyStreamingSessionCommand(
       "backend_unavailable",
       "outcome_unknown",
       "cleanup_pending",
+      "cleanup_blocked",
     ].includes(current.state)) {
       throw new StreamingSessionStoreError("invalid_state", "Only an adopted streaming session can be taken over.");
     }
     if (atTimestamp < ownershipLeaseExpiresAt) {
       throw new StreamingSessionStoreError("lease_not_expired", "Streaming session ownership lease has not expired.");
     }
-  } else if ((hasSessionAuthorityLease || input.type === "acknowledge_transfer") &&
+  } else if (input.type !== "renew_lease" &&
+      (hasSessionAuthorityLease || input.type === "acknowledge_transfer") &&
       atTimestamp >= ownershipLeaseExpiresAt) {
     throw new StreamingSessionStoreError("lease_expired", "Streaming session ownership lease has expired.");
   }
@@ -1304,17 +1722,18 @@ function applyStreamingSessionCommand(
       throw new StreamingSessionStoreError("invalid_state", "Streaming session takeover lease must extend beyond takeover time.");
     }
     const cleanup = currentCleanup;
-    if (current.state === "cleanup_pending") {
-      if (!cleanup || cleanup.status !== "pending" || cleanup.owner !== "session_authority" ||
+    if (current.state === "cleanup_pending" || current.state === "cleanup_blocked") {
+      if (!cleanup || (current.state === "cleanup_pending" ? cleanup.status !== "pending" : cleanup.status !== "blocked") || cleanup.owner !== "session_authority" ||
           (input.newFencingToken as number) !== (current.fencingToken as number) + 1) {
         throw new StreamingSessionStoreError("stale_fence", "Streaming session cleanup takeover fence is invalid.");
       }
     }
-    const effects = current.state === "cleanup_pending" && cleanup
+    const effects = (current.state === "cleanup_pending" || current.state === "cleanup_blocked") && cleanup
       ? currentEffects.map((effect) => effect.effectId === cleanup.effectId
         ? {
           ...effect,
           fencingToken: input.newFencingToken as number,
+          ...(effect.status === "blocked" ? { blockedAt: at } : {}),
           cleanupProvenance: {
             ...cleanupProvenanceFor(effect, current.ownerId, current.fencingToken),
             takeovers: [
@@ -1328,6 +1747,12 @@ function applyStreamingSessionCommand(
               },
             ],
           },
+          progress: effect.progress ? {
+            resources: effect.progress.resources.map((resource) =>
+              resource.status === "pending" || resource.status === "blocked"
+                ? { ...resource, ownerId: newOwnerId, fencingToken: input.newFencingToken as number }
+                : resource),
+          } : undefined,
         }
         : effect)
       : currentEffects;
@@ -1340,6 +1765,257 @@ function applyStreamingSessionCommand(
       fencingToken: input.newFencingToken,
       leaseExpiresAt,
       effects,
+    });
+  }
+
+  if (input.type === "renew_lease") {
+    if (!hasSessionAuthorityLease || ![
+      "active",
+      "stopping",
+      "input_unavailable",
+      "backend_unavailable",
+      "outcome_unknown",
+      "cleanup_pending",
+      "cleanup_blocked",
+    ].includes(current.state)) {
+      throw new StreamingSessionStoreError("invalid_state", "Only an adopted streaming session can renew its ownership lease.");
+    }
+    const leaseExpiresAt = requiredText(input.leaseExpiresAt, "leaseExpiresAt");
+    const renewedExpiry = assertTimestamp(leaseExpiresAt, "leaseExpiresAt");
+    if (renewedExpiry <= atTimestamp || renewedExpiry <= ownershipLeaseExpiresAt) {
+      throw new StreamingSessionStoreError("invalid_state", "Streaming session lease renewal must extend the current lease.");
+    }
+    return parseStreamingSessionRecord({
+      ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
+      schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+      revision: nextRevision,
+      leaseExpiresAt,
+    });
+  }
+
+  if (input.type === "retry_cleanup") {
+    if (current.state !== "cleanup_blocked" || current.cleanupOwner !== "session_authority" ||
+        !currentCleanup || currentCleanup.status !== "blocked" ||
+        input.effectId !== currentCleanup.effectId) {
+      throw new StreamingSessionStoreError("invalid_state", "Only exact retained SessionAuthority cleanup can be retried.");
+    }
+    const isConservativeLegacyRetry = currentCleanup.progress?.resources.every((resource) =>
+      resource.status === "pending" && resource.attempts === 0 && resource.attempt === undefined &&
+      resource.blocker === undefined && resource.verifiedAt === undefined && resource.evidence === undefined);
+    if (!isConservativeLegacyRetry) {
+      throw new StreamingSessionStoreError("invalid_effect", "Categorical adopted cleanup blockers require an exact resource retry.");
+    }
+    return parseStreamingSessionRecord({
+      ...current,
+      cleanupCreationAuthority: durableCleanupCreationAuthority,
+      schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+      revision: nextRevision,
+      state: "cleanup_pending",
+      history: [...current.history, { state: "cleanup_pending", at }],
+      effects: currentEffects.map((effect) => effect.effectId === currentCleanup.effectId
+        ? { ...effect, status: "pending" as const, blockedAt: undefined }
+        : effect),
+    });
+  }
+
+  if (input.type === "begin_cleanup_resource" || input.type === "expire_cleanup_resource") {
+    if (current.state !== "cleanup_pending" || current.cleanupOwner !== "session_authority" ||
+        !currentCleanup || currentCleanup.status !== "pending" ||
+        input.effectId !== currentCleanup.effectId || !currentCleanup.progress) {
+      throw new StreamingSessionStoreError("invalid_state", "Only exact pending adopted cleanup can begin a resource attempt.");
+    }
+    const resource = input.resource as AdoptedCleanupResourceKind;
+    if (!ADOPTED_CLEANUP_RESOURCE_ORDER.includes(resource)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource kind is invalid.");
+    }
+    const fact = currentCleanup.progress.resources.find((candidate) => candidate.resource === resource);
+    if (!fact || fact.status !== "pending" || fact.attempt) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource is not pending.");
+    }
+    if (currentCleanup.progress.resources.slice(0, ADOPTED_CLEANUP_RESOURCE_ORDER.indexOf(resource))
+      .some((previous) => previous.status !== "verified")) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource prerequisites are not verified.");
+    }
+    const deadlineAt = requiredTimestamp(input.deadlineAt, "cleanup attempt deadlineAt");
+    const latestAuthorityAt = Math.max(
+      Date.parse(currentCleanup.createdAt),
+      ...((currentCleanup.cleanupProvenance?.takeovers ?? []).map((takeover) => Date.parse(takeover.at))),
+    );
+    if (input.type === "expire_cleanup_resource") {
+      if (atTimestamp < Date.parse(deadlineAt) || atTimestamp < latestAuthorityAt) {
+        throw new StreamingSessionStoreError("invalid_effect", "Unissued cleanup deadline is outside current authority chronology.");
+      }
+      return parseStreamingSessionRecord({
+        ...current, schemaVersion: STREAMING_SESSION_RECORD_VERSION, revision: nextRevision,
+        state: "cleanup_blocked", history: [...current.history, { state: "cleanup_blocked", at }],
+        effects: currentEffects.map((effect) => effect.effectId === currentCleanup.effectId ? {
+          ...effect, status: "blocked", blockedAt: at,
+          progress: { resources: effect.progress!.resources.map((candidate) => candidate.resource === resource ? {
+            ...candidate, status: "blocked", blocker: {
+              code: "cleanup_deadline_before_effect", message: ADOPTED_CLEANUP_BLOCKER_MESSAGES.cleanup_deadline_before_effect,
+            },
+          } : candidate) },
+        } : effect),
+      });
+    }
+    const startedAt = requiredTimestamp(input.startedAt, "cleanup attempt startedAt");
+    const attemptId = deriveAdoptedCleanupAttemptId({
+      effectId: currentCleanup.effectId,
+      resource,
+      ordinal: fact.attempts + 1,
+      ownerId: current.ownerId,
+      fencingToken: current.fencingToken,
+    });
+    if ((input.attemptId !== undefined && input.attemptId !== attemptId) ||
+        startedAt !== at || Date.parse(startedAt) < latestAuthorityAt ||
+        Date.parse(deadlineAt) < Date.parse(startedAt) ||
+        Date.parse(deadlineAt) > Date.parse(current.leaseExpiresAt)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup attempt identity or chronology is outside exact ownership authority.");
+    }
+    const attempt: AdoptedCleanupAttempt = Object.freeze({
+      attemptId,
+      ownerId: current.ownerId,
+      fencingToken: current.fencingToken,
+      startedAt,
+      deadlineAt,
+    });
+    return parseStreamingSessionRecord({
+      ...current,
+      schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+      revision: nextRevision,
+      effects: currentEffects.map((effect) => effect.effectId === currentCleanup.effectId
+        ? {
+          ...effect,
+          progress: {
+            resources: effect.progress!.resources.map((candidate) => candidate.resource === resource
+              ? { ...candidate, status: "in_flight" as const, attempts: candidate.attempts + 1, attempt }
+              : candidate),
+          },
+        }
+        : effect),
+    });
+  }
+
+  if (input.type === "observe_finalized_evidence") {
+    const evidence = validateFinalizedEvidenceObservation(current, checkpoint, input);
+    return parseStreamingSessionRecord({
+      ...current, schemaVersion: STREAMING_SESSION_RECORD_VERSION, revision: nextRevision,
+      state: "cleanup_pending", history: [...current.history, { state: "cleanup_pending", at }],
+      effects: currentEffects.map((effect) => effect.effectId === currentCleanup!.effectId ? {
+        ...effect, status: "pending", blockedAt: undefined,
+        progress: { resources: effect.progress!.resources.map((fact) => fact.resource === "evidence" ? {
+          ...fact, status: "verified", blocker: undefined, verifiedAt: at, evidence,
+        } : fact) },
+      } : effect),
+    });
+  }
+  if (input.type === "settle_cleanup_resource") {
+    const observedBlockedResolution = current.state === "cleanup_blocked" && currentCleanup?.status === "blocked";
+    if ((current.state !== "cleanup_pending" && !observedBlockedResolution) || current.cleanupOwner !== "session_authority" ||
+        !currentCleanup || (currentCleanup.status !== "pending" && !observedBlockedResolution) ||
+        input.effectId !== currentCleanup.effectId || !currentCleanup.progress) {
+      throw new StreamingSessionStoreError("invalid_state", "Only exact pending adopted cleanup can settle a resource attempt.");
+    }
+    const resource = input.resource as AdoptedCleanupResourceKind;
+    const fact = currentCleanup.progress.resources.find((candidate) => candidate.resource === resource);
+    if (!fact || (fact.status !== "in_flight" && !(observedBlockedResolution && fact.status === "blocked")) || !fact.attempt ||
+        input.attemptId !== fact.attempt.attemptId ||
+        input.attemptOwnerId !== fact.attempt.ownerId ||
+        input.attemptFencingToken !== fact.attempt.fencingToken) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource settlement does not match the exact issued attempt.");
+    }
+    if (atTimestamp < Date.parse(fact.attempt.startedAt)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource settlement predates its issued attempt.");
+    }
+    if (input.result !== "verified" && input.result !== "blocked") {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource settlement result is invalid.");
+    }
+    if (observedBlockedResolution && input.result !== "verified") {
+      throw new StreamingSessionStoreError("invalid_effect", "Blocked cleanup reconciliation may only record an observed verification.");
+    }
+    const blocker = input.result === "blocked" ? parseAdoptedCleanupBlocker(input.blocker) : undefined;
+    if (blocker?.code === "cleanup_deadline_before_effect") {
+      throw new StreamingSessionStoreError("invalid_effect", "An issued effect cannot claim an unissued deadline blocker.");
+    }
+    const evidence = input.result === "verified" && resource === "evidence"
+      ? parseAdoptedCleanupEvidenceReference(input.evidence)
+      : undefined;
+    if ((input.result === "verified" && resource !== "evidence" && input.evidence !== undefined) ||
+        (input.result === "verified" && input.blocker !== undefined) ||
+        (input.result === "blocked" && input.evidence !== undefined)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource settlement carries incompatible proof.");
+    }
+    const blocked = input.result === "blocked";
+    const retainAttempt = blocked && blocker !== undefined && retainsCleanupAttempt(blocker.code);
+    return parseStreamingSessionRecord({
+      ...current,
+      schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+      revision: nextRevision,
+      state: blocked ? "cleanup_blocked" : observedBlockedResolution ? "cleanup_pending" : current.state,
+      history: blocked
+        ? [...current.history, { state: "cleanup_blocked", at }]
+        : observedBlockedResolution ? [...current.history, { state: "cleanup_pending", at }] : current.history,
+      effects: currentEffects.map((effect) => effect.effectId === currentCleanup.effectId
+        ? {
+          ...effect,
+          status: blocked ? "blocked" as const : observedBlockedResolution ? "pending" as const : effect.status,
+          ...(blocked ? { blockedAt: at } : observedBlockedResolution ? { blockedAt: undefined } : {}),
+          progress: {
+            resources: effect.progress!.resources.map((candidate) => candidate.resource === resource
+              ? blocked
+                ? {
+                  ...candidate,
+                  status: "blocked" as const,
+                  ownerId: current.ownerId,
+                  fencingToken: current.fencingToken,
+                  attempt: retainAttempt ? candidate.attempt : undefined,
+                  blocker,
+                }
+                : {
+                  ...candidate,
+                  status: "verified" as const,
+                  attempt: undefined,
+                  blocker: undefined,
+                  verifiedAt: at,
+                  ...(evidence ? { evidence } : {}),
+                }
+              : candidate),
+          },
+        }
+        : effect),
+    });
+  }
+
+  if (input.type === "retry_cleanup_resource") {
+    if (current.state !== "cleanup_blocked" || current.cleanupOwner !== "session_authority" ||
+        !currentCleanup || currentCleanup.status !== "blocked" ||
+        input.effectId !== currentCleanup.effectId || !currentCleanup.progress) {
+      throw new StreamingSessionStoreError("invalid_state", "Only exact blocked adopted cleanup can retry a resource.");
+    }
+    const resource = input.resource as AdoptedCleanupResourceKind;
+    const fact = currentCleanup.progress.resources.find((candidate) => candidate.resource === resource);
+    if (!fact || fact.status !== "blocked" || fact.attempt || !fact.blocker || !isRetryableCleanupBlocker(fact.blocker.code)) {
+      throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource is not provably retryable.");
+    }
+    return parseStreamingSessionRecord({
+      ...current,
+      schemaVersion: STREAMING_SESSION_RECORD_VERSION,
+      revision: nextRevision,
+      state: "cleanup_pending",
+      history: [...current.history, { state: "cleanup_pending", at }],
+      effects: currentEffects.map((effect) => effect.effectId === currentCleanup.effectId
+        ? {
+          ...effect,
+          status: "pending" as const,
+          blockedAt: undefined,
+          progress: {
+            resources: effect.progress!.resources.map((candidate) => candidate.resource === resource
+              ? { ...candidate, status: "pending" as const, blocker: undefined }
+              : candidate),
+          },
+        }
+        : effect),
     });
   }
 
@@ -1409,6 +2085,9 @@ function applyStreamingSessionCommand(
           originFencingToken: current.fencingToken,
           takeovers: [],
         },
+        ...(current.cleanupOwner === "session_authority"
+          ? { progress: { resources: beginAdoptedCleanupResources(current) } }
+          : {}),
       }],
     });
   }
@@ -1417,6 +2096,12 @@ function applyStreamingSessionCommand(
       throw new StreamingSessionStoreError("invalid_state", "Only pending cleanup can be acknowledged.");
     }
     const effectId = requiredText(input.effectId, "effectId");
+    const cleanup = currentEffects.find((effect) => effect.effectId === effectId && effect.kind === "cleanup");
+    if (current.schemaVersion === STREAMING_SESSION_RECORD_VERSION && cleanup?.owner === "session_authority" &&
+        (!cleanup?.progress || cleanup.progress.resources.some((resource) =>
+          resource.status !== "verified" || resource.attempt !== undefined))) {
+      throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup cannot release before all six resources are verified.");
+    }
     return parseStreamingSessionRecord({
       ...current,
       cleanupCreationAuthority: durableCleanupCreationAuthority,
@@ -1436,6 +2121,9 @@ function applyStreamingSessionCommand(
     const effect = currentEffects.find((candidate) => candidate.effectId === effectId);
     if (!effect || effect.kind !== "cleanup" || effect.status !== "pending") {
       throw new StreamingSessionStoreError("invalid_effect", "Streaming session cleanup effect is not pending.");
+    }
+    if (effect.owner === "session_authority" && effect.progress) {
+      throw new StreamingSessionStoreError("invalid_effect", "Adopted cleanup must record an exact categorical resource blocker.");
     }
     return parseStreamingSessionRecord({
       ...current,
@@ -1511,6 +2199,16 @@ function applyStreamingSessionCommand(
 function requiredText(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim() || value.length > 512 || value.includes("\0")) {
     throw new StreamingSessionStoreError("invalid_record", `Streaming session ${name} is invalid.`);
+  }
+  return value;
+}
+
+function requiredOpaqueBackendIdentity(value: unknown): string {
+  // Portable backend identities may encode a canonical platform path plus
+  // process/fence facts. Windows extended paths alone can approach 32 KiB, so
+  // this closed field has a purpose-specific bound instead of the label bound.
+  if (typeof value !== "string" || !value.trim() || value.length > 64 * 1_024 || value.includes("\0")) {
+    throw new StreamingSessionStoreError("invalid_record", "Streaming session backendBinding.opaqueIdentity is invalid.");
   }
   return value;
 }
@@ -1594,13 +2292,20 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   const markerRepeatIndexes: number[] = [];
   for (let index = 1; index < record.history.length; index++) {
     const prior = record.history[index - 1]!; const entry = record.history[index]!;
-    const takeoverIndex = prior.state === "cleanup_pending" && entry.state === "cleanup_pending" ? pendingTakeovers.findIndex((takeover) => takeover.at === entry.at) : -1;
-    const markerRepeat = prior.state === "bound" && entry.state === "bound" &&
-      (entry.at === record.channelAcquisitionStartedAt || entry.at === record.outputCheckpointCreatedAt);
+    // A takeover enters cleanup from any nonterminal source, not just pending.
+    // Consume provenance in order before a same-time checkpoint marker repeats it.
+    const takeover = entry.state === "cleanup_pending" &&
+      (prior.state === "cleanup_pending" || (allowed.get(prior.state) ?? []).includes("cleanup_pending")) &&
+      pendingTakeovers[0]?.at === entry.at;
+    const markerRepeat = (prior.state === "bound" && entry.state === "bound" &&
+      (entry.at === record.channelAcquisitionStartedAt || entry.at === record.outputCheckpointCreatedAt)) ||
+      (!takeover && prior.state === "cleanup_pending" && entry.state === "cleanup_pending" &&
+        entry.at === record.outputCheckpointCreatedAt);
     if (markerRepeat) markerRepeatIndexes.push(index);
-    if ((takeoverIndex < 0 && !markerRepeat && !(allowed.get(prior.state) ?? []).includes(entry.state)) || Date.parse(entry.at) < Date.parse(prior.at)) throw new StreamingSessionStoreError("invalid_state", "Host launch history transition is impossible.");
-    if (takeoverIndex >= 0) pendingTakeovers.splice(takeoverIndex, 1);
+    if ((!takeover && !markerRepeat && !(allowed.get(prior.state) ?? []).includes(entry.state)) || Date.parse(entry.at) < Date.parse(prior.at)) throw new StreamingSessionStoreError("invalid_state", "Host launch history transition is impossible.");
+    if (takeover) pendingTakeovers.shift();
   }
+  if (pendingTakeovers.length) throw new StreamingSessionStoreError("invalid_effect", "Host cleanup takeover history is incomplete or out of order.");
   const expectedMarkerTimes = [record.channelAcquisitionStartedAt, record.outputCheckpointCreatedAt].filter((value): value is string => Boolean(value));
   if (markerRepeatIndexes.length !== expectedMarkerTimes.length || markerRepeatIndexes.some((historyIndex, markerIndex) => record.history[historyIndex]?.at !== expectedMarkerTimes[markerIndex])) throw new StreamingSessionStoreError("invalid_state", "Host launch durable marker history is incomplete or out of order.");
   const byId = new Map<string, HostLaunchEffect>();
@@ -1648,8 +2353,9 @@ export function parseOutputCheckpointRecord(value: unknown): Readonly<OutputChec
   if (!isObjectRecord(value)) throw new StreamingSessionStoreError("invalid_record", "Output checkpoint must be an object.");
   assertNoForbiddenDurableValues(value);
   const keys = new Set(["recordKind", "schemaVersion", "revision", "sessionId", "ownerId", "fencingToken", "capacity", "outcome", "streams"]);
-  assertExactKeys(value, keys, "output checkpoint"); assertRequiredKeys(value, keys, "output checkpoint");
-  if (value.recordKind !== OUTPUT_CHECKPOINT_RECORD_KIND || value.schemaVersion !== OUTPUT_CHECKPOINT_RECORD_VERSION) throw new StreamingSessionStoreError("unsupported_active_version", "Output checkpoint version is unsupported.");
+  assertExactKeys(value, new Set([...keys, ...(value.schemaVersion === 2 ? ["continuation"] : [])]), "output checkpoint"); assertRequiredKeys(value, keys, "output checkpoint");
+  if (value.recordKind !== OUTPUT_CHECKPOINT_RECORD_KIND || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) throw new StreamingSessionStoreError("unsupported_active_version", "Output checkpoint version is unsupported.");
+  const continuation = value.schemaVersion === 2 ? parseEvidenceContinuation(value.continuation) : undefined;
   const revision = requiredNonNegativeInteger(value.revision, "checkpoint revision");
   const sessionId = requiredText(value.sessionId, "sessionId"); const ownerId = requiredText(value.ownerId, "ownerId");
   const fencingToken = requiredPositiveInteger(value.fencingToken, "checkpoint fence");
@@ -1681,7 +2387,7 @@ export function parseOutputCheckpointRecord(value: unknown): Readonly<OutputChec
     return Object.freeze({ stream: item.stream, lastConsumed, consumed: Object.freeze(consumed), accepted: Object.freeze(accepted), consumingIntent });
   });
   if (streams.reduce((total, stream) => total + stream.accepted.length, 0) > capacity) throw new StreamingSessionStoreError("capacity_exceeded", "Aggregate accepted output metadata exceeds provider capacity.");
-  return deepFreeze({ recordKind: OUTPUT_CHECKPOINT_RECORD_KIND, schemaVersion: OUTPUT_CHECKPOINT_RECORD_VERSION, revision, sessionId, ownerId, fencingToken, capacity, outcome: value.outcome, streams } as OutputCheckpointRecord);
+  return deepFreeze({ recordKind: OUTPUT_CHECKPOINT_RECORD_KIND, schemaVersion: value.schemaVersion, revision, sessionId, ownerId, fencingToken, capacity, outcome: value.outcome, streams, ...(continuation ? { continuation } : {}) } as OutputCheckpointRecord);
 }
 
 function parseOutputMetadata(value: unknown, expectedStream?: unknown): OutputChunkMetadata {
@@ -1697,12 +2403,40 @@ function parseOutputMetadata(value: unknown, expectedStream?: unknown): OutputCh
 
 function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>, input: Record<string, unknown>): Readonly<OutputCheckpointRecord> {
   assertNoForbiddenDurableValues(input);
-  assertExactKeys(input, new Set(["type", "sessionId", "ownerId", "fencingToken", "expectedRevision", "metadata", "at"]), "output checkpoint command");
+  assertExactKeys(input, new Set(["type", "sessionId", "ownerId", "fencingToken", "expectedRevision", "metadata", "at", "continuation"]), "output checkpoint command");
   if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
   const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
   if (current.outcome !== "active") {
     if (input.type === "mark_outcome_unknown" && expectedRevision === current.revision) return current;
     throw new StreamingSessionStoreError("invalid_state", "Output checkpoint is terminal outcome_unknown.");
+  }
+  if (input.type === "commit_continuation") {
+    if (expectedRevision !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+    const next = parseEvidenceContinuation(input.continuation);
+    const prior = current.continuation;
+    if (prior) {
+      if (prior.finalized || prior.evidenceId !== next.evidenceId || canonicalJson(prior.legacyHashes) !== canonicalJson(next.legacyHashes) ||
+          (prior.loss !== "none" && next.loss !== prior.loss && !(prior.loss === "legacy_gap" && next.loss.startsWith("legacy_gap_"))) ||
+          next.pages < prior.pages || next.pages > prior.pages + 1 || next.retainedBytes < prior.retainedBytes)
+        throw new StreamingSessionStoreError("invalid_effect", "Evidence continuation cannot be rewritten.");
+      const advanced = next.positions.filter((p, i) => canonicalJson(p) !== canonicalJson(prior.positions[i]));
+      if (next.finalized) {
+        if (advanced.length || prior.head !== next.head || prior.pages !== next.pages || prior.retainedBytes !== next.retainedBytes || prior.loss !== next.loss)
+          throw new StreamingSessionStoreError("invalid_effect", "Evidence finalization cannot change committed positions.");
+      } else {
+        if (advanced.length !== 1) throw new StreamingSessionStoreError("invalid_effect", "Evidence commit must advance exactly one stream.");
+        const p = advanced[0]!; const old = prior.positions.find((s) => s.stream === p.stream)!;
+        if (!p.last || p.last.sequence !== (old.last?.sequence ?? 0) + 1 || p.last.startOffset !== (old.last?.endOffset ?? 0) ||
+            (next.pages === prior.pages ? next.head !== prior.head || p.lostBytes - old.lostBytes !== p.last.byteLength :
+              next.head === prior.head || p.lostBytes !== old.lostBytes || next.retainedBytes - prior.retainedBytes !== p.last.byteLength))
+          throw new StreamingSessionStoreError("invalid_effect", "Evidence commit does not match its exact position.");
+      }
+    } else if (next.pages !== 0 || next.head !== null || next.finalized ||
+        canonicalJson(next.legacyHashes) !== canonicalJson([...new Set(current.streams.flatMap((s) => [...s.consumed, ...s.accepted].map((m) => m.digest)))]) || next.positions.some((p) => {
+      const last = current.streams.find((s) => s.stream === p.stream)?.lastConsumed ?? null;
+      return canonicalJson(last) !== canonicalJson(p.last) || p.lostBytes !== (last?.endOffset ?? 0);
+    })) throw new StreamingSessionStoreError("invalid_effect", "Legacy evidence upgrade must retain an explicit consumed gap.");
+    return parseOutputCheckpointRecord({ ...current, schemaVersion: 2, revision: current.revision + 1, continuation: next });
   }
   const metadata = parseOutputMetadata(input.metadata);
   const index = current.streams.findIndex((stream) => stream.stream === metadata.stream);
@@ -1720,6 +2454,7 @@ function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>,
     if (metadata.sequence !== (prior?.sequence ?? 0) + 1 || metadata.startOffset !== (prior?.endOffset ?? 0)) throw new StreamingSessionStoreError("invalid_effect", "Output metadata is not continuous.");
     nextStream = { ...stream, accepted: [...stream.accepted, metadata] };
   } else if (input.type === "begin_consume") {
+    if (current.continuation && (current.continuation.positions.find((p) => p.stream === metadata.stream)?.last?.sequence ?? 0) < metadata.sequence) throw new StreamingSessionStoreError("invalid_effect", "Evidence must be committed before family consumption.");
     if (stream.consumingIntent || canonicalJson(stream.accepted[0]) !== canonicalJson(metadata)) throw new StreamingSessionStoreError("invalid_effect", "Output consuming intent is invalid.");
     nextStream = { ...stream, consumingIntent: metadata };
   } else if (input.type === "commit_consumed") {
@@ -1729,6 +2464,7 @@ function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>,
     if (canonicalJson(stream.consumingIntent) !== canonicalJson(metadata) || canonicalJson(stream.accepted[0]) !== canonicalJson(metadata)) throw new StreamingSessionStoreError("invalid_effect", "Output consuming intent cancellation is invalid.");
     nextStream = { ...stream, consumingIntent: null };
   } else if (input.type === "commit_evidence_consumed") {
+    if (current.continuation && (current.continuation.positions.find((p) => p.stream === metadata.stream)?.last?.sequence ?? 0) < metadata.sequence) throw new StreamingSessionStoreError("invalid_effect", "Evidence must be committed before acknowledgement.");
     const accepted = stream.accepted.length > 0;
     if (stream.consumingIntent || (accepted ? canonicalJson(stream.accepted[0]) !== canonicalJson(metadata) : metadata.sequence !== (stream.lastConsumed?.sequence ?? 0) + 1 || metadata.startOffset !== (stream.lastConsumed?.endOffset ?? 0))) throw new StreamingSessionStoreError("invalid_effect", "Evidence-only consumed commit is invalid.");
     // Evidence acceptance and consumption are one atomic metadata update after
@@ -1742,6 +2478,78 @@ function applyOutputCheckpointCommand(current: Readonly<OutputCheckpointRecord>,
 }
 
 function cloneOutputCheckpoint(record: Readonly<OutputCheckpointRecord>): Readonly<OutputCheckpointRecord> { return deepFreeze(structuredClone(record)); }
+
+function outputEvidenceDestination(
+  checkpoint: Readonly<OutputCheckpointRecord> | undefined,
+  input: Record<string, unknown>,
+  session: Readonly<StreamingSessionRecord> | undefined,
+  host: Readonly<HostLaunchRecord> | undefined,
+): Readonly<AdoptedCleanupEvidenceReference> | undefined {
+  if (checkpoint && !checkpoint.continuation) return undefined;
+  const reference = parseAdoptedCleanupEvidenceReference(input.evidence);
+  if (reference.kind !== "bounded_output_manifest") throw new StreamingSessionStoreError("invalid_effect", "Durable evidence continuation is unavailable.");
+  const finalized = checkpoint?.continuation?.finalized;
+  if (checkpoint && (!finalized || finalized.manifestHash !== reference.digest || finalized.lossy !== reference.lossy ||
+      checkpoint.streams.some((stream) => stream.accepted.length || stream.consumingIntent)))
+    throw new StreamingSessionStoreError("invalid_effect", "Evidence source is not exactly finalized and settled.");
+  if (session) {
+    const fact = session.effects.find((effect) => effect.kind === "cleanup")?.progress?.resources.find((resource) => resource.resource === "evidence");
+    if (session.state !== "released" || session.sessionId !== input.sessionId || fact?.status !== "verified" || canonicalJson(fact.evidence) !== canonicalJson(reference))
+      throw new StreamingSessionStoreError("invalid_effect", "Authenticated evidence destination does not match.");
+    return reference;
+  }
+  const cleanup = host?.effects.find((effect) => effect.kind === "cleanup");
+  const fact = cleanup?.resources?.find((resource) => resource.resource === "output_checkpoint");
+  if (!host || host.sessionId !== input.sessionId || !cleanup || !fact)
+    throw new StreamingSessionStoreError("invalid_effect", "Durable evidence continuation is unavailable.");
+  if (fact.status === "succeeded") {
+    if (canonicalJson(fact.evidence) !== canonicalJson(reference)) throw new StreamingSessionStoreError("invalid_effect", "Authenticated evidence destination does not match.");
+    return reference;
+  }
+  throw new StreamingSessionStoreError("invalid_effect", "Host evidence transfer requires a successful authenticated cleanup fact.");
+}
+
+function outputDeletionDestination(
+  checkpoint: Readonly<OutputCheckpointRecord> | undefined,
+  input: Record<string, unknown>,
+  session: Readonly<StreamingSessionRecord> | undefined,
+  host: Readonly<HostLaunchRecord> | undefined,
+  evidence = outputEvidenceDestination(checkpoint, input, session, host),
+): Readonly<HostLaunchRecord> | undefined {
+  if (!evidence) return undefined;
+  if (host && !hostOutputChannelSettled(host))
+    throw new StreamingSessionStoreError("invalid_effect", "The channel still owns its output checkpoint.");
+  return undefined;
+}
+
+function hostOutputChannelSettled(host: Readonly<HostLaunchRecord>): boolean {
+  return host.effects.find((effect) => effect.kind === "cleanup")?.resources?.find((resource) => resource.resource === "channel")?.status === "succeeded";
+}
+
+function settledHostEvidenceCheckpoint(host: Readonly<HostLaunchRecord>, checkpoint: Readonly<OutputCheckpointRecord> | undefined): boolean {
+  const resources = host.effects.find((effect) => effect.kind === "cleanup")?.resources;
+  const fact = resources?.find((resource) => resource.resource === "output_checkpoint");
+  if (!checkpoint?.continuation || fact?.status !== "succeeded") return false;
+  const evidence = outputEvidenceDestination(checkpoint, { sessionId: host.sessionId, evidence: fact.evidence }, undefined, host);
+  // Valid evidence success is durable partial progress, not permission to retire a reader.
+  if (!hostOutputChannelSettled(host)) return false;
+  outputDeletionDestination(checkpoint, { sessionId: host.sessionId, evidence: fact.evidence }, undefined, host, evidence);
+  return true;
+}
+
+function settledSessionEvidenceCheckpoint(session: Readonly<StreamingSessionRecord>, checkpoint: Readonly<OutputCheckpointRecord> | undefined): boolean {
+  if (session.state !== "released" || !checkpoint?.continuation) return false;
+  const evidence = session.effects.find((effect) => effect.kind === "cleanup")?.progress?.resources.find((fact) => fact.resource === "evidence")?.evidence;
+  outputDeletionDestination(checkpoint, { sessionId: session.sessionId, evidence }, session, undefined);
+  return true;
+}
+
+function assertAdoptionOutput(session: Readonly<StreamingSessionRecord>, checkpoint: Readonly<OutputCheckpointRecord> | undefined): void {
+  if (!checkpoint || checkpoint.sessionId !== session.sessionId || checkpoint.ownerId !== session.ownerId ||
+      checkpoint.fencingToken !== session.fencingToken || checkpoint.outcome !== "active" ||
+      checkpoint.streams.some((stream) => stream.consumingIntent) || checkpoint.continuation?.finalized)
+    throw new StreamingSessionStoreError("invalid_effect", "Adoption requires exact active checkpoint authority.");
+}
 
 function refencedOutputCheckpoint(current: Readonly<OutputCheckpointRecord>, input: Record<string, unknown>): Readonly<OutputCheckpointRecord> {
   if (current.sessionId !== requiredText(input.sessionId, "sessionId") || current.ownerId !== requiredText(input.ownerId, "ownerId") || current.fencingToken !== requiredPositiveInteger(input.fencingToken, "fencingToken")) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
@@ -1794,7 +2602,9 @@ function createHostLaunchWriter(
       if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
       assertHostOutputCheckpointLink(current, outputCheckpoints.get(current.sessionId));
       const next = applyHostLaunchCommand(current, input);
+      const deleteOutput = settledHostEvidenceCheckpoint(next, outputCheckpoints.get(current.sessionId));
       if (next !== current) records.set(launchId, next);
+      if (deleteOutput) outputCheckpoints.delete(current.sessionId);
       return cloneHostLaunchRecord(next);
     },
     commitAdoption(input: StreamingSessionAdoptionInput) {
@@ -1808,6 +2618,7 @@ function createHostLaunchWriter(
       }
       const launch = requiredAdoptionLaunch(durableLaunch, input);
       assertAdoptionPair(launch, session);
+      assertAdoptionOutput(session, outputCheckpoints.get(session.sessionId));
       const existing = sessions.get(session.sessionId);
       if (existing) {
         if (canonicalJson(existing) !== canonicalJson(session)) throw new StreamingSessionStoreError("identity_conflict", "Session collision retained host ownership.");
@@ -1848,6 +2659,17 @@ function createHostLaunchWriter(
       outputCheckpoints.set(parsed.sessionId, parsed); records.set(launchId, host);
       return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(parsed), won: true });
     },
+    bootstrapHostCleanupOutputCheckpoint(command: unknown) {
+      const input = hostCleanupBootstrapCommand(command);
+      const parsed = parseOutputCheckpointRecord(input.record);
+      const current = records.get(requiredText(input.launchId, "launchId"));
+      const existing = outputCheckpoints.get(parsed.sessionId);
+      const host = bootstrapHostCleanupCheckpoint(current, input, parsed, existing, sessions.has(parsed.sessionId));
+      if (existing) return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(existing), won: false });
+      if (outputCheckpoints.size >= outputCapacity) throw new StreamingSessionStoreError("capacity_exceeded", "Output checkpoint record capacity is full.");
+      outputCheckpoints.set(parsed.sessionId, parsed); records.set(host.launchId, host);
+      return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(parsed), won: true });
+    },
     applyOutputCheckpoint(command: unknown) {
       const input = commandRecord(command, "output checkpoint command");
       const sessionId = requiredText(input.sessionId, "sessionId");
@@ -1859,9 +2681,13 @@ function createHostLaunchWriter(
     },
     deleteOutputCheckpoint(command: unknown) {
       const input = commandRecord(command, "output checkpoint delete"); const sessionId = requiredText(input.sessionId, "sessionId");
-      const current = outputCheckpoints.get(sessionId); if (!current) return;
+      const current = outputCheckpoints.get(sessionId);
+      const host = typeof input.launchId === "string" ? records.get(input.launchId) : undefined;
+      const nextHost = outputDeletionDestination(current, input, sessions.get(sessionId), host);
+      if (!current) return;
       if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
       if (requiredNonNegativeInteger(input.expectedRevision, "expectedRevision") !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+      if (nextHost) records.set(nextHost.launchId, nextHost);
       outputCheckpoints.delete(sessionId);
     },
     takeoverAdoptedWithOutput(command: unknown) {
@@ -1884,6 +2710,7 @@ function createSqliteHostLaunchWriter(
   outputCapacity: number,
   readOnly: boolean,
   adoptionFault?: SqliteStreamingSessionStoreOptions["adoptionFault"],
+  readSession?: (sessionId: string) => Readonly<StreamingSessionRecord> | undefined,
 ): StreamingSessionKernelWriter {
   return Object.freeze({
     ...sessionWriter,
@@ -1907,17 +2734,24 @@ function createSqliteHostLaunchWriter(
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
       const input = commandRecord(command, "host launch command");
       const launchId = requiredText(input.launchId, "launchId");
+      database.exec("BEGIN IMMEDIATE");
+      try {
       const current = readSqliteHostLaunch(database, integrityKey, launchId);
       if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
       assertHostOutputCheckpointLink(current, readSqliteOutputCheckpoint(database, integrityKey, current.sessionId));
       const next = applyHostLaunchCommand(current, input);
-      if (next === current) return cloneHostLaunchRecord(current);
+      if (next === current) { database.exec("COMMIT"); return cloneHostLaunchRecord(current); }
+      const checkpoint = readSqliteOutputCheckpoint(database, integrityKey, current.sessionId);
+      const deleteOutput = settledHostEvidenceCheckpoint(next, checkpoint);
       const json = JSON.stringify(next);
       const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
       const result = database.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ?, revision = ? WHERE launch_id = ? AND revision = ?")
         .run(json, integrity, next.revision, launchId, current.revision) as { changes?: number };
       if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Host launch revision is stale.");
+      if (deleteOutput) database.prepare("DELETE FROM streaming_output_checkpoints WHERE session_id = ? AND revision = ?").run(current.sessionId, checkpoint!.revision);
+      database.exec("COMMIT");
       return cloneHostLaunchRecord(next);
+      } catch (error) { database.exec("ROLLBACK"); throw error; }
     },
     commitAdoption(input: StreamingSessionAdoptionInput) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
@@ -1935,6 +2769,7 @@ function createSqliteHostLaunchWriter(
         }
         const launch = requiredAdoptionLaunch(durableLaunch, input);
         assertAdoptionPair(launch, session);
+        assertAdoptionOutput(session, readSqliteOutputCheckpoint(database, integrityKey, session.sessionId));
         const sessionJson = JSON.stringify(session);
         const sessionIntegrity = createHmac("sha256", integrityKey).update(sessionJson).digest("hex");
         adoptionFault?.("before_session_insert");
@@ -2000,6 +2835,26 @@ function createSqliteHostLaunchWriter(
         database.exec("COMMIT"); return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(parsed), won: true });
       } catch (error) { try { database.exec("ROLLBACK"); } catch {} throw error; }
     },
+    bootstrapHostCleanupOutputCheckpoint(command: unknown) {
+      if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
+      const input = hostCleanupBootstrapCommand(command);
+      const parsed = parseOutputCheckpointRecord(input.record);
+      const launchId = requiredText(input.launchId, "launchId");
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const current = readSqliteHostLaunch(database, integrityKey, launchId);
+        const existing = readSqliteOutputCheckpoint(database, integrityKey, parsed.sessionId);
+        const host = bootstrapHostCleanupCheckpoint(current, input, parsed, existing, Boolean(readSession?.(parsed.sessionId)));
+        if (existing) { database.exec("COMMIT"); return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(existing), won: false }); }
+        const outputJson = JSON.stringify(parsed); const outputIntegrity = createHmac("sha256", integrityKey).update(outputJson).digest("hex");
+        const inserted = database.prepare("INSERT INTO streaming_output_checkpoints (session_id, record_json, integrity, revision) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM streaming_output_checkpoints) < ?").run(parsed.sessionId, outputJson, outputIntegrity, parsed.revision, outputCapacity) as { changes?: number };
+        if (inserted.changes !== 1) throw new StreamingSessionStoreError("capacity_exceeded", "Output checkpoint record capacity is full.");
+        const hostJson = JSON.stringify(host); const hostIntegrity = createHmac("sha256", integrityKey).update(hostJson).digest("hex");
+        const updated = database.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ?, revision = ? WHERE launch_id = ? AND revision = ?").run(hostJson, hostIntegrity, host.revision, launchId, current!.revision) as { changes?: number };
+        if (updated.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Host launch revision is stale.");
+        database.exec("COMMIT"); return Object.freeze({ host: cloneHostLaunchRecord(host), record: cloneOutputCheckpoint(parsed), won: true });
+      } catch (error) { database.exec("ROLLBACK"); throw error; }
+    },
     applyOutputCheckpoint(command: unknown) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
       const input = commandRecord(command, "output checkpoint command");
@@ -2017,11 +2872,24 @@ function createSqliteHostLaunchWriter(
     deleteOutputCheckpoint(command: unknown) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
       const input = commandRecord(command, "output checkpoint delete"); const sessionId = requiredText(input.sessionId, "sessionId");
-      const current = readSqliteOutputCheckpoint(database, integrityKey, sessionId); if (!current) return;
+      database.exec("BEGIN IMMEDIATE");
+      try {
+      const current = readSqliteOutputCheckpoint(database, integrityKey, sessionId);
+      const session = readSession?.(sessionId);
+      const host = typeof input.launchId === "string" ? readSqliteHostLaunch(database, integrityKey, input.launchId) : undefined;
+      const nextHost = outputDeletionDestination(current, input, session, host);
+      if (!current) { database.exec("COMMIT"); return; }
       if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Output checkpoint owner/fence is stale.");
       const expectedRevision = requiredNonNegativeInteger(input.expectedRevision, "expectedRevision");
+      if (nextHost) {
+        const json = JSON.stringify(nextHost); const integrity = createHmac("sha256", integrityKey).update(json).digest("hex");
+        const changed = database.prepare("UPDATE streaming_host_launches SET record_json = ?, integrity = ?, revision = ? WHERE launch_id = ? AND revision = ?").run(json, integrity, nextHost.revision, nextHost.launchId, host!.revision) as { changes?: number };
+        if (changed.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Host evidence transfer revision is stale.");
+      }
       const result = database.prepare("DELETE FROM streaming_output_checkpoints WHERE session_id = ? AND revision = ?").run(sessionId, expectedRevision) as { changes?: number };
       if (result.changes !== 1) throw new StreamingSessionStoreError("revision_conflict", "Output checkpoint revision is stale.");
+      database.exec("COMMIT");
+      } catch (error) { database.exec("ROLLBACK"); throw error; }
     },
     takeoverAdoptedWithOutput(command: unknown) {
       if (readOnly) throw new StreamingSessionStoreError("invalid_record", "Streaming session store is read-only.");
@@ -2050,6 +2918,36 @@ function readSqliteHostLaunch(database: DatabaseSync, integrityKey: Uint8Array, 
   const parsed = parseHostLaunchRecord(JSON.parse(row.record_json));
   if (parsed.revision !== row.revision) throw new StreamingSessionStoreError("invalid_record", "Host launch revision is corrupt.");
   return parsed;
+}
+
+function hostCleanupBootstrapCommand(command: unknown): Record<string, unknown> {
+  const input = commandRecord(command, "host cleanup output bootstrap");
+  assertExactKeys(input, new Set(["record", "launchId", "ownerId", "fencingToken", "expectedRevision", "at"]), "host cleanup output bootstrap");
+  return input;
+}
+
+function bootstrapHostCleanupCheckpoint(current: Readonly<HostLaunchRecord> | undefined, input: Record<string, unknown>, checkpoint: Readonly<OutputCheckpointRecord>, existing: Readonly<OutputCheckpointRecord> | undefined, adopted: boolean): Readonly<HostLaunchRecord> {
+  if (!current) throw new StreamingSessionStoreError("invalid_record", "Host launch is unknown.");
+  if (requiredText(input.ownerId, "ownerId") !== current.ownerId || requiredPositiveInteger(input.fencingToken, "fencingToken") !== current.fencingToken) throw new StreamingSessionStoreError("stale_fence", "Host cleanup output owner/fence is stale.");
+  if (requiredNonNegativeInteger(input.expectedRevision, "expectedRevision") !== current.revision) throw new StreamingSessionStoreError("revision_conflict", "Host cleanup output revision is stale.");
+  const at = requiredTimestamp(input.at, "at");
+  if (Date.parse(at) >= Date.parse(current.ownerExpiresAt)) throw new StreamingSessionStoreError("lease_expired", "Host cleanup output owner lease is expired.");
+  if (current.state !== "cleanup_pending" || current.cleanupOwner !== "host_control" || !current.channelAcquisitionStartedAt || !current.backendBinding || !current.leaseBinding || adopted || current.handshakeDigest || current.effects.some((effect) => effect.kind === "handoff")) throw new StreamingSessionStoreError("invalid_state", "Output bootstrap requires exact never-adopted channel cleanup.");
+  if (checkpoint.sessionId !== current.sessionId || checkpoint.ownerId !== current.ownerId || checkpoint.fencingToken !== current.fencingToken) throw new StreamingSessionStoreError("identity_conflict", "Cleanup checkpoint identity differs from its host.");
+  const continuation = checkpoint.continuation;
+  if (checkpoint.schemaVersion !== 2 || checkpoint.revision !== 0 || checkpoint.outcome !== "active" || checkpoint.streams.length !== 2 || checkpoint.streams.some((stream) => stream.lastConsumed || stream.consumingIntent || stream.consumed.length) ||
+      !continuation || continuation.head || continuation.pages || continuation.retainedBytes || continuation.loss !== "none" || continuation.legacyHashes.length || continuation.finalized || continuation.positions.some((position) => position.last || position.lostBytes)) throw new StreamingSessionStoreError("invalid_record", "Cleanup bootstrap cannot invent prior output or evidence.");
+  if (existing || current.outputCheckpointCreatedAt) {
+    if (!existing || !current.outputCheckpointCreatedAt || canonicalJson(existing) !== canonicalJson(checkpoint)) throw new StreamingSessionStoreError("identity_conflict", "Cleanup bootstrap conflicts with prior checkpoint evidence.");
+    return current;
+  }
+  if (current.effects.find((effect) => effect.kind === "cleanup")?.resources?.some((resource) =>
+    (resource.resource === "host" || resource.resource === "channel") && resource.status === "succeeded")) throw new StreamingSessionStoreError("invalid_state", "Output bootstrap cannot reconstruct a retired backend or channel.");
+  const marked = { ...current, outputCheckpointCreatedAt: at };
+  const effects = current.effects.map((effect) => effect.kind === "cleanup" ? {
+    ...effect, resources: [...(effect.resources ?? []), { resource: "output_checkpoint" as const, identity: `checkpoint:${current.sessionId}`, status: "pending" as const, ownerId: current.ownerId, fencingToken: current.fencingToken, attempts: 1 }],
+  } : effect);
+  return parseHostLaunchRecord({ ...marked, revision: current.revision + 1, history: [...current.history, { state: "cleanup_pending", at }], effects });
 }
 
 function markHostOutputCheckpoint(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>, checkpoint: Readonly<OutputCheckpointRecord>): Readonly<HostLaunchRecord> {
@@ -2262,7 +3160,7 @@ function parseHostCleanupResourceFacts(value: unknown, effect: HostLaunchEffect)
   const ownership = new Set([`${effect.originOwnerId}\0${effect.originFencingToken}`, ...(effect.takeovers ?? []).map((takeover) => `${takeover.toOwnerId}\0${takeover.toFencingToken}`)]);
   const seen = new Set<HostCleanupResourceKind>();
   return Object.freeze(value.map((raw) => {
-    assertExactKeys(raw, new Set(["resource", "identity", "status", "ownerId", "fencingToken", "attempts", "failure"]), "cleanup resource fact");
+    assertExactKeys(raw, new Set(["resource", "identity", "status", "ownerId", "fencingToken", "attempts", "failure", "evidence"]), "cleanup resource fact");
     const item = raw as Record<string, unknown>;
     if (!isHostCleanupResourceKind(item.resource) || seen.has(item.resource)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource fact is duplicate or invalid.");
     seen.add(item.resource);
@@ -2271,9 +3169,11 @@ function parseHostCleanupResourceFacts(value: unknown, effect: HostLaunchEffect)
     const ownerId = requiredText(item.ownerId, "cleanup resource owner"); const fencingToken = requiredPositiveInteger(item.fencingToken, "cleanup resource fence");
     if (!ownership.has(`${ownerId}\0${fencingToken}`)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource fact has unauthenticated ownership.");
     const failure = item.failure === undefined ? undefined : parseHostCleanupFailure(item.failure);
+    const evidence = item.evidence === undefined ? undefined : parseAdoptedCleanupEvidenceReference(item.evidence);
+    if (evidence && (item.resource !== "output_checkpoint" || status !== "succeeded" || evidence.kind !== "bounded_output_manifest")) throw new StreamingSessionStoreError("invalid_effect", "Only successful output cleanup may retain its manifest root.");
     if ((status === "failed") !== Boolean(failure)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource failure evidence is invalid.");
     if (status !== "succeeded" && (ownerId !== effect.ownerId || fencingToken !== effect.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Unresolved cleanup resource is not fenced to the current cleanup owner.");
-    return Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), status: status as HostCleanupResourceFact["status"], ownerId, fencingToken, attempts: requiredPositiveInteger(item.attempts, "cleanup resource attempts"), ...(failure ? { failure } : {}) });
+    return Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), status: status as HostCleanupResourceFact["status"], ownerId, fencingToken, attempts: requiredPositiveInteger(item.attempts, "cleanup resource attempts"), ...(failure ? { failure } : {}), ...(evidence ? { evidence } : {}) });
   }));
 }
 
@@ -2313,21 +3213,23 @@ function beginCleanupResources(existing: readonly HostCleanupResourceFact[], def
 
 function settleCleanupResources(existing: readonly HostCleanupResourceFact[], input: unknown): readonly HostCleanupResourceFact[] {
   if (!Array.isArray(input)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource results are required.");
-  const results = new Map<HostCleanupResourceKind, Readonly<{ resource: HostCleanupResourceKind; identity: string; ownerId: string; fencingToken: number; status: "succeeded" | "failed"; failure?: HostCleanupFailure }>>();
+  const results = new Map<HostCleanupResourceKind, Readonly<{ resource: HostCleanupResourceKind; identity: string; ownerId: string; fencingToken: number; status: "succeeded" | "failed"; failure?: HostCleanupFailure; evidence?: AdoptedCleanupEvidenceReference }>>();
   for (const raw of input) {
-    assertExactKeys(raw, new Set(["resource", "identity", "ownerId", "fencingToken", "status", "failure"]), "cleanup resource result");
+    assertExactKeys(raw, new Set(["resource", "identity", "ownerId", "fencingToken", "status", "failure", "evidence"]), "cleanup resource result");
     const item = raw as Record<string, unknown>;
     if (!isHostCleanupResourceKind(item.resource) || results.has(item.resource) || !["succeeded", "failed"].includes(item.status as string)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is duplicate or invalid.");
     const failure = item.failure === undefined ? undefined : parseHostCleanupFailure(item.failure);
+    const evidence = item.evidence === undefined ? undefined : parseAdoptedCleanupEvidenceReference(item.evidence);
+    if (evidence && (item.resource !== "output_checkpoint" || item.status !== "succeeded" || evidence.kind !== "bounded_output_manifest")) throw new StreamingSessionStoreError("invalid_effect", "Host evidence transfer must accompany successful checkpoint cleanup.");
     if ((item.status === "failed") !== Boolean(failure)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result failure evidence is invalid.");
-    results.set(item.resource, Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), ownerId: requiredText(item.ownerId, "cleanup result owner"), fencingToken: requiredPositiveInteger(item.fencingToken, "cleanup result fence"), status: item.status, ...(failure ? { failure } : {}) }) as Readonly<{ resource: HostCleanupResourceKind; identity: string; ownerId: string; fencingToken: number; status: "succeeded" | "failed"; failure?: HostCleanupFailure }>);
+    results.set(item.resource, Object.freeze({ resource: item.resource, identity: requiredText(item.identity, "cleanup resource identity"), ownerId: requiredText(item.ownerId, "cleanup result owner"), fencingToken: requiredPositiveInteger(item.fencingToken, "cleanup result fence"), status: item.status, ...(failure ? { failure } : {}), ...(evidence ? { evidence } : {}) }) as Readonly<{ resource: HostCleanupResourceKind; identity: string; ownerId: string; fencingToken: number; status: "succeeded" | "failed"; failure?: HostCleanupFailure }>);
   }
   const settled = existing.map((fact) => {
     if (fact.status === "succeeded") return fact;
     const result = results.get(fact.resource);
     if (!result || result.identity !== fact.identity || result.ownerId !== fact.ownerId || result.fencingToken !== fact.fencingToken) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result is missing, mismatched, or stale.");
     results.delete(fact.resource);
-    return Object.freeze({ ...fact, status: result.status, ...(result.failure ? { failure: result.failure } : { failure: undefined }) });
+    return Object.freeze({ ...fact, status: result.status, ...(result.failure ? { failure: result.failure } : { failure: undefined }), ...(result.evidence ? { evidence: result.evidence } : {}) });
   });
   if (results.size) throw new StreamingSessionStoreError("invalid_effect", "Cleanup resource result does not own a pending resource.");
   return Object.freeze(settled);
@@ -2373,7 +3275,7 @@ function commandRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function isActorRole(value: unknown): boolean {
-  return value === "architect" || value === "worker" || value === "system" || value === "user";
+  return value === "architect" || value === "worker" || value === "system" || value === "user" || value === "runner_internal";
 }
 
 function isValidText(value: unknown): value is string {

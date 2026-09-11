@@ -1,7 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { redactSensitiveText, redactSensitiveValue } from "../src/sensitive-redaction.js";
+import { isSensitiveKey, redactSensitiveText, redactSensitiveValue } from "../src/sensitive-redaction.js";
+
+test("recognizes provider-prefixed API and private-key credential components without hiding harmless keys", () => {
+  for (const key of [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "azureOpenaiApiKey",
+    "provider-api-key",
+    "VENDOR_APIKEY",
+    "SERVICE_PRIVATE_KEY",
+    "servicePrivateKey",
+    "SERVICE_PRIVATEKEY",
+  ]) assert.equal(isSensitiveKey(key), true, key);
+  for (const key of [
+    "OPENAI_API_VERSION",
+    "PRIVATE_MODE",
+    "KEYBOARD_LAYOUT",
+    "MONKEY_PATCH",
+    "API_ENDPOINT",
+  ]) assert.equal(isSensitiveKey(key), false, key);
+
+  const sentinel = "SYNTHETIC_PROVIDER_CREDENTIAL_SENTINEL";
+  const redacted = JSON.stringify(redactSensitiveValue({
+    OPENAI_API_KEY: sentinel,
+    azureOpenaiApiKey: sentinel,
+    SERVICE_PRIVATE_KEY: sentinel,
+    OPENAI_API_VERSION: "2026-09-01",
+  }));
+  assert.doesNotMatch(redacted, new RegExp(sentinel));
+  assert.match(redacted, /2026-09-01/);
+});
 
 test("redacts common credential keys across nested objects, arrays, argv, and env forms", () => {
   const redacted = redactSensitiveValue({

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { ownFiniteFixtureChild } from "./support/finite-fixture-child.js";
+import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -60,28 +62,6 @@ function currentWindowsBirth(pid: number): string | undefined {
 function sameTestBirth(left: string, right: string): boolean {
   const normalize = (value: string) => value.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
   return normalize(left) === normalize(right);
-}
-
-async function stopExactWindowsFixture(pid: number | undefined, birth: string): Promise<void> {
-  if (!pid) return;
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    let current: string | undefined;
-    try { current = currentWindowsBirth(pid); }
-    catch {
-      if (Date.now() >= deadline) throw new Error(`Exact fixture birth inspection remained unavailable for ${pid}.`);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      continue;
-    }
-    if (!current) return;
-    if (!sameTestBirth(current, birth)) throw new Error(`Exact fixture PID ${pid} was replaced before cleanup.`);
-    try { execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 2_000 }); }
-    catch {}
-    try { await waitUntilProcessAbsent(pid, 500); return; }
-    catch {
-      if (Date.now() >= deadline) throw new Error(`Exact fixture PID ${pid} remained live after authenticated cleanup.`);
-    }
-  }
 }
 
 function createInactiveSemanticCleanupFixture(suffix: string): {
@@ -673,7 +653,11 @@ test("semantic cleanup stops only the exact authenticated supervisor when the re
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-semantic-duplex-"));
   const directory = join(root, "state", "owned-fixture");
   mkdirSync(directory, { recursive: true });
-  const supervisor = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", root], { windowsHide: true, stdio: "ignore" });
+  const owners: Array<ReturnType<typeof ownFiniteFixtureChild>> = [];
+  const own = (child: ReturnType<typeof ownFiniteFixtureChild>) => { owners.push(child); return child; };
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
+  try {
+  const supervisor = own(ownFiniteFixtureChild(spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", root], { windowsHide: true, stdio: "ignore" })));
   assert.ok(supervisor.pid);
   const supervisorBirth = windowsBirth(supervisor.pid!);
   const replacementBirth = windowsBirth(process.pid);
@@ -708,14 +692,22 @@ test("semantic cleanup stops only the exact authenticated supervisor when the re
     });
     return inventory;
   };
-  try {
     assert.equal(removeInactiveSemanticProbeRoot(root, binding, { globalInventory }), true);
     await waitUntilProcessAbsent(supervisor.pid!, 10_000);
     assert.equal(existsSync(root), false);
     assert.doesNotThrow(() => process.kill(process.pid, 0), "the replacement process must never be signalled");
-  } finally {
-    await stopExactWindowsFixture(supervisor.pid, supervisorBirth);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "semantic finite-child fixture", root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        const failures: unknown[] = [];
+        for (const owner of owners) { try { await owner.close(); } catch (error) { failures.push(error); } }
+        if (failures.length) throw new AggregateError(failures, "Finite semantic fixture cleanup failed.");
+      },
+      certify: async () => { assert.equal(owners.length, 1, "all exact child handles must have been acquired and joined"); },
+      removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+    });
   }
 });
 
@@ -724,9 +716,13 @@ test("semantic cleanup preserves an unlisted process that references the exact r
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-semantic-global-reference-"));
   const directory = join(root, "state", "owned-fixture");
   mkdirSync(directory, { recursive: true });
-  const supervisor = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", root], { windowsHide: true, stdio: "ignore" });
+  const owners: Array<ReturnType<typeof ownFiniteFixtureChild>> = [];
+  const own = (child: ReturnType<typeof ownFiniteFixtureChild>) => { owners.push(child); return child; };
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
+  try {
+  const supervisor = own(ownFiniteFixtureChild(spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", root], { windowsHide: true, stdio: "ignore" })));
   const encodedRoot = Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url");
-  const unlisted = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", encodedRoot], { windowsHide: true, stdio: "ignore", detached: true });
+  const unlisted = own(ownFiniteFixtureChild(spawn(process.execPath, ["-e", "setInterval(()=>{},1000)", encodedRoot], { windowsHide: true, stdio: "ignore", detached: true })));
   assert.ok(supervisor.pid); assert.ok(unlisted.pid);
   const supervisorBirth = windowsBirth(supervisor.pid!);
   const unlistedBirth = windowsBirth(unlisted.pid!);
@@ -764,20 +760,26 @@ test("semantic cleanup preserves an unlisted process that references the exact r
     }
     return inventory;
   };
-  try {
     assert.equal(removeInactiveSemanticProbeRoot(root, binding, { globalInventory }), false, "an unlisted exact-root reference must preserve the complete root");
     await waitUntilProcessAbsent(supervisor.pid!, 10_000);
     assert.equal(existsSync(root), true);
     assert.equal(sameTestBirth(currentWindowsBirth(unlisted.pid!) ?? "", unlistedBirth), true, "cleanup must not signal the unlisted process");
-    await stopExactWindowsFixture(unlisted.pid, unlistedBirth);
+    await unlisted.close();
     await waitUntilProcessAbsent(unlisted.pid!, 10_000);
     assert.equal(removeInactiveSemanticProbeRoot(root, binding, { globalInventory }), true);
     assert.equal(existsSync(root), false);
-  } finally {
-    for (const [child, birth] of [[supervisor, supervisorBirth], [unlisted, unlistedBirth]] as const) {
-      await stopExactWindowsFixture(child.pid, birth);
-    }
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "semantic finite-child fixture", root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        const failures: unknown[] = [];
+        for (const owner of owners) { try { await owner.close(); } catch (error) { failures.push(error); } }
+        if (failures.length) throw new AggregateError(failures, "Finite semantic fixture cleanup failed.");
+      },
+      certify: async () => { assert.equal(owners.length, 2, "all exact child handles must have been acquired and joined"); },
+      removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+    });
   }
 });
 

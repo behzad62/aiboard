@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import {
   existsSync,
   mkdirSync,
@@ -2604,7 +2605,7 @@ test("close retries cleanup that failed after settlement", async () => {
   }
 });
 
-test("manager close shares failures then retries only the handle that still owns a child", async () => {
+test("manager close shares failures then retries only the handle that still owns a child", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-handle-close-retry-"));
   const project = join(root, "project");
   const successState = join(root, "success-state");
@@ -2619,6 +2620,8 @@ test("manager close shares failures then retries only the handle that still owns
   let successExtensions: LoadedRunnerExtensions | undefined;
   let failedExtensions: LoadedRunnerExtensions | undefined;
   let manager: NativeBuildManager | undefined;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
+  t.diagnostic(`C5 finalizer10 acquired exact manager fixture: ${root}`);
   let childPid = 0;
   let failedProjectionCalls = 0;
   let failedTeardownStarted = false;
@@ -2715,14 +2718,36 @@ test("manager close shares failures then retries only the handle that still owns
     manager = undefined;
     successExtensions = undefined;
     failedExtensions = undefined;
-  } finally {
-    await manager?.close().catch(() => undefined);
-    await failedExtensions?.close().catch(() => undefined);
-    await successExtensions?.close().catch(() => undefined);
-    if (childPid > 0 && processExistsForManagerTest(childPid)) {
-      process.kill(childPid, "SIGKILL");
-    }
-    rmSync(root, { recursive: true, force: true });
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "manager handle retry", root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        const failures: unknown[] = [];
+        // Retain the actual owners and close each even when another rejects.
+        // Their existing idempotent close tracks which handle still owns work.
+        for (const owner of [manager, failedExtensions, successExtensions]) {
+          if (!owner) continue;
+          try { await owner.close(); } catch (error) { failures.push(error); }
+        }
+        if (failures.length) throw new AggregateError(failures, "Retained manager/extension cleanup failed.");
+      },
+      certify: async () => {
+        const pidPath = join(failedState, "extensions", "fixture.failed", "child.pid");
+        assert.ok(existsSync(pidPath), "the original child marker must be retained");
+        childPid = Number(readFileSync(pidPath, "utf8"));
+        assert.ok(Number.isSafeInteger(childPid) && childPid > 0);
+        assert.throws(() => process.kill(childPid, 0),
+          (error: unknown) => error instanceof Error && (error as NodeJS.ErrnoException).code === "ESRCH",
+          "only a definite absent observation can certify cleanup; permission/tool failures remain unknown");
+        assert.equal(readFileSync(join(successState, "extensions", "fixture.success", "lifecycle.log"), "utf8"), "start\nclose:1\n");
+        assert.equal(readFileSync(join(failedState, "extensions", "fixture.failed", "lifecycle.log"), "utf8"), "start\nclose:1\nclose:2\n");
+        for (const state of [successState, failedState]) {
+          assert.deepEqual(readdirSync(join(state, "extension-executions")), [], "every execution-copy owner must be released");
+        }
+      },
+      removeRoot: () => { rmSync(root, { recursive: true }); t.diagnostic(`C5 finalizer10 removed certified manager fixture: ${root}`); },
+    });
   }
 });
 

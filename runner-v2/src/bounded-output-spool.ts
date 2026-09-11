@@ -23,7 +23,8 @@ export type OutputLossReasonCode =
   | "spill_write_failed"
   | "spill_close_failed"
   | "spill_identity_failed"
-  | "artifact_ingestion_failed";
+  | "artifact_ingestion_failed"
+  | "evidence_continuation_loss";
 export type OutputSpillState = "empty" | "discarded" | "artifact_ingested" | "lossy";
 
 export interface OutputLossReason {
@@ -777,6 +778,12 @@ async function readEntryProof(
 }
 
 async function removeOwnedRootIfEmpty(lease: OwnedSpillRoot): Promise<void> {
+  try {
+    await lstat(lease.canonicalRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
   const current = await validateOwnedRoot(
     lease.canonicalRoot,
     lease.projectRoot,

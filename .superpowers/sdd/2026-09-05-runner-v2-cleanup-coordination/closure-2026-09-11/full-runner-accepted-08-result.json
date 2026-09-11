@@ -1,0 +1,14 @@
+{
+  "index": 8,
+  "label": "test-build-transcript-panel",
+  "exitCode": 0,
+  "startedAt": "2026-09-11T10:21:44.798532+00:00",
+  "finishedAt": "2026-09-11T10:21:46.171525+00:00",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/tsx/dist/cli.mjs",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "scripts/test-build-transcript-panel.mts"
+  ]
+}

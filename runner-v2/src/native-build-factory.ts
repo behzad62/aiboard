@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,7 +75,15 @@ import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
 import { createConfiguredOciIsolationSelector } from "./oci-execution-isolation-provider.js";
 import { readExecutionEnforcementState } from "./execution-isolation-provider.js";
-import { createMcpTools, type McpManager } from "./mcp-tools.js";
+import {
+  createMcpTools,
+  McpManager,
+  type LiveMcpStatusRegistry,
+} from "./mcp-tools.js";
+import {
+  cleanupRecoveredMcpTransports,
+  createExecutionHostMcpTransportFactory,
+} from "./execution-host-mcp-transport.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type {
   ProviderConfigStore,
@@ -103,6 +111,7 @@ import {
   type RunnerCapabilityContractErrorCode,
 } from "./runner-capability-contract.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
+import { runnerRunStateSegment } from "./run-state-identity.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import {
   providerUsageConfig,
@@ -139,7 +148,18 @@ import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
 import { createChildEnvironmentFactory } from "./child-environment.js";
-import { createExecutionGrantAuthority } from "./execution-grants.js";
+import {
+  createExecutionGrantAuthority,
+  type ExecutionGrantAuthority,
+} from "./execution-grants.js";
+import type {
+  ExecutionHost,
+  ExecutionHostRunBinding,
+} from "./execution-host.js";
+import type {
+  McpConfigurationAttestation,
+  RunnerInternalExecutionContext,
+} from "./runner-internal-execution-context.js";
 import {
   createProcessBackendRegistration,
   createProcessBackendRegistry,
@@ -152,9 +172,13 @@ import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
+  type OneShotCommandExecutor,
 } from "./one-shot-command-executor.js";
 
 export type NativeBuildRuntimeResourceStage =
+  | "execution_host_binding"
+  | "mcp_discovery"
+  | "mcp_manager"
   | "capabilities"
   | "execution_isolation"
   | "subprocess_runtime"
@@ -174,6 +198,7 @@ export type NativeBuildRuntimeInitializationStage =
   | NativeBuildRuntimeResourceStage
   | "baseline"
   | "runtime_configuration"
+  | "models"
   | "runtime_drivers";
 
 /** A bounded, attributable failure while rebuilding a live native Build. */
@@ -240,12 +265,24 @@ export interface NativeBuildFactoryOptions {
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
   capabilitiesConfig?: RunnerCapabilitiesConfig;
+  /** Production supplies the single CLI-owned execution composition root. */
+  executionHost?: ExecutionHost;
+  /** Production MCP configuration is attested once, discovered ephemerally per run, then bound live per run. */
+  mcpServers?: readonly import("./mcp-tools.js").McpServerSpec[];
+  mcpAttestation?: readonly McpConfigurationAttestation[];
+  mcpStatusRegistry?: LiveMcpStatusRegistry;
+  internalExecutionContext?: RunnerInternalExecutionContext;
   baselineFor(runId: string): string;
   skillRoots?: readonly SharedSkillRoot[];
   /** The CLI owns provider configuration cleanup when it manages the full process lifecycle. */
   closeProviderConfigs?: boolean;
   /** Injected only by focused lifecycle tests; live callers leave this undefined. */
   runtimeConstructionHooks?: NativeBuildRuntimeConstructionHooks;
+  /** Injected only by focused construction-order tests. */
+  providerModelFactory?: (
+    config: RunnerProviderConfig,
+    artifacts: ArtifactStore,
+  ) => AgentModel;
 }
 
 export class NativeBuildFactory {
@@ -262,7 +299,8 @@ export class NativeBuildFactory {
   private windowsProcessFactsPromise: Promise<ProcessHostSemanticFacts> | undefined;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
-    this.artifacts = new ArtifactStore(join(options.stateDirectory, "artifacts"));
+    this.artifacts = options.executionHost?.artifacts ??
+      new ArtifactStore(join(options.stateDirectory, "artifacts"));
     this.artifactReachability = new ArtifactReachabilityGuard(
       options.stateDirectory,
       this.artifacts
@@ -314,17 +352,103 @@ export class NativeBuildFactory {
     const constructionResources = new NativeBuildResourceCleanupStack(
       this.options.runtimeConstructionHooks,
     );
+    let ownedMcpCleanup: RetryableNativeBuildCleanup | undefined;
+    let ownedExecutionHostBindingCleanup: RetryableNativeBuildCleanup | undefined;
     let initializationStage: NativeBuildRuntimeInitializationStage = "capabilities";
     try {
+    initializationStage = "baseline";
+    const baselineRevision = this.options.baselineFor(spec.runId);
+    let executionHostBinding: ExecutionHostRunBinding | undefined;
+    if (this.options.executionHost) {
+      initializationStage = "execution_host_binding";
+      executionHostBinding = await this.options.executionHost.bindRun({
+        runId: spec.runId,
+        permissionProfile: spec.permissionProfile,
+        capabilityContract: spec.capabilityContract,
+        capabilitiesConfig,
+      });
+      if (relative(runRoot, executionHostBinding.runRoot) !== "") {
+        throw new Error("ExecutionHost returned a mismatched run root.");
+      }
+      constructionResources.add(
+        "execution_host_binding",
+        () => ownedExecutionHostBindingCleanup!.close(),
+        true,
+      );
+      ownedExecutionHostBindingCleanup = retryableNativeBuildCleanup(
+        () => executionHostBinding!.close(),
+      );
+      const hostRecovery = await executionHostBinding.recover({
+        maxRecords: 1_024,
+        timeoutMs: 30_000,
+      });
+      assertIsolationRecoveryClear(hostRecovery.isolation);
+      await cleanupRecoveredMcpTransports(executionHostBinding);
+      await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_host_binding");
+    }
+    let runMcpManager = this.options.mcpManager;
+    if (this.options.internalExecutionContext) {
+      const servers = this.options.mcpServers ?? [];
+      const attestation = this.options.mcpAttestation ?? [];
+      initializationStage = "mcp_discovery";
+      const discovery = this.options.internalExecutionContext.createMcpDiscoveryExecutor({
+        runId: spec.runId,
+        servers,
+        attestation,
+      });
+      try {
+        await discovery.discover();
+      } finally {
+        await discovery.close();
+      }
+      await this.options.runtimeConstructionHooks?.afterAcquire?.("mcp_discovery");
+      initializationStage = "mcp_manager";
+      if (!executionHostBinding) {
+        throw new Error("Live per-Build MCP requires its exact ExecutionHost run binding.");
+      }
+      const runtimeLaunches = await this.options.internalExecutionContext.resolveMcpRuntimeLaunches({
+        servers,
+        attestation,
+      });
+      runMcpManager = new McpManager({
+        cwd: this.options.projectRoot,
+        servers,
+        transportFactory: createExecutionHostMcpTransportFactory({
+          run: executionHostBinding,
+          permissionProfile: spec.permissionProfile,
+          projectDirectory: this.options.projectRoot,
+          launches: runtimeLaunches,
+        }),
+      });
+      const statusRegistration: {
+        value?: Readonly<{ dispose(): void }>;
+      } = {};
+      const ownedMcpManager = runMcpManager;
+      ownedMcpCleanup = retryableNativeBuildCleanup(async () => {
+        await ownedMcpManager.close();
+        statusRegistration.value?.dispose();
+      });
+      constructionResources.add(
+        "mcp_manager",
+        () => ownedMcpCleanup!.close(),
+        true,
+      );
+      await runMcpManager.start();
+      statusRegistration.value = this.options.mcpStatusRegistry?.register(spec.runId, runMcpManager);
+      await this.options.runtimeConstructionHooks?.afterAcquire?.("mcp_manager");
+    }
     initializationStage = "execution_isolation";
-    const executionIsolation = await createConfiguredOciIsolationSelector(
-      capabilitiesConfig,
-      join(runRoot, "execution-isolation"),
-    );
-    assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
-    constructionResources.add("execution_isolation", async () => {
+    const executionIsolation = executionHostBinding?.isolation ??
+      await createConfiguredOciIsolationSelector(
+        capabilitiesConfig,
+        join(runRoot, "execution-isolation"),
+      );
+    if (!executionHostBinding) {
       assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
-    }, true);
+      constructionResources.add("execution_isolation", async () => {
+        assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
+      }, true);
+    }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_isolation");
     initializationStage = "capabilities";
     const runCapabilities = await createNativeRunCapabilities({
@@ -345,17 +469,16 @@ export class NativeBuildFactory {
       },
       reservedToolNames: [
         ...RUNNER_BUILTIN_TOOL_NAMES,
-        ...(this.options.mcpManager
-          ? createMcpTools(this.options.mcpManager, this.artifacts).map(
+        ...(runMcpManager
+          ? createMcpTools(runMcpManager, this.artifacts).map(
               (tool) => tool.definition.name,
             )
           : []),
       ],
     });
     constructionResources.add("capabilities", () => runCapabilities.close(), true);
+    await runCapabilities.preflight();
     await this.options.runtimeConstructionHooks?.afterAcquire?.("capabilities");
-    initializationStage = "baseline";
-    const baselineRevision = this.options.baselineFor(spec.runId);
     initializationStage = "runtime_configuration";
     const selected = selectRuntimeCandidates(
       this.options.providerConfigs.load(),
@@ -367,12 +490,6 @@ export class NativeBuildFactory {
     const workerCandidates = selected.workers;
     const modelUsageRuntimes = selectedConfigs.map((config) =>
       configuredModelUsageRuntime(config, spec)
-    );
-    const models = new Map<string, AgentModel>(
-      selectedConfigs.map((config) => [
-        config.runtimeId,
-        createProviderModel(config, this.artifacts),
-      ])
     );
     const modelCostEstimators = new Map<string, ModelCostEstimator>(
       selectedConfigs.flatMap((config) => {
@@ -494,20 +611,6 @@ export class NativeBuildFactory {
         workspaceManager: verificationWorkspace,
       }),
     });
-    const initialHealth = providerHealthFromSchedulerEvents(
-      schedulerStore.readRun(spec.runId)
-    );
-    const health = new ProviderHealthRegistry({ initial: initialHealth });
-    const workerRouter = new RuntimeRouter({
-      candidates: workerCandidates,
-      health,
-    });
-    const architectRouter = new RuntimeRouter({ candidates, health });
-    const verifierRouter = new RuntimeRouter({ candidates, health });
-    const skillCatalog = new SkillCatalog({
-      projectRoot: this.options.projectRoot,
-      sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
-    });
     const hadMemoryStore = this.memoryStore !== undefined;
     initializationStage = "memory_store";
     const memoryStore = this.liveMemoryStore();
@@ -520,8 +623,8 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("memory_store");
     const hadManagedProcesses = this.managedProcesses !== undefined;
     initializationStage = "managed_process_service";
-    const managedProcesses = this.liveManagedProcesses();
-    if (!hadManagedProcesses) {
+    const managedProcesses = executionHostBinding?.managedProcesses ?? this.liveManagedProcesses();
+    if (!executionHostBinding && !hadManagedProcesses) {
       constructionResources.add("managed_process_service", () => {
         managedProcesses.close();
         if (this.managedProcesses === managedProcesses) this.managedProcesses = undefined;
@@ -529,6 +632,12 @@ export class NativeBuildFactory {
     }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("managed_process_service");
     initializationStage = "subprocess_runtime";
+    let executionGrants: ExecutionGrantAuthority;
+    let commandExecution: OneShotCommandExecutor;
+    if (executionHostBinding) {
+      executionGrants = executionHostBinding.executionGrants;
+      commandExecution = executionHostBinding.commandExecution;
+    } else {
     const childEnvironments = createChildEnvironmentFactory({
       credentialResolver: {
         consume: () => {
@@ -598,8 +707,8 @@ export class NativeBuildFactory {
       }),
     });
     await subprocessKernel.runtime.reconcileStartup();
-    const executionGrants = createExecutionGrantAuthority();
-    const commandExecution = createRuntimeBackedOneShotCommandExecutor({
+    executionGrants = createExecutionGrantAuthority();
+    commandExecution = createRuntimeBackedOneShotCommandExecutor({
       runtime: subprocessKernel.runtime,
       runtimeGrants: subprocessKernel.grantsController,
       executionGrants,
@@ -615,7 +724,30 @@ export class NativeBuildFactory {
       await subprocessKernel.runtime.reconcileStartup();
       subprocessKernel.readOnlyStore.close();
     }, true);
+    }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("subprocess_runtime");
+    const initialHealth = providerHealthFromSchedulerEvents(
+      schedulerStore.readRun(spec.runId)
+    );
+    const health = new ProviderHealthRegistry({ initial: initialHealth });
+    const workerRouter = new RuntimeRouter({
+      candidates: workerCandidates,
+      health,
+    });
+    const architectRouter = new RuntimeRouter({ candidates, health });
+    const verifierRouter = new RuntimeRouter({ candidates, health });
+    const skillCatalog = new SkillCatalog({
+      projectRoot: this.options.projectRoot,
+      sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
+    });
+    initializationStage = "models";
+    const providerModelFactory = this.options.providerModelFactory ?? createProviderModel;
+    const models = new Map<string, AgentModel>(
+      selectedConfigs.map((config) => [
+        config.runtimeId,
+        providerModelFactory(config, this.artifacts),
+      ])
+    );
     initializationStage = "runtime_drivers";
     const workerDriver = new NativeWorkerDriver({
       schedulerStore,
@@ -639,7 +771,7 @@ export class NativeBuildFactory {
       modelCostEstimators,
       modelCostBases,
       browserBackend: this.browserBackend,
-      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+      ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       managedProcesses,
       execution: commandExecution,
@@ -685,7 +817,7 @@ export class NativeBuildFactory {
       ledger,
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       browserBackend: this.browserBackend,
-      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+      ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
     });
     const nativeVerifier = new NativeVerifierRuntime({
       router: verifierRouter,
@@ -1036,8 +1168,23 @@ export class NativeBuildFactory {
           ? await integrationManager.applyToProject()
           : integrationManager.descriptor(false),
       cleanup: async () => {
+        if (ownedMcpCleanup && !ownedMcpCleanup.isComplete()) {
+          await this.options.runtimeConstructionHooks?.beforeCleanup?.("mcp_manager");
+          await ownedMcpCleanup.close();
+          constructionResources.completeHandleStage("mcp_manager");
+        }
         await cleanupSettledNativeBuild(
-          () => this.liveManagedProcesses().stopRun(spec.runId),
+          async () => {
+            await this.liveManagedProcesses().stopRun(spec.runId);
+            if (ownedExecutionHostBindingCleanup &&
+                !ownedExecutionHostBindingCleanup.isComplete()) {
+              await this.options.runtimeConstructionHooks?.beforeCleanup?.(
+                "execution_host_binding",
+              );
+              await ownedExecutionHostBindingCleanup.close();
+              constructionResources.completeHandleStage("execution_host_binding");
+            }
+          },
           [
             () => runCapabilities.close(),
             () => sessions.compactRun(spec.runId),
@@ -1116,6 +1263,7 @@ export class NativeBuildFactory {
 
   /** Historical readers must never reconcile or persist managed-process state. */
   private liveManagedProcesses(): ManagedProcessService {
+    if (this.options.executionHost) return this.options.executionHost.managedProcesses;
     return this.managedProcesses ??= new ManagedProcessService({
       stateDirectory: join(this.options.stateDirectory, "managed-processes"),
     });
@@ -1640,6 +1788,15 @@ class NativeBuildResourceCleanupStack {
     );
   }
 
+  completeHandleStage(stage: NativeBuildRuntimeResourceStage): void {
+    const matching = this.entries.filter((entry) =>
+      entry.stage === stage && entry.closeOnHandle);
+    if (matching.length !== 1) {
+      throw new Error(`Native Build handle cleanup stage ${stage} is not uniquely owned.`);
+    }
+    matching[0]!.completedOnHandle = true;
+  }
+
   async close(mode: NativeBuildResourceCleanupMode): Promise<void> {
     const inFlight = this.closing.get(mode);
     if (inFlight) return await inFlight;
@@ -1676,6 +1833,33 @@ class NativeBuildResourceCleanupStack {
       );
     }
   }
+}
+
+interface RetryableNativeBuildCleanup {
+  close(): Promise<void>;
+  isComplete(): boolean;
+}
+
+function retryableNativeBuildCleanup(
+  action: () => void | Promise<void>,
+): RetryableNativeBuildCleanup {
+  let complete = false;
+  let closing: Promise<void> | undefined;
+  return Object.freeze({
+    async close() {
+      if (complete) return;
+      if (closing) return await closing;
+      const attempt = Promise.resolve().then(action);
+      closing = attempt;
+      try {
+        await attempt;
+        complete = true;
+      } finally {
+        if (closing === attempt) closing = undefined;
+      }
+    },
+    isComplete: () => complete,
+  });
 }
 
 function nativeBuildConstructionFailure(
@@ -1972,10 +2156,7 @@ async function closePreflightCapabilities(
   }
 }
 
-/**
- * Validates and starts only the capabilities attributable to one active Build
- * before CLI startup can acquire provider, MCP, or live Build resources.
- */
+/** Statically validates the capabilities attributable to one recovered Build. */
 export async function preflightRecoveredRunnerCapabilities(
   options: RecoveredRunnerCapabilityPreflightOptions,
 ): Promise<void> {
@@ -1991,28 +2172,9 @@ export async function preflightRecoveredRunnerCapabilities(
   }
   await validateRunnerCapabilityContractSnapshot(contract, options.stateDirectory);
   const contractConfig = runnerCapabilitiesForContract(options.config, contract);
-  const preflightDirectory = join(
-    options.stateDirectory,
-    "capability-preflight",
-    "recovery",
-    safeSegment(options.spec.runId),
-  );
   try {
-    await mkdir(preflightDirectory, { recursive: true });
-    await preflightRunnerCapabilities({
-      config: {
-        ...contractConfig,
-        extensions: runnerCapabilitySnapshotExtensionDirectories(
-          contract,
-          options.stateDirectory,
-        ),
-      },
-      projectDirectory: options.projectDirectory,
-      stateDirectory: preflightDirectory,
-      reservedToolNames: options.reservedToolNames,
-      verifyExtensionIntegrity: async () => {
-        await validateRunnerCapabilityContractSnapshot(contract, options.stateDirectory);
-      },
+    await attestRunnerCapabilitiesLanguageServers(contractConfig, {
+      commandSearchDirectory: options.projectDirectory,
     });
   } catch (error) {
     throw new RunnerCapabilityContractError(
@@ -2576,12 +2738,7 @@ function isProviderHealthState(value: unknown): value is ProviderHealthState {
 }
 
 function safeSegment(value: string): string {
-  const readable = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "run";
-  return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+  return runnerRunStateSegment(value);
 }
 
 async function loadHistoricalFinalVerificationDiagnostics(input: {

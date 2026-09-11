@@ -1,0 +1,134 @@
+[
+  {
+    "path": "runner-v2/package.json",
+    "sha256": "559439e98c4cc66f7973a338c368ce7b494bc512072a7eb873b5dce777e9bb31"
+  },
+  {
+    "path": "runner-v2/src/agent-contracts.js",
+    "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881"
+  },
+  {
+    "path": "runner-v2/src/artifact-store.js",
+    "sha256": "04676ff33314e61f5150cc6cbfe0c6254a9a4e930333f7ce30329606d7ab80ff"
+  },
+  {
+    "path": "runner-v2/src/bounded-output-spool.js",
+    "sha256": "e17ba1812a72e872163c3aa2f89032bdeb6866c94d29f3c551639daffb2d7958"
+  },
+  {
+    "path": "runner-v2/src/bounded-protocol-queue.js",
+    "sha256": "f5ed1206ba874e5f6d2ffcb09a47a7e8e4c9f360ffc2a1a9df945473ad1c232d"
+  },
+  {
+    "path": "runner-v2/src/child-environment.js",
+    "sha256": "4da9119909837bf28cda228466f72b0ee118adea8aab3fb7f936b75e7aeb7565"
+  },
+  {
+    "path": "runner-v2/src/contracts.js",
+    "sha256": "503c91535af9ea966c74fb910b1a03422bc0f6854e03ecdd0348fc96dabffea6"
+  },
+  {
+    "path": "runner-v2/src/evidence-continuation.js",
+    "sha256": "011e1ffcc5e85de84b16a98bd0d0c76d4c8a6f67799a2e43dc8541a604c796c2"
+  },
+  {
+    "path": "runner-v2/src/execution-grants.js",
+    "sha256": "f303f22adf4a2e1b467a8195a6e684eee4364cb354eaf0d0dcf5780de77b548b"
+  },
+  {
+    "path": "runner-v2/src/execution-host-streaming.js",
+    "sha256": "a387f87a1bb7d63f456af778933bbe3e582f99f197099c574e37d494a6a91d91"
+  },
+  {
+    "path": "runner-v2/src/execution-isolation-provider.js",
+    "sha256": "90b6396e8454096043d5e620069f7ebb6b7e16f08a24d8956b548154e218ff60"
+  },
+  {
+    "path": "runner-v2/src/execution-safety-contracts.js",
+    "sha256": "509b8b897d163136c3f46e71d3e377f10095f8c3a637b0c93b2da72401aa4aa4"
+  },
+  {
+    "path": "runner-v2/src/interactive-process-channel.js",
+    "sha256": "ef5db95461d41bc38cb71fe05a84b57f6e67ad6eb932081897e081ce2a76a1ae"
+  },
+  {
+    "path": "runner-v2/src/managed-process-supervisor.mjs",
+    "sha256": "5dc29984faa22c4458c37e69d67a39391f9612384fc59a88c5d78d2b806040f3"
+  },
+  {
+    "path": "runner-v2/src/native-process-backend.js",
+    "sha256": "4a159cbe8671b0ef30d0e00e09b140d0edadf3ad28babba0c73ad914ec6e54a9"
+  },
+  {
+    "path": "runner-v2/src/owned-fence-lock.mjs",
+    "sha256": "c477bb194f502d8de34795a2629fd6f80feab69a8b2bc67c30eeb2bd1a608e6f"
+  },
+  {
+    "path": "runner-v2/src/portable-process-channel.js",
+    "sha256": "410309f1f90e0005ee1bd82fb9072e4340fa338ec4e9282970fb944cab4f7f49"
+  },
+  {
+    "path": "runner-v2/src/portable-process-child.mjs",
+    "sha256": "10a5e61cca3d7dd9bfcc089c87af8d77da6b37733e73bb8fe9016ac554d28736"
+  },
+  {
+    "path": "runner-v2/src/portable-process-posix-control.mjs",
+    "sha256": "ba58c146fb50d1a1d0fe850b6a00c370a63b6b4de5e9ed6956d367130dd870c1"
+  },
+  {
+    "path": "runner-v2/src/portable-process-protocol.mjs",
+    "sha256": "6f25843bbafe46641bcefead1e1815a7f3934fb3a81533a9bdd96cc17f6d93f0"
+  },
+  {
+    "path": "runner-v2/src/portable-process-supervisor.mjs",
+    "sha256": "c982bae21937c7125cda63cf46d651d9d0109c417505e2f28a194699701d03d7"
+  },
+  {
+    "path": "runner-v2/src/posix-process-backend.js",
+    "sha256": "85ecb444dc416ed8ffe64110cbf10aa263f83085d08f146e796e55acfb9e0303"
+  },
+  {
+    "path": "runner-v2/src/process-backend.js",
+    "sha256": "3aaecca29fe3051c415b59205fda7f39c98260a3e5d2b5a7eafe9e1814b1b2af"
+  },
+  {
+    "path": "runner-v2/src/protocol-evidence-tee.js",
+    "sha256": "3f7f4c916d429e5c2bcc30674737eb42a2efcd07a44c992b0eb1a621c92ea637"
+  },
+  {
+    "path": "runner-v2/src/sensitive-redaction.js",
+    "sha256": "5d2fe300c7f82cf8759fda80c4105c1314d65586c7ff7d5dc76fa8b0dd2edbb0"
+  },
+  {
+    "path": "runner-v2/src/session-authority.js",
+    "sha256": "3ecf635e8ddee2de47965bfb8fd50661cc2c74d0f623e808d43db309470e2ca9"
+  },
+  {
+    "path": "runner-v2/src/streaming-output-controller.js",
+    "sha256": "dd03c3f5721f2dfb6e68d4c0aa887e19a8bc5d779a2a76b5679d0719a6b2de0e"
+  },
+  {
+    "path": "runner-v2/src/streaming-process-session-runtime.js",
+    "sha256": "b320a924aa76483e45fff8218d47e7858549d7a7446322ec370ccd7b7a3dd6f9"
+  },
+  {
+    "path": "runner-v2/src/streaming-session-store.js",
+    "sha256": "bf62af1b21cd21063efa2839c73c4cc9cf82d8a4008965ea8c855d339dd7e260"
+  },
+  {
+    "path": "runner-v2/test/posix-process-backend.test.js",
+    "sha256": "7d06b201c122cce1d1f147198614bbd774f686597d8007639e407202272c8363"
+  },
+  {
+    "path": "runner-v2/test/streaming-expired-host-recovery.test.js",
+    "sha256": "6a42f34a8a798a250512469da81a5824eea1bcb10a3bac16ce6c370e85ab42b6"
+  },
+  {
+    "path": "runner-v2/test/streaming-unstarted-host-cleanup.test.js",
+    "sha256": "b28812ab0f6a7384d20be1c13fa13f3db74ceace1a722aced9a21213fcdb9227"
+  },
+  {
+    "path": "runner-v2/test/support/cli-root-observer.mjs",
+    "sha256": "8547b575b3e150f6d9f5ca8eb3d8586a1aee3ed0bdbfc50928b493b322250077"
+  }
+]

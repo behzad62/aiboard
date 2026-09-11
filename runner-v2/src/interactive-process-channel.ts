@@ -19,6 +19,10 @@ export interface BackpressuredOutputMetadata {
   readonly digest: string;
 }
 export type BackpressuredOutputAcknowledgement = BackpressuredOutputMetadata;
+export type BackpressuredOutputSettlement = Readonly<{ status: "settled" }> | Readonly<{
+  status: "blocked";
+  reason: "deadline" | "stale_fence" | "coordination_unavailable" | "output_unaccounted" | "outcome_unknown";
+}>;
 export interface BackpressuredInteractiveProcessChannelProvider {
   readonly version: typeof BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION;
   readonly replayCapacityChunks: number;
@@ -71,6 +75,8 @@ export interface InteractiveProcessWrite {
 }
 
 export interface InteractiveProcessChannel {
+  /** Private v2 cleanup barrier: terminal, fenced output retirement, then detach. */
+  settleBackpressuredOutput?(deadlineAt: number): Promise<BackpressuredOutputSettlement>;
   write(input: InteractiveProcessWrite, payload: Uint8Array): Promise<unknown>;
   closeInput(): Promise<unknown>;
   subscribePrivateOutput(sink: (bytes: Uint8Array) => void): () => void;

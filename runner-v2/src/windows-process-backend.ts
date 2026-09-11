@@ -233,7 +233,11 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       if (lane.release === release) {
         lane.release = undefined;
         const currentFence = this.writerFences.get(processId);
-        if ((error as { code?: unknown })?.code === "process_identity_mismatch" ||
+        // An exactly empty job with retained output refused release before any
+        // release effect. Allow the acknowledgements needed to finish draining;
+        // uncertain release failures must keep the control lane closed.
+        if ((error as { code?: unknown })?.code === "process_output_unsettled_terminal" ||
+            (error as { code?: unknown })?.code === "process_identity_mismatch" ||
             (fence && currentFence && (currentFence.ownerId !== fence.ownerId || currentFence.fencingToken !== fence.fencingToken)))
           lane.releaseRequested = false;
       }
@@ -259,6 +263,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
           owner: jobOwner(identity),
           fence,
           service: duplexService,
+          control: async <T>(effect: () => Promise<T>) => await this.control(identity, fence, effect),
           reattest: async () => {
             await this.claimFence(identity, fence);
             const snapshot = await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence);

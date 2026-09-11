@@ -57,6 +57,52 @@ test("prepares a public name-only capability while preserving safe platform vari
   assert.doesNotMatch(JSON.stringify(prepared), /SENTINEL_(?:AMBIENT_KEY|AUTH_TOKEN|HEADER|RUNNER_AUTH|HOSTILE_OVERRIDE)/);
 });
 
+test("removes provider-prefixed credentials from ambient and explicit input but admits an exact grant", () => {
+  const sentinel = "SYNTHETIC_PROVIDER_ENV_SENTINEL";
+  const runner = factory({
+    grant_provider: {
+      grantId: "grant_provider",
+      runId: "run_provider",
+      invocationId: "call_provider",
+      names: ["OPENAI_API_KEY"],
+      values: { OPENAI_API_KEY: "SYNTHETIC_GRANTED_PROVIDER_SENTINEL" },
+    },
+  });
+  const prepared = runner.prepare({
+    ambient: {
+      PATH: "/bin",
+      OPENAI_API_KEY: sentinel,
+      ANTHROPIC_FOUNDRY_API_KEY: sentinel,
+      AZURE_OPENAI_API_KEY: sentinel,
+      SERVICE_PRIVATE_KEY: sentinel,
+      OPENAI_API_VERSION: "2026-09-01",
+    },
+    explicitOverrides: { azureOpenaiApiKey: sentinel, SAFE_FLAG: "visible" },
+    runId: "run_provider",
+    invocationId: "call_provider",
+    credentialGrantId: "grant_provider",
+  });
+
+  assert.deepEqual(prepared.audit.removedNames, [
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "OPENAI_API_KEY",
+    "SERVICE_PRIVATE_KEY",
+  ]);
+  assert.deepEqual(prepared.audit.explicitSafeNames, ["SAFE_FLAG"]);
+  assert.deepEqual(prepared.audit.grantedNames, ["OPENAI_API_KEY"]);
+  assert.doesNotMatch(JSON.stringify(prepared), new RegExp(sentinel));
+  runner.withChildEnvironment(prepared.capability, (environment) => {
+    assert.equal(environment.OPENAI_API_KEY, "SYNTHETIC_GRANTED_PROVIDER_SENTINEL");
+    assert.equal(environment.OPENAI_API_VERSION, "2026-09-01");
+    assert.equal(environment.SAFE_FLAG, "visible");
+    assert.equal(environment.ANTHROPIC_FOUNDRY_API_KEY, undefined);
+    assert.equal(environment.AZURE_OPENAI_API_KEY, undefined);
+    assert.equal(environment.SERVICE_PRIVATE_KEY, undefined);
+    assert.equal(environment.azureOpenaiApiKey, undefined);
+  });
+});
+
 test("atomically consumes an authoritative opaque grant and exposes values only to the trusted callback once", () => {
   const runner = factory({ grant_1: { grantId: "grant_1", runId: "run_1", invocationId: "call_1", expiresAt: "2026-08-28T12:01:00.000Z", names: ["DEPLOY_TOKEN"], values: { DEPLOY_TOKEN: "SENTINEL_GRANTED_VALUE" } } });
   const prepared = runner.prepare({ ambient: { PATH: "/bin" }, runId: "run_1", invocationId: "call_1", credentialGrantId: "grant_1" });

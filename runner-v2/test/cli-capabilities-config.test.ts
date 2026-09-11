@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,9 @@ import {
 } from "../src/runner-capability-contract.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
+import { runnerRunStateSegment } from "../src/run-state-identity.js";
+import { openSqliteStreamingSessionStore } from "../src/streaming-session-store.js";
+import { cliRootCaptureArgs, forwardCliRootRecords } from "./support/cli-root-capture.js";
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
@@ -33,6 +36,69 @@ interface TrackedCliChild {
   child: ChildProcess;
   closed: Promise<ChildClose>;
 }
+
+for (const cleanupFails of [false, true]) {
+  test(`CLI fixture cleanup retains undefined primary failure cleanupFails=${cleanupFails}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "c-phase-cli-retention-"));
+    const cleanup = new Error("controlled cleanup rejection");
+    try {
+      const outcome = await finishOwnedCliFixture(root, undefined, async () => { if (cleanupFails) throw cleanup; }, true)
+        .then(() => ({ rejected: false as const }), (reason: unknown) => ({ rejected: true as const, reason }));
+      assert.equal(outcome.rejected, true);
+      assert.equal(existsSync(root), true);
+      if (outcome.rejected && cleanupFails) { assert.ok(outcome.reason instanceof AggregateError); assert.deepEqual(outcome.reason.errors, [undefined, cleanup]); }
+      else if (outcome.rejected) assert.equal(outcome.reason, undefined);
+    } finally { await removeFixtureRoot(root); } // Synthetic directories, no process/resource was launched.
+  });
+}
+
+test("CLI fixture cleanup preserves recovery records and both failures when verification fails", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-cleanup-guard-"));
+  const marker = join(root, "ownership.json");
+  writeFileSync(marker, "synthetic ownership, no process launched");
+  const primary = new Error("primary fixture failure");
+  const cleanup = new Error("cleanup remains unverified");
+  try {
+    const failure = await finishOwnedCliFixture(root, primary, async () => { throw cleanup; })
+      .then(() => undefined, (error: unknown) => error);
+    assert.equal(existsSync(marker), true, "uncertain cleanup must preserve its authority");
+    assert.ok(failure instanceof AggregateError);
+    assert.deepEqual(failure.errors, [primary, cleanup]);
+  } finally {
+    // This fixture is synthetic and never launches any process.
+    await removeFixtureRoot(root);
+  }
+});
+
+test("CLI fixture cleanup preserves diagnostics after primary failure even when cleanup verifies", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-cleanup-guard-"));
+  const marker = join(root, "ownership.json");
+  writeFileSync(marker, "synthetic ownership, no process launched");
+  const primary = new Error("primary fixture failure");
+  try {
+    const failure = await finishOwnedCliFixture(root, primary, async () => undefined)
+      .then(() => undefined, (error: unknown) => error);
+    assert.equal(existsSync(marker), true);
+    assert.equal(failure, primary);
+  } finally {
+    await removeFixtureRoot(root);
+  }
+});
+
+test("CLI fixture cleanup deletes only after successful cleanup verification", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cli-cleanup-guard-"));
+  let verified = false;
+  try {
+    await finishOwnedCliFixture(root, undefined, async () => {
+      assert.equal(existsSync(root), true);
+      verified = true;
+    });
+    assert.equal(verified, true);
+    assert.equal(existsSync(root), false);
+  } finally {
+    await removeFixtureRoot(root);
+  }
+});
 
 test("CLI successful shutdown guard rejects a nonzero child close result", async () => {
   const runner = trackCliChild(spawn(
@@ -90,17 +156,20 @@ test("CLI rejects malformed capability configuration before Git preflight or rea
   }
 });
 
-test("CLI rejects an invalid extension package before listening", async () => {
+test("CLI statically validates extension closure without evaluating live tool declarations", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-invalid-extension-"));
   const project = join(root, "project");
   const state = join(root, "state");
   const extension = join(root, "invalid extension");
   const config = join(root, "runner-capabilities.json");
+  const evaluated = join(root, "extension-evaluated.txt");
   mkdirSync(project);
   mkdirSync(state);
   writeExtension(extension, {
     id: "fixture.cli.invalid",
     module: `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(${JSON.stringify(evaluated)}, "evaluated");
       export function createExtension() {
         return {
           capabilities: () => ({
@@ -119,17 +188,19 @@ test("CLI rejects an invalid extension package before listening", async () => {
     `,
   });
   writeCapabilitiesConfig(config, [extension]);
+  let runner: TrackedCliChild | undefined;
   try {
-    const outcome = await runCliToExit(project, state, config, "cli-invalid-extension-token");
-    assert.equal(outcome.code, 1);
-    assert.equal(outcome.stdout, "");
-    assert.match(outcome.stderr, /reserved tool fs\.read/i);
+    runner = spawnCli(project, state, config, "cli-invalid-extension-token");
+    await awaitCliReadiness(runner);
+    assert.equal(existsSync(evaluated), false);
+    assertSuccessfulCliShutdown(await terminateCliChild(runner));
   } finally {
+    if (runner) await terminateCliChild(runner);
     await removeFixtureRoot(root);
   }
 });
 
-test("CLI closes a failed extension startup before listening", async () => {
+test("CLI does not start extension lifecycle code until a run owns the public facade", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capabilities-start-failure-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -167,22 +238,14 @@ test("CLI closes a failed extension startup before listening", async () => {
     `,
   });
   writeCapabilitiesConfig(config, [extension]);
+  let runner: TrackedCliChild | undefined;
   try {
-    const outcome = await runCliToExit(project, state, config, "cli-start-failure-token");
-    assert.equal(outcome.code, 1);
-    assert.equal(outcome.stdout, "");
-    assert.match(outcome.stderr, /fixture start failed/i);
-    assert.equal(
-      readFileSync(join(
-        state,
-        "capability-preflight",
-        "extensions",
-        "fixture.cli.start-failure",
-        "lifecycle.log",
-      ), "utf8"),
-      "started\nclosed\n",
-    );
+    runner = spawnCli(project, state, config, "cli-start-failure-token");
+    await awaitCliReadiness(runner);
+    assert.equal(existsSync(join(state, "capability-preflight")), false);
+    assertSuccessfulCliShutdown(await terminateCliChild(runner));
   } finally {
+    if (runner) await terminateCliChild(runner);
     await removeFixtureRoot(root);
   }
 });
@@ -303,7 +366,7 @@ test("CLI rejects an active legacy Build without a capability contract before li
     } finally {
       recovered.close();
     }
-    assert.equal(existsSync(join(state, "builds", runId)), false);
+    assert.equal(existsSync(join(state, "builds", runnerRunStateSegment(runId))), false);
   } finally {
     await removeFixtureRoot(root);
   }
@@ -436,7 +499,7 @@ test("CLI keeps a terminal legacy Build readable without recovering it against c
     assert.equal(response.status, 200);
     assert.equal(body.state, "failed");
     assert.equal(body.stopReason, "previous terminal outcome");
-    assert.equal(existsSync(join(state, "builds", runId)), false);
+    assert.equal(existsSync(join(state, "builds", runnerRunStateSegment(runId))), false);
   } finally {
     try {
       if (runner) assertSuccessfulCliShutdown(await terminateCliChild(runner));
@@ -547,7 +610,7 @@ test("CLI rejects a changed active extension before evaluating or starting it", 
     } finally {
       recovered.close();
     }
-    assert.equal(existsSync(join(state, "builds", runId)), false);
+    assert.equal(existsSync(join(state, "builds", runnerRunStateSegment(runId))), false);
   } finally {
     await removeFixtureRoot(root);
   }
@@ -636,7 +699,7 @@ test("CLI rejects a syntactically invalid changed active extension before prefli
   }
 });
 
-test("CLI fails an active Build when its matching snapshot extension cannot start before MCP or live runtime startup", async () => {
+test("CLI closes per-run MCP discovery and public facades when active extension startup fails before readiness", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-snapshot-start-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -678,11 +741,11 @@ test("CLI fails an active Build when its matching snapshot extension cannot star
     extensions: [extension],
     languageServers: [],
   }, state);
-  saveActiveBuild(state, project, runId, capabilityContract);
+  saveActiveBuild(state, project, runId, capabilityContract, true, "full");
   writeFileSync(mcpFixture, `
     import { appendFileSync } from "node:fs";
     import { createInterface } from "node:readline";
-    appendFileSync(${JSON.stringify(mcpMarker)}, "started\\n");
+    appendFileSync(${JSON.stringify(mcpMarker)}, String(process.pid) + "\\n");
     const input = createInterface({ input: process.stdin });
     input.on("line", (line) => {
       const request = JSON.parse(line);
@@ -692,6 +755,12 @@ test("CLI fails an active Build when its matching snapshot extension cannot star
     });
   `);
 
+  let primaryFailure: unknown; let hasPrimaryFailure = false;
+  // Existing Windows semantic probes are serialized (3 operation/cleanup windows).
+  // The outer fixture must not kill valid startup before the existing120s MCP
+  // request bound or subsequent30s cleanup. Product deadlines are unchanged.
+  const startupFixtureBudgetMs = 3 * (15_000 + 15_000) + 120_000 + 30_000;
+  const fixtureStarted = performance.now();
   try {
     const outcome = await runCliToExit(
       project,
@@ -699,13 +768,21 @@ test("CLI fails an active Build when its matching snapshot extension cannot star
       config,
       token,
       [`--mcp`, `fixture=${quoteShellArgument(process.execPath)} ${quoteShellArgument(mcpFixture)}`],
+      startupFixtureBudgetMs,
     );
 
     assert.equal(outcome.code, 1);
     assert.equal(outcome.stdout, "");
     assert.match(outcome.stderr, /fixture snapshot start failed/i);
-    assert.equal(existsSync(mcpMarker), false);
-    assert.equal(existsSync(join(state, "builds", runId)), false);
+    const mcpPids = readFileSync(mcpMarker, "utf8").trim().split("\n").map(Number);
+    assert.equal(mcpPids.length, 2, "discovery and the per-run public manager each get one closed process");
+    await waitForProcessesToExit(mcpPids, 10_000);
+    assert.equal(
+      mcpPids.every((pid) => !processExists(pid)),
+      true,
+      `MCP fixture processes still reported live: ${mcpPids.filter(processExists).join(",")}`,
+    );
+    assert.equal(existsSync(join(state, "builds", runnerRunStateSegment(runId))), true);
     assert.equal(readFileSync(lifecycleLog, "utf8"), "started\nclosed\n");
     const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
     try {
@@ -715,9 +792,45 @@ test("CLI fails an active Build when its matching snapshot extension cannot star
     } finally {
       recovered.close();
     }
-  } finally {
-    await removeFixtureRoot(root);
+  } catch (error) {
+    primaryFailure = error; hasPrimaryFailure = true;
+    t.diagnostic(`CLI startup fixture failed after ${Math.round(performance.now() - fixtureStarted)}ms: ${error instanceof Error ? error.message : String(error)}`);
   }
+  await finishOwnedCliFixture(root, primaryFailure, async () => {
+    const mcpPids = readFileSync(mcpMarker, "utf8").trim().split("\n").map(Number);
+    assert.equal(mcpPids.length, 2, "both discovery and public ownership must be accounted for");
+    assert.ok(mcpPids.every((pid) => Number.isSafeInteger(pid) && pid > 0));
+    assert.equal(mcpPids.some(processExists), false, "live MCP processes prevent fixture deletion");
+    const runRoot = join(state, "builds", runnerRunStateSegment(runId));
+    const key = readFileSync(join(runRoot, "streaming-sessions.key"));
+    assert.equal(key.byteLength, 32);
+    const kernel = openSqliteStreamingSessionStore(
+      join(runRoot, "streaming-sessions.sqlite"), key, { readOnly: true },
+    );
+    try {
+      const sessions = kernel.store.listSessionIds();
+      assert.ok(sessions.length > 0, "CLI exit alone is not proof of public session cleanup");
+      for (const sessionId of sessions) {
+        assert.equal(kernel.store.readBySession(sessionId)?.state, "released");
+      }
+      const launches = kernel.store.listHostLaunchIds();
+      assert.ok(launches.length > 0);
+      for (const launchId of launches) {
+        const launch = kernel.store.readHostLaunch(launchId)!;
+        assert.ok(launch.state === "released" || (
+          launch.state === "handed_off" &&
+          kernel.store.readBySession(launch.sessionId)?.state === "released"
+        ));
+      }
+    } finally {
+      kernel.store.close();
+    }
+    // Portable backend release removes only its exact verified-empty authority.
+    // Any retained internal or per-run backend entry makes deletion unsafe.
+    assert.deepEqual(readdirSync(join(state, "internal-processes")), []);
+    assert.deepEqual(readdirSync(join(runRoot, "process-backend")), []);
+    assert.equal(mcpPids.some(processExists), false, "process absence must remain stable before deletion");
+  }, hasPrimaryFailure);
 });
 
 test("CLI rejects a capability configuration placed inside the project", async () => {
@@ -771,9 +884,9 @@ function spawnCli(
   token: string,
   extraArgs: readonly string[] = [],
 ): TrackedCliChild {
-  return trackCliChild(spawn(
+  const child = spawn(
     process.execPath,
-    [
+    cliRootCaptureArgs([
       tsxPath,
       cliPath,
       "--project",
@@ -787,9 +900,11 @@ function spawnCli(
       "--capabilities-config",
       config,
       ...extraArgs,
-    ],
+    ], undefined, "tsx"),
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-  ));
+  );
+  if (process.env.AIBOARD_C5_CAPTURE_ROOTS === "1") forwardCliRootRecords(child.stderr!);
+  return trackCliChild(child);
 }
 
 async function awaitCliReadiness(
@@ -846,6 +961,22 @@ function assertSuccessfulCliShutdown(close: ChildClose): void {
   }
 }
 
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitForProcessesToExit(pids: readonly number[], timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (pids.some(processExists) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 function runnerStreams(child: ChildProcess) {
   const { stdout, stderr } = child;
   if (!stdout || !stderr) {
@@ -880,6 +1011,7 @@ async function runCliToExit(
   config: string,
   token: string,
   extraArgs: readonly string[] = [],
+  startupDeadlineMs = 10_000,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const runner = spawnCli(project, state, config, token, extraArgs);
   const { child } = runner;
@@ -895,7 +1027,7 @@ async function runCliToExit(
     const outcome = await Promise.race([
       runner.closed.then(({ code }) => ({ exited: true as const, code })),
       new Promise<{ exited: false }>((resolve) => {
-        timeout = setTimeout(() => resolve({ exited: false }), 10_000);
+        timeout = setTimeout(() => resolve({ exited: false }), startupDeadlineMs);
       }),
     ]);
     if (!outcome.exited) {
@@ -914,6 +1046,8 @@ function saveActiveBuild(
   project: string,
   runId: string,
   capabilityContract: Awaited<ReturnType<typeof createRunnerCapabilityContractSnapshot>>,
+  captureBaseline = false,
+  permissionProfile: "guarded" | "project" | "full" = "project",
 ): void {
   const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
   const specs = new SqliteBuildSpecStore(join(state, "build-specs.sqlite"));
@@ -921,9 +1055,17 @@ function saveActiveBuild(
     supervisor.createRun({
       runId,
       projectPath: project,
-      permissionProfile: "project",
+      permissionProfile,
       idempotencyKey: `create:${runId}`,
     });
+    if (captureBaseline) {
+      supervisor.captureBaseline(
+        runId,
+        `baseline:${runId}`,
+        "a".repeat(40),
+        `refs/aiboard/baselines/${runId}`,
+      );
+    }
     specs.save({
       version: 2,
       runId,
@@ -934,7 +1076,7 @@ function saveActiveBuild(
       verifierRuntimeIds: ["fixture:worker"],
       alwaysRequireIndependentVerifier: false,
       maxConcurrency: 1,
-      permissionProfile: "project",
+      permissionProfile,
       runPolicy: "finish",
       budgetLimits: {},
       createdAt: "2026-08-28T00:00:00.000Z",
@@ -999,6 +1141,24 @@ async function removeFixtureRoot(root: string): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
+}
+
+async function finishOwnedCliFixture(
+  root: string,
+  primaryFailure: unknown,
+  verifyCleanup: () => Promise<void>,
+  hasPrimaryFailure = primaryFailure !== undefined,
+): Promise<void> {
+  try {
+    await verifyCleanup();
+  } catch (cleanupFailure) {
+    throw new AggregateError(
+      hasPrimaryFailure ? [primaryFailure, cleanupFailure] : [cleanupFailure],
+      `CLI fixture cleanup is unverified; recovery evidence preserved at ${root}`,
+    );
+  }
+  if (hasPrimaryFailure) throw primaryFailure;
+  await removeFixtureRoot(root);
 }
 
 function quoteShellArgument(value: string): string {

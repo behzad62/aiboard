@@ -35,6 +35,7 @@ import {
   createExecutionIsolationSelector,
   type ExecutionIsolationSelector,
 } from "./execution-isolation-provider.js";
+import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 
 const OWNED_LABEL = "ai-board.runner-v2.owned";
@@ -43,6 +44,7 @@ const RUN_LABEL = "ai-board.runner-v2.run";
 const INVOCATION_LABEL = "ai-board.runner-v2.invocation";
 const GRANT_LABEL = "ai-board.runner-v2.grant";
 const IMAGE_LABEL = "ai-board.runner-v2.image";
+const PROBE_LABEL = "ai-board.runner-v2.probe";
 const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
 const STATE_LOCK_TIMEOUT_MS = 10_000;
 const MAX_LEASE_STATE_BYTES = 1024 * 1024;
@@ -53,6 +55,8 @@ export type OciExecutionIsolationErrorCode =
   | "oci_configuration_invalid"
   | "oci_cli_unavailable"
   | "oci_image_unavailable"
+  | "oci_interactive_attach_unavailable"
+  | "oci_image_executable_unavailable"
   | "oci_attestation_failed"
   | "oci_grant_unrepresentable"
   | "oci_environment_unrepresentable"
@@ -87,6 +91,7 @@ export interface OciCliResult {
 
 export interface OciCli {
   run(invocation: OciCliInvocation): Promise<OciCliResult>;
+  runDuplex?(invocation: OciCliInvocation, input: string): Promise<OciCliResult>;
 }
 
 export interface OciExecutionIsolationProviderOptions {
@@ -191,6 +196,8 @@ export function createOciExecutionIsolationProvider(
   const clock = options.clock ?? (() => new Date());
   let cliPath: string | undefined;
   let cliDigest: string | undefined;
+  let interactiveAttach = false;
+  const attestedImageExecutables = new Set<string>();
 
   const runCli = async (args: readonly string[]): Promise<OciCliResult> => {
     if (!cliPath) throw ociError("oci_attestation_failed", "OCI provider is not attested.");
@@ -207,6 +214,24 @@ export function createOciExecutionIsolationProvider(
       environment: Object.freeze({}),
       timeoutMs: 30_000,
     });
+  };
+  const runCliDuplex = async (args: readonly string[], input: string): Promise<OciCliResult> => {
+    if (!cliPath || !cli.runDuplex) {
+      throw ociError("oci_interactive_attach_unavailable", "OCI CLI has no semantic duplex execution seam.");
+    }
+    if (cliDigest) {
+      const currentPath = await attestExecutable(configuredCli);
+      const currentDigest = createHash("sha256").update(await readFile(currentPath)).digest("hex");
+      if (normalize(currentPath) !== normalize(cliPath) || currentDigest !== cliDigest) {
+        throw ociError("oci_attestation_failed", "Configured OCI CLI identity changed after attestation.");
+      }
+    }
+    return await cli.runDuplex({
+      executable: cliPath,
+      args: Object.freeze([...args]),
+      environment: Object.freeze({}),
+      timeoutMs: 30_000,
+    }, input);
   };
 
   const settleCreatingRecord = async (
@@ -272,12 +297,19 @@ export function createOciExecutionIsolationProvider(
         );
       }
       const immutableId = await attestImage(runCli, image);
+      interactiveAttach = await attestInteractiveAttach(
+        runCli,
+        runCliDuplex,
+        immutableId,
+        providerId,
+      );
       return deepFreeze({
         attestationVersion: 1 as const,
         providerId,
         verified: true,
         mechanism: "docker-compatible-oci",
         exactGrantWriteConfinement: true,
+        interactiveAttach,
         expiresAt: new Date(clock().getTime() + 60_000).toISOString(),
         executableIdentity: { path: cliPath, digest: cliDigest },
         imageIdentity: { configuredReference: image, immutableId },
@@ -290,6 +322,29 @@ export function createOciExecutionIsolationProvider(
       });
     },
 
+    async attestExecution(
+      intent: ExecutionIsolationAcquireRequest["intent"],
+      imageExecutable?: string,
+    ) {
+      if (!cliPath || !cliDigest) {
+        throw ociError("oci_attestation_failed", "OCI provider must be attested before intent attestation.");
+      }
+      const executable = strictImageExecutable(intent, imageExecutable);
+      if (!requiresInteractiveAttach(intent)) return;
+      if (!interactiveAttach) {
+        throw ociError(
+          "oci_interactive_attach_unavailable",
+          "Configured OCI CLI does not attest exact interactive create/start attach support.",
+        );
+      }
+      const immutableId = await attestImage(runCli, image);
+      const key = imageExecutableKey(immutableId, executable);
+      if (!attestedImageExecutables.has(key)) {
+        await attestImageExecutable(runCli, immutableId, executable);
+        attestedImageExecutables.add(key);
+      }
+    },
+
     async acquire(request: ExecutionIsolationAcquireRequest) {
       if (!cliPath || !cliDigest) {
         throw ociError("oci_attestation_failed", "OCI provider must be attested before acquire.");
@@ -299,12 +354,28 @@ export function createOciExecutionIsolationProvider(
           request.intent.sessionId !== request.grant.sessionId) {
         throw ociError("oci_grant_unrepresentable", "OCI request does not match its exact grant.");
       }
-      const representation = await representGrant(request);
+      const imageExecutable = strictImageExecutable(
+        request.intent,
+        request.imageExecutable,
+      );
+      const representation = await representGrant(request, imageExecutable);
+      const interactive = requiresInteractiveAttach(request.intent);
+      if (interactive && !interactiveAttach) {
+        throw ociError(
+          "oci_interactive_attach_unavailable",
+          "Configured OCI CLI does not attest exact interactive create/start attach support.",
+        );
+      }
       await withStateLock(statePath, async () => {
         const existing = await readLeaseState(statePath);
         if (existing.length >= MAX_DURABLE_LEASES) throw ociError("oci_create_failed", "OCI durable lease capacity is exhausted.");
       });
       const acquisitionImageId = await attestImage(runCli, image);
+      const key = imageExecutableKey(acquisitionImageId, imageExecutable);
+      if (!attestedImageExecutables.has(key)) {
+        await attestImageExecutable(runCli, acquisitionImageId, imageExecutable);
+        attestedImageExecutables.add(key);
+      }
       const leaseId = `oci-lease-${randomUUID()}`;
       const containerName = `aiboard-${createHash("sha256")
         .update(`${providerId}\0${request.intent.runId}\0${request.intent.invocationId}\0${leaseId}`)
@@ -317,14 +388,20 @@ export function createOciExecutionIsolationProvider(
         `${GRANT_LABEL}=${safeLabel(request.grant.grantId, "grant id")}`,
         `${IMAGE_LABEL}=${acquisitionImageId}`,
       ];
-      const args = ["create", "--name", containerName];
+      const args = ["create", ...(interactive ? ["--interactive"] : []), "--name", containerName];
       for (const label of labels) args.push("--label", label);
       args.push("--network", request.grant.networkApproved && options.allowNetwork === true
         ? "bridge" : "none");
       for (const mount of representation.mounts) args.push("--mount", mount);
       const environmentHandoff = preparePrivateEnvironmentHandoff(
         environmentHandoffRoot,
-        request.environment ?? {},
+        // Executable attestation uses the immutable image's own search path.
+        // A prepared host child environment can contain Windows PATH/Path or
+        // host-only POSIX paths; copying those into the image would invalidate
+        // that attestation and even break the image's entrypoint resolution.
+        // Other approved child values still use the private handoff, never the
+        // Docker control-plane environment. Leave the caller's object intact.
+        Object.fromEntries(Object.entries(request.environment ?? {}).filter(([name]) => name.toUpperCase() !== "PATH")),
       );
       const environmentFile = environmentHandoff?.path;
       if (environmentFile) args.push("--env-file", environmentFile);
@@ -490,7 +567,9 @@ export function createOciExecutionIsolationProvider(
       return deepFreeze({
         ...intent,
         executable: cliPath,
-        arguments: ["start", "--attach", owned.containerId],
+        arguments: requiresInteractiveAttach(intent)
+          ? ["start", "--attach", "--interactive", owned.containerId]
+          : ["start", "--attach", owned.containerId],
       });
     },
 
@@ -648,7 +727,10 @@ function cleanupTransition(
   };
 }
 
-async function representGrant(request: ExecutionIsolationAcquireRequest): Promise<{
+async function representGrant(
+  request: ExecutionIsolationAcquireRequest,
+  imageExecutable: string,
+): Promise<{
   mounts: string[];
   cwd: string;
   executable: string;
@@ -703,7 +785,7 @@ async function representGrant(request: ExecutionIsolationAcquireRequest): Promis
     const traversal = relative(root.host, actual).split(sep).join("/");
     return traversal ? `${root.container}/${traversal}` : root.container;
   };
-  const executable = await translate(request.intent.executable);
+  const executable = assertImageRelativeExecutable(imageExecutable);
   const arguments_: string[] = [];
   for (const argument of request.intent.arguments) arguments_.push(await translate(argument));
   const cwdTraversal = relative(workspace, cwdHost).split(sep).join("/");
@@ -834,24 +916,176 @@ async function attestImage(
   return immutableId;
 }
 
-async function withStateLock<T>(statePath: string, action: () => Promise<T>): Promise<T> {
-  const lockPath = `${statePath}.lock`;
-  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
-  while (true) {
-    try {
-      await mkdir(lockPath);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) {
-        throw ociError("oci_recovery_blocked", "OCI durable lease state lock is unavailable.", error);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
+async function attestInteractiveAttach(
+  runCli: (args: readonly string[]) => Promise<OciCliResult>,
+  runCliDuplex: (args: readonly string[], input: string) => Promise<OciCliResult>,
+  immutableImageId: string,
+  providerId: string,
+): Promise<boolean> {
+  if (!(await cleanupOwnedProbeContainers(runCli, providerId))) {
+    throw ociError("oci_attestation_failed", "Stale owned OCI capability probes could not be cleaned.");
+  }
+  const probeName = `aiboard-probe-${createHash("sha256")
+    .update(`${providerId}\0${randomUUID()}`)
+    .digest("hex").slice(0, 32)}`;
+  const token = `runner-v2-${randomUUID()}`;
+  let probeIdentity: string | undefined;
+  let result = false;
+  try {
+    const created = await runCli([
+      "create",
+      "--interactive",
+      "--name", probeName,
+      "--label", `${OWNED_LABEL}=true`,
+      "--label", `${PROVIDER_LABEL}=${providerId}`,
+      "--label", `${PROBE_LABEL}=true`,
+      "--network", "none",
+      "--read-only",
+      "--entrypoint", "/bin/sh",
+      immutableImageId,
+      "-c", 'IFS= read -r token; printf "%s" "$token"',
+    ]);
+    if (created.exitCode !== 0) return false;
+    const candidate = created.stdout.trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(candidate)) {
+      throw ociError("oci_attestation_failed", "OCI duplex probe returned an invalid container identity.");
+    }
+    probeIdentity = candidate;
+    const attached = await runCliDuplex(
+      ["start", "--attach", "--interactive", probeIdentity],
+      `${token}\n`,
+    );
+    result = attached.exitCode === 0 && attached.stdout === token;
+  } catch (error) {
+    if (error instanceof OciExecutionIsolationError && error.code === "oci_attestation_failed") throw error;
+    result = false;
+  } finally {
+    const identity = probeIdentity ?? probeName;
+    const removed = await runCli(["rm", "--force", identity]);
+    if (removed.exitCode !== 0 && !isOciAbsent(removed)) {
+      throw ociError("oci_attestation_failed", "Owned OCI duplex probe cleanup failed.");
+    }
+    const inspected = await runCli(["inspect", "--format", "{{.Id}}", identity]);
+    if (inspected.exitCode === 0 || !isOciAbsent(inspected)) {
+      throw ociError("oci_attestation_failed", "Owned OCI duplex probe absence could not be verified.");
+    }
+    if (!(await cleanupOwnedProbeContainers(runCli, providerId))) {
+      throw ociError("oci_attestation_failed", "Owned OCI capability probe residue remains.");
     }
   }
+  return result;
+}
+
+async function cleanupOwnedProbeContainers(
+  runCli: (args: readonly string[]) => Promise<OciCliResult>,
+  providerId: string,
+): Promise<boolean> {
+  const listed = await runCli([
+    "ps", "--all", "--quiet",
+    "--filter", `label=${OWNED_LABEL}=true`,
+    "--filter", `label=${PROVIDER_LABEL}=${providerId}`,
+    "--filter", `label=${PROBE_LABEL}=true`,
+  ]);
+  if (listed.exitCode !== 0) return false;
+  const identities = listed.stdout.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+  if (identities.some((identity) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(identity))) return false;
+  for (const identity of identities) {
+    const inspected = await runCli(["inspect", "--format", "{{json .Config.Labels}}", identity]);
+    if (inspected.exitCode !== 0) {
+      if (isOciAbsent(inspected)) continue;
+      return false;
+    }
+    let labels: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(inspected.stdout) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+      labels = parsed as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    if (labels[OWNED_LABEL] !== "true" || labels[PROVIDER_LABEL] !== providerId ||
+        labels[PROBE_LABEL] !== "true") return false;
+    const removed = await runCli(["rm", "--force", identity]);
+    if (removed.exitCode !== 0 && !isOciAbsent(removed)) return false;
+    const absent = await runCli(["inspect", "--format", "{{.Id}}", identity]);
+    if (absent.exitCode === 0 || !isOciAbsent(absent)) return false;
+  }
+  return true;
+}
+
+function isOciAbsent(result: OciCliResult): boolean {
+  return result.exitCode !== 0 && /\b(?:no such (?:object|container)|not found)\b/i
+    .test(result.stderr || result.stdout);
+}
+
+async function attestImageExecutable(
+  runCli: (args: readonly string[]) => Promise<OciCliResult>,
+  immutableImageId: string,
+  executable: string,
+): Promise<void> {
+  const requested = safeText(executable, "image executable", 4096);
+  const result = await runCli([
+    "run",
+    "--rm",
+    "--network", "none",
+    "--read-only",
+    "--entrypoint", "/bin/sh",
+    immutableImageId,
+    "-c", 'command -v "$1" >/dev/null 2>&1',
+    "runner-v2-executable-probe",
+    requested,
+  ]);
+  if (result.exitCode !== 0) {
+    throw ociError(
+      "oci_image_executable_unavailable",
+      "Requested executable is unavailable in the configured immutable OCI image.",
+    );
+  }
+}
+
+function imageExecutableKey(immutableImageId: string, executable: string): string {
+  return `${immutableImageId}\0${executable}`;
+}
+
+function assertImageRelativeExecutable(executable: string): string {
+  const requested = safeText(executable, "image executable", 4096);
+  if (isAbsolute(requested) || /^[a-zA-Z]:[\\/]/u.test(requested) || requested.startsWith("\\\\")) {
+    throw ociError(
+      "oci_grant_unrepresentable",
+      "Strict OCI execution requires an image-relative executable; host executables are forbidden.",
+    );
+  }
+  return requested;
+}
+
+function strictImageExecutable(
+  intent: ExecutionIsolationAcquireRequest["intent"],
+  imageExecutable?: string,
+): string {
+  return assertImageRelativeExecutable(imageExecutable ?? intent.executable);
+}
+
+function requiresInteractiveAttach(
+  intent: ExecutionIsolationAcquireRequest["intent"],
+): boolean {
+  return intent.kind === "mcp_server" || intent.kind === "language_server";
+}
+
+async function withStateLock<T>(statePath: string, action: () => Promise<T>): Promise<T> {
+  const lockPath = `${statePath}.lock`;
   try {
-    return await action();
-  } finally {
-    await rm(lockPath, { recursive: true, force: true });
+    return await withOwnedFenceLock(lockPath, action, {
+      deadlineMs: STATE_LOCK_TIMEOUT_MS,
+      retryDelayMs: 10,
+      retireAfterEffect: false,
+    });
+  } catch (error) {
+    if (error instanceof OciExecutionIsolationError) throw error;
+    throw ociError(
+      "oci_recovery_blocked",
+      "OCI durable lease state lock is unavailable.",
+      error,
+    );
   }
 }
 
@@ -1032,12 +1266,11 @@ export function createNativeOciCli(options: {
 } = {}): OciCli {
   const spawnProcess = options.spawnProcess ?? spawn;
   const terminationGraceMs = options.terminationGraceMs ?? 1_000;
-  return Object.freeze({
-    async run(invocation: OciCliInvocation): Promise<OciCliResult> {
+  const execute = async (invocation: OciCliInvocation, input?: string): Promise<OciCliResult> => {
       return await new Promise((resolvePromise, reject) => {
         const child = spawnProcess(invocation.executable, [...invocation.args], {
           env: { ...invocation.environment },
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
           windowsHide: true,
         });
         const stdout: Buffer[] = [];
@@ -1054,8 +1287,10 @@ export function createNativeOciCli(options: {
           child.removeAllListeners();
           child.stdout?.removeAllListeners();
           child.stderr?.removeAllListeners();
+          child.stdin?.removeAllListeners();
           child.stdout?.destroy();
           child.stderr?.destroy();
+          child.stdin?.destroy();
           child.unref();
           action();
         };
@@ -1069,9 +1304,10 @@ export function createNativeOciCli(options: {
           if (stream === "stdout") stdoutBytes = next; else stderrBytes = next;
           target.push(Buffer.from(chunk));
         };
-        child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk, "stdout"));
-        child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk, "stderr"));
+        child.stdout?.on("data", (chunk: Buffer) => append(stdout, chunk, "stdout"));
+        child.stderr?.on("data", (chunk: Buffer) => append(stderr, chunk, "stderr"));
         child.once("error", (error) => settle(() => reject(error)));
+        if (input !== undefined) child.stdin?.end(input, "utf8");
         const timer = setTimeout(() => {
           try { child.kill("SIGKILL"); } catch { /* bounded grace still settles */ }
           grace = setTimeout(() => settle(() => reject(ociError(
@@ -1087,6 +1323,13 @@ export function createNativeOciCli(options: {
           }));
         });
       });
+  };
+  return Object.freeze({
+    async run(invocation: OciCliInvocation): Promise<OciCliResult> {
+      return await execute(invocation);
+    },
+    async runDuplex(invocation: OciCliInvocation, input: string): Promise<OciCliResult> {
+      return await execute(invocation, input);
     },
   });
 }

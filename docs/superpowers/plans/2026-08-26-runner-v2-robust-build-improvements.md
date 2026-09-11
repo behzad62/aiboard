@@ -24,6 +24,8 @@ The plan is grounded in the live Runner V2 seams:
 
 Product requirements have exactly one owning phase. The following controls are deliberately cross-cutting and therefore do not “own” product requirements.
 
+**2026-09-06 scoped P6.6 amendment, source updated 2026-09-08:** The owner replaced P6.6's workflow prompt with `Plan_Prompt_4.txt`, preserved at `docs/superpowers/specs/2026-09-08-runner-v2-evidence-gated-planning-source.txt`; its identity, complete traceability and readiness live in the P6.6 plan/state index. Sections 2 and 8 of `docs/superpowers/plans/2026-09-06-runner-v2-evidence-gated-planning.md` govern its delivery. The source sets a maximum of four implementation workers; the actual T4/T5 DAG uses only two. It requires resumable planning, exclusive assignment, default three evidence-backed repairs per stable issue (explicit project overrides preserved), meaningful original RED/GREEN without redundant same-invariant mutation, one combined independent deliverable review with scoped correction review, and impact-based validation with the full suite on the final candidate unless a stronger mandate applies. This changes no P1–P6.5/P7 control, existing run policy or active cleanup budget. Source replacement is not execution authorization; parent phase exits remain unchanged.
+
 1. **PREPARE**
 
    - Work in an isolated implementation worktree.
@@ -90,10 +92,12 @@ or:
 | P3 | Durable user steering and Architect `ask_user` | P0 High | HVI-3 | P2 | P4 |
 | P4 | Independent high-risk verifier | P1 High | HVI-4 | P1–P3 | P5 |
 | P5 | Protected plugin seams and generic LSP | P1 High | HVI-5 | P1–P4 | P6 |
-| P6 | DeepSeek capability audit and portable gap closure | P0 Release gate | HVI-6A | P1–P5 | P7 after verified gap closure |
-| P7 | Real-world Build-mode qualification | P0 Final gate | RW-1 | P6 verified and OD-1 | Release decision |
+| P6 | DeepSeek capability audit and portable gap closure | P0 Release gate | HVI-6A | P1–P5 | P6.5 after verified gap closure |
+| P6.5 | Review-gap closure: plan critique, exit-code gate, repair-cycle cap, worker replan, context manifests, two-pass verifier (`docs/superpowers/plans/2026-09-02-runner-v2-p6-5-review-gap-closure.md`) | P1 High | RG-1–RG-6 | P6 verified | P6.6 |
+| P6.6 | Evidence-gated specification-to-plan delivery (`docs/superpowers/plans/2026-09-06-runner-v2-evidence-gated-planning.md`) | P0 High | EP01–EP32; exact leaf ownership in its section 6 | P6.5 verified | P7 subject to OD-1 |
+| P7 | Real-world Build-mode qualification | P0 Final gate | RW-1 | P6.6 verified and OD-1 | Release decision |
 
-The chain is intentionally serial. Later features consume the durable state and invalidation rules established by earlier phases.
+The top-level chain is intentionally serial. Later features consume the durable state and invalidation rules established by earlier phases. P6.6's internal BP3/BP4 acceptance groups permit only the independent task lane documented in its plan; they do not allow overlap with unfinished P6 or P6.5.
 
 ---
 
@@ -976,7 +980,7 @@ approved alternative and cannot satisfy P6.
 - P6.4a–P6.4i meet every audit acceptance criterion with current
   red/revert/green evidence, cleanup, recovery, maintained-LTS, package-parity,
   cross-platform contract evidence, and final adversarial evidence.
-- P7 unlocks only after this exact outcome.
+- This exact P6 outcome unlocks P6.5, not P7 directly; P6.5 and P6.6 must also be verified before P7.
 
 ---
 
@@ -986,10 +990,11 @@ approved alternative and cannot satisfy P6.
 
 **Priority:** P0 Final gate
 
-**Dependencies:** P6 verified and OD-1
+**Dependencies:** P6.6 verified and OD-1
 
 ### Entry conditions and scope
 
+- P6.5 and P6.6 are verified; the qualification charter enables the new source-traceable planning/evidence policy together with plan critique, two-pass verification, and context manifests. Validate the same product path's source coverage, meaningful/reused evidence, integration acceptance and recovery; do not add a comparative benchmark.
 - The user selects the project/repository and business brief.
 - Acceptance criteria are frozen before model execution.
 - The target must be suitable for exercising:
@@ -1135,44 +1140,124 @@ The final output must be the exact success outcome. Otherwise it remains at the 
 | HVI-6A.8 | P7 remains locked until every approved portable gap is verified | P6 | P6 exit gate |
 | RW-1.1 | Build a real-world project through Build mode | P7 | Product-path qualification run |
 | RW-1.2 | Verify modifications and intended operation | P7 | Frozen charter and external oracle |
+| RG-1.1 | Plan-time risk is deterministic, durable, and raise-only | P6.5 | `assessPlanRisk` + reducer tests (P6.5.5a) |
+| RG-1.2 | Independent read-only plan critic over the baseline revision | P6.5 | Critic runtime tests (P6.5.5b) |
+| RG-1.3 | Typed findings bound to the plan revision | P6.5 | Contract parser + reducer tests (P6.5.5a) |
+| RG-1.4 | Blocking findings force one Architect resolution before any worker | P6.5 | Build-runtime ordering test (P6.5.5c) |
+| RG-1.5 | Unavailable or failed critic pauses or skips durably, never silently | P6.5 | Pause/skip tests (P6.5.5c) |
+| RG-1.6 | Plan critique visible in UI and audit | P6.5 | Client/UI tests (P6.5.5d) |
+| RG-2.1 | Satisfied verdicts citing failing command evidence are rejected unless explicitly accepted | P6.5 | Acceptance-contract + scheduler gate tests (P6.5.1) |
+| RG-2.2 | Rule applies to Architect reviews and verifier verdicts | P6.5 | `validateSchedulerEvidenceEvent` tests (P6.5.1) |
+| RG-2.3 | Accepted failures visible in audit and UI | P6.5 | Task-board render test (P6.5.1) |
+| RG-3.1 | Durable per-run repair-plan limit (default 3) | P6.5 | `repair.policy_configured` reducer test (P6.5.3) |
+| RG-3.2 | Reducer rejects repair plans beyond the limit | P6.5 | Reducer block test (P6.5.3) |
+| RG-3.3 | Runner pauses at the limit; only the user extends | P6.5 | Build-runtime pause + actor tests (P6.5.3) |
+| RG-3.4 | Cap survives restart and duplicate events | P6.5 | Replay/idempotency tests (P6.5.3) |
+| RG-4.1 | Typed worker `request_replan` lifecycle tool | P6.5 | Worker lifecycle tool test (P6.5.2) |
+| RG-4.2 | Architect reconciles the plan or refuses with evidence | P6.5 | Reducer auto-answer + reason tests (P6.5.2) |
+| RG-4.3 | Replan requests visible in UI | P6.5 | Observability summary test (P6.5.2) |
+| RG-5.1 | Every Architect, worker, and verifier context pack records a manifest | P6.5 | Runtime tests for all roles (P6.5.4) |
+| RG-5.2 | Manifests durable, run-scoped, audit-exported | P6.5 | SQLite store + audit tests (P6.5.4) |
+| RG-5.3 | Optional full pack text artifact | P6.5 | Spec flag + artifact test (P6.5.4) |
+| RG-5.4 | Historical runs open manifests read-only | P6.5 | Read-only store test (P6.5.4) |
+| RG-6.1 | Verifier records expectations from the baseline before seeing the implementation | P6.5 | Pass-1 context/tool tests (P6.5.6) |
+| RG-6.2 | Kernel refuses a two-pass verdict without expectations | P6.5 | Reducer test (P6.5.6) |
+| RG-6.3 | Adversarial prompt; unsatisfied verdicts carry location and reproduction | P6.5 | Prompt + parser tests (P6.5.6) |
+| RG-6.4 | Two-pass verification restart-safe with baseline cleanup | P6.5 | Resume + cleanup tests (P6.5.6) |
+| EP01–EP32 | Complete resumable evidence-gated specification-to-plan workflow; revised Plan_Prompt_4 source references and expanded obligations are defined in P6.6 section 6 | P6.6, through each row's single BP1–BP6 leaf owner | Same 32 stable IDs with updated sub-obligations, tasks and evidence; current planning verdict in its state index; no duplicate RG ownership |
 
-Coverage: **32 of 32 active requirements assigned once; zero unowned and zero multiply owned.** The nine former HVI-6.1–HVI-6.9 comparison requirements were withdrawn by the owner on 2026-08-28 and are not active requirements.
+Coverage index: **88 active requirements: 56 individually indexed above plus 32 EP requirements individually defined in the referenced P6.6 ledger.** Each has one acceptance-owning phase; P6.6 is the parent of its BP leaf owners, not a second owner. The nine former HVI-6.1–HVI-6.9 comparison requirements were withdrawn by the owner on 2026-08-28 and are not active requirements. The 24 RG requirements were added on 2026-09-02 with P6.5; their ownership and gates are unchanged. The 32 EP requirements were added on 2026-09-06 with the owner's separate P6.6 placement authorization. Mapping coverage does not claim implementation completion.
 
 ### Doctrine applicability matrix
 
-| Doctrine | P1 | P2 | P3 | P4 | P5 | P6 | P7 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| PREPARE and baseline evidence | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| One coherent packet | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Smallest safe validation first | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Audit all assigned requirements | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Governed automatic repair | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Failed/affected reruns before broad gates | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Prove red, revert fault, prove green | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Final adversarial re-audit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| No unrelated phase expansion | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Exact two phase outcomes only | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Doctrine | P1 | P2 | P3 | P4 | P5 | P6 | P6.5 | P6.6 | P7 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| PREPARE and baseline evidence | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| One coherent packet | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Scoped parallel lane | ✓ |
+| Smallest safe validation first | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Audit all assigned requirements | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Governed automatic repair | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Scoped finite budget | ✓ |
+| Failed/affected reruns before broad gates | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Prove red, revert fault, prove green | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Meaningful proof; no redundant mutation | ✓ |
+| Final adversarial re-audit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Source/cross-task reconciliation; reuse valid reviews | ✓ |
+| No unrelated phase expansion | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Exact two parent phase outcomes only | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 # 4. Execution queue
 
+P6.5 is specified in `docs/superpowers/plans/2026-09-02-runner-v2-p6-5-review-gap-closure.md` and starts only after the exact P6 success output. P6.6 is specified in `docs/superpowers/plans/2026-09-06-runner-v2-evidence-gated-planning.md` and starts only after the exact P6.5 success output and execution is resumed. P7 starts only after the exact P6.6 parent phase success output and OD-1. The 2026-09-06 placement amendment itself was planning only. The owner's subsequent instruction to finish P6 resumed the existing P6 execution; it did not start P6.5/P6.6/P7 or change their gates. Current proof is in `.superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/progress.md`.
+
 P1–P5 are verified. P6.1 source audit and P6.2 benchmark cleanup closed in the
 clean publication commit. P6.3 is resolved by the owner's approval of the
-portable-core, capability-selected design. The next eligible implementation
-packet after review of the persisted amendment is:
+portable-core, capability-selected design. The execution status as of
+2026-09-06 is recorded in the portable execution-safety and cleanup packet reports:
 
-> **P6.4a — Freeze the portable execution-safety contracts**
+> **Current checkpoint, 2026-09-11: P6 remains IN PROGRESS; cleanup-coordination C1–C5 is VERIFIED and its Task 8.0B3/P6.4e handback is UNBLOCKED. The final complete Runner graph passed 2,264 tests with zero failures plus all 12 configured client commands; the Windows POSIX-only skip is covered by the actual Linux 21/21 gate. Source binding, Runner static checks and owner-authorized self-review passed. This is not B3/P6 completion or a P6.5/P6.6/P7 unlock. The cleanup SDD packet's closure-2026-09-11/phase-c-final-report.md and closure-acceptance-proof.json own the exact result and preserved historical exceptions.**
 
-Its first execution actions are:
+Preserved earlier checkpoint:
 
-1. Record the P6.4 starting revision, clean state, maintained-LTS/runtime facts,
-   Git facts, and external Runner-state root.
-2. Inventory current spawn, process identity, permission grant, filesystem
-   mutation, Git, audit, recovery, packaging, and client contract conventions.
-3. Add only the platform-neutral threat model, backend/provider interfaces,
-   capability/grant types, durable process identity/result/output schemas,
-   contract version, and older-run migration refusal.
-4. Prove the new contract/recovery guards red, revert each injected fault, prove
-   them green, and run only the affected schema/recovery/static gates.
+> **P6: IN PROGRESS. P6.4e / Task 8.0B3 remains in cleanup coordination. The explicitly adjudicated C1 dispatcher prerequisite is independently accepted; C5 fourth MCP fixture correction is active. C3 round4 is independently verified and the exact retained fixture recovered successfully. C5 scoped acceptance and stable sources gate the exact native tests. B3 and P6 have no verified exit. The cleanup ledger owns current evidence, counters and routing.**
+
+Independent spec adjudication classified the old current-task retained evidence
+row as an existing C3 recovery omission, not Task11 residue or a C2 eighth repair.
+Task3 already owns finalized evidence/manifest and store/runtime integration;
+existing fourth-of-five authority is sufficient. The cleanup packet's round4
+ruling/brief/baseline require effect-free full manifest verification, exact fenced
+atomic observation, unchanged generic terminal-finalization policy, causal and
+guard fault proofs, affected checks and independent review. C5 remains three of
+five test repairs, C2 seven total, C4 two of five; no counters reset.
+
+Preserved C5 readiness entry:
+
+C3 round3 passed independent review, 156 affected checks, fault/restored proof
+and static checks. The latest native failure differs from the earlier evidence
+cleanup failure: durable acceptance was mistaken for delivery-ready output while
+evidence writes were pending. Authenticated retained state has all six cleanup
+resources verified and session released. Independent classification routes the
+readiness correction to C5 round3, without production changes or counter reset.
+The cleanup ledger records both native attempts and exact root dispositions.
+
+Preserved earlier C3 entry:
+
+The new persistent-output run has complete TAP/exit/handle and authenticated
+read-only state: quiescence/output verified, finalized lossy continuation,
+evidence blocked. Its exact root remains preserved. Independent diagnosis maps
+the overlapping live/replacement spool cleanup lifecycle to C3/spec C/E. C3
+round3 (of five, two previously used) requires nonnative causal RED, preserved
+ownership refusal, material faults, affected checks and independent review before
+native rerun. See the cleanup packet `task-3-round3-brief.md` and current ledger.
+No eighth C2 round, C5 counter reset, or historical fixture control is authorized.
+
+C2 round 7 is verified; its report and independent review are in the cleanup
+ledger directory. OD-C2-7 below is resolved for that one correction. This reopens
+C5's exact failed integration only, producing the current results above. C5 has used two test-repair cycles of five,
+which do not fund C2 production work. The third exact MCP attempt's terminal
+TAP/exit result is unknown due to a lost command handle, but authenticated
+read-only retained state proves a cleanup blocker. Independent source review
+identified the cycle; see the cleanup ledger and `task-5-report.md` for exact
+evidence and the retained fixture's ownership-safe disposition.
+
+Tasks 1–7 and 8.0A/B1/B2 have prior verified exits. B3 has no exit yet; its
+September 2 usage-limit blocker is historical and independent review has resumed.
+The strengthened same-adapter retained-output recovery checks exposed a cleanup
+latch bug; its narrow repair and current evidence are tracked in
+`.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b3-report.md`.
+
+The fifth repair round's review had no blocking code findings, but final real
+integration was non-green (5/7). The subsequent focused architecture review
+identified cross-component protocol, recovery, evidence and witness-lifecycle
+defects. On September 5 the owner explicitly approved implementation of the
+recommended redesign. Its specification and C1–C5 queue are saved in
+`docs/superpowers/specs/2026-09-05-runner-v2-cleanup-coordination-design.md` and
+`docs/superpowers/plans/2026-09-05-runner-v2-cleanup-coordination.md`; current
+evidence is in that plan's SDD ledger. This replaces the exhausted patch campaign,
+not its historical evidence. The old recordless CLI process chain separately
+still requires exceptional cleanup approval and remains excluded from mutation.
+No verified exit has been issued. Only B3's verified exit unlocks 8.1 Git, then 8.2 MCP,
+8.3 LSP, 8.4 managed processes and the local-provider/static launch audit.
+Tasks 9–12 (Git hardening, filesystem fence, recovery/disclosure, packaging and
+platform gates) still precede the P6 exit. B3 completion is not P6 completion;
+neither P6.5, P6.6 nor P7 is unlocked by B3 alone.
 
 Full queue:
 
@@ -1184,12 +1269,30 @@ P4.1 → P4.2 → P4.3 → P4.4 → P4.5 → P4.6 → P4 gate
 P5.1 → P5.2 → P5.3 → P5.4 → P5.5 → P5.6 → P5 gate
 P6.1 audit → P6.2 benchmark cleanup → P6.3 portable design approved
   → P6.4a → P6.4b → P6.4c → P6.4d → P6.4e → P6.4f → P6.4g → P6.4h → P6.4i → P6 gate
+P6.5.0 → P6.5.1 → P6.5.2 → P6.5.3 → P6.5.4 → P6.5.5a → P6.5.5b → P6.5.5c → P6.5.5d → P6.5.6 → P6.5 gate
+P6.6: T1 → T2 → T3 → (T4 || T5, isolated writers) → integrate T4 then T5 → T6 → T7 → T8 → P6.6 gate
 P7.1 → P7.2 → P7.3 → P7.4 → P7.5 → P7.6 → final gate
 ```
 
 # 5. Genuine unresolved owner decisions
 
-One current owner decision remains:
+OD-C2-7 is resolved for the seventh bounded correction. OD-1 remains a later
+qualification decision and does not block P6:
+
+**OD-C2-7 — Bounded cleanup architecture correction authority**
+
+Resolved 2026-09-06: `resume the work` directly followed the explicit question
+requesting approval of this correction, including tests and independent review.
+It authorizes one additional C2 repair round (seventh total, not a counter reset)
+to transfer the live family attachment to its existing evidence-only cleanup
+reader before workload quiescence, without awaiting output exhaustion. Draining
+and ACKs must continue while stopping proceeds; separate output settlement,
+fences, evidence bounds, deadlines and backend/witness proofs stay mandatory.
+Require the combined accepted-but-undelivered frame/stopped family pump/
+ACK-dependent termination regression RED, material reversal RED, restored GREEN,
+affected contracts/static checks and independent re-review before resuming C5.
+The independently reviewed defect belongs to C2's existing Host split/ordering
+requirement; it must not be renamed C5 work to bypass exhausted authority.
 
 **OD-1 — Real-world qualification target**
 
@@ -1200,5 +1303,5 @@ capability-selected execution design and rejected the earlier Windows-first
 proposal. P6.4 implementation is therefore mandatory before P7 and cannot be
 replaced by a Windows-only implementation or a residual-risk waiver.
 
-OD-1 does **not** block P6. No other routine technical question or owner
-decision is currently required.
+OD-1 does **not** block P6. OD-C2-7 no longer blocks the scoped correction.
+No routine technical question or waiver of controls is requested.

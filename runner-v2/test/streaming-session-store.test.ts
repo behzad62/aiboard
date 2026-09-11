@@ -9,7 +9,9 @@ import test from "node:test";
 import {
   StreamingSessionStoreError,
   createInMemoryStreamingSessionStore,
+  deriveAdoptedCleanupAttemptId,
   digestStreamingSessionRecord,
+  getStreamingSessionKernelWriter,
   getStreamingSessionStoreWriter,
   openSqliteStreamingSessionStore,
   parseStreamingSessionRecord,
@@ -76,6 +78,237 @@ function pendingTransferRecord(
   };
 }
 
+function currentCleanupRecord(): Record<string, unknown> {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  return structuredClone(claimCurrentCleanup(writer)) as unknown as Record<string, unknown>;
+}
+
+function verifyCleanupPrefix(writer: ReturnType<typeof getStreamingSessionStoreWriter>, initial: ReturnType<typeof claimCurrentCleanup>, count: number) {
+  let record = initial;
+  for (const resource of ["workload_quiescence", "retained_output_settlement", "evidence", "channel_detach", "backend_release", "isolation_release"].slice(0, count)) {
+    record = writer.apply({ type: "begin_cleanup_resource", sessionId: "stream-1", ownerId: record.ownerId,
+      fencingToken: record.fencingToken, expectedRevision: record.revision, effectId: "cleanup-1", resource,
+      startedAt: "2026-08-29T00:00:02.000Z", deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:02.000Z" });
+    const attempt = record.effects.find((effect) => effect.kind === "cleanup")!.progress!.resources.find((fact) => fact.resource === resource)!.attempt!;
+    record = writer.apply({ type: "settle_cleanup_resource", sessionId: "stream-1", ownerId: record.ownerId,
+      fencingToken: record.fencingToken, expectedRevision: record.revision, effectId: "cleanup-1", resource,
+      attemptId: attempt.attemptId, attemptOwnerId: attempt.ownerId, attemptFencingToken: attempt.fencingToken,
+      result: "verified", ...(resource === "evidence" ? { evidence: {
+        kind: "same_runtime_finalization", digest: "e".repeat(64), lossy: false,
+      } } : {}), at: "2026-08-29T00:00:02.000Z" });
+  }
+  return record;
+}
+
+test("round4 resource intent cannot pass an unresolved predecessor", () => {
+  for (let index = 1; index < 6; index++) {
+    const kernel = createInMemoryStreamingSessionStore();
+    const writer = getStreamingSessionStoreWriter(kernel);
+    const record = verifyCleanupPrefix(writer, claimCurrentCleanup(writer), index - 1);
+    const resource = ["workload_quiescence", "retained_output_settlement", "evidence", "channel_detach", "backend_release", "isolation_release"][index]!;
+    assert.throws(() => writer.apply({ type: "begin_cleanup_resource", sessionId: "stream-1", ownerId: "owner-1",
+      fencingToken: 1, expectedRevision: record.revision, effectId: "cleanup-1", resource,
+      startedAt: "2026-08-29T00:00:03.000Z", deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:03.000Z" }),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect", resource);
+    assert.equal(kernel.store.readBySession("stream-1")!.revision, record.revision);
+  }
+});
+
+test("round4 pending deadline blocker proves no new effect and remains exactly retryable", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = claimCurrentCleanup(writer);
+  const command = { type: "expire_cleanup_resource", sessionId: "stream-1", ownerId: "owner-1", fencingToken: 1,
+    expectedRevision: record.revision, effectId: "cleanup-1", resource: "workload_quiescence",
+    deadlineAt: "2026-08-29T00:00:03.000Z", at: "2026-08-29T00:00:03.000Z" };
+  record = writer.apply(command);
+  const fact = record.effects.find((effect) => effect.kind === "cleanup")!.progress!.resources[0]!;
+  assert.equal(record.state, "cleanup_blocked");
+  assert.equal(fact.blocker?.code, "cleanup_deadline_before_effect");
+  assert.equal(fact.attempts, 0);
+  assert.equal(fact.attempt, undefined);
+  assert.throws(() => writer.apply({ ...command, type: "retry_cleanup", expectedRevision: record.revision }));
+  const retried = writer.apply({ ...command, type: "retry_cleanup_resource", expectedRevision: record.revision });
+  assert.equal(retried.state, "cleanup_pending");
+  assert.equal(retried.effects.find((effect) => effect.kind === "cleanup")!.progress!.resources[0]!.attempts, 0);
+});
+
+test("round4 an exhausted outer deadline may predate cleanup creation without authorizing an effect", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  const record = claimCurrentCleanup(writer);
+  const expired = writer.apply({ type: "expire_cleanup_resource", sessionId: "stream-1", ownerId: "owner-1", fencingToken: 1,
+    expectedRevision: record.revision, effectId: "cleanup-1", resource: "workload_quiescence",
+    deadlineAt: "2026-08-29T00:00:01.000Z", at: "2026-08-29T00:00:03.000Z" });
+  assert.equal(expired.state, "cleanup_blocked");
+  assert.equal(expired.effects.find((effect) => effect.kind === "cleanup")!.progress!.resources[0]!.attempts, 0);
+});
+
+test("round4 pending expiry validates chronology ownership revision identity and first unresolved resource", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  const record = claimCurrentCleanup(writer);
+  const command = { type: "expire_cleanup_resource", sessionId: "stream-1", ownerId: "owner-1", fencingToken: 1,
+    expectedRevision: record.revision, effectId: "cleanup-1", resource: "workload_quiescence",
+    deadlineAt: "2026-08-29T00:00:03.000Z", at: "2026-08-29T00:00:03.000Z" };
+  for (const mutation of [{ at: "2026-08-29T00:00:02.999Z" }, { at: "2026-08-29T00:05:00.000Z" },
+    { at: "2026-08-29T00:00:01.000Z", deadlineAt: "2026-08-29T00:00:00.000Z" },
+    { ownerId: "stale" }, { fencingToken: 2 }, { expectedRevision: record.revision + 1 },
+    { effectId: "foreign" }, { resource: "retained_output_settlement" }]) {
+    assert.throws(() => writer.apply({ ...command, ...mutation }), StreamingSessionStoreError);
+    assert.equal(kernel.store.readBySession("stream-1")!.revision, record.revision);
+  }
+  const issued = writer.apply({ ...command, type: "begin_cleanup_resource", startedAt: command.at,
+    deadlineAt: "2026-08-29T00:00:30.000Z" });
+  assert.throws(() => writer.apply({ ...command, expectedRevision: issued.revision }), StreamingSessionStoreError);
+  const attempt = issued.effects.find((effect) => effect.kind === "cleanup")!.progress!.resources[0]!.attempt!;
+  assert.throws(() => writer.apply({ ...command, type: "settle_cleanup_resource", expectedRevision: issued.revision,
+    attemptId: attempt.attemptId, attemptOwnerId: attempt.ownerId, attemptFencingToken: attempt.fencingToken,
+    result: "blocked", blocker: { code: "cleanup_deadline_before_effect", message: "Cleanup deadline expired before effect issuance." } }), StreamingSessionStoreError);
+});
+
+test("round4 pending expiry parser rejects forged disposition attempt and prerequisite shapes", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  const initial = verifyCleanupPrefix(writer, claimCurrentCleanup(writer), 1);
+  const expired = writer.apply({ type: "expire_cleanup_resource", sessionId: "stream-1", ownerId: "owner-1", fencingToken: 1,
+    expectedRevision: initial.revision, effectId: "cleanup-1", resource: "retained_output_settlement",
+    deadlineAt: "2026-08-29T00:00:03.000Z", at: "2026-08-29T00:00:03.000Z" });
+  const valid = structuredClone(expired) as unknown as Record<string, unknown>;
+  const resources = cleanupResources(valid);
+  const attempt = { attemptId: deriveAdoptedCleanupAttemptId({ effectId: "cleanup-1", resource: "retained_output_settlement",
+    ownerId: "owner-1", fencingToken: 1, ordinal: 1 }), ownerId: "owner-1", fencingToken: 1,
+    startedAt: "2026-08-29T00:00:03.000Z", deadlineAt: "2026-08-29T00:00:30.000Z" };
+  for (const [label, changed] of [
+    ["new blocker with attempt", resources.map((fact, index) => index === 1 ? { ...fact, attempts: 1, attempt } : fact)],
+    ["old blocker without attempt", resources.map((fact, index) => index === 1 ? { ...fact, attempts: 1,
+      blocker: { code: "cleanup_deadline_expired", message: "Cleanup deadline expired." } } : fact)],
+    ["unverified predecessor", resources.map((fact, index) => index === 0 ? { ...fact, status: "pending", attempts: 0, verifiedAt: undefined } : fact)],
+  ] as const) assert.throws(() => parseStreamingSessionRecord(withCleanupResources(valid, changed)), StreamingSessionStoreError, label);
+  const pending = structuredClone(valid);
+  pending.state = "cleanup_pending";
+  pending.history = (pending.history as unknown[]).slice(0, -1);
+  const cleanup = (pending.effects as Array<Record<string, unknown>>).find((effect) => effect.kind === "cleanup")!;
+  cleanup.status = "pending";
+  delete cleanup.blockedAt;
+  assert.throws(() => parseStreamingSessionRecord(pending), StreamingSessionStoreError);
+});
+
+test("round4 SQLite reopen retains each first-unissued blocker and refuses release for all six resources", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-unissued-expiry-"));
+  const key = new Uint8Array(32).fill(26);
+  let kernel: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  try {
+    for (let index = 0; index < 6; index++) {
+      const path = join(root, `sessions-${index}.sqlite`);
+      kernel = openSqliteStreamingSessionStore(path, key);
+      const writer = getStreamingSessionStoreWriter(kernel);
+      const initial = verifyCleanupPrefix(writer, claimCurrentCleanup(writer), index);
+      const resource = initial.effects.find((effect) => effect.kind === "cleanup")!.progress!.resources[index]!.resource;
+      const expired = writer.apply({ type: "expire_cleanup_resource", sessionId: "stream-1", ownerId: "owner-1", fencingToken: 1,
+        expectedRevision: initial.revision, effectId: "cleanup-1", resource,
+        deadlineAt: "2026-08-29T00:00:03.000Z", at: "2026-08-29T00:00:03.000Z" });
+      kernel.store.close();
+      kernel = openSqliteStreamingSessionStore(path, key);
+      assert.deepEqual(kernel.store.readBySession("stream-1"), expired);
+      assert.throws(() => getStreamingSessionStoreWriter(kernel!).apply({ type: "acknowledge_cleanup", sessionId: "stream-1",
+        ownerId: "owner-1", fencingToken: 1, expectedRevision: expired.revision, effectId: "cleanup-1", at: "2026-08-29T00:00:04.000Z" }),
+      StreamingSessionStoreError, `${resource} blocks final release`);
+      kernel.store.close();
+      kernel = undefined;
+    }
+  } finally {
+    kernel?.store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function claimCurrentCleanup(writer: ReturnType<typeof getStreamingSessionStoreWriter>) {
+  const pending = writer.claim(pendingTransferRecord()).record;
+  const active = writer.apply({
+    type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  return writer.apply({
+    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+  });
+}
+
+function blockedChannelCleanup(
+  code: "cleanup_deadline_expired" | "cleanup_effect_outcome_unknown" | "channel_detach_failed",
+  message: "Cleanup deadline expired." | "Cleanup effect outcome is unknown." | "Streaming channel detach failed.",
+) {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = verifyCleanupPrefix(writer, claimCurrentCleanup(writer), 3);
+  record = writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    startedAt: "2026-08-29T00:00:03.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:03.000Z",
+  });
+  const attemptId = cleanupResources(record as unknown as Record<string, unknown>)[3]!.attempt as { attemptId: string };
+  record = writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: attemptId.attemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "blocked", blocker: { code, message }, at: "2026-08-29T00:00:04.000Z",
+  });
+  return { writer, record, attemptId: attemptId.attemptId };
+}
+
+function verifyAndReleaseCurrentCleanup(
+  writer: ReturnType<typeof getStreamingSessionStoreWriter>,
+  initial: ReturnType<ReturnType<typeof getStreamingSessionStoreWriter>["apply"]>,
+) {
+  let record = initial;
+  const resources = cleanupResources(record as unknown as Record<string, unknown>)
+    .map((fact) => fact.resource as string);
+  for (const [index, resource] of resources.entries()) {
+    const startedAt = new Date(Date.parse("2026-08-29T00:00:03.000Z") + index * 2_000).toISOString();
+    record = writer.apply({
+      type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: record.ownerId, fencingToken: record.fencingToken, effectId: "cleanup-1", resource,
+      startedAt, deadlineAt: "2026-08-29T00:00:30.000Z", at: startedAt,
+    });
+    const attempt = cleanupResources(record as unknown as Record<string, unknown>)[index]!.attempt as { attemptId: string };
+    record = writer.apply({
+      type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: record.ownerId, fencingToken: record.fencingToken, effectId: "cleanup-1", resource,
+      attemptId: attempt.attemptId, attemptOwnerId: record.ownerId, attemptFencingToken: record.fencingToken,
+      result: "verified", at: new Date(Date.parse(startedAt) + 1_000).toISOString(),
+      ...(resource === "evidence" ? { evidence: {
+        kind: "bounded_output_manifest", digest: "e".repeat(64), lossy: false,
+      } } : {}),
+    });
+  }
+  return writer.apply({
+    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: record.ownerId, fencingToken: record.fencingToken,
+    at: "2026-08-29T00:00:20.000Z", effectId: "cleanup-1",
+  });
+}
+
+function cleanupResources(record: Record<string, unknown>): Array<Record<string, unknown>> {
+  const effects = record.effects as Array<Record<string, unknown>>;
+  const cleanup = effects.find((effect) => effect.kind === "cleanup")!;
+  return structuredClone((cleanup.progress as { resources: Array<Record<string, unknown>> }).resources);
+}
+
+function withCleanupResources(
+  record: Record<string, unknown>,
+  resources: Array<Record<string, unknown> | undefined>,
+): Record<string, unknown> {
+  return {
+    ...record,
+    effects: (record.effects as Array<Record<string, unknown>>).map((effect) => effect.kind === "cleanup"
+      ? { ...effect, progress: { resources } }
+      : effect),
+  };
+}
+
 function writeSignedStreamingSessionRow(
   path: string,
   integrityKey: Uint8Array,
@@ -121,7 +354,8 @@ test("rejects unknown fields on a durable pending-transfer session record", () =
 test("rejects a pending-transfer record without its exact pending transfer effect", () => {
   assert.throws(
     () => parseStreamingSessionRecord(pendingTransferRecord({ effects: [] })),
-    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+    (error) => error instanceof StreamingSessionStoreError &&
+      (error.code === "invalid_state" || error.code === "invalid_effect"),
   );
 });
 
@@ -154,12 +388,10 @@ test("rejects forged transfer and cleanup effect owner or fence evidence", () =>
         ? { ...effect, owner: "provider_lease", fencingToken: 99 }
         : effect),
     }),
-    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+    (error) => error instanceof StreamingSessionStoreError &&
+      (error.code === "invalid_state" || error.code === "invalid_effect"),
   );
-  const released = writer.apply({
-    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
-    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
-  });
+  const released = verifyAndReleaseCurrentCleanup(writer, cleaning);
   for (const owner of ["tool_broker", "provider_lease"] as const) {
     assert.throws(
       () => parseStreamingSessionRecord({
@@ -168,7 +400,8 @@ test("rejects forged transfer and cleanup effect owner or fence evidence", () =>
           ? { ...effect, owner }
           : effect),
       }),
-      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+      (error) => error instanceof StreamingSessionStoreError &&
+        (error.code === "invalid_state" || error.code === "invalid_effect"),
     );
   }
 
@@ -207,9 +440,631 @@ test("returns an immutable deep clone instead of retaining caller-owned durable 
 
 test("refuses an unsupported active streaming-session schema", () => {
   assert.throws(
-    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 4 })),
+    () => parseStreamingSessionRecord(pendingTransferRecord({ schemaVersion: 5 })),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_active_version",
   );
+});
+
+test("begins adopted cleanup with six derived pending version-4 resource facts and reopens them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-adopted-cleanup-v4-"));
+  const path = join(root, "sessions.sqlite");
+  const key = new Uint8Array(32).fill(12);
+  let kernel: ReturnType<typeof openSqliteStreamingSessionStore> | undefined;
+  try {
+    kernel = openSqliteStreamingSessionStore(path, key);
+    const writer = getStreamingSessionStoreWriter(kernel);
+    const pending = writer.claim(pendingTransferRecord()).record;
+    const active = writer.apply({
+      type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
+      ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+    });
+    const cleaning = writer.apply({
+      type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+      ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
+    });
+    const resources = cleaning.effects.find((effect) => effect.kind === "cleanup")?.progress?.resources;
+    assert.equal(cleaning.schemaVersion, 4);
+    assert.deepEqual(resources?.map(({ resource, status, ownerId, fencingToken, attempts }) => ({
+      resource, status, ownerId, fencingToken, attempts,
+    })), [
+      { resource: "workload_quiescence", status: "pending", ownerId: "owner-1", fencingToken: 1, attempts: 0 },
+      { resource: "retained_output_settlement", status: "pending", ownerId: "owner-1", fencingToken: 1, attempts: 0 },
+      { resource: "evidence", status: "pending", ownerId: "owner-1", fencingToken: 1, attempts: 0 },
+      { resource: "channel_detach", status: "pending", ownerId: "owner-1", fencingToken: 1, attempts: 0 },
+      { resource: "backend_release", status: "pending", ownerId: "owner-1", fencingToken: 1, attempts: 0 },
+      { resource: "isolation_release", status: "pending", ownerId: "owner-1", fencingToken: 1, attempts: 0 },
+    ]);
+    assert.deepEqual(resources?.map(({ resource, identity }) => ({ resource, identity })), [
+      { resource: "workload_quiescence", identity: "workload:backend-child-1" },
+      { resource: "retained_output_settlement", identity: "output:stream-1:backend-child-1" },
+      { resource: "evidence", identity: "evidence:stream-1" },
+      { resource: "channel_detach", identity: "channel:stream-1:backend-child-1" },
+      { resource: "backend_release", identity: "backend:registry-1:backend-1:backend-child-1" },
+      { resource: "isolation_release", identity: `isolation:fake-provider:lease-1:invoke-1:${"a".repeat(64)}` },
+    ]);
+    kernel.store.close();
+    kernel = openSqliteStreamingSessionStore(path, key);
+    assert.deepEqual(
+      kernel.store.readBySession("stream-1")?.effects.find((effect) => effect.kind === "cleanup")?.progress?.resources,
+      resources,
+    );
+  } finally {
+    try { kernel?.store.close(); } catch {}
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects malformed version-4 cleanup sets, identities, and forbidden evidence payloads", () => {
+  const valid = currentCleanupRecord();
+  const resources = cleanupResources(valid);
+  const variants = [
+    withCleanupResources(valid, resources.slice(0, -1)),
+    withCleanupResources(valid, [...resources, resources[0]]),
+    withCleanupResources(valid, [resources[0], resources[0], ...resources.slice(2)]),
+    withCleanupResources(valid, resources.map((resource, index) => index === 0
+      ? { ...resource, identity: "workload:foreign-backend" }
+      : resource)),
+    {
+      ...valid,
+      backendBinding: { ...(valid.backendBinding as Record<string, unknown>), opaqueIdentity: "other-backend" },
+    },
+  ];
+  for (const variant of variants) {
+    assert.throws(
+      () => parseStreamingSessionRecord(variant),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect",
+    );
+  }
+
+  const forbiddenEvidence = withCleanupResources(valid, resources.map((resource, index) => index === 2
+    ? {
+      ...resource,
+      status: "verified",
+      attempts: 1,
+      verifiedAt: "2026-08-29T00:00:03.000Z",
+      evidence: {
+        kind: "bounded_output_manifest",
+        digest: "d".repeat(64),
+        lossy: false,
+        payload: "credential=never-durable",
+      },
+    }
+    : resource));
+  assert.throws(
+    () => parseStreamingSessionRecord(forbiddenEvidence),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "forbidden_durable_value",
+  );
+});
+
+test("SQLite rejects invalid MAC and valid-MAC malformed version-4 cleanup rows", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-adopted-cleanup-integrity-"));
+  const key = new Uint8Array(32).fill(13);
+  try {
+    const invalidMacPath = join(root, "invalid-mac.sqlite");
+    writeSignedStreamingSessionRow(invalidMacPath, key, currentCleanupRecord());
+    const tamper = new DatabaseSync(invalidMacPath);
+    tamper.prepare("UPDATE streaming_sessions SET integrity = ? WHERE session_id = ?").run("00".repeat(32), "stream-1");
+    tamper.close();
+    const invalidMac = openSqliteStreamingSessionStore(invalidMacPath, key);
+    assert.throws(
+      () => invalidMac.store.readBySession("stream-1"),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record",
+    );
+    invalidMac.store.close();
+
+    const malformedPath = join(root, "valid-mac-malformed.sqlite");
+    const valid = currentCleanupRecord();
+    const resources = cleanupResources(valid);
+    writeSignedStreamingSessionRow(
+      malformedPath,
+      key,
+      withCleanupResources(valid, [resources[0], resources[0], ...resources.slice(2)]),
+    );
+    const malformed = openSqliteStreamingSessionStore(malformedPath, key);
+    assert.throws(
+      () => malformed.store.readBySession("stream-1"),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect",
+    );
+    malformed.store.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("conservatively upgrades a signed version-3 current-fence cleanup without rewriting it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-adopted-cleanup-v3-upgrade-"));
+  const path = join(root, "sessions.sqlite");
+  const key = new Uint8Array(32).fill(14);
+  const current = currentCleanupRecord();
+  const legacy = {
+    ...current,
+    schemaVersion: 3,
+    effects: (current.effects as Array<Record<string, unknown>>).map((effect) => {
+      const { progress: _progress, ...rest } = effect;
+      return rest;
+    }),
+  };
+  const before = writeSignedStreamingSessionRow(path, key, legacy);
+  const kernel = openSqliteStreamingSessionStore(path, key);
+  try {
+    const upgraded = kernel.store.readBySession("stream-1")!;
+    assert.equal(upgraded.schemaVersion, 4);
+    assert.equal(cleanupResources(upgraded as unknown as Record<string, unknown>).length, 6);
+    assert.ok(cleanupResources(upgraded as unknown as Record<string, unknown>).every((resource) =>
+      resource.status === "pending" && resource.attempts === 0));
+    assert.deepEqual(readSignedStreamingSessionRow(path), before, "read-time upgrade must not rewrite authenticated legacy bytes");
+  } finally {
+    kernel.store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("persists fenced cleanup attempts and releases only after all six exact facts are verified", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = claimCurrentCleanup(writer);
+  const resourceKinds = cleanupResources(record as unknown as Record<string, unknown>)
+    .map((resource) => resource.resource as string);
+
+  assert.throws(
+    () => writer.apply({
+      type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:03.000Z",
+    }),
+    (error) => error instanceof StreamingSessionStoreError &&
+      (error.code === "invalid_effect" || error.code === "invalid_state"),
+  );
+
+  for (const [index, resource] of resourceKinds.entries()) {
+    const startedAt = new Date(Date.parse("2026-08-29T00:00:03.000Z") + index * 2_000).toISOString();
+    const deadlineAt = new Date(Date.parse(startedAt) + 30_000).toISOString();
+    record = writer.apply({
+      type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource,
+      startedAt, deadlineAt, at: startedAt,
+    });
+    const inFlight = cleanupResources(record as unknown as Record<string, unknown>)[index]!;
+    const attemptId = (inFlight.attempt as { attemptId: string }).attemptId;
+    assert.deepEqual(inFlight.attempt, {
+      attemptId, ownerId: "owner-1", fencingToken: 1, startedAt, deadlineAt,
+    });
+    assert.equal(inFlight.status, "in_flight");
+    assert.equal(inFlight.attempts, 1);
+    assert.throws(
+      () => writer.apply({
+        type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+        ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: startedAt,
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect",
+      `${resource} in-flight must prevent release`,
+    );
+    assert.throws(
+      () => writer.apply({
+        type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+        ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource,
+        attemptId: `wrong-${resource}`, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+        result: "verified", at: new Date(Date.parse(startedAt) + 1_000).toISOString(),
+      }),
+      (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect",
+      `${resource} wrong attempt must be rejected`,
+    );
+    const settledAt = new Date(Date.parse(startedAt) + 1_000).toISOString();
+    record = writer.apply({
+      type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource,
+      attemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+      result: "verified", at: settledAt,
+      ...(resource === "evidence" ? { evidence: {
+        kind: "bounded_output_manifest", digest: "d".repeat(64), lossy: false,
+      } } : {}),
+    });
+    assert.equal(cleanupResources(record as unknown as Record<string, unknown>)[index]!.status, "verified");
+    if (index < resourceKinds.length - 1) {
+      assert.throws(
+        () => writer.apply({
+          type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+          ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: settledAt,
+        }),
+        (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect",
+        `${resourceKinds[index + 1]} pending must prevent release`,
+      );
+    }
+  }
+
+  record = writer.apply({
+    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:20.000Z",
+  });
+  assert.equal(record.state, "released");
+  assert.ok(cleanupResources(record as unknown as Record<string, unknown>).every((resource) =>
+    resource.status === "verified" && resource.attempt === undefined));
+});
+
+test("blocks and retries only the exact fenced cleanup resource without losing verified facts", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = verifyCleanupPrefix(writer, claimCurrentCleanup(writer), 3);
+  record = writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    startedAt: "2026-08-29T00:00:03.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:03.000Z",
+  });
+  const attemptId = (cleanupResources(record as unknown as Record<string, unknown>)[3]!.attempt as { attemptId: string }).attemptId;
+  for (const mutation of [
+    { expectedRevision: record.revision + 1 },
+    { ownerId: "stale-owner" },
+    { fencingToken: 2 },
+    { attemptOwnerId: "stale-owner" },
+    { attemptFencingToken: 2 },
+  ]) {
+    assert.throws(() => writer.apply({
+      type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+      attemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+      result: "blocked", blocker: { code: "channel_detach_failed", message: "Streaming channel detach failed." },
+      at: "2026-08-29T00:00:04.000Z", ...mutation,
+    }), StreamingSessionStoreError);
+  }
+  record = writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "blocked", blocker: { code: "channel_detach_failed", message: "Streaming channel detach failed." },
+    at: "2026-08-29T00:00:04.000Z",
+  });
+  assert.equal(record.state, "cleanup_blocked");
+  assert.equal(cleanupResources(record as unknown as Record<string, unknown>)[3]!.status, "blocked");
+  assert.throws(
+    () => writer.apply({
+      type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:05.000Z",
+    }),
+    (error) => error instanceof StreamingSessionStoreError &&
+      (error.code === "invalid_effect" || error.code === "invalid_state"),
+  );
+  record = writer.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    at: "2026-08-29T00:00:05.000Z",
+  });
+  const retried = cleanupResources(record as unknown as Record<string, unknown>)[3]!;
+  assert.equal(record.state, "cleanup_pending");
+  assert.equal(retried.status, "pending");
+  assert.equal(retried.attempts, 1);
+});
+
+test("refuses deadline retry, reusable attempt identity, generic v4 blocking, and invalid cleanup chronology", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = verifyCleanupPrefix(writer, claimCurrentCleanup(writer), 3);
+  assert.throws(() => writer.apply({
+    type: "mark_cleanup_blocked", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:03.000Z",
+  }), StreamingSessionStoreError, "generic v4 blocking cannot replace a categorical resource settlement");
+  assert.throws(() => writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: "reusable-attempt", startedAt: "2026-08-29T00:00:01.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:01.000Z",
+  }), StreamingSessionStoreError, "attempt cannot predate cleanup creation");
+  record = writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    startedAt: "2026-08-29T00:00:03.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:03.000Z",
+  });
+  const firstAttemptId = (cleanupResources(record as unknown as Record<string, unknown>)[3]!.attempt as { attemptId: string }).attemptId;
+  assert.throws(() => writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: firstAttemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "blocked", blocker: { code: "channel_detach_failed", message: "Streaming channel detach failed." },
+    at: "2026-08-29T00:00:02.000Z",
+  }), StreamingSessionStoreError, "settlement cannot predate its issued attempt");
+  record = writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: firstAttemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "blocked", blocker: { code: "cleanup_deadline_expired", message: "Cleanup deadline expired." },
+    at: "2026-08-29T00:00:04.000Z",
+  });
+  assert.throws(() => writer.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    at: "2026-08-29T00:00:05.000Z",
+  }), StreamingSessionStoreError, "deadline expiry requires typed reconciliation before retry");
+
+  const retryableKernel = createInMemoryStreamingSessionStore();
+  const retryableWriter = getStreamingSessionStoreWriter(retryableKernel);
+  let retryable = verifyCleanupPrefix(retryableWriter, claimCurrentCleanup(retryableWriter), 3);
+  retryable = retryableWriter.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: retryable.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    startedAt: "2026-08-29T00:00:03.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:03.000Z",
+  });
+  const retryableAttemptId = (cleanupResources(retryable as unknown as Record<string, unknown>)[3]!.attempt as { attemptId: string }).attemptId;
+  retryable = retryableWriter.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: retryable.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: retryableAttemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "blocked", blocker: { code: "channel_detach_failed", message: "Streaming channel detach failed." },
+    at: "2026-08-29T00:00:04.000Z",
+  });
+  assert.throws(() => retryableWriter.apply({
+    type: "retry_cleanup", sessionId: "stream-1", expectedRevision: retryable.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:05.000Z",
+  }), StreamingSessionStoreError, "generic retry cannot bypass resource classification");
+  retryable = retryableWriter.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: retryable.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    at: "2026-08-29T00:00:05.000Z",
+  });
+  assert.throws(() => retryableWriter.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: retryable.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: retryableAttemptId, startedAt: "2026-08-29T00:00:06.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:06.000Z",
+  }), StreamingSessionStoreError, "a late first completion must never match a reused retry identity");
+});
+
+test("rejects a signed v4 in-flight fact whose chronology predates cleanup creation", () => {
+  const valid = currentCleanupRecord();
+  const resources = cleanupResources(valid);
+  const malformed = withCleanupResources(valid, resources.map((resource, index) => index === 0 ? {
+    ...resource,
+    status: "in_flight",
+    attempts: 1,
+    attempt: {
+      attemptId: deriveAdoptedCleanupAttemptId({
+        effectId: "cleanup-1", resource: "workload_quiescence", ordinal: 1,
+        ownerId: "owner-1", fencingToken: 1,
+      }), ownerId: "owner-1", fencingToken: 1,
+      startedAt: "2026-08-29T00:00:01.000Z", deadlineAt: "2026-08-29T00:00:30.000Z",
+    },
+  } : resource));
+  assert.throws(
+    () => parseStreamingSessionRecord(malformed),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_effect",
+  );
+});
+
+test("deadline-expired cleanup cannot retry without typed reconciliation", () => {
+  const { writer, record } = blockedChannelCleanup("cleanup_deadline_expired", "Cleanup deadline expired.");
+  assert.throws(() => writer.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    at: "2026-08-29T00:00:05.000Z",
+  }), StreamingSessionStoreError);
+});
+
+test("deadline reconciliation retains the exact attempt until an observed resolution", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = claimCurrentCleanup(writer);
+  record = writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    startedAt: "2026-08-29T00:00:03.000Z", deadlineAt: "2026-08-29T00:00:30.000Z",
+    at: "2026-08-29T00:00:03.000Z",
+  });
+  const attempt = cleanupResources(record as unknown as Record<string, unknown>)[0]!.attempt as {
+    attemptId: string; ownerId: string; fencingToken: number;
+  };
+  record = writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    attemptId: attempt.attemptId, attemptOwnerId: attempt.ownerId,
+    attemptFencingToken: attempt.fencingToken, result: "blocked",
+    blocker: { code: "cleanup_deadline_expired", message: "Cleanup deadline expired." },
+    at: "2026-08-29T00:00:31.000Z",
+  });
+  const retained = cleanupResources(record as unknown as Record<string, unknown>)[0]!;
+  assert.equal(retained.status, "blocked");
+  assert.deepEqual(retained.attempt, attempt);
+  assert.throws(() => writer.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    at: "2026-08-29T00:00:32.000Z",
+  }), StreamingSessionStoreError);
+  record = writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    attemptId: attempt.attemptId, attemptOwnerId: attempt.ownerId,
+    attemptFencingToken: attempt.fencingToken, result: "verified",
+    at: "2026-08-29T00:00:33.000Z",
+  });
+  assert.equal(record.state, "cleanup_pending");
+  assert.equal(cleanupResources(record as unknown as Record<string, unknown>)[0]!.status, "verified");
+  assert.equal(cleanupResources(record as unknown as Record<string, unknown>)[0]!.attempt, undefined);
+});
+
+test("cleanup attempt identity cannot be reused after a blocked retry", () => {
+  const { writer, record, attemptId } = blockedChannelCleanup("channel_detach_failed", "Streaming channel detach failed.");
+  const retried = writer.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    at: "2026-08-29T00:00:05.000Z",
+  });
+  assert.throws(() => writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: retried.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId, startedAt: "2026-08-29T00:00:06.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:06.000Z",
+  }), StreamingSessionStoreError);
+});
+
+test("generic retry cannot bypass a categorical version-4 resource blocker", () => {
+  const { writer, record } = blockedChannelCleanup("channel_detach_failed", "Streaming channel detach failed.");
+  assert.throws(() => writer.apply({
+    type: "retry_cleanup", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:05.000Z",
+  }), StreamingSessionStoreError);
+});
+
+test("generic blocking cannot replace a categorical version-4 resource settlement", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  const record = claimCurrentCleanup(writer);
+  assert.throws(() => writer.apply({
+    type: "mark_cleanup_blocked", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", at: "2026-08-29T00:00:03.000Z",
+  }), StreamingSessionStoreError);
+});
+
+test("cleanup attempt and settlement chronology cannot predate their durable causes", () => {
+  const first = createInMemoryStreamingSessionStore();
+  const firstWriter = getStreamingSessionStoreWriter(first);
+  const cleaning = verifyCleanupPrefix(firstWriter, claimCurrentCleanup(firstWriter), 3);
+  assert.throws(() => firstWriter.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: cleaning.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId: "chronology-attempt", startedAt: "2026-08-29T00:00:01.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:01.000Z",
+  }), StreamingSessionStoreError);
+  const inFlight = firstWriter.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: cleaning.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    startedAt: "2026-08-29T00:00:03.000Z",
+    deadlineAt: "2026-08-29T00:00:30.000Z", at: "2026-08-29T00:00:03.000Z",
+  });
+  const attemptId = (cleanupResources(inFlight as unknown as Record<string, unknown>)[3]!.attempt as { attemptId: string }).attemptId;
+  assert.throws(() => firstWriter.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: inFlight.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "channel_detach",
+    attemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "verified", at: "2026-08-29T00:00:02.000Z",
+  }), StreamingSessionStoreError);
+});
+
+test("takeover preserves a verified cleanup fact under its historical proof owner", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = claimCurrentCleanup(writer);
+  record = writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    startedAt: "2026-08-29T00:00:03.000Z", deadlineAt: "2026-08-29T00:00:30.000Z",
+    at: "2026-08-29T00:00:03.000Z",
+  });
+  const attemptId = (cleanupResources(record as unknown as Record<string, unknown>)[0]!.attempt as { attemptId: string }).attemptId;
+  record = writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    attemptId, attemptOwnerId: "owner-1", attemptFencingToken: 1, result: "verified",
+    at: "2026-08-29T00:00:04.000Z",
+  });
+  const taken = writer.apply({
+    type: "takeover", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-2", newFencingToken: 2,
+    leaseExpiresAt: "2026-08-29T00:10:00.000Z", at: "2026-08-29T00:05:00.000Z",
+  });
+  assert.deepEqual(cleanupResources(taken as unknown as Record<string, unknown>)[0], {
+    ...cleanupResources(record as unknown as Record<string, unknown>)[0],
+    status: "verified",
+  });
+});
+
+test("takeover retains an old in-flight attempt without permitting a repeat or late settlement", () => {
+  const kernel = createInMemoryStreamingSessionStore();
+  const writer = getStreamingSessionStoreWriter(kernel);
+  let record = claimCurrentCleanup(writer);
+  record = writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    startedAt: "2026-08-29T00:00:03.000Z", deadlineAt: "2026-08-29T00:00:30.000Z",
+    at: "2026-08-29T00:00:03.000Z",
+  });
+  const oldAttempt = (cleanupResources(record as unknown as Record<string, unknown>)[0]!.attempt as { attemptId: string }).attemptId;
+  const taken = writer.apply({
+    type: "takeover", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-2", newFencingToken: 2,
+    leaseExpiresAt: "2026-08-29T00:10:00.000Z", at: "2026-08-29T00:05:00.000Z",
+  });
+  assert.equal(cleanupResources(taken as unknown as Record<string, unknown>)[0]!.status, "in_flight");
+  assert.throws(() => writer.apply({
+    type: "begin_cleanup_resource", sessionId: "stream-1", expectedRevision: taken.revision,
+    ownerId: "owner-2", fencingToken: 2, effectId: "cleanup-1", resource: "workload_quiescence",
+    startedAt: "2026-08-29T00:05:01.000Z", deadlineAt: "2026-08-29T00:06:00.000Z",
+    at: "2026-08-29T00:05:01.000Z",
+  }), StreamingSessionStoreError);
+  assert.throws(() => writer.apply({
+    type: "settle_cleanup_resource", sessionId: "stream-1", expectedRevision: taken.revision,
+    ownerId: "owner-1", fencingToken: 1, effectId: "cleanup-1", resource: "workload_quiescence",
+    attemptId: oldAttempt, attemptOwnerId: "owner-1", attemptFencingToken: 1,
+    result: "verified", at: "2026-08-29T00:05:01.000Z",
+  }), (error) => error instanceof StreamingSessionStoreError && error.code === "stale_fence");
+});
+
+test("takeover re-fences a retryable blocked cleanup fact with coherent blocker chronology", () => {
+  const { writer, record } = blockedChannelCleanup("channel_detach_failed", "Streaming channel detach failed.");
+  const taken = writer.apply({
+    type: "takeover", sessionId: "stream-1", expectedRevision: record.revision,
+    ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-2", newFencingToken: 2,
+    leaseExpiresAt: "2026-08-29T00:10:00.000Z", at: "2026-08-29T00:05:00.000Z",
+  });
+  const cleanup = taken.effects.find((effect) => effect.kind === "cleanup")!;
+  assert.equal(cleanup.blockedAt, "2026-08-29T00:05:00.000Z");
+  const blocked = cleanupResources(taken as unknown as Record<string, unknown>)[3]!;
+  assert.equal(blocked.ownerId, "owner-2");
+  assert.equal(blocked.fencingToken, 2);
+  const retried = writer.apply({
+    type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: taken.revision,
+    ownerId: "owner-2", fencingToken: 2, effectId: "cleanup-1", resource: "channel_detach",
+    at: "2026-08-29T00:05:01.000Z",
+  });
+  assert.equal(retried.state, "cleanup_pending");
+});
+
+test("takeover preserves retained deadline and unknown attempts under their historical proof owner", () => {
+  for (const [code, message] of [
+    ["cleanup_deadline_expired", "Cleanup deadline expired."],
+    ["cleanup_effect_outcome_unknown", "Cleanup effect outcome is unknown."],
+  ] as const) {
+    const { writer, record, attemptId } = blockedChannelCleanup(code, message);
+    const taken = writer.apply({
+      type: "takeover", sessionId: "stream-1", expectedRevision: record.revision,
+      ownerId: "owner-1", fencingToken: 1, newOwnerId: "owner-2", newFencingToken: 2,
+      leaseExpiresAt: "2026-08-29T00:10:00.000Z", at: "2026-08-29T00:05:00.000Z",
+    });
+    const fact = cleanupResources(taken as unknown as Record<string, unknown>)[3]!;
+    assert.equal(fact.ownerId, "owner-2");
+    assert.equal(fact.fencingToken, 2);
+    assert.deepEqual(fact.attempt, {
+      attemptId,
+      ownerId: "owner-1",
+      fencingToken: 1,
+      startedAt: "2026-08-29T00:00:03.000Z",
+      deadlineAt: "2026-08-29T00:00:30.000Z",
+    });
+    assert.throws(() => writer.apply({
+      type: "retry_cleanup_resource", sessionId: "stream-1", expectedRevision: taken.revision,
+      ownerId: "owner-2", fencingToken: 2, effectId: "cleanup-1", resource: "channel_detach",
+      at: "2026-08-29T00:05:01.000Z",
+    }), StreamingSessionStoreError);
+  }
+});
+
+test("retained cleanup attempt proof owner must exist in takeover provenance", () => {
+  const { record } = blockedChannelCleanup("cleanup_deadline_expired", "Cleanup deadline expired.");
+  const source = structuredClone(record) as unknown as Record<string, unknown>;
+  const resources = cleanupResources(source);
+  const fact = resources[3]!;
+  const attempt = fact.attempt as Record<string, unknown>;
+  Object.assign(attempt, {
+    ownerId: "foreign-owner",
+    fencingToken: 9,
+    attemptId: deriveAdoptedCleanupAttemptId({
+      effectId: "cleanup-1",
+      resource: "channel_detach",
+      ordinal: 1,
+      ownerId: "foreign-owner",
+      fencingToken: 9,
+    }),
+  });
+  const forged = withCleanupResources(source, resources);
+  assert.throws(() => parseStreamingSessionRecord(forged), StreamingSessionStoreError);
 });
 
 test("refuses an active record that tries to downgrade to the historical schema", () => {
@@ -428,12 +1283,9 @@ test("rejects unsupported schema versions even when their record claims to be te
     type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
   });
-  const released = writer.apply({
-    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
-    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
-  });
+  const released = verifyAndReleaseCurrentCleanup(writer, cleaning);
   assert.throws(
-    () => parseStreamingSessionRecord({ ...released, schemaVersion: 4 }),
+    () => parseStreamingSessionRecord({ ...released, schemaVersion: 99 }),
     (error) => error instanceof StreamingSessionStoreError && error.code === "unsupported_version",
   );
 });
@@ -450,16 +1302,13 @@ test("preserves the known historical terminal streaming-session schema", () => {
     type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
   });
-  const released = writer.apply({
-    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
-    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
-  });
+  const released = verifyAndReleaseCurrentCleanup(writer, cleaning);
   const { cleanupCreationAuthority: _cleanupCreationAuthority, ...legacyReleased } = released;
   assert.equal(parseStreamingSessionRecord({
     ...legacyReleased,
     schemaVersion: 0,
     effects: released.effects.map((effect) => {
-      const { cleanupProvenance: _cleanupProvenance, ...legacyEffect } = effect;
+      const { cleanupProvenance: _cleanupProvenance, progress: _progress, ...legacyEffect } = effect;
       return legacyEffect;
     }),
   }).schemaVersion, 0);
@@ -543,6 +1392,19 @@ test("rejects unknown fields inside the exact backend binding", () => {
   );
 });
 
+test("accepts a bounded path-sized opaque backend identity and rejects oversized durable input", () => {
+  const binding = pendingTransferRecord().backendBinding as Record<string, unknown>;
+  assert.doesNotThrow(() => parseStreamingSessionRecord(pendingTransferRecord({
+    backendBinding: { ...binding, opaqueIdentity: "x".repeat(4_096) },
+  })));
+  assert.throws(
+    () => parseStreamingSessionRecord(pendingTransferRecord({
+      backendBinding: { ...binding, opaqueIdentity: "x".repeat(64 * 1_024 + 1) },
+    })),
+    (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record",
+  );
+});
+
 test("rejects unknown fields inside exact path access claims", () => {
   const record = pendingTransferRecord({
     envelope: {
@@ -587,15 +1449,22 @@ test("enforces configured effect capacity on initial claims without evicting act
     type: "acknowledge_transfer", sessionId: "stream-1", expectedRevision: pending.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
   });
-  const cleaning = sourceWriter.apply({
-    type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
+  const otherSource = createInMemoryStreamingSessionStore();
+  const otherWriter = getStreamingSessionStoreWriter(otherSource);
+  const otherPending = otherWriter.claim(pendingTransferRecord({ sessionId: "stream-2" })).record;
+  const otherActive = otherWriter.apply({
+    type: "acknowledge_transfer", sessionId: "stream-2", expectedRevision: otherPending.revision,
+    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:01.000Z", effectId: "transfer-1",
+  });
+  const otherCleaning = otherWriter.apply({
+    type: "begin_cleanup", sessionId: "stream-2", expectedRevision: otherActive.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
   });
   const assertInitialClaimCap = (kernel: ReturnType<typeof createInMemoryStreamingSessionStore>) => {
     const writer = getStreamingSessionStoreWriter(kernel);
     writer.claim(active);
     assert.throws(
-      () => writer.claim({ ...cleaning, sessionId: "stream-2" }),
+      () => writer.claim(otherCleaning),
       (error) => error instanceof StreamingSessionStoreError && error.code === "capacity_exceeded",
     );
     const retained = kernel.store.readBySession("stream-1");
@@ -784,14 +1653,16 @@ test("quarantines coherent forged active version-2 cleanup provenance without mu
       ...unanchored,
       schemaVersion: 2,
       effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
-        ? {
-          ...effect,
+        ? (() => {
+          const { progress: _progress, ...legacyEffect } = effect;
+          return {
+          ...legacyEffect,
           cleanupProvenance: {
             ...provenance,
             originOwnerId: "forged-origin",
             takeovers: [{ ...provenance.takeovers[0]!, fromOwnerId: "forged-origin" }],
           },
-        }
+        }; })()
         : effect),
     };
     const before = writeSignedStreamingSessionRow(path, integrityKey, forged);
@@ -844,7 +1715,7 @@ test("upgrades cleanup-free active version-2 state only by creating independentl
     type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
   });
-  assert.equal(cleaning.schemaVersion, 3);
+  assert.equal(cleaning.schemaVersion, 4);
   assert.deepEqual(cleaning.cleanupCreationAuthority, {
     effectId: "cleanup-1", ownerId: "owner-1", fencingToken: 1,
     createdAt: "2026-08-29T00:00:02.000Z",
@@ -852,6 +1723,7 @@ test("upgrades cleanup-free active version-2 state only by creating independentl
   assert.deepEqual(cleaning.effects.find((effect) => effect.kind === "cleanup")?.cleanupProvenance, {
     effectId: "cleanup-1", originOwnerId: "owner-1", originFencingToken: 1, takeovers: [],
   });
+  assert.equal(cleaning.effects.find((effect) => effect.kind === "cleanup")?.progress?.resources.length, 6);
 });
 
 test("keeps released version-2 cleanup history readable without making it mutable authority", () => {
@@ -866,12 +1738,16 @@ test("keeps released version-2 cleanup history readable without making it mutabl
     type: "begin_cleanup", sessionId: "stream-1", expectedRevision: active.revision,
     ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:02.000Z", effectId: "cleanup-1",
   });
-  const released = sourceWriter.apply({
-    type: "acknowledge_cleanup", sessionId: "stream-1", expectedRevision: cleaning.revision,
-    ownerId: "owner-1", fencingToken: 1, at: "2026-08-29T00:00:03.000Z", effectId: "cleanup-1",
-  });
+  const released = verifyAndReleaseCurrentCleanup(sourceWriter, cleaning);
   const { cleanupCreationAuthority: _anchor, ...unanchoredReleased } = released;
-  const historical = parseStreamingSessionRecord({ ...unanchoredReleased, schemaVersion: 2 });
+  const historical = parseStreamingSessionRecord({
+    ...unanchoredReleased,
+    schemaVersion: 2,
+    effects: released.effects.map((effect) => {
+      const { progress: _progress, ...legacyEffect } = effect;
+      return legacyEffect;
+    }),
+  });
   assert.equal(historical.state, "released");
   assert.equal(historical.schemaVersion, 2);
   assert.equal(historical.cleanupOwner, "none");
@@ -1017,7 +1893,8 @@ test("anchors multi-step cleanup takeover provenance and rejects coherent forger
     for (const variant of variants) {
       assert.throws(
         () => parseStreamingSessionRecord(variant),
-        (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_state",
+        (error) => error instanceof StreamingSessionStoreError &&
+          (error.code === "invalid_state" || error.code === "invalid_effect"),
       );
     }
 
@@ -1094,5 +1971,67 @@ test("retains durable SQLite ownership and cleanup evidence when record capacity
   } finally {
     try { kernel?.store.close(); } catch {}
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const backend of ["memory", "sqlite"] as const) for (const fault of [
+  "none", "owner", "fence", "revision", "lease", "deadline", "effect", "identity", "wrong_blocker", "live_attempt",
+  "missing_checkpoint", "checkpoint_revision", "checkpoint_owner", "checkpoint_fence", "checkpoint_session", "checkpoint_outcome",
+  "accepted", "consuming", "unfinalized", "position", "reference", "loss",
+] as const) test(`C3 round4 atomic observation ${backend} ${fault}`, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "c3-round4-store-"));
+  t.diagnostic(`created exact fixture root: ${root}`);
+  const kernel = backend === "memory" ? createInMemoryStreamingSessionStore() : openSqliteStreamingSessionStore(join(root, "sessions.sqlite"), Buffer.alloc(32, 24));
+  t.after(async () => { kernel.store.close(); await rm(root, { recursive: true, force: true }); t.diagnostic(`removed exact fixture root: ${root}`); });
+  const writer = getStreamingSessionKernelWriter(kernel);
+  let record = claimCurrentCleanup(writer);
+  for (const resource of ["workload_quiescence", "retained_output_settlement", "evidence"]) {
+    record = writer.apply({ type: "begin_cleanup_resource", sessionId: record.sessionId, ownerId: record.ownerId, fencingToken: record.fencingToken,
+      expectedRevision: record.revision, effectId: "cleanup-1", resource, at: "2026-08-29T00:00:03.000Z", startedAt: "2026-08-29T00:00:03.000Z", deadlineAt: "2026-08-29T00:00:30.000Z" });
+    const attempt = record.effects.find((e) => e.kind === "cleanup")!.progress!.resources.find((r) => r.resource === resource)!.attempt!;
+    record = writer.apply({ type: "settle_cleanup_resource", sessionId: record.sessionId, ownerId: record.ownerId, fencingToken: record.fencingToken,
+      expectedRevision: record.revision, effectId: "cleanup-1", resource, attemptId: attempt.attemptId, attemptOwnerId: attempt.ownerId, attemptFencingToken: attempt.fencingToken,
+      at: "2026-08-29T00:00:04.000Z", result: resource === "evidence" ? "blocked" : "verified",
+      ...(resource === "evidence" ? { blocker: fault === "live_attempt" ? { code: "evidence_continuation_unavailable", message: "Durable evidence continuation is unavailable." } :
+        fault === "wrong_blocker" ? { code: "channel_detach_failed", message: "Streaming channel detach failed." } :
+          { code: "evidence_finalization_failed", message: "Evidence finalization failed." } } : {}),
+    });
+  }
+  const meta = { stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: "a".repeat(64) };
+  const finalized = { manifestHash: "b".repeat(64), resultHash: "c".repeat(64), legacyHead: null, lossy: false };
+  const checkpoint = writer.claimOutputCheckpoint({ recordKind: "runner.output-checkpoint", schemaVersion: 2, sessionId: "stream-1", ownerId: fault === "checkpoint_owner" ? "foreign" : "owner-1", fencingToken: fault === "checkpoint_fence" ? 2 : 1,
+    revision: 0, capacity: 4, outcome: fault === "checkpoint_outcome" ? "outcome_unknown" : "active",
+    streams: ["stdout", "stderr"].map((stream) => ({ stream, consumed: [], lastConsumed: null,
+      accepted: stream === "stdout" && (fault === "accepted" || fault === "consuming") ? [meta] : [], consumingIntent: stream === "stdout" && fault === "consuming" ? meta : null })),
+    continuation: { version: 1, evidenceId: "00000000-0000-0000-0000-000000000024", head: null, pages: 0, retainedBytes: 0,
+      loss: fault === "position" ? "legacy_gap" : "none", legacyHashes: [], positions: ["stdout", "stderr"].map((stream) => ({ stream,
+        last: stream === "stdout" && fault === "position" ? meta : null, lostBytes: stream === "stdout" && fault === "position" ? 1 : 0 })),
+      finalized: fault === "unfinalized" ? null : { ...finalized, lossy: fault === "position" } },
+  }).record;
+  record = kernel.store.readBySession("stream-1")!;
+  const inputCheckpoint = structuredClone(checkpoint);
+  if (fault === "checkpoint_revision") Object.assign(inputCheckpoint, { revision: 1 });
+  if (fault === "checkpoint_owner") Object.assign(inputCheckpoint, { ownerId: "foreign" });
+  if (fault === "checkpoint_fence") Object.assign(inputCheckpoint, { fencingToken: 2 });
+  if (fault === "checkpoint_session") Object.assign(inputCheckpoint, { sessionId: "foreign" });
+  if (fault === "reference") Object.assign(inputCheckpoint.continuation!.finalized!, { resultHash: "d".repeat(64) });
+  if (fault === "loss") Object.assign(inputCheckpoint.continuation!.finalized!, { lossy: true });
+  const command = { type: "observe_finalized_evidence", sessionId: "stream-1", ownerId: fault === "owner" ? "foreign" : "owner-1", fencingToken: fault === "fence" ? 2 : 1,
+    expectedRevision: record.revision + (fault === "revision" ? 1 : 0), effectId: fault === "effect" ? "foreign" : "cleanup-1",
+    resourceIdentity: fault === "identity" ? "foreign" : "evidence:stream-1", checkpoint: fault === "missing_checkpoint" ? undefined : inputCheckpoint,
+    at: fault === "lease" ? record.leaseExpiresAt : "2026-08-29T00:00:05.000Z", deadlineAt: fault === "deadline" ? "2026-08-29T00:00:05.000Z" : "2026-08-29T00:10:00.000Z" };
+  if (fault === "none") {
+    const observed = writer.apply(command);
+    assert.equal(observed.state, "cleanup_pending");
+    assert.equal(observed.revision, record.revision + 1);
+    const before = record.effects.find((e) => e.kind === "cleanup")!.progress!.resources[2]!;
+    const after = observed.effects.find((e) => e.kind === "cleanup")!.progress!.resources[2]!;
+    assert.equal(after.attempts, before.attempts); assert.equal(after.attempt, undefined);
+    assert.deepEqual(after.evidence, { kind: "bounded_output_manifest", digest: finalized.manifestHash, lossy: false });
+    assert.deepEqual(kernel.store.readOutputCheckpoint("stream-1"), checkpoint);
+  } else {
+    assert.throws(() => writer.apply(command), StreamingSessionStoreError);
+    assert.deepEqual(kernel.store.readBySession("stream-1"), record);
+    assert.deepEqual(kernel.store.readOutputCheckpoint("stream-1"), checkpoint);
   }
 });

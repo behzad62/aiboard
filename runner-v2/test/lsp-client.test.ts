@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import {
   chmodSync,
   existsSync,
@@ -170,7 +171,7 @@ test("LSP client returns typed bounded errors for missing executables, malformed
   }
 });
 
-test("LSP client settles cancellation before a backpressured pipe and bounds the failed session", async () => {
+test("LSP client settles cancellation before a backpressured pipe and bounds the failed session", async (t) => {
   const fixture = workspace("stdin backpressure");
   const pauseMarker = join(fixture.root, "stdin-paused.json");
   const descendantMarker = join(fixture.root, "descendant.pid");
@@ -185,6 +186,8 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
       LSP_FIXTURE_DESCENDANT_PID_FILE: descendantMarker,
     },
   });
+  t.diagnostic(`exact LSP fixture acquired: ${fixture.root}`);
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   let serverPid = 0;
   let descendantPid = 0;
   try {
@@ -224,16 +227,25 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
     await waitFor(() => !processExists(serverPid));
     await waitFor(() => !processExists(descendantPid));
     assert.equal(client.stats().state, "closed");
-  } finally {
-    await completesBefore(client.close(), 250).catch(() => undefined);
-    for (const pid of [serverPid, descendantPid]) {
-      if (pid > 0 && processExists(pid)) {
-        process.kill(pid, "SIGKILL");
-        await waitFor(() => !processExists(pid));
-      }
-    }
-    await completesBefore(client.close(), 500).catch(() => undefined);
-    await fixture.close();
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "LSP backpressure", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => { await client.close(); },
+      certify: async () => {
+        assert.equal(client.stats().state, "closed", "the retained client must finish its own bounded cleanup");
+        // Markers are observations only, never fallback signal authority.
+        if (!serverPid && existsSync(pauseMarker)) serverPid = (JSON.parse(await readFile(pauseMarker, "utf8")) as { pid: number }).pid;
+        if (!descendantPid && existsSync(descendantMarker)) descendantPid = (JSON.parse(await readFile(descendantMarker, "utf8")) as { pid: number }).pid;
+        for (const pid of [serverPid, descendantPid]) {
+          if (pid === 0) continue;
+          assert.ok(Number.isSafeInteger(pid) && pid > 0, "an acquired marker must retain its exact observed PID");
+          await waitFor(() => !processExists(pid));
+          assert.equal(processExists(pid), false, "owned cleanup must cover both server and detached descendant");
+        }
+      },
+      removeRoot: async () => { await fixture.close(); t.diagnostic(`certified LSP root removed: ${fixture.root}`); },
+    });
   }
 });
 
@@ -266,6 +278,7 @@ test("LSP client bounds a stalled Windows Job-host bootstrap without an unhandle
     windowsJobHostPathForTest: stalledWindowsJobHost,
   });
   let hostPid = 0;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     await rejectsBefore(client.start(), 2_000, isLspError("write_failed"));
     await new Promise((resolvePromise) => setImmediate(resolvePromise));
@@ -275,14 +288,21 @@ test("LSP client bounds a stalled Windows Job-host bootstrap without an unhandle
     assert.ok(Number.isSafeInteger(hostPid) && hostPid > 0);
     await completesBefore(client.close(), 1_000);
     await waitFor(() => !processExists(hostPid));
-  } finally {
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
     process.removeListener("unhandledRejection", onUnhandled);
-    await completesBefore(client.close(), 500).catch(() => undefined);
-    if (hostPid > 0 && processExists(hostPid)) {
-      process.kill(hostPid, "SIGKILL");
-      await waitFor(() => !processExists(hostPid));
-    }
-    await fixture.close();
+    await finalizeCertifiedFixture({
+      fixtureName: "LSP client bounds a stalled Windows Job-host bootstrap without an unhandled rejection", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => { await client.close(); },
+      certify: async () => {
+        assert.equal(client.stats().state, "closed");
+        if (!hostPid && existsSync(pidMarker)) hostPid = Number(await readFile(pidMarker, "utf8"));
+        assert.ok(Number.isSafeInteger(hostPid) && hostPid > 0, "the exact acquired process observation is required");
+        try { process.kill(hostPid, 0); throw new Error("Owned fixture process remains live after cleanup."); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      },
+      removeRoot: () => fixture.close(),
+    });
   }
 });
 
@@ -428,6 +448,7 @@ test("LSP client retries termination after a failed close while the server remai
     },
   });
   let pid = 0;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     await client.start();
     pid = (await client.request<FixtureState>("fixture/state", {})).pid;
@@ -438,13 +459,19 @@ test("LSP client retries termination after a failed close while the server remai
     await waitFor(() => !processExists(pid));
     assert.equal(terminationAttempts, 2);
     assert.equal(client.stats().state, "closed");
-  } finally {
-    await client.close().catch(() => undefined);
-    if (pid > 0 && processExists(pid)) {
-      process.kill(pid, "SIGKILL");
-      await waitFor(() => !processExists(pid));
-    }
-    await fixture.close();
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "LSP client retries termination after a failed close while the server remains live", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => { await client.close(); },
+      certify: async () => {
+        assert.equal(client.stats().state, "closed");
+        assert.ok(Number.isSafeInteger(pid) && pid > 0, "the exact acquired process observation is required");
+        try { process.kill(pid, 0); throw new Error("Owned fixture process remains live after cleanup."); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      },
+      removeRoot: () => fixture.close(),
+    });
   }
 });
 
@@ -560,6 +587,7 @@ test("LSP client shutdown owns and terminates language-server descendants", asyn
     env: { LSP_FIXTURE_DESCENDANT_PID_FILE: descendantMarker },
   });
   let descendantPid = 0;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     await client.start();
     await waitFor(() => existsSync(descendantMarker));
@@ -573,13 +601,19 @@ test("LSP client shutdown owns and terminates language-server descendants", asyn
     assert.equal(descendant.parentPid, state.pid);
     await client.close();
     await waitFor(() => !processExists(descendantPid));
-  } finally {
-    await client.close().catch(() => undefined);
-    if (descendantPid > 0 && processExists(descendantPid)) {
-      process.kill(descendantPid, "SIGKILL");
-      await waitFor(() => !processExists(descendantPid));
-    }
-    await fixture.close();
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "LSP client shutdown owns and terminates language-server descendants", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => { await client.close(); },
+      certify: async () => {
+        assert.equal(client.stats().state, "closed");
+        assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0, "the exact acquired process observation is required");
+        try { process.kill(descendantPid, 0); throw new Error("Owned fixture process remains live after cleanup."); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      },
+      removeRoot: () => fixture.close(),
+    });
   }
 });
 

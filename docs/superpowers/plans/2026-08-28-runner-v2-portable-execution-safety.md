@@ -35,6 +35,27 @@ Actions Windows/Linux/macOS matrices.
 
 ## Non-negotiable execution doctrine
 
+**Current checkpoint, 2026-09-11: cleanup-coordination C1–C5 is VERIFIED.**
+The final complete Runner graph passed 2,264 tests with zero failures, plus all
+12 configured client commands. Its one Windows POSIX-only skip is covered by
+the exact actual-Linux test (Linux gate 21/21). All 361 source inputs stayed
+frozen; configured Runner typecheck/lint and owner-authorized self-review passed.
+The C-specific blocker is cleared for remaining Task 8.0B3/P6.4e handback.
+B3/P6 are not declared complete; later master gates remain in force. Historical
+uncertain diagnostics remain preserved, not represented as successful cleanup.
+Current evidence: the cleanup SDD packet's
+`closure-2026-09-11/phase-c-final-report.md` and `closure-acceptance-proof.json`.
+The older checkpoints below are provenance, not current C acceptance status.
+
+**Current execution checkpoint, 2026-09-06:** Task8.0B3/C5 fourth nonnative
+fixture preparation carries the explicit C1 cap-ruling dispatcher prerequisite.
+C1's output-error dispatcher prerequisite has now passed scoped independent
+review; C5 MCP fixture correction remains active. Stable sources and C5 review
+gate exact native verification. C3 round4 remains independently verified and
+exact retained recovery succeeded. No B3/P6 exit.
+The cleanup plan's progress ledger is authoritative for exact current artifacts,
+counters and routing; older gate entries below are preserved provenance.
+
 For every task below:
 
 1. PREPARE: record base revision, clean/expected diff, exact assigned

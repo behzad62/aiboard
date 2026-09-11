@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import {
+  ExecutionIsolationError,
   createExecutionIsolationProviderRegistration,
   createExecutionIsolationRegistry,
   createExecutionIsolationSelector,
@@ -78,7 +79,7 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
     assert.match(lease.leaseId, /^oci-lease-/);
     assert.deepEqual(lease.grantedAccess, fixture.claims.access);
 
-    const create = calls.find((call) => call.args[0] === "create");
+    const create = workloadCreates(calls)[0];
     assert.ok(create);
     assert.equal(create.executable, fixture.cli);
     assert.deepEqual(create.environment, {});
@@ -117,6 +118,281 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
   }
 });
 
+test("strict OCI duplex requires separately attested interactive create and exact interactive attach", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-interactive",
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli: fakeCli(calls, { interactiveAttach: true, imageExecutables: ["sh"] }),
+    });
+    const attestation = await provider.attest() as { interactiveAttach?: boolean };
+    assert.equal(attestation.interactiveAttach, true);
+    const intent = {
+      ...fixture.intent,
+      kind: "mcp_server" as const,
+      executable: "sh",
+      arguments: [],
+    };
+    const lease = await provider.acquire({
+      providerId: "oci-interactive",
+      implementationDigest: "a".repeat(64),
+      intent,
+      grant: fixture.claims,
+    });
+    const create = workloadCreates(calls)[0];
+    assert.ok(create);
+    assert.equal(create.args.includes("--interactive"), true);
+    const plan = await provider.prepareExecution!(lease as never, intent);
+    assert.deepEqual(plan.arguments, ["start", "--attach", "--interactive", durableContainerId(fixture.state, "oci-interactive")]);
+    await provider.release(lease as never);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("strict OCI consumer cancellation and external disappearance retain exact cleanup ownership", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const cli = fakeCli(calls, { interactiveAttach: true, imageExecutables: ["sh"] });
+    const providerId = "oci-interactive-lifecycle";
+    const provider = createOciExecutionIsolationProvider({
+      providerId,
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli,
+    });
+    await provider.attest();
+    const intent = {
+      ...fixture.intent,
+      kind: "mcp_server" as const,
+      executable: "sh",
+      arguments: ["-c", "while :; do sleep 1; done"],
+    };
+    const cancelledLease = await provider.acquire({
+      providerId,
+      implementationDigest: "a".repeat(64),
+      intent,
+      grant: fixture.claims,
+    });
+    const cancelledPlan = await provider.prepareExecution!(cancelledLease as never, intent);
+    const cancellation = new AbortController();
+    cancellation.abort();
+    assert.equal(cancellation.signal.aborted, true);
+    assert.equal(cancelledPlan.executable, fixture.cli);
+    assert.deepEqual(cancelledPlan.arguments, [
+      "start", "--attach", "--interactive", durableContainerId(fixture.state, providerId),
+    ]);
+    await provider.release(cancelledLease as never);
+    assert.equal(durableLeaseCount(fixture.state, providerId), 0);
+
+    const disappearedIntent = { ...intent, invocationId: "invocation-disappeared" };
+    await provider.acquire({
+      providerId,
+      implementationDigest: "a".repeat(64),
+      intent: disappearedIntent,
+      grant: fixture.claims,
+    });
+    const disappearedId = durableContainerId(fixture.state, providerId);
+    cli.removeExternally(disappearedId);
+    const restarted = createOciExecutionIsolationProvider({
+      providerId,
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli,
+    });
+    await restarted.attest();
+    const recovered = await restarted.recoverOwned();
+    assert.equal(recovered.cleaned, 1);
+    assert.deepEqual(recovered.blockers, []);
+    assert.equal(recovered.transitions?.[0]?.status, "cleaned");
+    await restarted.acknowledgeRecovery(recovered.transitions ?? []);
+    assert.equal(durableLeaseCount(fixture.state, providerId), 0);
+    assert.equal(workloadCreates(calls).every((call) => call.args.includes("--interactive")), true);
+    assert.equal(workloadCreates(calls).some((call) =>
+      optionValues(call.args, "--mount").some((mount) => mount.includes(`src=${fixture.cli}`))), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("strict OCI duplex fails typed before executable probing or create when interactive attach is unavailable", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-no-interactive",
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli: fakeCli(calls, { interactiveAttach: false, imageExecutables: ["sh"] }),
+    });
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({
+        stableProviderId: "oci-no-interactive",
+        codeDigest: "a".repeat(64),
+        configDigest: "b".repeat(64),
+        provider,
+      }),
+    ]), fixture.selectorOptions);
+    await assert.rejects(
+      selector.acquire({
+        permissionProfile: "project",
+        intent: { ...fixture.intent, kind: "mcp_server", executable: "sh", arguments: [] },
+        grant: fixture.claims,
+      }),
+      (error) => error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable",
+    );
+    assert.equal(calls.some((call) => call.args[0] === "run"), false);
+    assert.equal(workloadCreates(calls).length, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("strict OCI rejects a bind-mounted host executable before workload creation", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-host-executable",
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli: fakeCli(calls),
+    });
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({
+        stableProviderId: "oci-host-executable",
+        codeDigest: "a".repeat(64),
+        configDigest: "b".repeat(64),
+        provider,
+      }),
+    ]), fixture.selectorOptions);
+    await assert.rejects(
+      selector.acquire({
+        permissionProfile: "project",
+        intent: {
+          ...fixture.intent,
+          executable: join(fixture.workspace, "scripts", "build.mjs"),
+          arguments: [],
+        },
+        grant: fixture.claims,
+      }),
+      (error) => error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable",
+    );
+    assert.equal(calls.some((call) => call.args[0] === "create" &&
+      !optionValues(call.args, "--label").includes("ai-board.runner-v2.probe=true")), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("strict OCI interactive capability requires a semantic create/start duplex round trip", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-false-help-advertisement",
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli: fakeCli(calls, { interactiveAttach: true, semanticDuplex: false }),
+    });
+    const attestation = await provider.attest() as { interactiveAttach?: boolean };
+    assert.equal(attestation.interactiveAttach, false);
+    assert.equal(calls.some((call) => call.args[0] === "help"), false,
+      "syntax advertising is not capability evidence");
+    assert.equal(calls.some((call) => call.args[0] === "create" &&
+      optionValues(call.args, "--label").includes("ai-board.runner-v2.probe=true")), true);
+    assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("--force")), true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("strict OCI duplex fails typed before create when its executable is absent from the immutable image", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const provider = createOciExecutionIsolationProvider({
+      providerId: "oci-missing-image-executable",
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli: fakeCli(calls, { interactiveAttach: true, imageExecutables: [] }),
+    });
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({
+        stableProviderId: "oci-missing-image-executable",
+        codeDigest: "a".repeat(64),
+        configDigest: "b".repeat(64),
+        provider,
+      }),
+    ]), fixture.selectorOptions);
+    await assert.rejects(
+      selector.acquire({
+        permissionProfile: "project",
+        intent: { ...fixture.intent, kind: "language_server", executable: "missing-lsp", arguments: [] },
+        grant: fixture.claims,
+      }),
+      (error) => error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable",
+    );
+    assert.equal(calls.filter((call) => call.args[0] === "run").length, 1);
+    assert.equal(workloadCreates(calls).length, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+for (const pathName of ["PATH", "Path", "path"] as const) {
+  test(`OCI preserves the attested image search path instead of inheriting host ${pathName}`, async () => {
+    const fixture = await ociFixture();
+    const calls: OciCliInvocation[] = [];
+    const cli = fakeCli(calls);
+    const provider = createOciExecutionIsolationProvider({ providerId: "oci-image-search-path", cliPath: fixture.cli,
+      image: "fixture/image:configured", stateDirectory: fixture.state, cli });
+    try {
+      await provider.attest();
+      const environment = { [pathName]: "C:\\HostOnly\\bin;C:\\Windows\\System32", APPROVED_DATA: "child-only-value" };
+      const lease = await provider.acquire({ providerId: "oci-image-search-path", implementationDigest: "a".repeat(64),
+        intent: fixture.intent, grant: fixture.claims, environment });
+      try {
+        assert.deepEqual(cli.environmentFiles, [{ APPROVED_DATA: "child-only-value" }],
+          "image-relative executable attestation must use the same image-owned PATH at execution");
+        assert.equal(environment[pathName], "C:\\HostOnly\\bin;C:\\Windows\\System32", "do not mutate the caller's host environment");
+        assert.equal(calls.every((call) => Object.keys(call.environment).length === 0), true,
+          "neither child data nor host search paths may select the Docker control plane");
+        assert.equal(cli.environmentFilePaths.every((path) => !existsSync(path)), true);
+      } finally { await provider.release(lease as never); }
+      assert.deepEqual(await provider.recoverOwned(), { cleaned: 0, blockers: [], transitions: [] });
+    } finally { await fixture.close(); }
+  });
+}
+
+test("OCI does not allocate a private environment handoff for only a host search path", async () => {
+  const fixture = await ociFixture();
+  const calls: OciCliInvocation[] = [];
+  const cli = fakeCli(calls);
+  const provider = createOciExecutionIsolationProvider({ providerId: "oci-path-only", cliPath: fixture.cli,
+    image: "fixture/image:configured", stateDirectory: fixture.state, cli });
+  try {
+    await provider.attest();
+    const lease = await provider.acquire({ providerId: "oci-path-only", implementationDigest: "a".repeat(64),
+      intent: fixture.intent, grant: fixture.claims, environment: { PATH: "/host-only/bin" } });
+    try {
+      assert.deepEqual(cli.environmentFilePaths, []);
+      assert.equal(workloadCreates(calls)[0]!.args.includes("--env-file"), false);
+    } finally { await provider.release(lease as never); }
+  } finally { await fixture.close(); }
+});
+
 test("OCI child environment never enters the attested Docker control-plane environment", async () => {
   const fixture = await ociFixture();
   const calls: OciCliInvocation[] = [];
@@ -145,7 +421,7 @@ test("OCI child environment never enters the attested Docker control-plane envir
       grant: fixture.claims,
       environment,
     });
-    const create = calls.find((call) => call.args[0] === "create")!;
+    const create = workloadCreates(calls)[0]!;
     assert.deepEqual(create.environment, {}, "child variables must not select the Docker daemon");
     assert.equal(create.args.includes("--env-file"), true);
     for (const value of Object.values(environment)) {
@@ -173,7 +449,9 @@ test("OCI deletion faults never orphan a successfully created container and reco
       const cli: OciCli = {
         ...base,
         run: async (invocation) => {
-          if (invocation.args[0] === "rm" && failContainerCleanup) {
+          if (invocation.args[0] === "rm" && failContainerCleanup &&
+              !String(invocation.args.at(-1)).startsWith("probe-fixture-") &&
+              !String(invocation.args.at(-1)).startsWith("aiboard-probe-")) {
             calls.push(invocation);
             return { exitCode: 1, stdout: "", stderr: "injected rm failure" };
           }
@@ -206,7 +484,7 @@ test("OCI deletion faults never orphan a successfully created container and reco
         const durable = readFileSync(statePath, "utf8");
         assert.equal(durable.includes("container-fixture-1"), true, "created effect is durably owned");
         assert.equal(durable.includes("private-value"), false);
-        assert.equal(calls.some((call) => call.args[0] === "rm"), true, "compensation is attempted");
+        assert.equal(workloadRemoves(calls).length > 0, true, "compensation is attempted");
 
         failHandoff = false;
         failContainerCleanup = false;
@@ -238,7 +516,7 @@ test("OCI pre-effect create journal recovers every pre-identity failure without 
         const cli: OciCli = {
           ...base,
           run: async (invocation) => {
-            if (invocation.args[0] !== "create") return await base.run(invocation);
+            if (invocation.args[0] !== "create" || isProbeCreate(invocation)) return await base.run(invocation);
             if (mode === "throw") {
               calls.push(structuredClone(invocation));
               throw new Error("injected create transport failure");
@@ -288,7 +566,7 @@ test("OCI pre-effect create journal recovers every pre-identity failure without 
           assert.equal(readFileSync(statePath, "utf8"), "[]");
           assert.equal(existsSync(join(fixture.state, "environment-handoffs")), false);
           const effectExpected = mode === "invalid_id" || mode === "effect_then_throw";
-          assert.equal(calls.some((call) => call.args[0] === "rm"), effectExpected);
+          assert.equal(workloadRemoves(calls).length > 0, effectExpected);
         } finally { await fixture.close(); }
       });
     }
@@ -328,7 +606,7 @@ test("OCI create journal owns absent and present handoffs across crash barriers"
         assert.equal(durable[0]?.createStage, "creating");
         assert.equal(readFileSync(statePath, "utf8").includes("crash-private-value"), false);
         assert.equal(existsSync(durable[0]!.environmentHandoffPath), stage === "after_environment_handoff");
-        assert.equal(calls.some((call) => call.args[0] === "create"), false);
+        assert.equal(workloadCreates(calls).length, 0);
 
         const restarted = createOciExecutionIsolationProvider({
           providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
@@ -376,7 +654,7 @@ test("OCI file-write plus cleanup failure retains its pre-effect journal for res
     assert.equal(durable[0]?.createStage, "creating");
     assert.equal(existsSync(durable[0]!.environmentHandoffPath), true);
     assert.equal(readFileSync(statePath, "utf8").includes("write-private-value"), false);
-    assert.equal(calls.some((call) => call.args[0] === "create"), false);
+    assert.equal(workloadCreates(calls).length, 0);
 
     const restarted = createOciExecutionIsolationProvider({
       providerId, cliPath: fixture.cli, image: "fixture:latest", stateDirectory: fixture.state, cli,
@@ -399,7 +677,7 @@ test("OCI re-attests returned create identity before durable binding", async (t)
       let failInspection = mode === "inspect_failure";
       const cli: OciCli = { ...base, run: async (invocation) => {
         const result = await base.run(invocation);
-        if (invocation.args[0] === "create" && mode === "returned_id_mismatch") {
+        if (invocation.args[0] === "create" && !isProbeCreate(invocation) && mode === "returned_id_mismatch") {
           return { ...result, stdout: "unowned-returned-id\n" };
         }
         if (failInspection && invocation.args[0] === "inspect" && invocation.args.includes("{{json .Config.Labels}}")) {
@@ -462,7 +740,7 @@ test("OCI network requires both grant and explicit provider policy", async () =>
         intent: fixture.intent,
         grant: fixture.claims,
       });
-      const create = calls.find((call) => call.args[0] === "create")!;
+      const create = workloadCreates(calls)[0]!;
       assert.deepEqual(optionValues(create.args, "--network"), [expected]);
     } finally {
       await fixture.close();
@@ -511,7 +789,7 @@ test("OCI rejects broad parents, root mounts, symlink escapes, unsafe cwd, and u
       (error) => error instanceof OciExecutionIsolationError &&
         error.code === "oci_path_escape",
     );
-    assert.equal(calls.some((call) => call.args[0] === "create"), false);
+    assert.equal(workloadCreates(calls).length, 0);
   } finally {
     await fixture.close();
   }
@@ -551,7 +829,7 @@ test("OCI restart recovery validates durable labelled ownership and reports unkn
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("container-fixture-1")), true);
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("container-fixture-2")), false);
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("unknown-container")), false);
-    const listing = calls.find((call) => call.args[0] === "ps");
+    const listing = calls.find((call) => call.args[0] === "ps" && call.args.includes("--no-trunc"));
     assert.ok(listing?.args.includes("--no-trunc"), "recovery must compare canonical full container ids");
     await provider.acknowledgeRecovery(recovered.transitions?.filter((transition) => transition.status === "cleaned") ?? []);
   } finally {
@@ -593,7 +871,7 @@ test("OCI restart recovery clears a durable lease only after confirming its cont
     await provider.acknowledgeRecovery(recovered.transitions ?? []);
     assert.equal(durableLeaseCount(fixture.state, "oci-stale"), 0);
     assert.equal(calls.some((call) => call.args[0] === "inspect"), true);
-    assert.equal(calls.some((call) => call.args[0] === "rm"), false);
+    assert.equal(workloadRemoves(calls).length, 0);
   } finally {
     await fixture.close();
   }
@@ -654,8 +932,8 @@ test("overlapping OCI provider instances preserve both durable leases without or
     assert.equal(rightSelection.enforcement, "write_confinement_exact_grant");
     if (leftSelection.enforcement !== "write_confinement_exact_grant" || rightSelection.enforcement !== "write_confinement_exact_grant") throw new Error("strict OCI fixture bypassed");
     assert.equal(durableLeaseCount(first.state, "oci-concurrent"), 2);
-    assert.equal(calls.filter((call) => call.args[0] === "create").length, 2);
-    const usedImages = calls.filter((call) => call.args[0] === "create")
+    assert.equal(workloadCreates(calls).length, 2);
+    const usedImages = workloadCreates(calls)
       .flatMap((call) => call.args.filter((argument) => /^sha256:/.test(argument))).sort();
     assert.deepEqual(usedImages, [`sha256:${"3".repeat(64)}`, `sha256:${"4".repeat(64)}`]);
     assert.deepEqual(durableLeaseImages(first.state, "oci-concurrent"), usedImages);
@@ -759,11 +1037,11 @@ test("OCI durable lease capacity refuses before create and bounds post-create pe
     assert.ok(Buffer.byteLength(paddedText) < 1024 * 1024);
     assert.ok(Buffer.byteLength(JSON.stringify([...padded, row(2_000)])) > 1024 * 1024);
     await writeFile(statePath, paddedText);
-    const creates = calls.filter((call) => call.args[0] === "create").length;
+    const creates = workloadCreates(calls).length;
     await assert.rejects(provider.acquire(request), (error) =>
       error instanceof OciExecutionIsolationError && error.code === "oci_recovery_blocked" &&
       error.cause instanceof Error && /byte bound/i.test(error.cause.message));
-    assert.equal(calls.filter((call) => call.args[0] === "create").length, creates,
+    assert.equal(workloadCreates(calls).length, creates,
       "pre-effect journal capacity failure must happen before create");
     assert.equal(readFileSync(statePath, "utf8"), paddedText);
 
@@ -953,6 +1231,125 @@ test("real Docker launch plan runs the original command only inside the owned co
   }
 });
 
+test("real Docker strict interactive plan completes an exact JSON duplex roundtrip and leaves zero containers", async (t) => {
+  const docker = availableDockerFixture();
+  if (!docker) return t.skip("Docker unavailable; no installation attempted.");
+  const fixture = await ociFixture();
+  let containerId: string | undefined;
+  try {
+    const providerId = "oci-real-interactive";
+    const provider = createOciExecutionIsolationProvider({
+      providerId,
+      cliPath: docker,
+      image: "alpine:latest",
+      stateDirectory: fixture.state,
+    });
+    const attestation = await provider.attest() as { interactiveAttach?: boolean };
+    assert.equal(attestation.interactiveAttach, true);
+    const intent = {
+      ...fixture.intent,
+      kind: "mcp_server" as const,
+      executable: "sh",
+      arguments: ["-c", "IFS= read -r line; printf '%s\\n' \"$line\""],
+    };
+    const lease = await provider.acquire({
+      providerId,
+      implementationDigest: "f".repeat(64),
+      intent,
+      grant: fixture.claims,
+    });
+    containerId = durableContainerId(fixture.state, providerId);
+    const plan = await provider.prepareExecution!(lease as never, intent);
+    assert.deepEqual(plan.arguments, ["start", "--attach", "--interactive", containerId]);
+    const request = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "initialize" });
+    const result = await execFileInputResult(plan.executable, plan.arguments, `${request}\n`);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.trim(), request);
+    await provider.release(lease as never);
+    containerId = undefined;
+    assert.equal((await execFileResult(docker, [
+      "ps", "-aq", "--filter", `label=ai-board.runner-v2.provider=${providerId}`,
+    ])).stdout.trim(), "");
+  } finally {
+    if (containerId) await execFileResult(docker, ["rm", "--force", containerId]);
+    await fixture.close();
+  }
+});
+
+test("real Docker strict attach cancellation and external disappearance leave zero owned containers", { timeout: 90_000 }, async (t) => {
+  const docker = availableDockerFixture();
+  if (!docker) return t.skip("Docker unavailable; strict cancellation/disappearance was not weakened or emulated.");
+  const fixture = await ociFixture();
+  const providerId = "oci-real-interactive-lifecycle";
+  let containerId: string | undefined;
+  let attached: ReturnType<typeof spawn> | undefined;
+  try {
+    const provider = createOciExecutionIsolationProvider({
+      providerId,
+      cliPath: docker,
+      image: "alpine:latest",
+      stateDirectory: fixture.state,
+    });
+    const attestation = await provider.attest() as { interactiveAttach?: boolean };
+    assert.equal(attestation.interactiveAttach, true);
+    const intent = {
+      ...fixture.intent,
+      kind: "mcp_server" as const,
+      executable: "sh",
+      arguments: ["-c", "while :; do sleep 1; done"],
+    };
+    const lease = await provider.acquire({
+      providerId,
+      implementationDigest: "f".repeat(64),
+      intent,
+      grant: fixture.claims,
+    });
+    containerId = durableContainerId(fixture.state, providerId);
+    const plan = await provider.prepareExecution!(lease as never, intent);
+    assert.deepEqual(plan.arguments, ["start", "--attach", "--interactive", containerId]);
+    attached = spawn(plan.executable, [...plan.arguments], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    await waitForDockerRunning(docker, containerId, 30_000);
+    await terminateAttachedClient(attached, 10_000);
+    attached = undefined;
+    await provider.release(lease as never);
+    containerId = undefined;
+    await assertNoOwnedDockerContainers(docker, providerId);
+
+    const disappearedIntent = { ...intent, invocationId: "invocation-disappeared" };
+    await provider.acquire({
+      providerId,
+      implementationDigest: "f".repeat(64),
+      intent: disappearedIntent,
+      grant: fixture.claims,
+    });
+    containerId = durableContainerId(fixture.state, providerId);
+    const removed = await execFileResult(docker, ["rm", "--force", containerId]);
+    assert.equal(removed.code, 0, removed.stderr);
+    containerId = undefined;
+    const restarted = createOciExecutionIsolationProvider({
+      providerId,
+      cliPath: docker,
+      image: "alpine:latest",
+      stateDirectory: fixture.state,
+    });
+    await restarted.attest();
+    const recovered = await restarted.recoverOwned();
+    assert.equal(recovered.cleaned, 1);
+    assert.deepEqual(recovered.blockers, []);
+    assert.equal(recovered.transitions?.[0]?.status, "cleaned");
+    await restarted.acknowledgeRecovery(recovered.transitions ?? []);
+    assert.equal(durableLeaseCount(fixture.state, providerId), 0);
+    await assertNoOwnedDockerContainers(docker, providerId);
+  } finally {
+    if (attached) await terminateAttachedClient(attached, 10_000).catch(() => undefined);
+    if (containerId) await execFileResult(docker, ["rm", "--force", containerId]);
+    await fixture.close();
+  }
+});
+
 test("real Docker recovery blocks an exact image mismatch without removing the container", async (t) => {
   const docker = availableDockerFixture();
   if (!docker) return t.skip("Docker unavailable; no installation attempted.");
@@ -963,7 +1360,12 @@ test("real Docker recovery blocks an exact image mismatch without removing the c
       providerId: "oci-real-mismatch", cliPath: docker, image: "alpine:latest", stateDirectory: fixture.state,
     });
     await provider.attest();
-    await provider.acquire({ providerId: "oci-real-mismatch", implementationDigest: "d".repeat(64), intent: fixture.intent, grant: fixture.claims });
+    await provider.acquire({
+      providerId: "oci-real-mismatch",
+      implementationDigest: "d".repeat(64),
+      intent: { ...fixture.intent, executable: "sh", arguments: ["-c", "true"] },
+      grant: fixture.claims,
+    });
     containerId = durableContainerId(fixture.state, "oci-real-mismatch");
     const statePath = join(fixture.state, "oci-leases-oci-real-mismatch.json");
     const rows = JSON.parse(readFileSync(statePath, "utf8")) as { lease: { immutableImageId: string } }[];
@@ -984,11 +1386,19 @@ test("real Docker recovery blocks an exact image mismatch without removing the c
   }
 });
 
-function fakeCli(calls: OciCliInvocation[]) {
+function fakeCli(
+  calls: OciCliInvocation[],
+  options: {
+    interactiveAttach?: boolean;
+    semanticDuplex?: boolean;
+    imageExecutables?: readonly string[];
+  } = {},
+) {
   const labelsByContainer = new Map<string, Record<string, string>>();
   const imageByContainer = new Map<string, string>();
   const idByName = new Map<string, string>();
   let createdCount = 0;
+  let probeCount = 0;
   const runner = {
     psOutput: "",
     imageIds: [] as string[],
@@ -1003,6 +1413,29 @@ function fakeCli(calls: OciCliInvocation[]) {
     async run(invocation: OciCliInvocation) {
       calls.push(structuredClone(invocation));
       const [command] = invocation.args;
+      if (command === "help" && invocation.args[1] === "create") {
+        return {
+          exitCode: 0,
+          stdout: options.interactiveAttach === false ? "Usage: create" : "Usage: create --interactive",
+          stderr: "",
+        };
+      }
+      if (command === "help" && invocation.args[1] === "start") {
+        return {
+          exitCode: 0,
+          stdout: options.interactiveAttach === false ? "Usage: start --attach" : "Usage: start --attach --interactive",
+          stderr: "",
+        };
+      }
+      if (command === "run") {
+        const executable = invocation.args.at(-1);
+        const available = (options.imageExecutables ?? ["sh", "node"]).includes(executable ?? "");
+        return {
+          exitCode: available ? 0 : 127,
+          stdout: available ? `${executable}\n` : "",
+          stderr: available ? "" : `${executable}: not found`,
+        };
+      }
       if (command === "image") {
         return { exitCode: 0, stdout: (runner.imageIds.shift() ?? "sha256:" + "1".repeat(64)) + "\n", stderr: "" };
       }
@@ -1017,8 +1450,9 @@ function fakeCli(calls: OciCliInvocation[]) {
             }),
           ));
         }
-        createdCount += 1;
-        const containerId = `container-fixture-${createdCount}`;
+        const probe = isProbeCreate(invocation);
+        if (probe) probeCount += 1; else createdCount += 1;
+        const containerId = probe ? `probe-fixture-${probeCount}` : `container-fixture-${createdCount}`;
         idByName.set(optionValues(invocation.args, "--name")[0]!, containerId);
         labelsByContainer.set(containerId, Object.fromEntries(
           optionValues(invocation.args, "--label").map((label) => {
@@ -1030,6 +1464,12 @@ function fakeCli(calls: OciCliInvocation[]) {
         return { exitCode: 0, stdout: `${containerId}\n`, stderr: "" };
       }
       if (command === "ps") {
+        if (invocation.args.includes(`label=ai-board.runner-v2.probe=true`)) {
+          const probes = [...labelsByContainer]
+            .filter(([, labels]) => labels["ai-board.runner-v2.probe"] === "true")
+            .map(([id]) => id);
+          return { exitCode: 0, stdout: probes.length > 0 ? `${probes.join("\n")}\n` : "", stderr: "" };
+        }
         return { exitCode: 0, stdout: runner.psOutput, stderr: "" };
       }
       if (command === "inspect") {
@@ -1065,6 +1505,16 @@ function fakeCli(calls: OciCliInvocation[]) {
         return { exitCode: 0, stdout: "", stderr: "" };
       }
       return { exitCode: 1, stdout: "", stderr: "unexpected fake command" };
+    },
+    async runDuplex(invocation: OciCliInvocation, input: string) {
+      calls.push(structuredClone(invocation));
+      if (invocation.args[0] !== "start" || !invocation.args.includes("--attach") ||
+          !invocation.args.includes("--interactive")) {
+        return { exitCode: 1, stdout: "", stderr: "unexpected fake duplex command" };
+      }
+      return options.interactiveAttach === false || options.semanticDuplex === false
+        ? { exitCode: 0, stdout: "wrong-token", stderr: "" }
+        : { exitCode: 0, stdout: input.trimEnd(), stderr: "" };
     },
   };
   return runner;
@@ -1138,6 +1588,21 @@ function optionValues(args: readonly string[], option: string): string[] {
   return values;
 }
 
+function isProbeCreate(invocation: Pick<OciCliInvocation, "args">): boolean {
+  return invocation.args[0] === "create" &&
+    optionValues(invocation.args, "--label").includes("ai-board.runner-v2.probe=true");
+}
+
+function workloadCreates(calls: readonly OciCliInvocation[]): OciCliInvocation[] {
+  return calls.filter((call) => call.args[0] === "create" && !isProbeCreate(call));
+}
+
+function workloadRemoves(calls: readonly OciCliInvocation[]): OciCliInvocation[] {
+  return calls.filter((call) => call.args[0] === "rm" &&
+    !String(call.args.at(-1)).startsWith("probe-fixture-") &&
+    !String(call.args.at(-1)).startsWith("aiboard-probe-"));
+}
+
 function availableDockerFixture(): string | undefined {
   try {
     const explicit = process.env.RUNNER_V2_TEST_DOCKER_CLI;
@@ -1187,5 +1652,82 @@ async function execFileResult(executable: string, args: readonly string[]): Prom
         stderr,
       });
     });
+  });
+}
+
+async function waitForDockerRunning(
+  executable: string,
+  containerId: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const inspected = await execFileResult(executable, [
+      "inspect", "--format", "{{.State.Running}}", containerId,
+    ]);
+    if (inspected.code === 0 && inspected.stdout.trim() === "true") return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Configured Docker container did not become running within its test bound.");
+}
+
+async function terminateAttachedClient(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise<void>((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("close", () => resolvePromise());
+  });
+  child.kill("SIGKILL");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    closed,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Configured Docker attach client did not close within its test bound.")), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function assertNoOwnedDockerContainers(executable: string, providerId: string): Promise<void> {
+  const listed = await execFileResult(executable, [
+    "ps", "-aq", "--filter", `label=ai-board.runner-v2.provider=${providerId}`,
+  ]);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.equal(listed.stdout.trim(), "");
+}
+
+async function execFileInputResult(
+  executable: string,
+  args: readonly string[],
+  input: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return await new Promise((resolvePromise, reject) => {
+    const child = spawn(executable, [...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("Configured Docker duplex fixture exceeded its 30 second test bound."));
+    }, 30_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      resolvePromise({ code: code ?? 1, stdout, stderr });
+    });
+    child.stdin.end(input);
   });
 }

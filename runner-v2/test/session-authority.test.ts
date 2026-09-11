@@ -297,8 +297,9 @@ test("durably transfers cleanup ownership only after the exact transfer acknowle
       ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
       externalApproved: false, destructiveApproved: false, networkApproved: false,
     });
+    const kernel = createInMemoryStreamingSessionStore();
     const sessions = createSessionAuthority({
-      grants, sessions: createInMemoryStreamingSessionStore(),
+      grants, sessions: kernel,
       clock: () => new Date("2026-08-29T00:00:00.000Z"),
     });
     const begun = sessions.beginTransfer({
@@ -854,7 +855,7 @@ test("fails closed into durable provider-lease cleanup blocking after host loss 
   }
 });
 
-test("uses SessionAuthority-only fenced cleanup after transfer acknowledgement", async () => {
+test("adopted compatibility recovery cannot replace categorical v4 resource proofs", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-adopted-recovery-"));
   const workspace = join(root, "workspace");
   await mkdir(workspace);
@@ -868,8 +869,9 @@ test("uses SessionAuthority-only fenced cleanup after transfer acknowledgement",
       ...binding, workspacePath: workspace, access: [{ path: workspace, mode: "write" }],
       externalApproved: false, destructiveApproved: false, networkApproved: false,
     });
+    const kernel = createInMemoryStreamingSessionStore();
     const sessions = createSessionAuthority({
-      grants, sessions: createInMemoryStreamingSessionStore(),
+      grants, sessions: kernel,
       clock: () => new Date("2026-08-29T00:00:00.000Z"),
     });
     const begun = sessions.beginTransfer({
@@ -890,23 +892,24 @@ test("uses SessionAuthority-only fenced cleanup after transfer acknowledgement",
       expectedRevision: begun.record.revision, effectId: begun.record.effects[0]!.effectId,
     }).record;
     const replayed: string[] = [];
-    const recovered = sessions.recoverAdopted({
-      sessionId: "stream-1", ownerId: active.ownerId, fencingToken: active.fencingToken,
-      replay: (effect) => {
-        replayed.push(effect.kind);
-        return "cleaned";
-      },
-    });
-    assert.deepEqual(replayed, ["cleanup"]);
-    assert.equal(recovered.record.state, "released");
-    assert.equal(recovered.record.cleanupOwner, "none");
-    assert.equal(recovered.record.effects.every((effect) => effect.status === "acknowledged"), true);
+    assert.throws(
+      () => sessions.recoverAdopted({
+        sessionId: "stream-1", ownerId: active.ownerId, fencingToken: active.fencingToken,
+        replay: (effect) => {
+          replayed.push(effect.kind);
+          return "blocked";
+        },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
+    );
+    assert.deepEqual(replayed, [], "categorical cleanup must refuse before invoking compatibility replay");
+    assert.equal(kernel.store.readBySession("stream-1")?.state, "cleanup_pending");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("recovers an expired adopted pending cleanup only after a new fenced owner takes over", async () => {
+test("re-fences expired adopted cleanup but refuses compatibility proof after takeover", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-expired-cleanup-"));
   const workspace = join(root, "workspace");
   const path = join(root, "sessions.sqlite");
@@ -1024,16 +1027,19 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
     assert.equal(staleReplayCalls, 0);
 
     const replayed: Array<{ effectId: string; fencingToken: number }> = [];
-    const recovered = sessions.recoverAdopted({
-      sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
-      replay: (effect) => {
-        replayed.push({ effectId: effect.effectId, fencingToken: effect.fencingToken });
-        return "cleaned";
-      },
-    });
-    assert.deepEqual(replayed, [{ effectId: "cleanup-1", fencingToken: 2 }]);
-    assert.equal(recovered.record.state, "released");
-    assert.equal(recovered.record.cleanupOwner, "none");
+    assert.throws(
+      () => sessions.recoverAdopted({
+        sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
+        replay: (effect) => {
+          replayed.push({ effectId: effect.effectId, fencingToken: effect.fencingToken });
+          return "cleaned";
+        },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
+    );
+    assert.deepEqual(replayed, []);
+    assert.equal(first.store.readBySession("stream-1")?.state, "cleanup_pending");
+    assert.equal(first.store.readBySession("stream-1")?.cleanupOwner, "session_authority");
     assert.throws(
       () => sessions.authorizeLaunchOperation({
         sessionId: "stream-1", operation: "request",
@@ -1061,7 +1067,7 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
       (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
     );
     assert.equal(reopenedReplayCalls, 0);
-    assert.equal(reopened.store.readBySession("stream-1")?.state, "released");
+    assert.equal(reopened.store.readBySession("stream-1")?.state, "cleanup_pending");
     reopened.store.close();
   } finally {
     try { first?.store.close(); } catch {}
@@ -1070,7 +1076,7 @@ test("recovers an expired adopted pending cleanup only after a new fenced owner 
   }
 });
 
-test("durably blocks a re-fenced expired adopted cleanup exactly once", async () => {
+test("does not fabricate a generic blocker for re-fenced adopted cleanup", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-session-expired-cleanup-blocked-"));
   const workspace = join(root, "workspace");
   const path = join(root, "sessions.sqlite");
@@ -1118,37 +1124,27 @@ test("durably blocks a re-fenced expired adopted cleanup exactly once", async ()
       leaseExpiresAt: "2026-08-29T00:02:00.000Z",
     }).record;
     let replayCalls = 0;
-    const blocked = sessions.recoverAdopted({
-      sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
-      replay: (effect) => {
-        replayCalls += 1;
-        assert.equal(effect.effectId, "cleanup-1");
-        return "blocked";
-      },
-    });
-    assert.equal(replayCalls, 1);
-    assert.equal(blocked.record.state, "cleanup_blocked");
-    assert.deepEqual(blocked.record.effects.find((effect) => effect.kind === "cleanup"), {
-      effectId: "cleanup-1", kind: "cleanup", status: "blocked", owner: "session_authority",
-      fencingToken: 2, createdAt: "2026-08-29T00:00:01.000Z", blockedAt: "2026-08-29T00:01:00.000Z",
-      cleanupProvenance: {
-        effectId: "cleanup-1", originOwnerId: cleaning.ownerId, originFencingToken: 1,
-        takeovers: [{
-          fromOwnerId: cleaning.ownerId, fromFencingToken: 1,
-          toOwnerId: "session-authority:recovered", toFencingToken: 2,
-          at: "2026-08-29T00:01:00.000Z",
-        }],
-      },
-    });
+    assert.throws(
+      () => sessions.recoverAdopted({
+        sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
+        replay: () => { replayCalls += 1; return "blocked"; },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
+    );
+    assert.equal(replayCalls, 0);
+    assert.equal(first.store.readBySession("stream-1")?.state, "cleanup_pending");
     first.store.close();
     reopened = openSqliteStreamingSessionStore(path, new Uint8Array(32).fill(11));
     const restarted = createSessionAuthority({ grants, sessions: reopened, clock: () => now });
-    const later = restarted.recoverAdopted({
-      sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
-      replay: () => { replayCalls += 1; return "blocked"; },
-    });
-    assert.equal(later.record.state, "cleanup_blocked");
-    assert.equal(replayCalls, 1);
+    assert.throws(
+      () => restarted.recoverAdopted({
+        sessionId: "stream-1", ownerId: takenOver.ownerId, fencingToken: takenOver.fencingToken,
+        replay: () => { replayCalls += 1; return "blocked"; },
+      }),
+      (error) => error instanceof SessionAuthorityError && error.code === "recovery_refused",
+    );
+    assert.equal(reopened.store.readBySession("stream-1")?.state, "cleanup_pending");
+    assert.equal(replayCalls, 0);
     reopened.store.close();
   } finally {
     try { first?.store.close(); } catch {}
@@ -1215,14 +1211,16 @@ test("quarantines active version-2 cleanup before replay or model-call authority
       ...unanchored,
       schemaVersion: 2,
       effects: takenOver.effects.map((effect) => effect.kind === "cleanup"
-        ? {
-          ...effect,
+        ? (() => {
+          const { progress: _progress, ...legacyEffect } = effect;
+          return {
+          ...legacyEffect,
           cleanupProvenance: {
             ...provenance,
             originOwnerId: "forged-origin",
             takeovers: [{ ...provenance.takeovers[0]!, fromOwnerId: "forged-origin" }],
           },
-        }
+        }; })()
         : effect),
     };
     const recordJson = JSON.stringify(legacy);

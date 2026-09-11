@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
@@ -245,7 +246,7 @@ test("backend ownership release is exact, durable across service restart, and id
   }
 });
 
-test("restart hydrates a port-zero durable handshake record before authenticated stop", async () => {
+test("restart hydrates a port-zero durable handshake record before authenticated stop", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-managed-process-handshake-crash-"));
   const workspace = join(root, "workspace");
   const state = join(root, "state");
@@ -255,6 +256,8 @@ test("restart hydrates a port-zero durable handshake record before authenticated
     idFactory: () => "handshake_crash",
   });
   const owner = broker(workspace, firstService, "session_owner");
+  t.diagnostic(`exact managed-process fixture acquired: ${root}`);
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   let childPid = 0;
   try {
     const started = await invoke(owner, "handshake_start", "process.start", {
@@ -287,33 +290,33 @@ test("restart hydrates a port-zero durable handshake record before authenticated
     } finally {
       recovered.close();
     }
-  } finally {
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
     firstService.close();
-    try {
-      const recordPath = join(state, "handshake_crash.json");
-      const cleanupRecord = JSON.parse(readFileSync(recordPath, "utf8")) as {
-        supervisor: { port: number; statusPath: string };
-      };
-      if (cleanupRecord.supervisor.port === 0) {
-        const statuses = readFileSync(cleanupRecord.supervisor.statusPath, "utf8")
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .map((line) => JSON.parse(line) as { port: number });
-        cleanupRecord.supervisor.port = statuses.findLast((status) => status.port > 0)?.port ?? 0;
-        writeFileSync(recordPath, JSON.stringify(cleanupRecord, null, 2));
-      }
-      const cleanup = new ManagedProcessService({ stateDirectory: state });
-      try {
-        await cleanup.stopRun("run_1");
-      } finally {
-        cleanup.close();
-      }
-    } catch {
-      // The assertion failure remains primary; the verified process PID is a last-resort test cleanup.
-      if (childPid > 0 && isPidAlive(childPid)) process.kill(childPid, "SIGKILL");
-    }
-    await waitForPidExit(childPid);
-    rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
+    await finalizeCertifiedFixture({
+      fixtureName: "managed handshake recovery", root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        // The production service authenticates the durable status/endpoint and
+        // hydrates its own port. Never invent authority from a status-file port
+        // or fall back to the fixture's numeric child PID.
+        const cleanup = new ManagedProcessService({ stateDirectory: state });
+        try { await cleanup.stopRun("run_1"); }
+        finally { cleanup.close(); }
+      },
+      certify: async () => {
+        const record = JSON.parse(readFileSync(join(state, "handshake_crash.json"), "utf8")) as {
+          status: string; supervisor: { port: number; supervisorPid: number };
+        };
+        assert.equal(record.status, "stopped");
+        assert.ok(record.supervisor.port > 0, "the authenticated endpoint must have been recovered");
+        for (const pid of [childPid, record.supervisor.supervisorPid]) {
+          assert.ok(Number.isSafeInteger(pid) && pid > 0, "exact acquired child and supervisor observations are required");
+          await waitForPidExit(pid);
+          assert.equal(isPidAlive(pid), false);
+        }
+      },
+      removeRoot: () => { rmSync(root, { recursive: true, maxRetries: 50, retryDelay: 100 }); t.diagnostic(`certified managed-process root removed: ${root}`); },
+    });
   }
 });
 
@@ -662,6 +665,7 @@ test("supervisor startup timeout aborts and reaps a late supervisor deterministi
   });
   const owner = broker(workspace, service, "session_owner");
   let supervisorPid = 0;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const result = await invoke(owner, "timeout", "process.start", {
       command: process.execPath,
@@ -678,12 +682,20 @@ test("supervisor startup timeout aborts and reaps a late supervisor deterministi
       readdirSync(join(state, "timeout")).filter((name) => name.startsWith("launch-")),
       []
     );
-  } finally {
-    service.close();
-    if (supervisorPid > 0 && isPidAlive(supervisorPid)) process.kill(supervisorPid, "SIGKILL");
-    await waitForPidExit(supervisorPid);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "supervisor startup timeout aborts and reaps a late supervisor deterministically", root: root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => { service.close(); },
+      certify: async () => {
+        if (!supervisorPid) supervisorPid = (JSON.parse(readFileSync(join(state, "timeout.json"), "utf8")) as { supervisor?: { supervisorPid?: number } }).supervisor?.supervisorPid ?? 0;
+        assert.deepEqual(readdirSync(join(state, "timeout")).filter((name) => name.startsWith("launch-")), []);
+        assert.ok(Number.isSafeInteger(supervisorPid) && supervisorPid > 0, "the exact acquired process observation is required");
+        try { process.kill(supervisorPid, 0); throw new Error("Owned fixture process remains live after cleanup."); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      },
+      removeRoot: () => rmSync(root, { recursive: true, maxRetries: 50, retryDelay: 100 }),
+    });
   }
 });
 
@@ -781,6 +793,7 @@ test("controlled stop terminates a descendant after its launcher exits", async (
   });
   const owner = broker(workspace, firstService, "session_owner");
   let descendantPid = 0;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const launcher = [
       "const { spawn } = require('node:child_process');",
@@ -809,12 +822,19 @@ test("controlled stop terminates a descendant after its launcher exits", async (
     } finally {
       recovered.close();
     }
-  } finally {
-    firstService.close();
-    if (descendantPid > 0 && isPidAlive(descendantPid)) process.kill(descendantPid, "SIGKILL");
-    await waitForPidExit(descendantPid);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "controlled stop terminates a descendant after its launcher exits", root: root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => { firstService.close(); const cleanup = new ManagedProcessService({ stateDirectory: state }); try { await cleanup.stopRun("run_1"); assert.equal(cleanup.listRun("run_1")[0]?.status, "stopped"); } finally { cleanup.close(); } },
+      certify: async () => {
+        await waitForPidExit(descendantPid);
+        assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0, "the exact acquired process observation is required");
+        try { process.kill(descendantPid, 0); throw new Error("Owned fixture process remains live after cleanup."); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      },
+      removeRoot: () => rmSync(root, { recursive: true, maxRetries: 50, retryDelay: 100 }),
+    });
   }
 });
 

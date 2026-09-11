@@ -235,6 +235,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       return { ...this.snapshot(this.ownedRecord(processId, owner)), ownershipReleased: true };
     }
     const status = await this.authenticatedStatus(record);
+    this.throwIfTerminalOutputPending(status);
     if (status.status !== "stopped" || !status.ownershipReleased)
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} is not verified terminal.`);
     const confirmed = await this.authenticatedStatus(record);

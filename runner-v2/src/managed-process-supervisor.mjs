@@ -304,7 +304,13 @@ function drainInteractiveOutput(stream, readable) {
   const retainedBytes = retainedOutputByteLength();
   if (retainedOutputChunkCount() >= maximumChunks || retainedBytes >= maximumBytes) return;
   const maximumRead = Math.min(config.maxRetainedOutputChunkBytes ?? 16 * 1024, config.maxPollBytes ?? 256 * 1024, maximumBytes - retainedBytes);
-  const chunk = readable.read(maximumRead);
+  // Read the bounded bytes that are available now. Readable.read(n) returns
+  // null while fewer than n bytes are buffered, which otherwise deadlocks
+  // conversational protocols whose small response must arrive before the next
+  // request (or before stdin closes).
+  const availableRead = Math.min(maximumRead, readable.readableLength);
+  if (availableRead < 1) return;
+  const chunk = readable.read(availableRead);
   if (!chunk) return;
   retainInteractiveOutput(stream, chunk);
   if (retainedOutputChunkCount() < maximumChunks && retainedOutputByteLength() < maximumBytes)

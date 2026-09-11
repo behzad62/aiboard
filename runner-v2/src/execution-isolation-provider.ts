@@ -13,6 +13,7 @@ import {
   reserveConsumedExecutionGrantForIsolation,
   type ConsumedExecutionGrantClaims,
 } from "./execution-grants.js";
+import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 
 export type ExecutionIsolationErrorCode =
   | "isolation_capability_unavailable"
@@ -40,6 +41,8 @@ export interface ExecutionIsolationAttestation {
   readonly mechanism: string;
   readonly implementationDigest?: string;
   readonly exactGrantWriteConfinement: boolean;
+  /** Independently probed OCI create/start duplex support. */
+  readonly interactiveAttach?: boolean;
   readonly expiresAt?: string;
   readonly executableIdentity?: Readonly<{ path: string; digest: string }>;
   readonly imageIdentity?: Readonly<{
@@ -66,6 +69,8 @@ export interface ExecutionIsolationAcquireRequest {
   readonly providerId: string;
   readonly implementationDigest: string;
   readonly intent: ExecutionInvocationIntent;
+  /** Runner-family-owned command token for strict image execution. */
+  readonly imageExecutable?: string;
   readonly grant: ConsumedExecutionGrantClaims;
   /** Ephemeral centrally scrubbed environment; never persisted or projected. */
   readonly environment?: Readonly<Record<string, string>>;
@@ -94,6 +99,11 @@ export interface ExecutionIsolationCleanupTransition {
 
 export interface ExecutionIsolationProvider {
   attest(): Promise<unknown>;
+  /** Optional fail-before-acquire intent attestation; it must not create the owned workload. */
+  attestExecution?(
+    intent: ExecutionInvocationIntent,
+    imageExecutable?: string,
+  ): Promise<void>;
   acquire(request: ExecutionIsolationAcquireRequest): Promise<unknown>;
   release(lease: ExecutionIsolationLease): Promise<void>;
   recoverOwned(): Promise<ExecutionIsolationRecoveryResult>;
@@ -138,6 +148,7 @@ export interface ExecutionIsolationSelector {
   acquire(input: {
     permissionProfile: PermissionProfile;
     intent: ExecutionInvocationIntent;
+    readonly imageExecutable?: string;
     grant: ConsumedExecutionGrantClaims;
     readonly environment?: Readonly<Record<string, string>>;
   }): Promise<ExecutionIsolationSelection>;
@@ -217,6 +228,9 @@ export function createExecutionIsolationProviderRegistration(
     acknowledgeRecovery: source.acknowledgeRecovery.bind(source),
     ...(source.prepareExecution
       ? { prepareExecution: source.prepareExecution.bind(source) }
+      : {}),
+    ...(source.attestExecution
+      ? { attestExecution: source.attestExecution.bind(source) }
       : {}),
   });
   const registration = Object.freeze({
@@ -311,6 +325,7 @@ export function createExecutionIsolationSelector(
     async acquire(input: {
       permissionProfile: PermissionProfile;
       intent: ExecutionInvocationIntent;
+      readonly imageExecutable?: string;
       grant: ConsumedExecutionGrantClaims;
       readonly environment?: Readonly<Record<string, string>>;
     }): Promise<ExecutionIsolationSelection> {
@@ -337,6 +352,17 @@ export function createExecutionIsolationSelector(
           continue;
         }
         if (!qualifies(attestation, provider, clock())) continue;
+        if (requiresInteractiveAttach(input.intent) &&
+            (attestation.interactiveAttach !== true || !provider.provider.attestExecution)) {
+          continue;
+        }
+        if (provider.provider.attestExecution) {
+          try {
+            await provider.provider.attestExecution(input.intent, input.imageExecutable);
+          } catch {
+            continue;
+          }
+        }
         reserveGrant(input.grant);
         let lease: ExecutionIsolationLease;
         try {
@@ -345,6 +371,9 @@ export function createExecutionIsolationSelector(
               providerId: provider.providerId,
               implementationDigest: provider.implementationDigest,
               intent: input.intent,
+              ...(input.imageExecutable
+                ? { imageExecutable: input.imageExecutable }
+                : {}),
               grant: input.grant,
               environment: snapshotExecutionEnvironment(input.environment),
             }),
@@ -660,18 +689,20 @@ async function appendEnforcementRecord(path: string, record: ExecutionEnforcemen
 async function withProjectionLock<T>(path: string, action: () => Promise<T>): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
   const lockPath = `${path}.lock`;
-  const deadline = Date.now() + 10_000;
-  while (true) {
-    try { await mkdir(lockPath); break; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) {
-        throw new ExecutionIsolationError("isolation_recovery_blocked", "Enforcement state lock is unavailable.", { cause: error });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+  try {
+    return await withOwnedFenceLock(lockPath, action, {
+      deadlineMs: 10_000,
+      retryDelayMs: 10,
+      retireAfterEffect: false,
+    });
+  } catch (error) {
+    if (error instanceof ExecutionIsolationError) throw error;
+    throw new ExecutionIsolationError(
+      "isolation_recovery_blocked",
+      "Enforcement state lock is unavailable.",
+      { cause: error },
+    );
   }
-  try { return await action(); }
-  finally { await rm(lockPath, { recursive: true, force: true }); }
 }
 
 function enforcementRecord(
@@ -811,10 +842,11 @@ function parseAttestation(value: unknown): ExecutionIsolationAttestation {
   const input = exactObject(value, new Set([
     "attestationVersion", "providerId", "verified", "mechanism",
     "implementationDigest", "exactGrantWriteConfinement", "expiresAt", "capabilities",
-    "executableIdentity", "imageIdentity",
+    "executableIdentity", "imageIdentity", "interactiveAttach",
   ]));
   if (input.attestationVersion !== 1 || typeof input.verified !== "boolean" ||
-      typeof input.exactGrantWriteConfinement !== "boolean") throw new Error();
+      typeof input.exactGrantWriteConfinement !== "boolean" ||
+      (input.interactiveAttach !== undefined && typeof input.interactiveAttach !== "boolean")) throw new Error();
   const capabilities = exactObject(input.capabilities, new Set([
     "tree_termination", "crash_cleanup", "verified_emptiness", "write_confinement",
   ]));
@@ -828,6 +860,8 @@ function parseAttestation(value: unknown): ExecutionIsolationAttestation {
     ...(input.implementationDigest === undefined
       ? {} : { implementationDigest: safeDigest(input.implementationDigest) }),
     exactGrantWriteConfinement: input.exactGrantWriteConfinement,
+    ...(input.interactiveAttach === undefined
+      ? {} : { interactiveAttach: input.interactiveAttach }),
     ...(input.expiresAt === undefined ? {} : { expiresAt: dateText(input.expiresAt) }),
     ...(input.executableIdentity === undefined ? {} : {
       executableIdentity: parseExecutableIdentity(input.executableIdentity),
@@ -837,6 +871,10 @@ function parseAttestation(value: unknown): ExecutionIsolationAttestation {
     }),
     capabilities: capabilities as unknown as ExecutionSafetyCapabilities,
   });
+}
+
+function requiresInteractiveAttach(intent: ExecutionInvocationIntent): boolean {
+  return intent.kind === "mcp_server" || intent.kind === "language_server";
 }
 
 function qualifies(

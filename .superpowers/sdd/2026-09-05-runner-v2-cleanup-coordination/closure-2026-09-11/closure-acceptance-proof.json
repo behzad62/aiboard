@@ -1,0 +1,70 @@
+{
+  "verifiedAt": "2026-09-11T10:27:50.269384+00:00",
+  "head": "4bf64cf398a2f8d57b464182efbc2aa492dee78d",
+  "sourceFiles": 361,
+  "sourceDrift": [],
+  "nodeTestFiles": 152,
+  "counts": {
+    "tests": 2265,
+    "pass": 2264,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 1,
+    "todo": 0
+  },
+  "clientCommandsPassed": 12,
+  "requiredNativeIntegration": [
+    {
+      "name": "post-ready oversized-line failure rejects the call and releases its exact process session",
+      "result": "ok 759 - post-ready oversized-line failure rejects the call and releases its exact process session"
+    },
+    {
+      "name": "real persistent output stays private between calls and spill failure never corrupts protocol bytes",
+      "result": "ok 1262 - real persistent output stays private between calls and spill failure never corrupts protocol bytes"
+    },
+    {
+      "name": "CLI closes per-run MCP discovery and public facades when active extension startup fails before readiness",
+      "result": "ok 235 - CLI closes per-run MCP discovery and public facades when active extension startup fails before readiness"
+    },
+    {
+      "name": "strict public MCP uses the separately attested portable image command and refuses unsafe host identities",
+      "result": "ok 756 - strict public MCP uses the separately attested portable image command and refuses unsafe host identities"
+    },
+    {
+      "name": "public MCP manager close verifies its launched server tree is empty",
+      "result": "ok 757 - public MCP manager close verifies its launched server tree is empty"
+    },
+    {
+      "name": "public MCP manager crash recovery cleans its exact launched server tree without relaunch",
+      "result": "ok 762 - public MCP manager crash recovery cleans its exact launched server tree without relaunch"
+    },
+    {
+      "name": "two real concurrent run bindings cannot cross grants outputs or cleanup effects",
+      "result": "ok 378 - two real concurrent run bindings cannot cross grants outputs or cleanup effects"
+    },
+    {
+      "name": "real Runner crash before transfer is cleaned exactly once without fabricated adoption",
+      "result": "ok 1261 - real Runner crash before transfer is cleaned exactly once without fabricated adoption"
+    }
+  ],
+  "linuxNativeTestsPassed": 21,
+  "macOSExecuted": false,
+  "typecheckExit": 0,
+  "eslintExit": 0,
+  "acceptedGateAcquisitions": 1855,
+  "acceptedGateAbsent": 1800,
+  "acceptedGateRetainedSynthetic": 55,
+  "acceptedGateRetainedNative": 0,
+  "resourceClassificationSource": "streaming-precheckpoint-recovery.test.ts lines25-168,185-329: actual memory/SQLite/artifacts with synthetic process/channel boundaries; finalizers close stores/spools/channels and join late effects.",
+  "historicalAndEarlierFailedDiagnostics": "Preserved separately, not converted to release success; earlier CLI ggPTew remains blocked by zero-byte noncanonical Job coordination authority. No raw PID recovery or deletion.",
+  "headUnchanged": true,
+  "stagedEntriesUnchanged": true,
+  "selfReviewRequired": true,
+  "independentReviewRequired": false,
+  "mechanicalGateVerified": true,
+  "documentationGateUpdatePending": false,
+  "phaseStatus": "PHASE VERIFIED 100% COMPLETE \u2014 NEXT PHASE MAY BEGIN",
+  "selfReviewAccepted": true,
+  "nextQueue": "remaining Task 8.0B3 / P6.4e handback",
+  "gateDocumentsVerifiedAt": "2026-09-11T10:33:48.498932+00:00"
+}

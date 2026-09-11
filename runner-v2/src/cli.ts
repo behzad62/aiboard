@@ -6,19 +6,22 @@ import { ControlServer } from "./control-server.js";
 import { ArtifactStore } from "./artifact-store.js";
 import type { BuildStepResult } from "./build-runtime.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
+import { createExecutionHost } from "./execution-host.js";
+import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { captureGitBaseline } from "./git-baseline.js";
-import { checkGit } from "./git-preflight.js";
 import {
   classifyNativeBuildRecoveryError,
   NativeBuildFactory,
   preflightRecoveredRunnerCapabilities,
-  preflightRunnerCapabilities,
 } from "./native-build-factory.js";
 import {
   NativeBuildManager,
   type HistoricalTerminalState,
 } from "./native-build-manager.js";
-import { createMcpTools, McpManager, type McpServerSpec } from "./mcp-tools.js";
+import {
+  createLiveMcpStatusRegistry,
+  type McpServerSpec,
+} from "./mcp-tools.js";
 import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
 import {
@@ -84,13 +87,32 @@ async function main(): Promise<void> {
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 
-    const git = await checkGit();
+    const artifactDirectory = join(options.stateDirectory, "artifacts");
+    await mkdir(artifactDirectory, { recursive: true });
+    const artifacts = new ArtifactStore(artifactDirectory);
+    const executionHost = createExecutionHost({
+      projectRoot: options.projectPath,
+      stateDirectory: options.stateDirectory,
+      artifacts,
+    });
+    resources.executionHost = executionHost;
+    const internalExecutionContext = createRunnerInternalExecutionContext({
+      projectDirectory: options.projectPath,
+      stateDirectory: options.stateDirectory,
+      processKernel: executionHost.internalProcesses,
+    });
+    resources.internalExecutionContext = internalExecutionContext;
+
+    const git = (await internalExecutionContext.gitPreflight()).result;
     if (!git.available) {
       throw new Error(`${git.code}: ${git.reason}`);
     }
+    const configuredCapabilitiesAttestation =
+      await internalExecutionContext.attestConfiguredCapabilities({
+        mcpServers: options.mcpServers,
+        capabilitiesConfig,
+      });
 
-    const artifactDirectory = join(options.stateDirectory, "artifacts");
-    await mkdir(artifactDirectory, { recursive: true });
     const supervisor = new RunSupervisor(
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
     );
@@ -106,40 +128,22 @@ async function main(): Promise<void> {
       options.token
     );
     resources.providerConfigs = providerConfigs;
-    const mcpManager = new McpManager({
-      cwd: options.projectPath,
-      servers: options.mcpServers,
-    });
-    resources.mcpManager = mcpManager;
-    await mcpManager.start();
+    const mcpStatus = createLiveMcpStatusRegistry(options.mcpServers);
     const permissions = new SqlitePermissionStore(
       join(options.stateDirectory, "permissions.sqlite")
     );
     resources.permissions = permissions;
-    const capabilityPreflightDirectory = join(
-      options.stateDirectory,
-      "capability-preflight",
-    );
-    await mkdir(capabilityPreflightDirectory, { recursive: true });
-    await preflightRunnerCapabilities({
-      config: capabilitiesConfig,
-      projectDirectory: options.projectPath,
-      stateDirectory: capabilityPreflightDirectory,
-      reservedToolNames: [
-        ...RUNNER_BUILTIN_TOOL_NAMES,
-        ...createMcpTools(
-          mcpManager,
-          new ArtifactStore(artifactDirectory),
-        ).map((tool) => tool.definition.name),
-      ],
-    });
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
       providerConfigs,
-      mcpManager,
       permissions,
       capabilitiesConfig,
+      executionHost,
+      internalExecutionContext,
+      mcpServers: options.mcpServers,
+      mcpAttestation: configuredCapabilitiesAttestation.mcp,
+      mcpStatusRegistry: mcpStatus,
       closeProviderConfigs: false,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
@@ -148,6 +152,7 @@ async function main(): Promise<void> {
       },
     });
     resources.buildFactory = buildFactory;
+    const blockingRecoveryFailures: unknown[] = [];
     const builds = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(
         join(options.stateDirectory, "build-specs.sqlite")
@@ -169,6 +174,13 @@ async function main(): Promise<void> {
       },
       onRecoverySpecError: (runId, error) => {
         recordRuntimeRecoveryFailure(supervisor, runId, error);
+        const classified = classifyNativeBuildRecoveryError(error);
+        if (
+          classified?.kind === "capability" &&
+          classified.code === "capability_preflight_failed"
+        ) {
+          blockingRecoveryFailures.push(error);
+        }
       },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
@@ -194,7 +206,7 @@ async function main(): Promise<void> {
         projectPath: options.projectPath,
         nodeVersion: process.versions.node,
       },
-      mcp: mcpManager,
+      mcp: mcpStatus,
       permissions,
       token: options.token,
       checkGit: async () => git,
@@ -217,6 +229,13 @@ async function main(): Promise<void> {
     });
     resources.server = server;
     await builds.recover();
+    if (blockingRecoveryFailures.length === 1) throw blockingRecoveryFailures[0];
+    if (blockingRecoveryFailures.length > 1) {
+      throw new AggregateError(
+        blockingRecoveryFailures,
+        "Runner startup rejected one or more active Build capability startups.",
+      );
+    }
     const address = await server.start(options.port);
 
     const readiness = {
@@ -228,7 +247,7 @@ async function main(): Promise<void> {
       projectPath: options.projectPath,
       stateDirectory: options.stateDirectory,
       gitVersion: git.version,
-      mcp: mcpManager.status(),
+      mcp: mcpStatus.status(),
       allowOrigins: options.allowOrigins,
     };
     process.stdout.write(`${JSON.stringify(readiness)}\n`);

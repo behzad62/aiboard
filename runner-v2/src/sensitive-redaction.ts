@@ -24,7 +24,10 @@ export function isSensitiveKey(value: string): boolean {
   if (parts.some((part) => [
     "token", "password", "passwd", "passphrase", "secret",
     "authorization", "auth", "credential", "credentials",
+    "apikey", "privatekey",
   ].includes(part))) return true;
+  if (parts.some((part, index) =>
+    (part === "api" || part === "private") && parts[index + 1] === "key")) return true;
   return [
     "apikey", "apitoken", "accesstoken", "refreshtoken", "idtoken",
     "clientsecret", "privatekey", "authtoken", "authcredential", "authcredentials",

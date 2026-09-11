@@ -322,19 +322,26 @@ findings. Only then may 8.0B3 begin.
   binding; nonblocking run recovery; bounded ephemeral internal MCP discovery;
   per-run public MCP/LSP/managed facades; architect/worker/subagent registries
   and models last.
-- To preserve family packet ownership, B3 may perform only behavior-neutral
-  construction relocation for the public MCP manager, LSP, and managed surfaces,
-  plus the closed Git-preflight prerequisite and the narrowly owned internal
-  `McpDiscoveryExecutor` above. The discovery executor is prerequisite control-
-  plane behavior, not the public/live MCP manager: it has no tool-call method,
-  does not persist or reuse a session, and always closes after `tools/list`.
-  Existing live/public family protocol and lifecycle behavior remains unchanged
-  until 8.1–8.4 and may not receive a new fallback. Task 8.2 owns lazy live MCP
-  servers, external requests, restart limits, public statuses/tools, and manager
-  close semantics. The production graph must not create a second host kernel or
-  share a run binding. Any current eager global family spawn that cannot be
-  relocated without changing public protocol behavior is a blocking architecture
-  defect for review, not permission to disable the family.
+- To preserve family packet ownership, B3 may perform behavior-neutral
+  construction relocation for LSP and managed surfaces, plus the closed Git-
+  preflight prerequisite and the narrowly owned internal `McpDiscoveryExecutor`
+  above. The discovery executor is prerequisite control-plane behavior, not the
+  public/live MCP manager: it has no tool-call method, does not persist or reuse
+  a session, and always closes after `tools/list`.
+- Owner decision recorded 2026-09-01: B3 has one additional narrow MCP lifecycle
+  and status exception needed to eliminate the unowned eager global process.
+  A command-based stdio MCP server launched for a Build is owned by that Build;
+  Runner starts, observes, and completely cleans it with the run binding. When no
+  Build owns such a manager its truthful public status is `stopped`, while active
+  runs project their actual manager status. Runner never scans for, matches,
+  adopts, signals, restarts, or terminates a similar pre-existing OS process.
+  Future externally managed endpoint support is connect/disconnect-only and must
+  never transfer process-lifecycle authority to Runner.
+- The exception does not advance Task 8.2's richer lazy/live protocol, external-
+  endpoint implementation, request behavior, restart limits, public tool model,
+  or manager-close redesign. Existing LSP/managed behavior and all other public
+  MCP protocol behavior remain unchanged and receive no new fallback. The
+  production graph must not create a second host kernel or share a run binding.
 - Real fixtures: Runner host crash between isolation/host launch and transfer
   acknowledgement; persistent child fills stdout beyond memory tail between
   ToolBroker calls; two concurrent runs; strict OCI interactive Docker when

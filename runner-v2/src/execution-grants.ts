@@ -32,7 +32,10 @@ export interface OpaqueExecutionGrant {
 export interface ExecutionGrantBinding {
   readonly runId: string;
   readonly sessionId: string;
-  readonly actor: AgentActor;
+  readonly actor: Readonly<{
+    role: AgentActor["role"] | "runner_internal";
+    id: string;
+  }>;
   readonly toolName: string;
   readonly callId: string;
   readonly permissionProfile: PermissionProfile;
@@ -389,6 +392,9 @@ async function canonicalTarget(target: string): Promise<string> {
 
 function cloneBinding(value: ExecutionGrantBinding): ExecutionGrantBinding {
   if (!["guarded", "project", "full"].includes(value.permissionProfile)) {
+    throw grantError("grant_mismatch");
+  }
+  if (!["architect", "worker", "subagent", "verifier", "runner_internal"].includes(value.actor.role)) {
     throw grantError("grant_mismatch");
   }
   return deepFreeze({

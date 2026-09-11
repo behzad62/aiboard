@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -16,9 +17,12 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { captureGitBaseline } from "../src/git-baseline.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { createExecutionHost } from "../src/execution-host.js";
+import { createRunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
 import { IntegrationManager } from "../src/integration-manager.js";
 import {
   FinalVerificationDiagnosticsArchive,
@@ -36,7 +40,9 @@ import {
   preflightRunnerCapabilities,
 } from "../src/native-build-factory.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
+import { createLiveMcpStatusRegistry } from "../src/mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
+import { runnerRunStateSegment } from "../src/run-state-identity.js";
 import {
   createRunnerCapabilityContractSnapshot,
   RunnerCapabilityContractError,
@@ -57,6 +63,174 @@ import {
   toolInvocationFingerprint,
   toolInvocationKey,
 } from "../src/tool-ledger.js";
+
+test("production composition settles its owned MCP and run binding while retaining history and isolating another run", async () => {
+  const fixture = createFixture("execution-host-mcp-order");
+  const runId = "execution_host_mcp_order";
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  let otherHandle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  const acquired: string[] = [];
+  let failNextMcpSettlement = false;
+  let modelConstructionPrefix: string[] | undefined;
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  const executionHost = createExecutionHost({
+    projectRoot: fixture.project,
+    stateDirectory: fixture.state,
+    artifacts,
+  });
+  const internalExecutionContext = createRunnerInternalExecutionContext({
+    projectDirectory: fixture.project,
+    stateDirectory: fixture.state,
+  });
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: fixture.project,
+      stateDirectory: fixture.state,
+      runId,
+    });
+    const servers = [{
+      name: "docs",
+      command: `${quoteShell(process.execPath)} ${quoteShell(fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url)))}`,
+    }];
+    const mcpStatus = createLiveMcpStatusRegistry(servers);
+    const config: RunnerCapabilitiesConfig = { extensions: [], languageServers: [] };
+    const attestation = await internalExecutionContext.attestConfiguredCapabilities({
+      mcpServers: servers,
+      capabilitiesConfig: config,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: fixture.project,
+      stateDirectory: fixture.state,
+      providerConfigs: {
+        load: () => [providerConfig()],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      capabilitiesConfig: config,
+      baselineFor: () => baseline.revision,
+      executionHost,
+      internalExecutionContext,
+      mcpServers: servers,
+      mcpAttestation: attestation.mcp,
+      mcpStatusRegistry: mcpStatus,
+      runtimeConstructionHooks: {
+        afterAcquire: (stage) => { acquired.push(stage); },
+        beforeCleanup: (stage) => {
+          if (stage === "mcp_manager" && failNextMcpSettlement) {
+            failNextMcpSettlement = false;
+            throw new Error("injected settled MCP close failure");
+          }
+        },
+      },
+      providerModelFactory: () => {
+        modelConstructionPrefix = [...acquired];
+        return new ScriptedModel([]);
+      },
+    });
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    handle = await factory.create(prepared);
+    assert.deepEqual(acquired.slice(0, 5), [
+      "execution_host_binding",
+      "mcp_discovery",
+      "mcp_manager",
+      "execution_isolation",
+      "capabilities",
+    ]);
+    assert.deepEqual(modelConstructionPrefix, [
+      "execution_host_binding",
+      "mcp_discovery",
+      "mcp_manager",
+      "execution_isolation",
+      "capabilities",
+      "evidence_store",
+      "scheduler_store",
+      "session_store",
+      "tool_ledger",
+      "budget_ledger",
+      "workspace_manager",
+      "integration_workspace",
+      "verification_workspace",
+      "independent_verifier_workspace",
+      "memory_store",
+      "managed_process_service",
+      "subprocess_runtime",
+    ]);
+    const discovery = JSON.parse(readFileSync(join(
+      fixture.state,
+      "builds",
+      runnerRunStateSegment(runId),
+      "mcp-discovery.json",
+    ), "utf8")) as { servers: Array<{ status: string; cleanupVerified: boolean }> };
+    assert.deepEqual(discovery.servers, [{
+      name: "docs",
+      configDigest: attestation.mcp[0]!.configDigest,
+      executableDigest: attestation.mcp[0]!.executableDigest,
+      status: "ready",
+      tools: [{
+        name: "lookup",
+        description: "Look up fixture documentation",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      }],
+      schemaDigest: discovery.servers[0] && (discovery.servers[0] as { schemaDigest?: string }).schemaDigest,
+      cleanupVerified: true,
+    }]);
+    assert.equal(mcpStatus.status()[0]?.status, "ready");
+    assert.equal(mcpStatus.status()[0]?.toolCount, 1);
+
+    const otherRunId = "execution_host_mcp_order_other";
+    otherHandle = await factory.create(await factory.prepareSpec(buildSpec(otherRunId)));
+    await waitForProcess(() =>
+      retainedStreamingOutputCount(fixture.state, runId) === 0 &&
+      retainedStreamingOutputCount(fixture.state, otherRunId) === 0,
+    );
+    const ownedPids = ownedBackendSupervisorPids(fixture.state, runId);
+    const otherOwnedPids = ownedBackendSupervisorPids(fixture.state, otherRunId);
+    assert.ok(ownedPids.length > 0 && ownedPids.every(processExists));
+    assert.ok(otherOwnedPids.length > 0 && otherOwnedPids.every(processExists));
+    assert.deepEqual([...executionHost.activeRunIds()].sort(), [runId, otherRunId].sort());
+    failNextMcpSettlement = true;
+    await assert.rejects(Promise.resolve(handle.cleanup()), /injected settled MCP close failure/i);
+    assert.equal(mcpStatus.status()[0]?.status, "ready");
+    assert.deepEqual([...executionHost.activeRunIds()].sort(), [runId, otherRunId].sort());
+    assert.ok(ownedPids.every(processExists));
+    assert.ok(otherOwnedPids.every(processExists));
+    assert.equal((await handle.observability()).runId, runId);
+
+    await handle.cleanup();
+    await waitForProcess(() => ownedPids.every((pid) => !processExists(pid)));
+    assert.equal(mcpStatus.status()[0]?.status, "ready", "the other active run must remain projected");
+    assert.deepEqual(executionHost.activeRunIds(), [otherRunId]);
+    assert.ok(otherOwnedPids.every(processExists));
+    assert.equal(Number.isSafeInteger((await handle.transcript()).cursor), true);
+    await handle.close();
+    handle = undefined;
+
+    await otherHandle.cleanup();
+    assert.equal(mcpStatus.status()[0]?.status, "stopped");
+    assert.deepEqual(executionHost.activeRunIds(), []);
+    await otherHandle.close();
+    otherHandle = undefined;
+  } finally {
+    if (handle) {
+      await Promise.resolve(handle.close()).catch(() => undefined);
+      await Promise.resolve(handle.close());
+    }
+    if (otherHandle) {
+      await Promise.resolve(otherHandle.close()).catch(() => undefined);
+      await Promise.resolve(otherHandle.close());
+    }
+    await factory?.close();
+    await internalExecutionContext.close();
+    await executionHost.close();
+    fixture.cleanup();
+  }
+});
 
 test("NativeBuildFactory loads configured capabilities and reports provider audit metadata", async () => {
   const fixture = createFixture("metadata");
@@ -116,7 +290,7 @@ test("NativeBuildFactory loads configured capabilities and reports provider audi
   }
 });
 
-test("active recovery preflights matching snapshot extensions atomically and retains startup plus cleanup failures", async () => {
+test("active recovery validates matching snapshots without starting extension lifecycle code", async () => {
   const fixture = createFixture("recovery-preflight-start-cleanup");
   const lifecycle = join(fixture.state, "snapshot-preflight-lifecycle.log");
   const runId = "recovery_preflight_start_cleanup";
@@ -143,28 +317,14 @@ test("active recovery preflights matching snapshot extensions atomically and ret
     const config = { extensions: [fixture.extension], languageServers: [] };
     const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
 
-    await assert.rejects(
-      preflightRecoveredRunnerCapabilities({
-        spec: { runId, capabilityContract },
-        config,
-        projectDirectory: fixture.project,
-        stateDirectory: fixture.state,
-        reservedToolNames: [],
-      }),
-      (error: unknown) => {
-        assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
-        const cause = (error as Error & { cause?: unknown }).cause;
-        assert.equal(cause instanceof AggregateError, true);
-        const messages = nestedErrorMessages(cause);
-        assert.equal(messages.some((message) => /snapshot preflight start failed/i.test(message)), true);
-        assert.equal(messages.some((message) => /snapshot preflight close failed/i.test(message)), true);
-        return true;
-      },
-    );
-    assert.equal(
-      readFileSync(lifecycle, "utf8"),
-      "started\nclosed\nclosed\nclosed\nclosed\n",
-    );
+    await preflightRecoveredRunnerCapabilities({
+      spec: { runId, capabilityContract },
+      config,
+      projectDirectory: fixture.project,
+      stateDirectory: fixture.state,
+      reservedToolNames: [],
+    });
+    assert.equal(existsSync(lifecycle), false);
     assert.equal(existsSync(runRoot(fixture.state, runId)), false);
   } finally {
     fixture.cleanup();
@@ -200,10 +360,13 @@ test("standalone capability preflight sweeps retryable close failures before rel
   }
 });
 
-test("capability startup retries a failed partial-start disposer until its child exits", async () => {
+test("capability startup retries a failed partial-start disposer until its child exits", async (t) => {
   const fixture = createFixture("partial-start-disposer-retry");
   const extensionState = join(fixture.state, "extensions", "fixture.factory");
   const pidPath = join(extensionState, "child.pid");
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
+  const expectedLifecycle = "start\nextension:1\nextension:2\n";
+  t.diagnostic(`C5 finalizer10 acquired exact capability fixture: ${fixture.root}`);
   let childPid = 0;
   try {
     writeProcessCleanupExtension(fixture.extension, { failStart: true });
@@ -232,17 +395,39 @@ test("capability startup retries a failed partial-start disposer until its child
         readdirSync(join(fixture.state, "extension-executions")).length === 0,
       true,
     );
-  } finally {
-    if (!childPid && existsSync(pidPath)) childPid = Number(readFileSync(pidPath, "utf8"));
-    if (childPid > 0 && processExists(childPid)) process.kill(childPid, "SIGKILL");
-    fixture.cleanup();
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "capability process cleanup", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        // preflightRunnerCapabilities has already joined its bounded cleanup.
+        // It exposes no replacement owner here; certification must fail closed
+        // rather than manufacture control from the child marker.
+      },
+      certify: async () => {
+        assert.ok(existsSync(pidPath), "the exact acquired child's observation marker is required");
+        childPid = Number(readFileSync(pidPath, "utf8"));
+        assert.ok(Number.isSafeInteger(childPid) && childPid > 0, "invalid child marker cannot certify cleanup");
+        assert.throws(() => process.kill(childPid, 0),
+          (error: unknown) => error instanceof Error && (error as NodeJS.ErrnoException).code === "ESRCH",
+          "only a definite absent observation can certify cleanup; permission/tool failures remain unknown");
+        assert.equal(readFileSync(join(extensionState, "lifecycle.log"), "utf8"), expectedLifecycle,
+          "only the expected completed disposer lifecycle can certify release");
+        const executionRoot = join(fixture.state, "extension-executions");
+        if (existsSync(executionRoot)) assert.deepEqual(readdirSync(executionRoot), [], "an unreleased execution copy retains its root");
+      },
+      removeRoot: () => { fixture.cleanup(); t.diagnostic(`C5 finalizer10 removed certified capability fixture: ${fixture.root}`); },
+    });
   }
 });
 
-test("capability startup retries post-start router-collision cleanup in exact order", async () => {
+test("capability startup retries post-start router-collision cleanup in exact order", async (t) => {
   const fixture = createFixture("router-collision-disposer-retry");
   const extensionState = join(fixture.state, "extensions", "fixture.factory");
   const pidPath = join(extensionState, "child.pid");
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
+  const expectedLifecycle = "start\nprovider:1\nextension:1\nprovider:2\nextension:2\n";
+  t.diagnostic(`C5 finalizer10 acquired exact capability fixture: ${fixture.root}`);
   let childPid = 0;
   try {
     writeProcessCleanupExtension(fixture.extension, {
@@ -274,14 +459,33 @@ test("capability startup retries post-start router-collision cleanup in exact or
         readdirSync(join(fixture.state, "extension-executions")).length === 0,
       true,
     );
-  } finally {
-    if (!childPid && existsSync(pidPath)) childPid = Number(readFileSync(pidPath, "utf8"));
-    if (childPid > 0 && processExists(childPid)) process.kill(childPid, "SIGKILL");
-    fixture.cleanup();
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "capability process cleanup", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        // preflightRunnerCapabilities has already joined its bounded cleanup.
+        // It exposes no replacement owner here; certification must fail closed
+        // rather than manufacture control from the child marker.
+      },
+      certify: async () => {
+        assert.ok(existsSync(pidPath), "the exact acquired child's observation marker is required");
+        childPid = Number(readFileSync(pidPath, "utf8"));
+        assert.ok(Number.isSafeInteger(childPid) && childPid > 0, "invalid child marker cannot certify cleanup");
+        assert.throws(() => process.kill(childPid, 0),
+          (error: unknown) => error instanceof Error && (error as NodeJS.ErrnoException).code === "ESRCH",
+          "only a definite absent observation can certify cleanup; permission/tool failures remain unknown");
+        assert.equal(readFileSync(join(extensionState, "lifecycle.log"), "utf8"), expectedLifecycle,
+          "only the expected completed disposer lifecycle can certify release");
+        const executionRoot = join(fixture.state, "extension-executions");
+        if (existsSync(executionRoot)) assert.deepEqual(readdirSync(executionRoot), [], "an unreleased execution copy retains its root");
+      },
+      removeRoot: () => { fixture.cleanup(); t.diagnostic(`C5 finalizer10 removed certified capability fixture: ${fixture.root}`); },
+    });
   }
 });
 
-test("active recovery rejects matching snapshot evaluation and factory failures before a live runtime root exists", async () => {
+test("active recovery never evaluates matching snapshot modules or extension factories", async () => {
   for (const scenario of [
     {
       name: "evaluation",
@@ -301,20 +505,13 @@ test("active recovery rejects matching snapshot evaluation and factory failures 
       const config = { extensions: [fixture.extension], languageServers: [] };
       const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
 
-      await assert.rejects(
-        preflightRecoveredRunnerCapabilities({
-          spec: { runId, capabilityContract },
-          config,
-          projectDirectory: fixture.project,
-          stateDirectory: fixture.state,
-          reservedToolNames: [],
-        }),
-        (error: unknown) => {
-          assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
-          assert.match(String(error), scenario.expected);
-          return true;
-        },
-      );
+      await preflightRecoveredRunnerCapabilities({
+        spec: { runId, capabilityContract },
+        config,
+        projectDirectory: fixture.project,
+        stateDirectory: fixture.state,
+        reservedToolNames: [],
+      });
       assert.equal(existsSync(runRoot(fixture.state, runId)), false);
     } finally {
       fixture.cleanup();
@@ -377,12 +574,18 @@ test("active recovery validates a corrupt snapshot before evaluating an extensio
   }
 });
 
-test("active recovery starts configured language servers before a live runtime is constructed", async () => {
+test("active recovery statically attests configured language servers without spawning them", async () => {
   const fixture = createFixture("recovery-preflight-lsp");
   const runId = "recovery_preflight_lsp";
   const server = join(fixture.state, "lsp-preflight-failure.mjs");
+  const marker = join(fixture.state, "lsp-started.txt");
   try {
-    writeFileSync(server, "process.exit(23);\n");
+    writeFileSync(server, [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(marker)}, String(process.pid));`,
+      "process.exit(23);",
+      "",
+    ].join("\n"));
     const config: RunnerCapabilitiesConfig = {
       extensions: [],
       languageServers: [{
@@ -402,20 +605,14 @@ test("active recovery starts configured language servers before a live runtime i
     };
     const capabilityContract = await createRunnerCapabilityContractSnapshot(config, fixture.state);
 
-    await assert.rejects(
-      preflightRecoveredRunnerCapabilities({
-        spec: { runId, capabilityContract },
-        config,
-        projectDirectory: fixture.project,
-        stateDirectory: fixture.state,
-        reservedToolNames: [],
-      }),
-      (error: unknown) => {
-        assert.equal((error as { code?: unknown }).code, "capability_preflight_failed");
-        assert.match(String(error), /language server|process exited|preflight/i);
-        return true;
-      },
-    );
+    await preflightRecoveredRunnerCapabilities({
+      spec: { runId, capabilityContract },
+      config,
+      projectDirectory: fixture.project,
+      stateDirectory: fixture.state,
+      reservedToolNames: [],
+    });
+    assert.equal(existsSync(marker), false);
     assert.equal(existsSync(runRoot(fixture.state, runId)), false);
   } finally {
     fixture.cleanup();
@@ -1069,12 +1266,15 @@ test("NativeBuildFactory retries real capability close failures and removes the 
   }
 });
 
-test("NativeBuildFactory retains a persistently failed pre-handle disposer for a later close", async () => {
+test("NativeBuildFactory retains a persistently failed pre-handle disposer for a later close", async (t) => {
   const fixture = createFixture("pre-handle-disposer-retention");
   const runId = "pre_handle_disposer_retention";
   const root = runRoot(fixture.state, runId);
   const pidPath = join(root, "extensions", "fixture.factory", "child.pid");
   let factory: NativeBuildFactory | undefined;
+  let hasPrimaryFailure = false; let primaryFailure: unknown;
+  const expectedLifecycle = "start\nextension:1\nextension:2\nextension:3\nextension:4\nextension:5\nextension:6\n";
+  t.diagnostic(`C5 finalizer10 acquired exact capability fixture: ${fixture.root}`);
   let childPid = 0;
   try {
     writeProcessCleanupExtension(fixture.extension, {
@@ -1113,11 +1313,27 @@ test("NativeBuildFactory retains a persistently failed pre-handle disposer for a
       readFileSync(join(root, "extensions", "fixture.factory", "lifecycle.log"), "utf8"),
       "start\nextension:1\nextension:2\nextension:3\nextension:4\nextension:5\nextension:6\n",
     );
-  } finally {
-    await factory?.close().catch(() => undefined);
-    if (!childPid && existsSync(pidPath)) childPid = Number(readFileSync(pidPath, "utf8"));
-    if (childPid > 0 && processExists(childPid)) process.kill(childPid, "SIGKILL");
-    fixture.cleanup();
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    await finalizeCertifiedFixture({
+      fixtureName: "capability process cleanup", root: fixture.root, hasPrimaryFailure, primaryFailure,
+      cleanup: async () => {
+        if (factory) await factory.close();
+      },
+      certify: async () => {
+        assert.ok(existsSync(pidPath), "the exact acquired child's observation marker is required");
+        childPid = Number(readFileSync(pidPath, "utf8"));
+        assert.ok(Number.isSafeInteger(childPid) && childPid > 0, "invalid child marker cannot certify cleanup");
+        assert.throws(() => process.kill(childPid, 0),
+          (error: unknown) => error instanceof Error && (error as NodeJS.ErrnoException).code === "ESRCH",
+          "only a definite absent observation can certify cleanup; permission/tool failures remain unknown");
+        assert.equal(readFileSync(join(join(root, "extensions", "fixture.factory"), "lifecycle.log"), "utf8"), expectedLifecycle,
+          "only the expected completed disposer lifecycle can certify release");
+        const executionRoot = join(root, "extension-executions");
+        if (existsSync(executionRoot)) assert.deepEqual(readdirSync(executionRoot), [], "an unreleased execution copy retains its root");
+      },
+      removeRoot: () => { fixture.cleanup(); t.diagnostic(`C5 finalizer10 removed certified capability fixture: ${fixture.root}`); },
+    });
   }
 });
 
@@ -2413,7 +2629,7 @@ function configuredServer(id: string): RunnerCapabilitiesConfig["languageServers
     },
     languageId: "fixture",
     command: process.execPath,
-    args: [join(process.cwd(), "runner-v2", "test", "fixtures", "lsp-server.mjs")],
+    args: [fileURLToPath(new URL("./fixtures/lsp-server.mjs", import.meta.url))],
   };
 }
 
@@ -2434,6 +2650,12 @@ function buildSpec(runId: string) {
     createdAt: "2026-08-28T00:00:00.000Z",
     idempotencyKey: `capability:${runId}`,
   };
+}
+
+function quoteShell(value: string): string {
+  return process.platform === "win32"
+    ? `"${value.replaceAll('"', '""')}"`
+    : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function createFixture(
@@ -2464,6 +2686,7 @@ function createFixture(
     extensionModuleSource(extensionLanguageId, extensionToolName),
   );
   return {
+    root,
     project,
     state,
     extension,
@@ -2611,6 +2834,33 @@ async function waitForProcess(predicate: () => boolean, timeoutMs = 5_000): Prom
     if (Date.now() >= deadline) throw new Error("Timed out waiting for fixture process state.");
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+function retainedStreamingOutputCount(stateDirectory: string, runId: string): number {
+  const backendRoot = join(runRoot(stateDirectory, runId), "process-backend");
+  if (!existsSync(backendRoot)) return 0;
+  return readdirSync(backendRoot).reduce((count, directory) => {
+    const output = join(backendRoot, directory, "channel", "output");
+    return count + (existsSync(output) ? readdirSync(output).length : 0);
+  }, 0);
+}
+
+function ownedBackendSupervisorPids(stateDirectory: string, runId: string): number[] {
+  const backendRoot = join(stateDirectory, "managed-processes-job-host");
+  if (!existsSync(backendRoot)) return [];
+  return readdirSync(backendRoot).flatMap((file) => {
+    if (!file.endsWith(".json")) return [];
+    const state = join(backendRoot, file);
+    const value = JSON.parse(readFileSync(state, "utf8")) as { supervisorPid?: unknown };
+    const record = value as typeof value & {
+      runId?: unknown;
+      pid?: unknown;
+      supervisor?: { supervisorPid?: unknown };
+    };
+    if (record.runId !== runId) return [];
+    return [record.pid, record.supervisor?.supervisorPid]
+      .filter((pid): pid is number => Number.isSafeInteger(pid) && Number(pid) > 0);
+  });
 }
 
 function nestedErrorMessages(error: unknown): string[] {

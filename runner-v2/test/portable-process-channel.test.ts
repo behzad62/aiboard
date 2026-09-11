@@ -5,11 +5,486 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { writeFile } from "node:fs/promises";
+import { NativeOwnedProcessBackend, type ProcessBirthInspection } from "../src/native-process-backend.js";
 
 import { WindowsProcessBackend } from "../src/windows-process-backend.js";
 import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessBackendBinding, type ProcessEffectFence } from "../src/process-backend.js";
 import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
-import { createPortableProcessChannelProvider } from "../src/portable-process-channel.js";
+import { createPortableProcessChannelProvider, type PortableChannelAuthority } from "../src/portable-process-channel.js";
+import { retirePortableOutputAcknowledgement, runPortableFenceEffectSync, runPortableFenceSnapshotSync } from "../src/portable-process-protocol.mjs";
+
+for (const mode of ["replacement", "removal", "detach"] as const) {
+  test(`C1 cap output-error dispatch ${mode} respects registration lifetime and fresh scheduling`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "aiboard-c1-cap-output-"));
+    console.log(JSON.stringify({ created: root }));
+    for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+    writeOutputCheckpoint(root);
+    writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+    let failOutput = false;
+    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 1024, pollIntervalMs: 20,
+      authority: () => ({ directory: root, nonce: "nonce", fence,
+        reattest: () => { if (failOutput) throw new Error("synthetic output failure"); return "live"; },
+        reattestObservation: async () => "live",
+        effect: async (_kind, effect) => effect(), snapshot: (read) => ({ status: "applied", value: read() }),
+      }),
+    });
+    const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+    const calls: unknown[] = [];
+    let beforeMicrotask = true;
+    let sameDispatch = 0;
+    let remove = () => {};
+    let unsubscribeOutput = () => {};
+    let detaching: Promise<unknown> | undefined;
+    const observer = (result: unknown) => {
+      calls.push(result);
+      if (beforeMicrotask) sameDispatch++;
+      if (calls.length !== 1) return;
+      queueMicrotask(() => { beforeMicrotask = false; });
+      unsubscribeOutput();
+      if (mode === "replacement") { channel.observeTerminal(observer); remove(); }
+      if (mode === "removal") remove();
+      if (mode === "detach") detaching = channel.detach();
+    };
+    try {
+      const removeFirst = channel.observeTerminal(observer);
+      remove = mode === "replacement" ? removeFirst : channel.observeTerminal(() => calls.push("removed"));
+      const waiter = channel.waitForTerminal();
+      failOutput = true;
+      unsubscribeOutput = channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+      assert.deepEqual(await round4Within(waiter), { state: "outcome_unknown" });
+      if (mode === "replacement") {
+        assert.deepEqual(await round4Within(channel.waitForTerminal()), { state: "outcome_unknown", detail: "synthetic output failure" });
+        assert.deepEqual(calls, [{ state: "outcome_unknown" }, { state: "outcome_unknown", detail: "synthetic output failure" }]);
+      } else assert.deepEqual(calls, [{ state: "outcome_unknown" }]);
+      assert.equal(sameDispatch, 1);
+    } finally {
+      unsubscribeOutput(); await detaching; await channel.detach();
+      rmSync(root, { recursive: true, force: true });
+      console.log(JSON.stringify({ removed: root, absent: !existsSync(root) }));
+    }
+  });
+}
+
+test("C1 round5 terminal dispatch skips a subscriber removed by an earlier callback", async () => {
+  const fixture = await round4ObserverFixture(async () => ({ state: "absent" }));
+  const calls: string[] = [];
+  let removeNext = () => {};
+  try {
+    fixture.state("stopped");
+    fixture.channel.observeTerminal(() => { calls.push("first"); removeNext(); });
+    removeNext = fixture.channel.observeTerminal(() => calls.push("removed"));
+    assert.deepEqual(await round4Within(fixture.channel.waitForTerminal()), { state: "exited", exitCode: 0 });
+    assert.deepEqual(calls, ["first"]);
+  } finally { await fixture.close(); }
+});
+
+test("C1 round5 terminal dispatch detach skips later subscribers and settles pending waiters", async () => {
+  const fixture = await round4ObserverFixture(async () => ({ state: "absent" }));
+  const calls: string[] = [];
+  let detaching: Promise<unknown> | undefined;
+  try {
+    fixture.state("stopped");
+    fixture.channel.observeTerminal(() => { calls.push("first"); detaching = fixture.channel.detach(); });
+    fixture.channel.observeTerminal(() => calls.push("detached"));
+    const waiters = [fixture.channel.waitForTerminal(), fixture.channel.waitForTerminal()];
+    assert.deepEqual(await round4Within(Promise.all(waiters)), [{ state: "outcome_unknown" }, { state: "outcome_unknown" }]);
+    await detaching;
+    assert.deepEqual(calls, ["first"]);
+  } finally { await detaching; await fixture.close(); }
+});
+
+for (const mode of ["addition", "replacement"] as const) {
+  test(`C1 round5 terminal dispatch ${mode} receives fresh observation and survives predecessor removal`, async () => {
+    const fixture = await round4ObserverFixture(async () => ({ state: "absent" }));
+    const results: unknown[] = [];
+    const next = (result: unknown) => { results.push(result); };
+    let removeNext = () => {};
+    let freshWaiter: Promise<unknown> | undefined;
+    try {
+      fixture.state("stopped");
+      fixture.channel.observeTerminal(() => {
+        removeNext();
+        fixture.state("outcome_unknown");
+        fixture.channel.observeTerminal(next);
+        // A stale unsubscribe must not remove a new registration of the same callback.
+        removeNext();
+        freshWaiter = fixture.channel.waitForTerminal();
+      });
+      if (mode === "replacement") removeNext = fixture.channel.observeTerminal(next);
+      assert.deepEqual(await round4Within(fixture.channel.waitForTerminal()), { state: "exited", exitCode: 0 });
+      assert.ok(freshWaiter);
+      assert.deepEqual(await round4Within(freshWaiter), { state: "outcome_unknown" });
+      assert.deepEqual(results, [{ state: "outcome_unknown" }], "a registration added during delivery needs its own terminal observation");
+    } finally { await fixture.close(); await freshWaiter; }
+  });
+}
+
+test("C1 round5 terminal dispatch delivers ordinary subscribers and waiters once each", async () => {
+  const fixture = await round4ObserverFixture(async () => ({ state: "absent" }));
+  const results: unknown[] = [];
+  try {
+    fixture.state("stopped");
+    fixture.channel.observeTerminal((result) => results.push(["first", result]));
+    fixture.channel.observeTerminal((result) => results.push(["second", result]));
+    assert.deepEqual(await round4Within(Promise.all([fixture.channel.waitForTerminal(), fixture.channel.waitForTerminal()])), [
+      { state: "exited", exitCode: 0 }, { state: "exited", exitCode: 0 },
+    ]);
+    assert.deepEqual(await round4Within(fixture.channel.waitForTerminal()), { state: "exited", exitCode: 0 });
+    await fixture.channel.detach();
+    assert.deepEqual(results, [["first", { state: "exited", exitCode: 0 }], ["second", { state: "exited", exitCode: 0 }]]);
+  } finally { await fixture.close(); }
+});
+
+test("round4 native terminal observation permits async evidence intake while birth inspection is pending", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c1-round4-observation-"));
+  console.log(`C1 round4 synthetic root: ${root}`);
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let observing = false;
+  let synchronousInspections = 0;
+  let pendingInspections = 0;
+  let evidenceFinished = false;
+  const pendingWrites: Promise<void>[] = [];
+  let finishInspection!: () => void;
+  const inspectionGate = new Promise<void>((resolve) => { finishInspection = resolve; });
+  const operations = {
+    inspectProcessBirth: () => {
+      if (observing) {
+        synchronousInspections++;
+        const started = performance.now();
+        pendingWrites.push(writeFile(join(root, `inspection-${synchronousInspections}.evidence`), "ready").then(() => { evidenceFinished = true; }));
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40);
+        console.log(JSON.stringify({ synchronousInspections, blockedMs: performance.now() - started, evidenceFinished }));
+      }
+      return { state: "present" as const, fingerprint: "birth" };
+    },
+    inspectProcessBirthAsync: async () => { pendingInspections++; await inspectionGate; pendingInspections--; return { state: "present" as const, fingerprint: "birth" }; },
+    listPosixGroup: () => [], signal: () => { throw new Error("synthetic fixture must not signal"); },
+  };
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 1, operations });
+  const opaque = { version: 1, backendId: "runner-windows-supervisor-v1", nonce: "nonce", directory: root, supervisorPid: 9001, supervisorBirth: "birth" };
+  const binding = bindingFor({ opaqueIdentity: Buffer.from(JSON.stringify(opaque)).toString("base64url"), birthFingerprint: { observedAt: "now", discriminator: createHash("sha256").update("nonce\0birth").digest("hex") }, rootPid: 9001, startedAt: "now" });
+  const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
+  const bytes = Buffer.from("readiness");
+  const metadata: BackpressuredOutputMetadata = { stream: "stdout", sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  let enterSink!: () => void;
+  let releaseSink!: () => void;
+  const atSink = new Promise<void>((resolve) => { enterSink = resolve; });
+  const sinkGate = new Promise<void>((resolve) => { releaseSink = resolve; });
+  const unsubscribeOutput = channel.subscribeBackpressuredOutput(async (actual, data) => {
+    enterSink(); await sinkGate;
+    await writeFile(join(root, "output.evidence"), data);
+    evidenceFinished = true;
+    return actual;
+  });
+  await atSink;
+  await writeFile(join(root, "observer-disabled.evidence"), "ready");
+  assert.equal(readFileSync(join(root, "observer-disabled.evidence"), "utf8"), "ready");
+  assert.equal(synchronousInspections, 0, "observer-disabled control completes async evidence without inspection");
+  // No further output poll may obscure which consumer owns the inspected call.
+  // Its in-flight sink remains tracked through detach.
+  unsubscribeOutput();
+  try {
+    observing = true;
+    const unsubscribe = channel.observeTerminal(() => { throw new Error("running owner is not terminal"); });
+    await waitFor(() => synchronousInspections > 0 || pendingInspections > 0);
+    releaseSink();
+    await waitFor(() => evidenceFinished);
+    const activeCount = synchronousInspections;
+    unsubscribe();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    console.log(JSON.stringify({ activeCount, afterUnsubscribe: synchronousInspections, pendingInspections, evidenceFinished }));
+    assert.equal(synchronousInspections, 0, "live terminal observation must not synchronously block async evidence intake");
+    assert.equal(pendingInspections, 1, "one owned inspection must stay pending without an overlapping backlog");
+  } finally {
+    observing = false; releaseSink(); finishInspection();
+    await channel.detach(); await Promise.all(pendingWrites);
+    rmSync(root, { recursive: true, force: true });
+    console.log(`C1 round4 synthetic root removed: ${root}`);
+  }
+});
+
+for (const fault of ["absent_running", "recycled", "unknown", "takeover", "wrong_nonce", "corrupt_state", "unknown_status", "stopped", "retained", "late_output", "late_takeover", "late_running"] as const) {
+  test(`round4 native terminal authority preserves ${fault}`, async () => {
+    let checks = 0;
+    const fixture = await round4ObserverFixture(async () => {
+      checks++;
+      await writeFile(join(fixture.root, `inspection-${checks}.evidence`), "async boundary");
+      if (fault === "takeover" || fault === "late_takeover" && checks === 2) fixture.takeover();
+      if (fault === "late_output" && checks === 2) fixture.output();
+      if (fault === "late_running" && checks === 2) fixture.state("running");
+      if (fault === "absent_running" || fault === "stopped") return { state: "absent" };
+      if (fault === "unknown") return { state: "unknown" };
+      return { state: "present", fingerprint: fault === "recycled" ? "replacement" : "birth" };
+    });
+    try {
+      if (["stopped", "retained", "late_output", "late_takeover", "late_running"].includes(fault)) fixture.state("stopped");
+      if (fault === "retained") fixture.output();
+      if (fault === "wrong_nonce") writeFileSync(join(fixture.root, "state.json"), JSON.stringify({ nonce: "foreign", status: "stopped" }));
+      if (fault === "corrupt_state") writeFileSync(join(fixture.root, "state.json"), "{");
+      if (fault === "unknown_status") fixture.state("corrupt");
+      if (fault === "retained" || fault === "late_output") {
+        const results: unknown[] = [];
+        const unsubscribe = fixture.channel.observeTerminal((result) => results.push(result));
+        await waitFor(() => checks >= 3 || results.length > 0);
+        unsubscribe();
+        assert.deepEqual(results, [], "retained output still prevents clean terminal");
+        assert.equal(readdirSync(join(fixture.root, "channel/output")).length, 1);
+      } else {
+        assert.deepEqual(await round4Within(fixture.channel.waitForTerminal()), fault === "stopped" ? { state: "exited", exitCode: 0 } : { state: "outcome_unknown" });
+      }
+    } finally { await fixture.close(); }
+  });
+}
+
+test("round4 terminal unsubscribe and detach cancel and join late inspection without reviving observers", async () => {
+  let entered = 0;
+  let complete!: (inspection: ProcessBirthInspection) => void;
+  const completions: Array<(inspection: ProcessBirthInspection) => void> = [];
+  let inspectionSignal!: AbortSignal;
+  const fixture = await round4ObserverFixture(async (signal) => {
+    entered++; inspectionSignal = signal;
+    return await new Promise<ProcessBirthInspection>((resolve) => { complete = resolve; completions.push(resolve); });
+  });
+  const oldResults: unknown[] = [];
+  const newResults: unknown[] = [];
+  try {
+    const remove = fixture.channel.observeTerminal((result) => oldResults.push(result));
+    await waitFor(() => entered === 1);
+    remove();
+    assert.equal(inspectionSignal.aborted, true, "last removal must cancel inspection");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(entered, 1, "zero observers must not restart inspection");
+    fixture.channel.observeTerminal((result) => newResults.push(result));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(entered, 1, "replacement observers cannot overlap the old owned inspection");
+    complete({ state: "unknown" });
+    await waitFor(() => entered === 2 || newResults.length > 0);
+    assert.deepEqual(oldResults, []);
+    assert.deepEqual(newResults, [], "old unknown result must not notify a replacement observer");
+    let detached = false;
+    const detaching = fixture.channel.detach().then(() => { detached = true; });
+    assert.equal(inspectionSignal.aborted, true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(detached, false, "detach must retain pending inspection through actual completion");
+    complete({ state: "absent" });
+    await detaching;
+    assert.deepEqual(newResults, []);
+    assert.throws(() => fixture.channel.observeTerminal(() => {}), /detached/);
+  } finally { for (const finish of completions) finish({ state: "unknown" }); await fixture.close(); }
+});
+
+test("round4 native observation boundary rejects ownership changed during its await", async () => {
+  const fixture = await round4ObserverFixture(async () => {
+    await writeFile(join(fixture.root, "inspection.evidence"), "ready");
+    fixture.takeover();
+    return { state: "present", fingerprint: "birth" };
+  });
+  try {
+    // Exercise the actual injected native authority boundary separately from
+    // the channel's next poll, which also rejects an already stale fence.
+    const authority = Reflect.get(fixture.channel, "authority") as PortableChannelAuthority;
+    await assert.rejects(authority.reattestObservation!(new AbortController().signal), /stale|fence/i);
+  } finally { await fixture.close(); }
+});
+
+async function round4Within<T>(operation: Promise<T>): Promise<T> {
+  let timer!: ReturnType<typeof setTimeout>;
+  try { return await Promise.race([operation, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("terminal proof did not settle within the synthetic bound")), 2_000); })]); }
+  finally { clearTimeout(timer); }
+}
+
+test("round4 POSIX workload identity is revalidated after asynchronous birth inspection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c1-round4-posix-"));
+  console.log(`C1 round4 synthetic root: ${root}`);
+  const group = { groupId: 9002, leaderPid: 9002, leaderBirth: "group-birth" };
+  const state = { protocol: "aiboard-portable-process/v2", nonce: "nonce", supervisorPid: 9001, supervisorBirth: "birth", workloadGroup: group,
+    revision: 1, handledControl: 0, launchEffect: "started", status: "running", knownProcesses: [], rootProcess: null,
+    exitCode: null, signal: null, error: null, updatedAt: "now", workloadGroupRetirement: { state: "active" } };
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root); writeFileSync(join(root, "state.json"), JSON.stringify(state));
+  const backend = new NativeOwnedProcessBackend({ stateDirectory: root, pollIntervalMs: 1, platform: "posix", backendId: "synthetic-posix",
+    capabilities: { tree_termination: "unavailable", crash_cleanup: "unavailable", verified_emptiness: "unavailable", write_confinement: "unavailable" },
+    operations: {
+      inspectProcessBirth: () => ({ state: "present", fingerprint: "birth" }),
+      inspectProcessBirthAsync: async () => {
+        await writeFile(join(root, "state.json"), JSON.stringify({ ...state, workloadGroup: { ...group, leaderBirth: "replacement" } }));
+        return { state: "present", fingerprint: "birth" };
+      }, listPosixGroup: () => [], signal: () => { throw new Error("synthetic fixture must not signal"); },
+    } });
+  const opaque = { version: 2, backendId: "synthetic-posix", nonce: "nonce", directory: root, supervisorPid: 9001, supervisorBirth: "birth", workloadGroup: group };
+  const binding = { ...bindingFor({ opaqueIdentity: Buffer.from(JSON.stringify(opaque)).toString("base64url"), rootPid: 9001, startedAt: "now",
+    birthFingerprint: { observedAt: "now", discriminator: createHash("sha256").update(["nonce", "birth", 9002, 9002, "group-birth"].join("\0")).digest("hex") } }), backendId: "synthetic-posix" };
+  const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
+  try { assert.deepEqual(await round4Within(channel.waitForTerminal()), { state: "outcome_unknown" }); }
+  finally { await channel.detach(); rmSync(root, { recursive: true, force: true }); console.log(`C1 round4 synthetic root removed: ${root}`); }
+});
+
+async function round4ObserverFixture(inspect: (signal: AbortSignal) => Promise<ProcessBirthInspection>) {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c1-round4-authority-"));
+  console.log(`C1 round4 synthetic root: ${root}`);
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const state = (status: string) => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status, exitCode: 0, signal: null }));
+  state("running");
+  const inspections = new Set<Promise<ProcessBirthInspection>>();
+  const operations = {
+    inspectProcessBirth: () => ({ state: "present" as const, fingerprint: "birth" }),
+    inspectProcessBirthAsync: (_pid: number, _platform: "posix" | "windows", signal: AbortSignal) => {
+      const operation = inspect(signal);
+      inspections.add(operation);
+      void operation.finally(() => inspections.delete(operation));
+      return operation;
+    },
+    listPosixGroup: () => [], signal: () => { throw new Error("synthetic fixture must not signal"); },
+  };
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 1, operations });
+  const opaque = { version: 1, backendId: "runner-windows-supervisor-v1", nonce: "nonce", directory: root, supervisorPid: 9001, supervisorBirth: "birth" };
+  const binding = bindingFor({ opaqueIdentity: Buffer.from(JSON.stringify(opaque)).toString("base64url"), birthFingerprint: { observedAt: "now", discriminator: createHash("sha256").update("nonce\0birth").digest("hex") }, rootPid: 9001, startedAt: "now" });
+  const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
+  return { root, channel, state,
+    takeover: () => writeFileSync(join(root, "fence.json"), JSON.stringify({ nonce: "nonce", ownerId: "new-owner", fencingToken: 8 })),
+    output: () => {
+      const bytes = Buffer.from("retained");
+      const metadata = { stream: "stdout", sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+      writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+    },
+    close: async () => { await channel.detach(); await Promise.all(inspections); rmSync(root, { recursive: true, force: true }); console.log(`C1 round4 synthetic root removed: ${root}`); },
+  };
+}
+
+test("round5 portable settlement waits through sink ACK publication retirement and terminal", async () => {
+  const fixture = await settlementFixture();
+  let sinkCalls = 0;
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => { sinkCalls++; return metadata; });
+  let settled = false;
+  const settlement = fixture.channel.settleBackpressuredOutput(2_000).then((result) => { settled = true; return result; });
+  try {
+    await fixture.atAck;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(sinkCalls, 1);
+    assert.equal(settled, false, "sink success is not ACK publication");
+    assert.deepEqual(readdirSync(join(fixture.root, "channel/ack")), []);
+    fixture.resumeAck();
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(settled, false, "published ACK is not supervisor retirement");
+    retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata: fixture.metadata });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(settled, false, "empty output without terminal proof cannot exclude a later suffix");
+    fixture.stop();
+    assert.deepEqual(await settlement, { status: "settled" });
+    assert.deepEqual(readdirSync(join(fixture.root, "channel/output")), []);
+    assert.deepEqual(readdirSync(join(fixture.root, "channel/ack")), []);
+    await fixture.channel.detach();
+    assert.equal(sinkCalls, 1);
+  } finally { await fixture.close(); }
+});
+
+for (const failure of ["deadline", "deadline_final_reattest", "takeover", "takeover_final_snapshot", "coordination", "corrupt_snapshot", "retirement_intent", "suffix"] as const) {
+  test(`round5 portable settlement blocks ${failure} while tracking the issued ACK`, async () => {
+    const fixture = await settlementFixture();
+    fixture.channel.subscribeBackpressuredOutput(async (metadata) => {
+      if (metadata.sequence !== 1) throw new Error("unaccepted suffix");
+      return metadata;
+    });
+    const settlement = fixture.channel.settleBackpressuredOutput(2_000);
+    try {
+      await fixture.atAck;
+      if (failure === "deadline") fixture.setTime(2_000);
+      if (failure === "takeover") fixture.takeover();
+      fixture.resumeAck();
+      if (failure !== "deadline" && failure !== "takeover") {
+        await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+        if (failure === "retirement_intent") {
+          assert.throws(() => retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"),
+            nonce: "nonce", fence, name: "stdout-000000000001.json", metadata: fixture.metadata,
+            afterBoundary: (boundary) => { if (boundary === "intent") throw new Error("held retirement"); } }));
+          fixture.stop();
+        } else {
+          retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence,
+            name: "stdout-000000000001.json", metadata: fixture.metadata });
+          if (failure === "coordination") fixture.blockCoordination();
+          if (failure === "corrupt_snapshot") unlinkSync(join(fixture.root, "channel/output-checkpoint.json"));
+          if (failure === "takeover_final_snapshot") fixture.takeoverAfterSnapshot();
+          if (failure === "deadline_final_reattest") fixture.expireOnReattest();
+          if (failure === "suffix") fixture.appendSuffix();
+          fixture.stop();
+        }
+      }
+      const result = await settlement;
+      assert.equal(result.status, "blocked");
+      if (failure === "deadline" || failure === "deadline_final_reattest") assert.deepEqual(result, { status: "blocked", reason: "deadline" });
+      if (failure === "takeover" || failure === "takeover_final_snapshot") assert.deepEqual(result, { status: "blocked", reason: "stale_fence" });
+      if (failure === "coordination") assert.deepEqual(result, { status: "blocked", reason: "coordination_unavailable" });
+      if (failure === "deadline" || failure === "takeover") {
+        await fixture.channel.detach();
+        assert.deepEqual(readdirSync(join(fixture.root, "channel/ack")), [], "late or stale ACK must never publish");
+        assert.equal(readdirSync(join(fixture.root, "channel/output")).length, 1);
+      }
+      if (failure === "suffix") assert.equal(existsSync(join(fixture.root, "channel/ack/stdout-000000000002.json")), false);
+    } finally { await fixture.close(); }
+  });
+}
+
+async function settlementFixture() {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cleanup-settlement-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const bytes = Buffer.from([0]);
+  const metadata: BackpressuredOutputMetadata = { stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1,
+    byteLength: 1, digest: createHash("sha256").update(bytes).digest("hex") };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let current = { ...fence } as { ownerId: string; fencingToken: number };
+  let now = 1_000;
+  let coordination = false;
+  let takeoverAfterSnapshot = false;
+  let expireOnReattest = false;
+  let entered!: () => void;
+  let resume!: () => void;
+  const atAck = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { resume = resolve; });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 1,
+    clock: () => now,
+    authority: () => ({ directory: root, nonce: "nonce", fence,
+      reattest: () => {
+        if (current.ownerId !== fence.ownerId || current.fencingToken !== fence.fencingToken) throw new Error("stale fence");
+        if (expireOnReattest) now = 2_000;
+        return "live";
+      },
+      effect: async (kind, effect) => {
+        if (kind === "output_ack") { entered(); await held; }
+        const result = runPortableFenceEffectSync({ lockPath: join(root, "effect.lock"), expectedFence: fence,
+          readCurrentFence: () => current, effect });
+        if (result.status !== "applied") throw new Error("effect refused");
+        return result.value;
+      },
+      snapshot: (read) => {
+        if (coordination) return { status: "unavailable", cause: "coordination", error: new Error("held lock") };
+        const result = runPortableFenceSnapshotSync({ lockPath: join(root, "effect.lock"), expectedFence: fence,
+          readCurrentFence: () => current, read });
+        if (takeoverAfterSnapshot) current = { ownerId: "successor", fencingToken: 8 };
+        return result;
+      },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  return { root, metadata, channel, atAck, resumeAck: resume, setTime: (value: number) => { now = value; },
+    takeover: () => { current = { ownerId: "successor", fencingToken: 8 }; },
+    takeoverAfterSnapshot: () => { takeoverAfterSnapshot = true; },
+    expireOnReattest: () => { expireOnReattest = true; },
+    blockCoordination: () => { coordination = true; },
+    stop: () => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 })),
+    appendSuffix: () => writeFileSync(join(root, "channel/output/stdout-000000000002.json"), JSON.stringify({ nonce: "nonce",
+      metadata: { ...metadata, sequence: 2, startOffset: 1, endOffset: 2 }, bytes: bytes.toString("base64") })),
+    close: async () => { resume(); await channel.detach(); rmSync(root, { recursive: true, force: true }); },
+  };
+}
 
 test("portable channel ignores only the exact supervisor atomic output publication", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-publication-"));
@@ -24,7 +499,7 @@ test("portable channel ignores only the exact supervisor atomic output publicati
     replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5,
     authority: () => ({
       directory: root, nonce: "nonce", fence, supervisorPid: 321,
-      reattest: () => "live", effect: async (_kind, effect) => effect(),
+      reattest: () => "live", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot,
     }),
   });
   const exactTemporary = join(root, "channel/output/stdout-000000000001.json.321.tmp");
@@ -71,6 +546,7 @@ test("portable write returns its durable acknowledged outcome when takeover wins
         }
         return result;
       },
+      snapshot: immediateSnapshot,
     }),
   });
   const channel = await provider.acquire(bindingFor({
@@ -106,7 +582,7 @@ test("portable provider retains a chunk until the identical sink acknowledgement
   let release!: () => void;
   const barrier = new Promise<void>((resolve) => { release = resolve; });
   let entered = false;
-  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 4, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect() }) });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 4, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
   const unsubscribe = channel.subscribeBackpressuredOutput(async (actual, actualBytes) => {
     entered = true;
@@ -391,17 +867,19 @@ test("portable takeover reports one truthful outcome for published input and adv
     supervisorBirth: string;
   };
   const provider = backend.backpressuredChannelProvider(); const old = await provider.acquire(binding, fence);
-  const staleBytes = Buffer.from("stale\n");
-  const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5_000 }, staleBytes).then(
-    () => ({ status: "acknowledged" as const }),
-    (error: unknown) => ({ status: "rejected" as const, error }),
-  );
-  await waitFor(() => existsSync(join(identity.directory, "channel", "input", "input-000000000001.json")));
   const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-  const recovered = await provider.acquire(binding, higher); const output: Buffer[] = [];
-  recovered.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); return metadata; });
-  const freshBytes = Buffer.from("fresh\n");
+  let recovered: Awaited<ReturnType<typeof provider.acquire>> | undefined;
   try {
+    const staleBytes = Buffer.from("stale\n");
+    const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5_000 }, staleBytes).then(
+      () => ({ status: "acknowledged" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await waitFor(() => portableInputPublished(identity.directory));
+    recovered = await provider.acquire(binding, higher);
+    const output: Buffer[] = [];
+    recovered.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); return metadata; });
+    const freshBytes = Buffer.from("fresh\n");
     const staleOutcome = await stale;
     if (staleOutcome.status === "rejected") assert.match(String(staleOutcome.error), /failed|stale|fence|rejected/i);
     assert.deepEqual(await recovered.write({ sequence: 2, byteLength: freshBytes.byteLength, digest: createHash("sha256").update(freshBytes).digest("hex"), timeoutMs: 5_000 }, freshBytes), { acknowledged: true, sequence: 2 });
@@ -409,7 +887,7 @@ test("portable takeover reports one truthful outcome for published input and adv
     const seen = Buffer.concat(output).toString();
     assert.equal(seen, staleOutcome.status === "acknowledged" ? "seen:stale\nseen:fresh\n" : "seen:fresh\n");
   } finally {
-    await old.detach(); await recovered.detach();
+    await old.detach(); await recovered?.detach();
     await cleanupPortableBackendFixture(backend, binding, higher);
     await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
   }
@@ -436,6 +914,7 @@ test("portable output acknowledgement paused after sink success cannot delete by
         if (current.ownerId !== fence.ownerId || current.fencingToken !== fence.fencingToken) throw new Error("stale fence at effect boundary");
         return effect();
       },
+      snapshot: immediateSnapshot,
     }),
   });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
@@ -463,7 +942,7 @@ test("portable detach waits for a held sink and leaves its bytes unacknowledged 
   writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 1, nextWrite: 1, inputClosed: false }));
   let entered!: () => void; let resume!: () => void;
   const atSink = new Promise<void>((resolve) => { entered = resolve; }); const held = new Promise<void>((resolve) => { resume = resolve; });
-  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect() }) });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
   const binding = bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" });
   const first = await provider.acquire(binding, fence);
   first.subscribeBackpressuredOutput(async (actual) => { entered(); await held; return actual; });
@@ -534,10 +1013,12 @@ test("portable empty proof paused at its final fence cannot survive higher-fence
 
 test("portable release refuses a live supervisor even when membership is empty", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-live-empty-release-"));
+  console.log(JSON.stringify({ created: root }));
   const identityDirectory = join(root, "identity");
   for (const path of [identityDirectory, join(identityDirectory, "channel/output"), join(identityDirectory, "channel/input"), join(identityDirectory, "channel/ack")]) mkdirSync(path, { recursive: true });
   writeFileSync(join(identityDirectory, "state.json"), JSON.stringify({ protocol: "aiboard-portable-process/v1", nonce: "fixture-nonce", supervisorPid: 9001, revision: 1, handledControl: 0, status: "running", exitCode: null, signal: null, launchEffect: "not_started", rootProcess: null, knownProcesses: [], error: null }));
   writeFileSync(join(identityDirectory, "channel/output-checkpoint.json"), JSON.stringify({ nonce: "fixture-nonce", stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
+  for (const stream of ["stdout", "stderr"]) writeFileSync(join(identityDirectory, `${stream}.log`), "");
   const operations = { inspectProcessBirth: () => ({ state: "present" as const, fingerprint: "fixture-birth" }), listPosixGroup: () => undefined, signal: () => undefined };
   const backend = new WindowsProcessBackend({ stateDirectory: root, operations });
   const opaque = { version: 1, backendId: "runner-windows-supervisor-v1", nonce: "fixture-nonce", directory: identityDirectory, supervisorPid: 9001, supervisorBirth: "fixture-birth" };
@@ -545,7 +1026,7 @@ test("portable release refuses a live supervisor even when membership is empty",
   try {
     await assert.rejects(backend.release(binding, fence), /terminal|stopped/i);
     assert.equal(existsSync(identityDirectory), true);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, { recursive: true, force: true }); console.log(JSON.stringify({ removed: root, absent: !existsSync(root) })); }
 });
 
 test("portable reconcile and release reject corrupt acknowledgement evidence", { timeout: 60_000 }, async () => {
@@ -678,7 +1159,7 @@ test("portable acquire fails closed on a corrupt retained filename, nonce, metad
       writeOutputCheckpoint(root);
       writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 1, nextWrite: 1, inputClosed: false }));
       writeFileSync(join(root, "channel/fence.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken }));
-      const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect() }) });
+      const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
       try {
         await assert.rejects(provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence), /output|corrupt|invalid|continu/i);
       } finally { rmSync(root, { recursive: true, force: true }); }
@@ -694,7 +1175,7 @@ test("portable acquire fails closed when owned output, acknowledgement, or check
     writeOutputCheckpoint(root);
     const target = join(root, "channel", missing);
     if (missing.endsWith(".json")) unlinkSync(target); else rmSync(target, { recursive: true, force: true });
-    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect() }) });
+    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
     try {
       await assert.rejects(provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence), /output|acknowledgement|checkpoint|missing|invalid/i);
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -710,7 +1191,7 @@ test("portable acquire rejects malformed acknowledgement evidence", async () => 
   writeFileSync(join(root, "channel/ack/stdout-000000000001.json"), "{not-json");
   writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 1, nextWrite: 1, inputClosed: false }));
   writeOutputCheckpoint(root);
-  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "exited", effect: async (_kind, effect) => effect() }) });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "exited", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
   try {
     await assert.rejects(provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence), /acknowledgement|invalid|malformed/i);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -722,7 +1203,7 @@ test("portable channel terminal becomes outcome unknown when output evidence dis
   writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 1, nextWrite: 1, inputClosed: true }));
   writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, signal: null }));
   writeOutputCheckpoint(root);
-  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "exited", effect: async (_kind, effect) => effect() }) });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "exited", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
   rmSync(join(root, "channel", "output"), { recursive: true, force: true });
   try {
@@ -736,7 +1217,7 @@ test("portable terminal validates but does not misclassify a durable input ackno
   writeFileSync(join(root, "channel/ack/input-000000000001.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, sequence: 1, status: "acknowledged" }));
   writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 2, nextWrite: 2, inputClosed: true }));
   writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, signal: null })); writeOutputCheckpoint(root);
-  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "exited", effect: async (_kind, effect) => effect() }) });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "exited", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
   try { assert.deepEqual(await channel.waitForTerminal(), { state: "exited", exitCode: 0 }); }
   finally { await channel.detach(); rmSync(root, { recursive: true, force: true }); }
@@ -748,13 +1229,14 @@ test("portable terminal cannot return clean exit after ownership changes during 
   writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 1, nextWrite: 1, inputClosed: true }));
   writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, signal: null })); writeOutputCheckpoint(root);
   let checks = 0;
-  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => { checks += 1; if (checks >= 3) throw new Error("writer fence changed"); return "exited"; }, effect: async (_kind, effect) => effect() }) });
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => { checks += 1; if (checks >= 3) throw new Error("writer fence changed"); return "exited"; }, effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
   try { assert.deepEqual(await channel.waitForTerminal(), { state: "outcome_unknown" }); }
   finally { await channel.detach(); rmSync(root, { recursive: true, force: true }); }
 });
 
 const fence = { ownerId: "portable-channel-owner", fencingToken: 7 } as const;
+function immediateSnapshot<T>(read: () => T) { return { status: "applied" as const, value: read() }; }
 function request(args: string[]) {
   return {
     intent: { invocationId: "portable-channel", runId: "run", kind: "command" as const, executable: process.execPath, arguments: args, workingDirectory: process.cwd(), requestedCapabilities: ["tree_termination"] as const },
@@ -862,6 +1344,18 @@ async function waitFor(predicate: () => boolean, deadlineMs = 5_000): Promise<vo
     if (Date.now() >= deadline) throw new Error("portable output did not arrive");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+function portableInputPublished(directory: string): boolean {
+  const input = join(directory, "channel", "input", "input-000000000001.json");
+  if (existsSync(input)) return true;
+  try {
+    const state = JSON.parse(readFileSync(join(directory, "channel", "client-state.json"), "utf8")) as {
+      nextCommand?: unknown;
+      nextWrite?: unknown;
+    };
+    if (state.nextCommand === 2 && state.nextWrite === 2) return true;
+  } catch {}
+  return existsSync(join(directory, "channel", "ack", "input-000000000001.json"));
 }
 async function waitForChildText(child: ChildProcess, expected: string, deadlineMs = 5_000): Promise<void> {
   let stdout = "";

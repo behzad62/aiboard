@@ -182,6 +182,14 @@ export interface AdoptedSessionRecoveryRequest {
   readonly replay: (effect: SessionRecoveryEffect) => "cleaned" | "blocked";
 }
 
+export interface CompleteAdoptedCleanupRequest {
+  readonly sessionId: string;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  readonly expectedRevision: number;
+  readonly effectId: string;
+}
+
 interface AuthorizationRecord {
   readonly sessionId: string;
   readonly ownerId: string;
@@ -226,6 +234,9 @@ export interface SessionAuthority {
     record: Readonly<StreamingSessionRecord>;
   }>;
   recoverAdopted(input: AdoptedSessionRecoveryRequest): Readonly<{
+    record: Readonly<StreamingSessionRecord>;
+  }>;
+  completeAdoptedCleanup(input: CompleteAdoptedCleanupRequest): Readonly<{
     record: Readonly<StreamingSessionRecord>;
   }>;
 }
@@ -604,6 +615,13 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         throw new SessionAuthorityError("authorization_stale", "Adopted recovery has a stale owner fence.");
       }
       assertCurrentSessionLease(record, clock);
+      const retainedCleanup = record.effects.find((effect) => effect.kind === "cleanup");
+      if (retainedCleanup?.progress) {
+        throw new SessionAuthorityError(
+          "recovery_refused",
+          "Compatibility recovery cannot replace categorical adopted cleanup resource proofs.",
+        );
+      }
       if (record.state === "cleanup_blocked") return Object.freeze({ record });
       let cleanup = pendingEffect(record, "cleanup");
       if (!cleanup) {
@@ -620,6 +638,12 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       }
       if (!cleanup) {
         throw new SessionAuthorityError("recovery_refused", "Adopted cleanup effect is missing.");
+      }
+      if (cleanup.progress) {
+        throw new SessionAuthorityError(
+          "recovery_refused",
+          "Compatibility recovery cannot replace categorical adopted cleanup resource proofs.",
+        );
       }
       const cleanupOutcome = input.replay(effectFor(cleanup));
       if (cleanupOutcome === "blocked") {
@@ -641,6 +665,28 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         fencingToken: input.fencingToken,
         expectedRevision: record.revision,
         effectId: cleanup.effectId,
+        at: clock().toISOString(),
+      });
+      return Object.freeze({ record: released });
+    },
+    completeAdoptedCleanup(input: CompleteAdoptedCleanupRequest) {
+      const record = options.sessions.store.readBySession(input.sessionId);
+      if (!record || record.cleanupOwner !== "session_authority" || record.state !== "cleanup_pending" ||
+          record.ownerId !== input.ownerId || record.fencingToken !== input.fencingToken) {
+        throw new SessionAuthorityError("recovery_refused", "Adopted cleanup completion authority is unavailable.");
+      }
+      const cleanup = record.effects.find((effect) => effect.kind === "cleanup" && effect.effectId === input.effectId);
+      if (!cleanup?.progress || cleanup.progress.resources.some((resource) =>
+        resource.status !== "verified" || resource.attempt !== undefined)) {
+        throw new SessionAuthorityError("recovery_refused", "Adopted cleanup resource proof conjunction is incomplete.");
+      }
+      const released = writer.apply({
+        type: "acknowledge_cleanup",
+        sessionId: input.sessionId,
+        ownerId: input.ownerId,
+        fencingToken: input.fencingToken,
+        expectedRevision: input.expectedRevision,
+        effectId: input.effectId,
         at: clock().toISOString(),
       });
       return Object.freeze({ record: released });

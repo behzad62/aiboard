@@ -879,6 +879,59 @@ test("an open failure never unlinks a candidate the spool did not create", async
   assert.equal(await readFile(foreignPath, "utf8"), "foreign");
 });
 
+test("C3 shared spool cleanup is idempotent after a replacement removes the exact empty owned root", async (t) => {
+  const root = await temporaryRoot(t);
+  const nodeStorage = createNodeOutputSpillStorage();
+  let openAttempts = 0;
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => ({
+      currentPrincipalPrivacy: true,
+      identityStableDeletion: true,
+      unlinkedEntries: false,
+    }),
+    openExclusive: async () => {
+      openAttempts += 1;
+      throw new Error("deliberate spill-open failure");
+    },
+  };
+  const options = spoolOptions(root, { storage, tailBytes: 64, spillBytes: 64 });
+  const original = new BoundedOutputSpool(options);
+  const replacement = new BoundedOutputSpool(options);
+
+  await original.write("stdout", Buffer.from("original"));
+  await replacement.write("stdout", Buffer.from("replacement"));
+  const replacementOutput = stream(await replacement.finalize(), "stdout");
+
+  assert.equal(openAttempts, 2, "both real spools establish and use the shared owned root");
+  assert.equal(replacementOutput.lossReason?.code, "spill_open_failed");
+  await assert.rejects(lstat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  await original.cleanup();
+});
+
+test("C3 cached spool cleanup still refuses a missing ownership marker inside an existing root", async (t) => {
+  const root = await temporaryRoot(t);
+  const nodeStorage = createNodeOutputSpillStorage();
+  const storage: OutputSpillStorage = {
+    ...nodeStorage,
+    attest: async () => ({
+      currentPrincipalPrivacy: true,
+      identityStableDeletion: true,
+      unlinkedEntries: false,
+    }),
+    openExclusive: async () => { throw new Error("deliberate spill-open failure"); },
+  };
+  const spool = new BoundedOutputSpool(spoolOptions(root, { storage }));
+  await spool.write("stdout", Buffer.from("owned"));
+  await unlink(join(root, ".output-spool-owner.json"));
+
+  await assert.rejects(
+    spool.cleanup(),
+    (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+  );
+  assert.equal((await lstat(root)).isDirectory(), true, "cleanup must not remove an unverifiable root");
+});
+
 test("cleanup refuses a foreign regular file swapped over an owned spill identity", async (t) => {
   const root = await temporaryRoot(t);
   const nodeStorage = createNodeOutputSpillStorage();

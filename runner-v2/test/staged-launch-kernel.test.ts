@@ -154,13 +154,14 @@ test("finalizeLaunch atomically hands host ownership to one active session and c
   const kernel = createInMemoryStreamingSessionStore();
   const authority = createSessionAuthority({ grants, sessions: kernel, clock: () => new Date(now) });
   const staged = authority.stageLaunch({ sessionId: "stream-1", launchId: "launch-1", grant, binding });
+  const stagedClaims = authority.validateStagedLaunch(staged, { sessionId: "stream-1", launchId: "launch-1" });
   const writer = getStreamingSessionKernelWriter(kernel);
   writer.prepareLaunch(hostRecord());
   writer.transitionLaunch({ type: "bind_isolation", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 0, lease: leaseBinding(), at: now });
   writer.transitionLaunch({ type: "begin_launch", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 1, at: now });
   writer.transitionLaunch({ type: "bind_backend", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 2, backendBinding: backendBinding(), at: now });
   writer.transitionLaunch({ type: "begin_channel", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 3, at: now });
-  writer.claimHostOutputCheckpoint({ launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 4, at: now, record: outputCheckpointRecord() });
+  writer.claimHostOutputCheckpoint({ launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 4, at: now, record: { ...outputCheckpointRecord(), ownerId: `session-authority:${stagedClaims.runId}:${stagedClaims.grantId}` } });
   const verified = writer.transitionLaunch({ type: "verify_handshake", launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1, expectedRevision: 5, handshakeDigest: "b".repeat(64), at: now });
   const finalize = { staged, launchId: "launch-1", sessionId: "stream-1", ownerId: verified.ownerId, fencingToken: verified.fencingToken, expectedRevision: verified.revision, lease: { leaseId: "lease-1", providerId: "fake", invocationId: "invoke-1", providerIdentity: "a".repeat(64), acquiredAt: now, access: [] }, backendBinding: backendBinding(), handshakeDigest: "b".repeat(64), envelope: { access: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false } };
   for (const mismatch of [

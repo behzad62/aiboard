@@ -1,5 +1,112 @@
 # SDD ledger — plan: docs/superpowers/plans/2026-08-28-runner-v2-portable-execution-safety.md
 
+## Current execution checkpoint — 2026-09-06
+
+Successor: C1 cap prerequisite and C5 fourth independently accepted. Native
+persistent output/spill, oversized MCP, manager tree close and crash recovery
+passed; strict OCI failed before durable isolation acknowledgement. All317
+source/test hashes unchanged, six successful exact roots absent, two failed OCI
+roots retained with cleanup_blocked state. Cleanup packet
+task-5-native-after-round4-summary.md owns exact evidence; a271-character SQLite
+lock-path hypothesis is undergoing a new synthetic causal diagnostic. No native
+retry, historical control, C5 fifth correction, B3/P6 exit or later phase start.
+
+### Preserved C1 prerequisite/C5 fourth entry
+
+Current gate supersedes the preserved notes below: C5 fourth nonnative fixture
+preparation carries one explicitly ruled C1 production prerequisite after its
+fifth cap. C1 fifth addressed normal dispatch but introduced a proven interaction
+with live-Set output-error delivery. `task-1-cap-ruling-terminal-dispatch.md` and
+`task-5-round4-brief.md` in the cleanup packet own the narrow correction and
+separate fixture work. The C1 prerequisite is independently accepted; C5 fixture
+correction remains active. Stable sources and C5 review gate native verification.
+C1 five plus one explicit prerequisite, C2 seven,
+C3 four verified, C4 two, C5 fourth active. No counter reset or B3/P6 exit.
+
+### Preserved recovery/readiness diagnosis checkpoint
+
+C3 round4 is independently verified (440/440 unrestricted affected checks,
+25 material faults, static0, review approved). Its exact OLD6z recovery succeeded
+with all six facts verified and original lossy manifest preserved. Fresh native
+persistent output then failed the first readiness wait, while its exact ez2LIl
+fixture fully released all resources. Read-only source diagnosis is active before
+any new correction; C5 remains three of five and its prepared finalizer round4 is
+undispatched. C2 seven, C3 four, C4 two; no B3/P6 exit or later phase start. Exact
+terminal/hash/root accounting is in the cleanup ledger. This supersedes the
+pre-review gate narrative preserved below.
+
+### Preserved C3 round4 pre-review checkpoint
+
+C3 round4 affected verification is reconciling four inherited runtime fixtures.
+Frozen baseline reversal proves they predate the manifest correction; causal
+source review classifies all four as obsolete expectations, including a
+pre-expiry reattach previously mistaken for a deadline violation. No additional
+production correction or C2/C5 round is authorized or consumed by these test
+edits. Preserve safety assertions, finish affected/fault proof, then scoped
+independent review; native gates remain closed. Cleanup progress owns the ruling.
+
+Current gate: C3 round4-of5 active for observation of an already finalized
+authenticated manifest after terminal post-finalization cleanup failure. An
+independent spec ruling places it within existing Task3 scope and authority,
+preserving C2's generic no-retry/no-repeat-finalize policy. No new user approval,
+C2 eighth repair, Task11 exception or counter reset is needed. The cleanup packet
+owns `task-3-round4-ownership-ruling.md`, brief and six-file baseline. C5 round3
+readiness repair is independently approved after report-only command provenance;
+its native retry remains gated on C3 round4. C2 seven total, C4 two of five,
+C5 three of five. No B3/P6 exit and no later phase start.
+
+### Preserved C5 readiness entry
+
+Current C5 entry supersedes the C3-entry narrative below: C3 round3 is now
+independently verified with 156 affected/fault/static proofs. The next native
+persistent test failed its first-delivery readiness assertion, but authenticated
+state has session released and all six cleanup facts verified. Independent
+source classification found a C5 fixture race: durable acceptance precedes actual
+delivery readiness. C5 round3 of five is dispatched for test-only correction,
+actual-runtime held-evidence RED/fault/GREEN and independent review. C2 seven
+total, C3 three of five, C4 two of five. No B3/P6 exit or phase queue change.
+
+### Preserved C3 entry narrative
+
+Current gate supersedes the historical resumption narrative below: C2 round7
+passed independent review; the next exact MCP oversized-line test passed 1/1
+with both roots absent. The separately selected persistent-output test failed
+0/1 with complete terminal evidence and its exact root preserved. Authenticated
+read-only state verifies quiescence/output and lossy finalization but blocks the
+evidence resource. Independent source classification found a C3 shared-spool
+cleanup lifecycle defect. C3 round3 of five is dispatched with nonnative RED,
+strict ownership refusal, material fault/restored proof and independent review
+required before native rerun. C2 remains seven total, C4 two of five, C5 two of
+five test repairs. The cleanup ledger and `task-3-round3-brief.md` own details.
+No B3/P6 exit or historical fixture controls/deletions are claimed.
+
+### Preserved C2 resumption narrative
+
+The owner has resumed P6 implementation. Tasks 1–7 and 8.0A/B1/B2 have prior
+verified exits; the original task-table and September 5 blocked repair campaign
+below are preserved historical records, not the current queue. The approved
+cleanup architecture replacement inside 8.0B3 now has C1/C3/C4 prior verified
+evidence, but C5 integration exposed a C2-owned cleanup dependency cycle. C2's
+prior exit is reopened. The user's 2026-09-06 `resume the work`, replying to the
+explicit seventh-round approval question, authorizes that bounded correction
+and its fault-proven tests/independent review. Six earlier rounds remain consumed;
+C2 round 7 passed independent scoped review after its required fault/affected/
+static proof, with no counter reset. C5's exact oversized-line integration is
+running; P6 has no verified exit. See
+`../2026-09-05-runner-v2-cleanup-coordination/progress.md` and its C4 final report
+for exact current Linux/Windows, synthetic/static, review and artifact evidence.
+C2 used six authorized rounds; C3/C4 used two each and C5 used two test-repair
+cycles; no counter is reset. The exact third MCP attempt's terminal TAP is
+unknown, but its retained cleanup-blocked state is authenticated and the source
+cycle was independently reviewed. No native retry or production repair followed.
+
+There is no B3 or P6 verified exit. C2 round 7 is verified; C5 now owns the exact
+integration attempt, with later selections, broader Runner validation and final
+review still dependent on its result. Only verified B3
+handback unlocks 8.1 Git → 8.2 MCP → 8.3 LSP → 8.4 managed → 8.5 provider/static
+closure → Tasks 9–12 → P6 gate. P6.5/P6.6/P7 remain locked. The historical
+recordless CLI chain and uncertain roots remain excluded from control/deletion.
+
 ## Preflight evidence
 
 - Starting revision: `c867ac08e079a242a6bd4f59e96918ccfe6d78a0`
@@ -647,4 +754,78 @@ overlap is expected.
   holder-delete exception is confined and removed before recovery effects. B2
   is unlocked and B3 is eligible but has not started.
 
-**PHASE VERIFIED 100% COMPLETE — NEXT PHASE MAY BEGIN**
+**B2 exit: PHASE VERIFIED 100% COMPLETE — NEXT PHASE MAY BEGIN**
+
+- Task 8.0B3 (2026-09-05 continuation): B3 is implemented and undergoing
+  cleanup repair and independent review; the preceding B2 exit does not close
+  B3 or P6. See `task-8.0b3-report.md` for September 2 historical gates and
+  current evidence. A same-adapter retained-output release latch defect was
+  exposed RED 2/2, repaired, fault-injected RED again, restored GREEN; current
+  Windows contracts are 84/84 and downstream integration is 91/91. The prior
+  usage-limit review blocker is resolved. Review returned four Important
+  findings: strict MCP image-command identity, settled Build MCP/host cleanup,
+  post-ready MCP failure cleanup/status, and crash-stale OCI/projection locks.
+  A single fix wave is assigned to `/root/b3_sep5_fix_wave` under
+  `task-8.0b3-sep5-review-fix-brief.md`; no B3 exit is issued.
+  Successful B3 closure unlocks 8.1 Git only. Remaining P6 Tasks 8–12 still
+  precede P6.5 and P7.
+
+- September 5 current wave additionally owns Critical F5: provider-prefixed
+  credential names bypassed the shared environment/redaction filter. The user
+  was advised to rotate the affected credential; values are never reproduced
+  in reports. Synthetic guards are repaired, actual process-graph proof and
+  independent re-review remain required. F1/F4 affected isolation checks are
+  70/70 green. Six obsolete live test fixtures were recovered with exact owned
+  authority and verified stopped/released; ten associated Temp folders remain
+  because tool policy rejected deletion. Historical uncertain roots remain
+  untouched. See the B3 report for precise current residue evidence.
+
+- September 5 scoped re-reviews cleared F1/F4 and F5 with zero remaining
+  Critical/Important findings. F5 review uncovered the additional internal
+  Git/discovery filter path; that path is now repaired and actual process-graph
+  tests prove both normal-run and internal-discovery environment/metadata
+  filtering. Relevant internal/Git group is 16/16 green; isolated fault injection
+  was RED and reverted; final graph is 2/2 green. F2/F3 and the broader current
+  regression/cleanup gate remain open. The MCP oversized-output test exposed
+  a cleanup fence transition invalidating acknowledgements on the old channel;
+  the executor is repairing exact output/ownership handoff, not adding idle-gap
+  completion claims or weakening force escalation.
+
+Current queue: B3 review/repair remains active; no B3 or P6 exit is issued.
+
+- September 5 10:53:52 UTC broad Runner sweep finished non-green: 1,498 tests,
+  1,495 passed, two failed, one expected skip, zero cancelled (1,334.463s).
+  The CLI startup-failure fixture hit EBUSY while deleting its root, masking
+  its primary failure; real persistent output lost its original lossy-evidence
+  flag during cleanup takeover. Chained client/Build checks did not run.
+  Final scoped review has zero Critical and three Important findings: intake
+  self-await deadlock, continuous-output shutdown starvation, and failure-time
+  deletion of CLI cleanup authority. Wave 4 of five is now active for these
+  three findings plus the confirmed evidence-continuity regression, under
+  `task-8.0b3-review-wave-4-brief.md`. F1/F2/F4/F5 are independently clear.
+  Exceptional recovery approval is still pending for the recordless CLI test
+  process chain; no process has been signalled without that authority.
+
+- Wave 4 bounded impacted graph is GREEN 399/399 (466.914s), including real
+  CLI/MCP/crash/output and native construction. Final scoped review still found
+  one Important shared-evidence readiness defect: a failed cleanup subscription
+  could seal the active retry continuation. Wave 5, the final governed round,
+  owns only that correction under `task-8.0b3-review-wave-5-brief.md`. No B3/P6
+  exit; exceptional old-process recovery approval remains pending.
+
+- Final wave-5 code review is zero Critical/Important and focused runtime/output
+  is 71/71 green, but final real integration is RED: 5/7, with oversized MCP
+  cleanup and persistent-output stop failures (137.649s). Retained MCP state
+  `mczgg7` / project `7I2ZYu` records a portable stale-effect-fence error,
+  cleanup_pending/active output, and retained ACK/output 5–7; all of its known
+  processes are absent. Evidence is preserved, not rewritten as released.
+  Old F2 KicXnJ/IkFb7b backends were authenticated, stopped/released, and all
+  known processes are absent; diagnostic roots remain. The separate recordless
+  CLI process chain remains live. Five governed rounds are exhausted. No sixth
+  round and no B3/P6/P6.5 exit/start is authorized by these non-green results.
+
+**PHASE BLOCKED — GENUINE USER DECISION REQUIRED**
+
+Next eligible action requires owner direction: extend the repair budget for
+the retained cleanup/fence failure; separately decide exact exceptional cleanup
+of the recordless old CLI process chain. Do not start 8.1, P6.5 or P7.

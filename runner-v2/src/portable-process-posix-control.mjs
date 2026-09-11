@@ -1,4 +1,136 @@
-export function signalOwnedPosixGroup(action, signal = process.kill, groupId = process.pid) {
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const POSIX_INSPECTION_DEADLINE_MS = 15_000;
+const POSIX_PREPARED_PROTOCOL = "aiboard-portable-process/v2-posix-prepared";
+const POSIX_GO_PROTOCOL = "aiboard-portable-process/v2-posix-go";
+const POSIX_ANCHOR_RELEASE_PROTOCOL = "aiboard-portable-process/v2-posix-anchor-release";
+
+export function parseLinuxProcStatIdentity(pid, stat) {
+  if (!positivePid(pid) || typeof stat !== "string") return undefined;
+  const close = stat.lastIndexOf(")");
+  const prefix = /^\s*(\d+)\s+\(/.exec(stat.slice(0, close + 1));
+  if (close < 1 || !prefix || Number(prefix[1]) !== pid) return undefined;
+  const fields = stat.slice(close + 1).trim().split(/\s+/);
+  // Linux /proc/<pid>/stat is: state, ppid, pgrp, ... starttime (field 22).
+  const groupId = Number(fields[2]);
+  const startTime = fields[19];
+  if (!positivePid(groupId) || !/^\d+$/.test(startTime ?? "")) return undefined;
+  return { pid, groupId, birth: `proc-start:${startTime}` };
+}
+
+export function inspectPosixProcessIdentity(pid) {
+  if (!positivePid(pid)) return { state: "unknown" };
+  if (process.platform === "linux") {
+    try {
+      const value = parseLinuxProcStatIdentity(pid, readFileSync(`/proc/${pid}/stat`, "utf8"));
+      return value ? { state: "present", value } : { state: "unknown" };
+    } catch (error) {
+      return error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" };
+    }
+  }
+  try {
+    const row = execFileSync("ps", ["-o", "pid=,pgid=,lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: POSIX_INSPECTION_DEADLINE_MS,
+    }).trim();
+    if (!row) return { state: "absent" };
+    const value = parsePosixPsIdentity(pid, row);
+    return value ? { state: "present", value } : { state: "unknown" };
+  } catch {
+    return { state: "unknown" };
+  }
+}
+
+export function parsePosixPsIdentity(pid, row) {
+  if (!positivePid(pid) || typeof row !== "string") return undefined;
+  const match = /^(\d+)\s+(\d+)\s+(.+)$/.exec(row.trim());
+  if (!match || Number(match[1]) !== pid || !positivePid(Number(match[2])) || !match[3]) return undefined;
+  // Match native-process-backend's non-Linux `ps -o lstart=` fingerprint exactly.
+  return { pid, groupId: Number(match[2]), birth: match[3] };
+}
+
+export function listOwnedPosixGroupMembers(groupId) {
+  if (!positivePid(groupId)) return undefined;
+  try {
+    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
+      encoding: "utf8",
+      timeout: POSIX_INSPECTION_DEADLINE_MS,
+    }), groupId);
+  } catch {
+    return undefined;
+  }
+}
+
+export function parsePosixGroupMembers(output, groupId) {
+  if (!positivePid(groupId) || typeof output !== "string") return undefined;
+  const members = [];
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = /^(\d+)\s+(\d+)$/.exec(trimmed);
+    if (!match || !positivePid(Number(match[1])) || !positivePid(Number(match[2]))) return undefined;
+    if (Number(match[2]) === groupId) members.push(Number(match[1]));
+  }
+  return members;
+}
+
+export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixProcessIdentity, listMembers = listOwnedPosixGroupMembers) {
+  if (!validWorkloadGroup(workloadGroup)) return { state: "identity_mismatch" };
+  const inspection = inspect(workloadGroup.leaderPid);
+  if (inspection?.state === "unknown" || inspection?.state === "absent") return { state: "outcome_unknown" };
+  if (inspection?.state !== "present" || !inspection.value || inspection.value.pid !== workloadGroup.leaderPid ||
+      inspection.value.groupId !== workloadGroup.groupId || inspection.value.birth !== workloadGroup.leaderBirth)
+    return { state: "identity_mismatch" };
+  const members = listMembers(workloadGroup.groupId);
+  if (!Array.isArray(members) || !members.every(positivePid) || !members.includes(workloadGroup.leaderPid))
+    return { state: "outcome_unknown" };
+  return { state: "ready", members: [...members] };
+}
+
+export function parsePosixBootstrapPrepared(value, nonce, expectedLeaderPid) {
+  if (!record(value) || value.protocol !== POSIX_PREPARED_PROTOCOL || value.nonce !== nonce || !positivePid(expectedLeaderPid)) return undefined;
+  const workloadGroup = { groupId: value.groupId, leaderPid: value.leaderPid, leaderBirth: value.leaderBirth };
+  return validWorkloadGroup(workloadGroup) && workloadGroup.leaderPid === expectedLeaderPid ? workloadGroup : undefined;
+}
+
+export function parsePosixBootstrapGo(value, nonce, workloadGroup) {
+  if (!record(value) || value.protocol !== POSIX_GO_PROTOCOL || value.nonce !== nonce || !sameWorkloadGroup(value.workloadGroup, workloadGroup) ||
+      !positivePid(value.supervisorPid) || typeof value.supervisorBirth !== "string" || value.supervisorBirth.length === 0 ||
+      typeof value.ownerId !== "string" || value.ownerId.length === 0 || !positiveFence(value.fencingToken)) return undefined;
+  return { supervisorPid: value.supervisorPid, supervisorBirth: value.supervisorBirth };
+}
+
+export function isExactPosixAnchorRelease(value, nonce, workloadGroup, expectedSupervisor, currentFence) {
+  return !!record(value) && value.protocol === POSIX_ANCHOR_RELEASE_PROTOCOL && value.nonce === nonce &&
+    sameWorkloadGroup(value.workloadGroup, workloadGroup) && positivePid(value.supervisorPid) &&
+    typeof value.supervisorBirth === "string" && value.supervisorBirth.length > 0 &&
+    sameSupervisorAuthority(value, expectedSupervisor) && typeof value.ownerId === "string" && value.ownerId.length > 0 &&
+    positiveFence(value.fencingToken) && sameFenceAuthority(value, currentFence);
+}
+
+export function signalOwnedPosixGroup(action, signal = process.kill, groupId) {
+  if (!positivePid(groupId)) throw new Error("Owned POSIX workload group identity is invalid.");
   const osSignal = action === "force_terminate" ? "SIGKILL" : "SIGTERM";
   signal(-groupId, osSignal);
 }
+
+function validWorkloadGroup(value) {
+  return !!value && typeof value === "object" && positivePid(value.groupId) && value.groupId === value.leaderPid &&
+    positivePid(value.leaderPid) && typeof value.leaderBirth === "string" && value.leaderBirth.length > 0;
+}
+function sameWorkloadGroup(left, right) {
+  return validWorkloadGroup(left) && validWorkloadGroup(right) && left.groupId === right.groupId &&
+    left.leaderPid === right.leaderPid && left.leaderBirth === right.leaderBirth;
+}
+function sameSupervisorAuthority(value, expected) {
+  return !!expected && positivePid(expected.supervisorPid) && typeof expected.supervisorBirth === "string" && expected.supervisorBirth.length > 0 &&
+    value.supervisorPid === expected.supervisorPid && value.supervisorBirth === expected.supervisorBirth;
+}
+function sameFenceAuthority(value, current) {
+  return !!current && typeof current.ownerId === "string" && current.ownerId.length > 0 && positiveFence(current.fencingToken) &&
+    value.ownerId === current.ownerId && value.fencingToken === current.fencingToken;
+}
+function record(value) { return !!value && typeof value === "object"; }
+function positiveFence(value) { return Number.isSafeInteger(value) && value >= 1; }
+function positivePid(value) { return Number.isSafeInteger(value) && value > 0; }

@@ -6,6 +6,8 @@ export interface RunnerResources {
   server?: ClosableRunnerResource;
   builds?: ClosableRunnerResource;
   buildFactory?: ClosableRunnerResource;
+  internalExecutionContext?: ClosableRunnerResource;
+  executionHost?: ClosableRunnerResource;
   permissions?: ClosableRunnerResource;
   mcpManager?: ClosableRunnerResource;
   providerConfigs?: ClosableRunnerResource;
@@ -19,6 +21,8 @@ export async function closeRunnerResources(resources?: RunnerResources): Promise
   await closeResource(resources.server, failures);
   await closeResource(resources.builds, failures);
   await closeResource(resources.buildFactory, failures);
+  await closeResource(resources.internalExecutionContext, failures);
+  await closeResource(resources.executionHost, failures);
   await closeResource(resources.permissions, failures);
   await closeResource(resources.mcpManager, failures);
   await closeResource(resources.providerConfigs, failures);
