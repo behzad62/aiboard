@@ -1,3 +1,4 @@
+import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
 import { requireGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -400,8 +401,9 @@ export class NativeBuildFactory {
         servers,
         attestation,
       });
+      let discovered: McpDiscoveryResult;
       try {
-        await discovery.discover();
+        discovered = await discovery.discover();
       } finally {
         await discovery.close();
       }
@@ -415,6 +417,9 @@ export class NativeBuildFactory {
         attestation,
       });
       runMcpManager = new McpManager({
+        runId: spec.runId,
+        discovery: discovered,
+        reattest: () => this.options.internalExecutionContext!.resolveMcpRuntimeLaunches({ servers, attestation }),
         cwd: this.options.projectRoot,
         servers,
         transportFactory: createExecutionHostMcpTransportFactory({

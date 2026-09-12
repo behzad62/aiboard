@@ -1,0 +1,106 @@
+[
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task82-affected1-terminal.json",
+    "sha256": "63f3befe039c6165fa586bb5ecc64c8009fa68557633f05acea44a60c40b6aaf"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task82-affected1.tap.log",
+    "sha256": "315f602ec4fc0c0f3593819290761cc4a40da9529714c46a4335c83d56fe627d"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task82-final-delta-terminal.json",
+    "sha256": "066c1c2f33fcf11accb98024ba1a5bd00c4a7bbe231fcd87434f84fcfde71702"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task82-final-delta.tap.log",
+    "sha256": "4098745a8da51cde3423da70ceb9a1646eec571743e1067ebdbc7f0cf0be729e"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/linux-mcp-final-terminal.json",
+    "sha256": "89b2cbc8d81a9525fdc32c3f00437e3b55d78eb40a10bce1d1f6a0e09a06a0d2"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/linux-mcp-final.tap.log",
+    "sha256": "64440e5d5e0ce6ddff0cbaac96a006c4c555ac0d88dd129b85d21b35971a8920"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/static-final-terminal.json",
+    "sha256": "606b56c1ab9011538da97c04c2a5fa08f9864850ed8f7d942e785b9a1d425bd7"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-accepted.json",
+    "sha256": "d7de662319ec7d042aceaca7f7002e55243c319bdc8ad0670c0ceb7acabc6a2d"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-source-baseline.json",
+    "sha256": "9b36e591df010bedff26ed7f01e020fdcd91fb34f5863af5a7a26c9062a853e5"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/resource-observations.json",
+    "sha256": "8c445685ded56f6c7a3a85270284d17854d3c02322cb58453d1a706add846972"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-pinned-executable.tap.log",
+    "sha256": "288179315ebd2ec69ebd35f86111506a5efdf4bd99664bbaf67e5a9f9f4cd9e0"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-stable-schema-keys.tap.log",
+    "sha256": "ebbfbdea8c19ae2180b57de9033a59fd2f2188e2a6fbacd40230d3e298902f58"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-fixed-network-default.tap.log",
+    "sha256": "4687b1567024bdce574dbcfae294c713a61026dd6bb4becf5349f2b18f0ad493"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-config-envelope-digest.tap.log",
+    "sha256": "1410706f3cf1b54fae42bb22db8d731ab6a7653e76a6172e2b4f3ac4874bbb9d"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-broker-empty-access.tap.log",
+    "sha256": "e09ca4657141f60d5d4b94b9a35c69a4cb82e9e73c1020683981b68ee06295a1"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-replay-refusal.tap.log",
+    "sha256": "847f21bb34327641bf8738a345a9b085c33aec7f1be970b867c9e69d446b70bc"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-restart-budget.tap.log",
+    "sha256": "68d9e68de879c67c3794ea1e10fe893bb6d84de02ad0e6961db053d8a8f778b6"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-all-agent-invalidation.tap.log",
+    "sha256": "e167ac4e3338882fd7112ffca15f3dc41fc94ecaa0e2997c7ce844954b8a4652"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-request-exclusive-lifetime.tap.log",
+    "sha256": "6dc6019ee388df0ba4b7d93f9b6832d7a946f721085654e9659b3c13a769a510"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-pre-isolation-subset.tap.log",
+    "sha256": "4602537ac24140ef7922fc07baed602219b9e6dd9a749515bb58b632c2aa61ed"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-discovery-closed-executor.tap.log",
+    "sha256": "60cd97b98a1d571577ee6f3d447f0f65c82285caec712905082310d10fbe9b78"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-discovery-acquisition-join.tap.log",
+    "sha256": "45e9fd79be3c67aa520532f791ed1cfb3e64fe5606a5d11082e8f0c754c28f9d"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-incomplete-frame-no-write.tap.log",
+    "sha256": "97c5154ee68c62cb8198b40578ce6cfe078ec312f5494262c6f0bd07b68aed1b"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-pending-notification-first.tap.log",
+    "sha256": "21e2810e920b640aeb00ead59d03e8c7627c49bd856ba0d4e158c319f0ba3192"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-original-startup-deadline.tap.log",
+    "sha256": "8acfcc255bf34c1dc25bfb14717187c19a3a573748e721c6c3046008a7526b9b"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-2-mcp/material-exact-first-authorization.tap.log",
+    "sha256": "05fad51518788b72d94fe98ee165512d4859cc19dd9fc819353cec9df335237b"
+  }
+]

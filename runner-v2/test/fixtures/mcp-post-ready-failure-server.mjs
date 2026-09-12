@@ -4,7 +4,10 @@ import { createInterface } from "node:readline";
 const mode = process.argv[2];
 const pidMarker = process.argv[3];
 const triggerMarker = process.argv[4];
-writeFileSync(pidMarker, String(process.pid), { flag: "wx" });
+const lazy = process.argv[5] === "--lazy";
+let marked = false;
+function markLive() { if (!marked) { writeFileSync(pidMarker, String(process.pid), { flag: "wx" }); marked = true; } }
+if (!lazy) markLive();
 
 const lines = createInterface({ input: process.stdin });
 lines.on("line", (line) => {
@@ -19,7 +22,9 @@ lines.on("line", (line) => {
     reply(message.id, { tools: [{
       name: "trigger",
       inputSchema: { type: "object", additionalProperties: false },
-    }] });
+    }, ...(lazy ? [{ name: "probe", inputSchema: { type: "object" } }] : [])] });
+  } else if (message.method === "tools/call" && message.params.name === "probe") {
+    markLive(); reply(message.id, { content: [{ type: "text", text: "ready-to-trigger" }] });
   } else if (message.method === "tools/call") {
     appendFileSync(triggerMarker, `${mode}\n`);
     if (mode === "self-exit") {

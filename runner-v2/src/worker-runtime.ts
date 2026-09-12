@@ -1,3 +1,4 @@
+import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
@@ -379,7 +380,7 @@ export async function runWorkerTask(
         clock,
       })
     : broker;
-  const loop = await runAgentLoop({
+  const loop = await withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => runAgentLoop({
     model: options.model,
     registry: toolRuntime,
     context: {
@@ -395,7 +396,7 @@ export async function runWorkerTask(
     onCheckpoint: async (checkpoint) => {
       await options.sessions.checkpoint(options.sessionId, checkpoint, clock());
     },
-  });
+  }));
 
   if (loop.status === "submitted") {
     producedChangeSet ??= changeSetFromMessages(loop.messages, loop.changeSetId);

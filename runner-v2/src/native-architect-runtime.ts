@@ -1,3 +1,4 @@
+import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
@@ -305,7 +306,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           clock: this.clock,
         })
       : model;
-    const result = await runAgentLoop({
+    const result = await withMcpAgentLifecycle(this.options.mcpManager, request.context, () => runAgentLoop({
       model: runtimeModel,
       registry: tools,
       context: {
@@ -337,7 +338,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
-    });
+    }));
     if (result.status === "architect_action") {
       this.options.health.recordSuccess(candidate.providerId);
       this.persistHealth(request.runId, candidate.providerId);

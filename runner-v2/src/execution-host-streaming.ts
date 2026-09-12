@@ -1,3 +1,5 @@
+import { authorizeSessionLeaseOwnership } from "./session-authority.js";
+import { transferExecutionIsolationLeaseToSession } from "./execution-isolation-provider.js";
 import { createHash } from "node:crypto";
 
 import type { ChildEnvironmentFactory } from "./child-environment.js";
@@ -274,7 +276,21 @@ export function createExecutionHostStreamingGraph(
       };
       pending.set(request.launchId, context);
       try {
-        return await runtime.open(request);
+        const facade = await runtime.open(request);
+        if (request.intent.kind === "mcp_server") {
+          const selection = selections.get(facade.record.lease.leaseId);
+          if (selection?.enforcement === "write_confinement_exact_grant") {
+            try {
+              transferExecutionIsolationLeaseToSession(options.isolation, selection,
+                authorizeSessionLeaseOwnership(options.sessions, facade.sessionId));
+            } catch (primary) {
+              try { await runtime.cleanupOwnedSession({ sessionId: facade.sessionId, timeoutMs: 30_000 }); }
+              catch (cleanup) { throw new AggregateError([primary, cleanup], "MCP adopted isolation transfer could not certify cleanup."); }
+              throw primary;
+            }
+          }
+        }
+        return facade;
       } finally {
         pending.delete(request.launchId);
         if (context.backendIdentity) contextByBackendIdentity.delete(context.backendIdentity);

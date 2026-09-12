@@ -1,28 +1,24 @@
+import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionGrantBinding } from "./execution-grants.js";
 import type { ExecutionHostRunBinding } from "./execution-host.js";
 import type { ExecutionHostStreamingHandshakeChannel } from "./execution-host-streaming.js";
-import type {
-  McpOwnedTransport,
-  McpTransportFactory,
-  McpTransportOpenRequest,
-} from "./mcp-tools.js";
+import type { McpOwnedTransport, McpTransportFactory, McpTransportOpenRequest, McpRequestOwner, McpTransportWriter } from "./mcp-tools.js";
 import type { McpRuntimeServerLaunch } from "./runner-internal-execution-context.js";
-import type { OperationAuthorizationAssertion } from "./session-authority.js";
+import { canonicalMcpDigest, mcpConfigurationDigest } from "./mcp-configuration.js";
+import { McpSessionError } from "./mcp-session-manager.js";
+import { McpProtocolError } from "./mcp-rpc-peer.js";
+import type { StreamingRequestChannel } from "./streaming-request-operation.js";
+import type { StreamingSessionRecord } from "./streaming-session-store.js";
 
-const MCP_OPERATION_ACCESS = Object.freeze([]);
-const MCP_WRITE_TIMEOUT_MS = 30_000;
 const MCP_CLEANUP_TIMEOUT_MS = 30_000;
-
 type StreamingFacade = Awaited<ReturnType<ExecutionHostRunBinding["openStreaming"]>>;
 
-/**
- * Binds the existing public MCP line protocol to one run's durable streaming
- * authority. It owns only processes launched from the exact static
- * attestation; it never scans for or adopts a similar host process.
+/** Exact per-call host adapter. It never issues an execution grant or invents an
+ * actor. The first request uses the original launch claims once; subsequent
+ * requests consume the fresh actual ToolBroker grant through SessionAuthority.
  */
 export function createExecutionHostMcpTransportFactory(options: {
   readonly run: ExecutionHostRunBinding;
@@ -31,116 +27,57 @@ export function createExecutionHostMcpTransportFactory(options: {
   readonly launches: readonly McpRuntimeServerLaunch[];
 }): McpTransportFactory {
   const launches = new Map(options.launches.map((launch) => [launch.name, launch]));
-  if (launches.size !== options.launches.length) {
-    throw new Error("MCP runtime launch descriptors contain duplicate names.");
-  }
-
+  if (launches.size !== options.launches.length) throw new Error("MCP runtime launch descriptors contain duplicate names.");
   return Object.freeze({
     async open(request: McpTransportOpenRequest): Promise<McpOwnedTransport> {
+      const owner = request.owner;
+      if (!owner?.context.executionGrant || owner.context.runId !== options.run.runId || !owner.context.sessionId ||
+          !owner.context.actor?.id || !owner.context.callId || !owner.context.toolName?.startsWith("mcp."))
+        throw new McpSessionError("mcp_authority_required", "MCP live launch requires the exact current run/call grant authority.");
       const launch = launches.get(request.server.name);
-      if (!launch || launch.command !== request.server.command) {
-        throw new Error(`MCP server ${request.server.name} lacks exact runtime attestation.`);
-      }
+      if (!launch || launch.command !== request.server.command || launch.configDigest !== mcpConfigurationDigest(request.server) ||
+          request.expected?.configDigest !== launch.configDigest || request.expected?.executableDigest !== launch.executableDigest)
+        throw new McpSessionError("mcp_attestation_mismatch", "MCP server lacks its exact discovered runtime attestation.");
+      const executable = await realpath(launch.executablePath);
+      if (executable !== launch.executablePath || await hashExecutableDescriptor(executable) !== launch.executableDigest)
+        throw new McpSessionError("mcp_attestation_mismatch", "MCP executable identity changed before live launch.");
       const projectDirectory = await realpath(options.projectDirectory);
-      const identity = createHash("sha256")
-        .update(`${options.run.runId}\0${launch.name}\0${randomUUID()}`)
-        .digest("hex");
-      const agentSessionId = `mcp-agent-${identity.slice(0, 32)}`;
-      const streamingSessionId = `mcp-stream-${identity}`;
+      const identity = createHash("sha256").update(`${options.run.runId}\0${launch.name}\0${owner.context.sessionId}\0${randomUUID()}`).digest("hex");
+      const sessionId = `mcp-stream-${identity}`;
       const launchId = `mcp-launch-${identity}`;
-      const actor = Object.freeze({
-        role: "runner_internal" as const,
-        id: `mcp:${launch.name}`,
-      });
-      const launchBinding: ExecutionGrantBinding = Object.freeze({
-        runId: options.run.runId,
-        sessionId: agentSessionId,
-        actor,
-        toolName: "mcp.transport.open",
-        callId: launchId,
-        permissionProfile: options.permissionProfile,
-      });
-      const envelope = Object.freeze({
-        access: Object.freeze([{ canonicalPath: projectDirectory, mode: "write" as const }]),
-        credentialNames: Object.freeze([]),
-        networkApproved: true,
-        externalApproved: false,
-        destructiveApproved: false,
-      });
-      const grant = await options.run.executionGrants.issue({
-        ...launchBinding,
-        workspacePath: projectDirectory,
-        access: [{ path: projectDirectory, mode: "write" }],
-        externalApproved: false,
-        destructiveApproved: false,
-        networkApproved: true,
-      });
+      const binding = bindingFor(owner, options.permissionProfile);
       const facade = await options.run.openStreaming({
-        sessionId: streamingSessionId,
-        launchId,
-        grant,
-        binding: launchBinding,
-        intent: Object.freeze({
-          invocationId: launchId,
-          runId: options.run.runId,
-          sessionId: agentSessionId,
-          kind: "mcp_server" as const,
-          executable: launch.executablePath,
-          arguments: Object.freeze([...launch.arguments]),
-          workingDirectory: projectDirectory,
-          requestedCapabilities: Object.freeze([
-            "tree_termination" as const,
-            "verified_emptiness" as const,
-          ]),
-        }),
-        ...(launch.imageExecutable
-          ? { imageExecutable: launch.imageExecutable }
-          : {}),
-        protocolStreams: Object.freeze(["stdout" as const]),
-        envelope,
-        verifyHandshake: async (channel) => await verifyMcpHandshake(channel, request),
+        sessionId, launchId, grant: owner.context.executionGrant, binding, envelope: owner.envelope,
+        ...(owner.context.signal ? { signal: owner.context.signal } : {}), protocolStreams: ["stdout"],
+        ...(launch.imageExecutable ? { imageExecutable: launch.imageExecutable } : {}),
+        intent: { invocationId: launchId, runId: options.run.runId, sessionId: owner.context.sessionId,
+          kind: "mcp_server", executable: launch.executablePath, arguments: launch.arguments, workingDirectory: projectDirectory,
+          requestedCapabilities: ["tree_termination", "verified_emptiness"] },
+        verifyHandshake: (channel) => verifyMcpHandshake(channel, request),
       });
-
-      return createLiveTransport({
-        run: options.run,
-        projectDirectory,
-        permissionProfile: options.permissionProfile,
-        request,
-        facade,
-        launchBinding,
-        streamingSessionId,
-      });
+      return liveTransport({ run: options.run, facade, request, firstOwner: owner, binding, sessionId, permissionProfile: options.permissionProfile });
     },
   });
 }
 
-/** Clean exact recovered MCP identities before this Build creates new facades. */
-export async function cleanupRecoveredMcpTransports(
-  run: ExecutionHostRunBinding,
-): Promise<void> {
+/** Authenticated durable state is the only recovery source. No process search,
+ * similar-PID adoption, autonomous launch or replacement grant is permitted. */
+export async function cleanupRecoveredMcpTransports(run: ExecutionHostRunBinding): Promise<void> {
+  const isMcp = (record: Readonly<StreamingSessionRecord> | undefined) => record && record.runId === run.runId &&
+    (record.actor.role === "runner_internal" && record.toolName === "mcp.transport.open" ||
+      record.sessionId.startsWith("mcp-stream-") && record.toolName.startsWith("mcp."));
   const failures: unknown[] = [];
   for (const sessionId of run.streamingState.listSessionIds()) {
     const record = run.streamingState.readSession(sessionId);
-    if (!record || record.actor.role !== "runner_internal" ||
-        record.toolName !== "mcp.transport.open") continue;
-    if (record.state === "released") continue;
-    try {
-      await run.streamingRuntime.cleanupOwnedSession({
-        sessionId,
-        timeoutMs: MCP_CLEANUP_TIMEOUT_MS,
-      });
-    } catch (error) { failures.push(error); }
+    if (!isMcp(record) || record!.state === "released") continue;
+    try { await run.streamingRuntime.cleanupOwnedSession({ sessionId, timeoutMs: MCP_CLEANUP_TIMEOUT_MS }); }
+    catch (error) { failures.push(error); }
   }
   for (const sessionId of run.streamingState.listSessionIds()) {
-    const retained = run.streamingState.readSession(sessionId);
-    if (retained && retained.actor.role === "runner_internal" &&
-        retained.toolName === "mcp.transport.open" && retained.state !== "released") {
-      failures.push(new Error("Recovered MCP ownership remains durably unreleased; replacement is refused."));
-    }
+    const record = run.streamingState.readSession(sessionId);
+    if (isMcp(record) && record!.state !== "released") failures.push(new Error("Recovered MCP ownership remains durably unreleased; replacement is refused."));
   }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Recovered MCP process cleanup could not be verified.");
-  }
+  if (failures.length) throw new AggregateError(failures, "Recovered MCP process cleanup could not be verified.");
 }
 
 async function verifyMcpHandshake(
@@ -180,117 +117,105 @@ async function verifyMcpHandshake(
   }
 }
 
-function createLiveTransport(input: {
-  readonly run: ExecutionHostRunBinding;
-  readonly projectDirectory: string;
-  readonly permissionProfile: PermissionProfile;
-  readonly request: McpTransportOpenRequest;
-  readonly facade: StreamingFacade;
-  readonly launchBinding: ExecutionGrantBinding;
-  readonly streamingSessionId: string;
-}): McpOwnedTransport {
-  let closing = false;
-  let closeComplete = false;
+
+function bindingFor(owner: McpRequestOwner, permissionProfile: PermissionProfile): ExecutionGrantBinding {
+  return Object.freeze({ runId: owner.context.runId, sessionId: owner.context.sessionId, actor: Object.freeze({ ...owner.context.actor }),
+    callId: owner.context.callId!, toolName: owner.context.toolName!, permissionProfile });
+}
+function sameAgent(a: McpRequestOwner, b: McpRequestOwner): boolean {
+  return a.context.runId === b.context.runId && a.context.sessionId === b.context.sessionId &&
+    a.context.actor.role === b.context.actor.role && a.context.actor.id === b.context.actor.id &&
+    canonicalMcpDigest(a.envelope) === canonicalMcpDigest(b.envelope);
+}
+function liveTransport(input: Readonly<{ run: ExecutionHostRunBinding; facade: StreamingFacade; request: McpTransportOpenRequest;
+  firstOwner: McpRequestOwner; binding: ExecutionGrantBinding; sessionId: string; permissionProfile: PermissionProfile }>): McpOwnedTransport {
+  let first = true; let closing = false; let closed = false;
   let closePromise: Promise<void> | undefined;
-  let operationSequence = 0;
-  const outputAbort = new AbortController();
-
-  const authorize = async (operation: "write" | "family_delivery") => {
-    const base = Object.freeze({
-      sessionId: input.streamingSessionId,
-      operation,
-      requestAccess: MCP_OPERATION_ACCESS,
-      credentialNames: Object.freeze([]),
-      networkApproved: false,
-      externalApproved: false,
-      destructiveApproved: false,
-    });
-    const binding: ExecutionGrantBinding = Object.freeze({
-      ...input.launchBinding,
-      toolName: `mcp.transport.${operation}`,
-      callId: `mcp-operation-${operation}-${++operationSequence}-${randomUUID()}`,
-    });
-    const grant = await input.run.executionGrants.issue({
-      ...binding,
-      workspacePath: input.projectDirectory,
-      access: [],
-      externalApproved: false,
-      destructiveApproved: false,
-      networkApproved: false,
-    });
-    const operationRequest = Object.freeze({ ...base, grant, binding });
-    return Object.freeze({
-      authorization: input.facade.authorizeOperation(operationRequest),
-      assertion: Object.freeze({ ...base, binding }),
-    });
+  let activeRequest: Promise<unknown> | undefined;
+  let requestAbort: AbortController | undefined;
+  let idleAbort: AbortController | undefined; let idleWait: Promise<void> | undefined;
+  const observeIdleTermination = () => {
+    if (closing) return;
+    const control = new AbortController(); idleAbort = control;
+    idleWait = input.facade.waitForOutput(control.signal).then((available) => {
+      if (!available && !control.signal.aborted && !closing) input.request.onFailure(new McpProtocolError("mcp_transport_unavailable", "MCP server terminated between requests.", "not_sent"));
+      // Available bytes remain in the bounded provider window until a fresh
+      // authorized request may deliver them; idle observation consumes nothing.
+    }).catch((error: unknown) => { if (!control.signal.aborted && !closing) input.request.onFailure(error instanceof Error ? error : new Error(String(error))); });
   };
-
-  const outputPump = (async () => {
-    for (;;) {
-      if (closing) return;
-      const available = await input.facade.waitForOutput(outputAbort.signal);
-      // An aborted wait may still report an already-pending frame. Shutdown
-      // owns that retained suffix through exact cleanup; do not require an
-      // idle observation before force-capable cleanup can begin.
-      if (closing) return;
-      if (!available) {
-        throw new Error("MCP transport process exited after becoming ready.");
+  return Object.freeze({
+    async write(): Promise<void> { throw new McpSessionError("mcp_authority_required", "MCP writes require a current scoped request authorization."); },
+    async request<T>(owner: McpRequestOwner, perform: (writer: McpTransportWriter) => Promise<T>, timeoutMs: number): Promise<T> {
+      if (closing || closed || !sameAgent(input.firstOwner, owner) || !owner.context.executionGrant)
+        throw new McpSessionError("mcp_authority_required", "MCP request does not match its active exact session envelope/owner.");
+      if (activeRequest) throw new McpProtocolError("mcp_request_busy", "MCP transport request is already in progress.", "not_sent");
+      const grant = owner.context.executionGrant;
+      const control = new AbortController(); requestAbort = control;
+      const signal = owner.context.signal ? AbortSignal.any([owner.context.signal, control.signal]) : control.signal;
+      const operation = (async () => {
+        idleAbort?.abort(); await idleWait;
+        if (closing || signal.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP request was closed before authorization.", "not_sent");
+        const binding = bindingFor(owner, input.permissionProfile);
+        const expected = { sessionId: input.sessionId, operation: "request" as const, requestAccess: owner.envelope.access,
+          credentialNames: owner.envelope.credentialNames, networkApproved: owner.envelope.networkApproved,
+          externalApproved: owner.envelope.externalApproved, destructiveApproved: owner.envelope.destructiveApproved };
+        let authorization;
+        if (first) {
+          if (grant !== input.firstOwner.context.executionGrant || owner.context.callId !== input.binding.callId || owner.context.toolName !== input.binding.toolName)
+            throw new McpSessionError("mcp_authority_required", "The first MCP request must retain its original launching call.");
+          authorization = input.facade.authorizeFirstOperation(expected); first = false;
+        } else authorization = input.facade.authorizeOperation({ ...expected, binding, grant });
+        return await input.facade.request(authorization, { ...expected, binding },
+          (io) => performWithOutput(io, perform, input.request, signal), timeoutMs, signal);
+      })();
+      activeRequest = operation;
+      try { return await operation; }
+      finally {
+        if (activeRequest === operation) activeRequest = undefined;
+        if (requestAbort === control) requestAbort = undefined;
+        observeIdleTermination();
       }
-      const operation = await authorize("family_delivery");
-      await input.facade.deliverOutput(
-        operation.authorization,
-        operation.assertion as OperationAuthorizationAssertion,
-        async (stream, bytes) => {
-          await input.request.onOutput(stream, new Uint8Array(bytes));
-        },
-      );
-    }
-  })();
-  void outputPump.catch((error) => {
-    if (!closing) input.request.onFailure(asError(error));
-  });
-
-  const transport: McpOwnedTransport = Object.freeze({
-    async write(payload: Uint8Array, timeoutMs: number) {
-      if (closing || closeComplete) throw new Error("MCP transport is closing.");
-      const operation = await authorize("write");
-      await input.facade.write(
-        operation.authorization,
-        operation.assertion as OperationAuthorizationAssertion,
-        new Uint8Array(payload),
-        Number.isSafeInteger(timeoutMs) && timeoutMs > 0
-          ? timeoutMs
-          : MCP_WRITE_TIMEOUT_MS,
-      );
     },
     async closeVerified() {
-      if (closeComplete) return;
+      if (closed) return;
       if (closePromise) return await closePromise;
-      closing = true;
-      outputAbort.abort();
+      closing = true; idleAbort?.abort(); requestAbort?.abort();
       const attempt = (async () => {
-        await outputPump.catch(() => undefined);
-        await input.run.streamingRuntime.cleanupOwnedSession({
-          sessionId: input.streamingSessionId,
-          timeoutMs: MCP_CLEANUP_TIMEOUT_MS,
-        });
-        const record = input.run.streamingState.readSession(input.streamingSessionId);
-        if (record?.state !== "released") {
-          throw new Error("MCP transport process cleanup is not durably released.");
-        }
-        closeComplete = true;
+        await idleWait;
+        // The active request may be rejected by cancellation, but its current
+        // coherent delivery must settle before we move into owned cleanup.
+        if (activeRequest) await Promise.allSettled([activeRequest]);
+        await input.run.streamingRuntime.cleanupOwnedSession({ sessionId: input.sessionId, timeoutMs: MCP_CLEANUP_TIMEOUT_MS, gracefulShutdownMs: 250 });
+        if (input.run.streamingState.readSession(input.sessionId)?.state !== "released") throw new Error("MCP transport process cleanup is not durably released.");
+        closed = true;
       })();
       closePromise = attempt;
-      try {
-        await attempt;
-      } finally {
-        if (closePromise === attempt) closePromise = undefined;
-      }
+      try { await attempt; } finally { if (closePromise === attempt) closePromise = undefined; }
     },
   });
-  return transport;
 }
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+async function performWithOutput<T>(io: StreamingRequestChannel, perform: (writer: McpTransportWriter) => Promise<T>, request: McpTransportOpenRequest, signal: AbortSignal): Promise<T> {
+  // Already-buffered notifications belong to this newly authorized request.
+  // Process them before writing an external call; do not mint an idle grant.
+  const noWait = new AbortController(); noWait.abort();
+  while (await io.waitForOutput(noWait.signal)) {
+    if (signal.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP request closed before its write.", "not_sent");
+    await io.deliverOutput(async (stream, bytes) => request.onOutput(stream, new Uint8Array(bytes)));
+  }
+  const finished = new AbortController();
+  const operation = perform({ write: (bytes, timeoutMs) => io.write(bytes, timeoutMs) });
+  void operation.finally(() => finished.abort()).catch(() => undefined);
+  for (;;) {
+    if (signal.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP transport closed during its request; no replay is permitted.", "outcome_unknown");
+    const outcome = await Promise.race([
+      operation.then((value) => ({ kind: "result" as const, value })),
+      io.waitForOutput(AbortSignal.any([finished.signal, signal])).then((available) => ({ kind: "output" as const, available })),
+    ]);
+    if (outcome.kind === "result") return outcome.value;
+    if (!outcome.available) {
+      if (finished.signal.aborted) return await operation;
+      throw new McpProtocolError("mcp_transport_unavailable", "MCP output became unavailable after the request; outcome is unknown.", "outcome_unknown");
+    }
+    await io.deliverOutput(async (stream, bytes) => request.onOutput(stream, new Uint8Array(bytes)));
+  }
 }

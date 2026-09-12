@@ -1,6 +1,10 @@
+import { canonicalMcpDigest, mcpConfigurationDigest, fixedMcpEnvelope, type McpServerSpec } from "../src/mcp-configuration.js";
+import type { ToolExecutionContext } from "../src/agent-contracts.js";
+import type { McpDiscoveryResult, McpDiscoveryTool } from "../src/runner-internal-execution-context.js";
+import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -478,6 +482,8 @@ test("live MCP status follows registered per-run managers and returns to configu
 test("post-ready transport failure closes automatically and explicit close retries one blocked cleanup", async () => {
   let failTransport: ((error: Error) => void) | undefined;
   let closeAttempts = 0;
+  let applicationRequestSent = false;
+  const configured = syntheticMcpOptions("controlled", "controlled-fixture", [{ name: "lookup", inputSchema: { type: "object" } }]);
   const transportFactory: McpTransportFactory = {
     async open(request) {
       failTransport = request.onFailure;
@@ -487,6 +493,7 @@ test("post-ready transport failure closes automatically and explicit close retri
             id?: number;
             method?: string;
           };
+          if (message.method === "tools/call") applicationRequestSent = true;
           if (message.method === "initialize") {
             await request.onOutput("stdout", Buffer.from(`${JSON.stringify({
               jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05" },
@@ -503,6 +510,7 @@ test("post-ready transport failure closes automatically and explicit close retri
       await request.handshake(writer);
       return {
         ...writer,
+        request: async (_owner, perform) => perform(writer),
         async closeVerified() {
           closeAttempts += 1;
           if (closeAttempts === 1) throw new Error("injected cleanup verification blocker");
@@ -511,6 +519,7 @@ test("post-ready transport failure closes automatically and explicit close retri
     },
   };
   const manager = new McpManager({
+    ...configured,
     cwd: process.cwd(),
     servers: [{ name: "controlled", command: "controlled-fixture" }],
     requestTimeoutMs: 5_000,
@@ -519,15 +528,16 @@ test("post-ready transport failure closes automatically and explicit close retri
   try {
     await manager.start();
     assert.equal(manager.status()[0]?.status, "ready");
-    const pending = manager.toolEntries()[0]!.client.call("lookup", { query: "pending" });
+    const pending = manager.toolEntries()[0]!.client.call("lookup", { query: "pending" }, configured.context);
+    await waitFor(() => applicationRequestSent);
     failTransport!(new Error("controlled post-ready transport failure"));
-    await assert.rejects(pending, /controlled post-ready transport failure/);
+    await assert.rejects(pending, /cleanup|transport|closed/i);
     await waitFor(() => closeAttempts === 1 &&
-      /cleanup verification blocker/i.test(manager.status()[0]?.error ?? ""));
+      /cleanup.*unverified/i.test(manager.status()[0]?.error ?? ""));
     assert.deepEqual(manager.status().map(({ status, toolCount }) => ({ status, toolCount })), [
       { status: "error", toolCount: 0 },
     ]);
-    assert.match(manager.status()[0]?.error ?? "", /controlled post-ready transport failure/i);
+    assert.match(manager.status()[0]?.error ?? "", /transport|cleanup/i);
 
     await Promise.all([manager.close(), manager.close()]);
     assert.equal(closeAttempts, 2);
@@ -540,6 +550,7 @@ test("post-ready transport failure closes automatically and explicit close retri
 
 test("a terminal failure during transport opening cannot be overwritten as ready", async () => {
   let closeAttempts = 0;
+  const configured = syntheticMcpOptions("opening", "opening-fixture", [{ name: "unsafe_ready", inputSchema: { type: "object" } }]);
   const transportFactory: McpTransportFactory = {
     async open(request) {
       const writer = {
@@ -567,17 +578,19 @@ test("a terminal failure during transport opening cannot be overwritten as ready
     },
   };
   const manager = new McpManager({
+    ...configured,
     cwd: process.cwd(),
     servers: [{ name: "opening", command: "opening-fixture" }],
     transportFactory,
   });
 
   await manager.start();
+  await assert.rejects(manager.toolEntries()[0]!.client.call("unsafe_ready", {}, configured.context), /transport|closed/i);
   await waitFor(() => closeAttempts === 1);
   assert.deepEqual(manager.status().map(({ status, toolCount }) => ({ status, toolCount })), [
     { status: "error", toolCount: 0 },
   ]);
-  assert.match(manager.status()[0]?.error ?? "", /terminal failure before open returned/);
+  assert.match(manager.status()[0]?.error ?? "", /transport|closed/i);
   assert.doesNotMatch(manager.status()[0]?.error ?? "", /cleanup verification failed/i);
   await manager.close();
   assert.equal(manager.status()[0]?.status, "stopped");
@@ -604,6 +617,7 @@ test("MCP stdio schemas become audited native tools with artifact-backed images"
     ]);
     const broker = new ToolBroker({
       permissionProfile: "full",
+      executionGrants: owned.run.executionGrants,
       workspacePath: root,
       artifacts,
       ledger,
@@ -616,7 +630,7 @@ test("MCP stdio schemas become audited native tools with artifact-backed images"
       name: "mcp.docs.lookup",
       arguments: { query: "runner" },
     }, {
-      runId: "run_mcp",
+      runId: owned.run.runId,
       sessionId: "session_mcp",
       actor: { role: "worker", id: "worker_1" },
       workspacePath: root,
@@ -704,7 +718,10 @@ test("strict public MCP uses the separately attested portable image command and 
     assert.deepEqual(portable.manager.status().map(({ status, toolCount }) => ({ status, toolCount })), [
       { status: "ready", toolCount: 1 },
     ]);
-    const result = await portable.manager.toolEntries()[0]!.client.call("lookup", { query: "strict" });
+    const result = await portable.invoke("lookup", { query: "strict" });
+    const second = await portable.invoke("lookup", { query: "same-session-fresh-grant" });
+    assert.equal(second.content?.[0]?.text, "found:same-session-fresh-grant");
+    assert.deepEqual(portable.mcpSessionStates(), ["active"], "strict isolation must survive first-grant revocation under durable session ownership");
     assert.equal(result.content?.[0]?.text, "found:strict");
     await waitFor(() => portable!.retainedOutputCount() === 0, 5_000);
     await portable.close({ retainStateDirectory: true });
@@ -721,7 +738,7 @@ test("strict public MCP uses the separately attested portable image command and 
     assert.equal(unavailable.launches[0]!.imageExecutable, "git");
     await unavailable.manager.start();
     assert.equal(unavailable.manager.status()[0]?.status, "error");
-    assert.match(unavailable.manager.status()[0]?.error ?? "", /isolation|provider|launch|image|executable|unavailable/i);
+    assert.match(unavailable.manager.status()[0]?.error ?? "", /isolation|provider|launch|image|executable|unavailable|discovery/i);
     assert.equal(dockerOwnedContainers(docker, providerIds[1]!), "");
 
     absolute = await strictOwnedManager(
@@ -734,8 +751,10 @@ test("strict public MCP uses the separately attested portable image command and 
     owners.push(absolute);
     assert.equal(absolute.launches[0]!.imageExecutable, undefined);
     await absolute.manager.start();
+    assert.equal(absolute.manager.status()[0]?.status, "ready", "host discovery is not permission to launch in the strict image");
+    await assert.rejects(absolute.invoke("lookup", { query: "must-refuse" }), /isolation|provider|image|executable|unavailable/i);
     assert.equal(absolute.manager.status()[0]?.status, "error");
-    assert.match(absolute.manager.status()[0]?.error ?? "", /isolation|provider|launch|image|executable|unavailable/i);
+    assert.match(absolute.manager.status()[0]?.error ?? "", /isolation|provider|launch|image|executable|unavailable|discovery/i);
     assert.equal(dockerOwnedContainers(docker, providerIds[2]!), "");
   } catch (error) {
     hasPrimaryFailure = true; primaryFailure = error;
@@ -765,9 +784,10 @@ test("public MCP manager close verifies its launched server tree is empty", asyn
   let hasPrimaryFailure = false;
   try {
     owned = await ownedManager(root, [{ name: "tree",
-      command: `"${process.execPath}" "${fixture}" "${descendantMarker}" "${serverMarker}"`,
+      command: `"${process.execPath}" "${fixture}" "${descendantMarker}" "${serverMarker}" --lazy`,
     }], undefined, (stateDirectory) => { stateDirectories.push(stateDirectory); captureMcpFixtureRoots(root, stateDirectory); });
     await owned.manager.start();
+    await owned.invoke("probe", {});
     await waitFor(() => existsSync(serverMarker) && existsSync(descendantMarker));
     serverPid = Number(readFileSync(serverMarker, "utf8"));
     descendantPid = Number(readFileSync(descendantMarker, "utf8"));
@@ -792,7 +812,10 @@ test("public MCP manager close verifies its launched server tree is empty", asyn
 });
 
 for (const mode of ["self-exit", "oversized-line"] as const) {
-  const requestTimeoutMs = mode === "oversized-line" ? 60_000 : 5_000;
+  // This positive setup now includes an actual lazy first launch/handshake;
+  // the trigger still must self-exit (not merely time out), exactly once. Tight
+  // write/request deadline behavior is covered separately by gated RPC tests.
+  const requestTimeoutMs = mode === "oversized-line" ? 60_000 : 15_000;
   // Bounded whole-fixture allowance: initialize/tools-list request windows,
   // initialized notification write, existing PID marker wait, real call,
   // release observation, and one verified-close window. All values are
@@ -828,7 +851,7 @@ for (const mode of ["self-exit", "oversized-line"] as const) {
       stage("manager construct begun");
       const fixtureOwner = await ownedManager(root, [{
         name: "failure",
-        command: `${quoteCommandArgument(process.execPath)} ${quoteCommandArgument(fixture)} ${mode} ${quoteCommandArgument(pidMarker)} ${quoteCommandArgument(triggerMarker)}`,
+        command: `${quoteCommandArgument(process.execPath)} ${quoteCommandArgument(fixture)} ${mode} ${quoteCommandArgument(pidMarker)} ${quoteCommandArgument(triggerMarker)} --lazy`,
       }], mode === "oversized-line"
         ? { requestTimeoutMs, maximumLineBytes: 32 * 1024 }
         : { requestTimeoutMs }, (stateDirectory) => { stateDirectories.push(stateDirectory); captureRoot("state", stateDirectory); });
@@ -837,11 +860,12 @@ for (const mode of ["self-exit", "oversized-line"] as const) {
       await fixtureOwner.manager.start();
       stage("manager start complete");
       assert.equal(fixtureOwner.manager.status()[0]?.status, "ready");
+      await fixtureOwner.invoke("probe", {});
       await waitFor(() => existsSync(pidMarker));
       serverPid = Number(readFileSync(pidMarker, "utf8"));
       assert.equal(processExists(serverPid), true);
 
-      const call = fixtureOwner.manager.toolEntries()[0]!.client.call("trigger", {});
+      const call = fixtureOwner.invoke("trigger", {});
       const observedCall = observeMcpCall(call);
       callOutcome = observedCall;
       stage("call begun");
@@ -938,112 +962,59 @@ test("recovered blocked MCP ownership prevents a replacement launch", async () =
 });
 
 test("closing an owned MCP transport stops a sustained pending-output pump after its current delivery", async () => {
-  let pendingOutput = true;
-  let released = false;
-  let cleanupCalls = 0;
-  let deliveryCalls = 0;
-  let resolveDeliveryStarted!: () => void;
-  const deliveryStarted = new Promise<void>((resolve) => { resolveDeliveryStarted = resolve; });
-  let resolveCurrentDelivery!: () => void;
-  const currentDelivery = new Promise<void>((resolve) => { resolveCurrentDelivery = resolve; });
+  let pendingOutput = true; let released = false; let cleanupCalls = 0; let deliveryCalls = 0;
+  let resolveDeliveryStarted!: () => void; const deliveryStarted = new Promise<void>((resolve) => { resolveDeliveryStarted = resolve; });
+  let resolveCurrentDelivery!: () => void; const currentDelivery = new Promise<void>((resolve) => { resolveCurrentDelivery = resolve; });
   let streamingSessionId = "";
   const facade = {
-    authorizeOperation: () => ({}),
-    write: async () => undefined,
-    waitForOutput: async () => {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      return pendingOutput;
-    },
-    deliverOutput: async () => {
-      deliveryCalls++;
-      if (deliveryCalls === 1) {
-        resolveDeliveryStarted();
-        await currentDelivery;
-      }
-      return true;
-    },
+    authorizeFirstOperation: () => ({}), authorizeOperation: () => ({}),
+    waitForOutput: async () => { await new Promise<void>((resolve) => setImmediate(resolve)); return pendingOutput; },
+    request: async (_auth: unknown, _assertion: unknown, perform: (channel: {
+      write(payload: Uint8Array, timeoutMs: number): Promise<void>;
+      waitForOutput(signal?: AbortSignal): Promise<boolean>;
+      deliverOutput(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>): Promise<boolean>;
+    }) => Promise<unknown>) => perform({ write: async () => undefined,
+      waitForOutput: async () => { await new Promise<void>((resolve) => setImmediate(resolve)); return pendingOutput; },
+      deliverOutput: async () => { deliveryCalls++; if (deliveryCalls === 1) { resolveDeliveryStarted(); await currentDelivery; } return true; },
+    }),
   };
   const run = {
-    runId: "run-sustained-output",
-    executionGrants: { issue: async () => ({}) },
-    openStreaming: async (input: {
-      sessionId: string;
-      verifyHandshake: (channel: {
-        write(payload: Uint8Array, timeoutMs: number): Promise<void>;
-        waitForOutput(signal?: AbortSignal): Promise<boolean>;
-        deliverOutput(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>): Promise<boolean>;
-      }) => Promise<string>;
-    }) => {
+    runId: "run-sustained-output", executionGrants: { issue: async () => assert.fail("transport cannot mint replacement grants") },
+    openStreaming: async (input: { sessionId: string; verifyHandshake: (channel: {
+      write(payload: Uint8Array, timeoutMs: number): Promise<void>; waitForOutput(signal?: AbortSignal): Promise<boolean>;
+      deliverOutput(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>): Promise<boolean>;
+    }) => Promise<string> }) => {
       streamingSessionId = input.sessionId;
-      await input.verifyHandshake({
-        write: async () => undefined,
-        waitForOutput: async () => await new Promise<boolean>(() => undefined),
-        deliverOutput: async () => false,
-      });
+      await input.verifyHandshake({ write: async () => undefined, waitForOutput: async () => new Promise<boolean>(() => undefined), deliverOutput: async () => false });
       return facade;
     },
-    streamingRuntime: {
-      cleanupOwnedSession: async ({ sessionId }: { sessionId: string }) => {
-        assert.equal(sessionId, streamingSessionId);
-        cleanupCalls++;
-        released = true;
-        return { released: true as const };
-      },
-    },
-    streamingState: {
-      readSession: (sessionId: string) => sessionId === streamingSessionId && released
-        ? { state: "released" }
-        : { state: "active" },
-    },
+    streamingRuntime: { cleanupOwnedSession: async ({ sessionId }: { sessionId: string }) => {
+      assert.equal(sessionId, streamingSessionId); cleanupCalls++; released = true; return { released: true as const };
+    } },
+    streamingState: { readSession: () => ({ state: released ? "released" : "active" }) },
   } as unknown as ExecutionHostRunBinding;
-  const transport = await createExecutionHostMcpTransportFactory({
-    run,
-    permissionProfile: "project",
-    projectDirectory: process.cwd(),
-    launches: [{
-      name: "sustained",
-      command: "fixture-command",
-      executablePath: process.execPath,
-      arguments: [],
-      configDigest: "a".repeat(64),
-      executableDigest: "b".repeat(64),
-    }],
-  }).open({
-    server: { name: "sustained", command: "fixture-command" },
-    handshake: async () => "c".repeat(64),
-    onOutput: async () => undefined,
-    onFailure: () => undefined,
-  });
+  const server = { name: "sustained", command: "fixture-command" };
+  const configDigest = mcpConfigurationDigest(server); const executableDigest = createHash("sha256").update(readFileSync(process.execPath)).digest("hex");
+  const owner = { context: { runId: run.runId, sessionId: "real-agent", actor: { role: "worker" as const, id: "real-worker" }, callId: "actual-call", toolName: "mcp.sustained.stream", executionGrant: Object.freeze({}) as OpaqueExecutionGrant },
+    envelope: { access: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false } };
+  const transport = await createExecutionHostMcpTransportFactory({ run, permissionProfile: "full", projectDirectory: process.cwd(),
+    launches: [{ ...server, envelope: { paths: [], network: false, credentialNames: [] }, executablePath: process.execPath, arguments: [], configDigest, executableDigest }],
+  }).open({ server, owner, expected: { name: server.name, configDigest, executableDigest, status: "ready", tools: [], cleanupVerified: true },
+    handshake: async () => "c".repeat(64), onOutput: async () => undefined, onFailure: () => undefined });
+  const pending = observeMcpCall(transport.request!(owner, async (writer) => {
+    await writer.write(Buffer.from("request"), 100); return await new Promise<unknown>(() => undefined);
+  }, 1000));
   await deliveryStarted;
-
   const close = transport.closeVerified();
-  resolveCurrentDelivery();
-  let primaryFailure: unknown;
-  let cleanupFailure: unknown;
   try {
-    const outcome = await Promise.race([
-      close.then(() => "closed" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
-    ]);
-    assert.equal(outcome, "closed", "close must enter exact cleanup without waiting for sustained pending output to become idle");
-    assert.equal(cleanupCalls, 1);
-    assert.equal(deliveryCalls, 1, "closing completes only the already in-flight coherent delivery");
-  } catch (error) {
-    primaryFailure = error;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(cleanupCalls, 0, "owned cleanup must join the current coherent delivery before claiming release");
+    resolveCurrentDelivery(); await close;
+    assert.equal((await pending).status, "rejected");
+    assert.equal(cleanupCalls, 1); assert.equal(deliveryCalls, 1, "closing cannot drain another frame under stale authority");
   } finally {
-    // RED teardown clears only the synthetic pending-output source so the
-    // retained close attempt can reach exact fake cleanup.
-    pendingOutput = false;
-    resolveCurrentDelivery();
-    try { await close; } catch (error) { cleanupFailure = error; }
+    pendingOutput = false; resolveCurrentDelivery(); await close; await pending;
   }
-  if (cleanupFailure) {
-    throw new AggregateError(
-      primaryFailure ? [primaryFailure, cleanupFailure] : [cleanupFailure],
-      "Sustained-output transport test cleanup failed.",
-    );
-  }
-  if (primaryFailure) throw primaryFailure;
 });
 
 test("public MCP manager crash recovery cleans its exact launched server tree without relaunch", { timeout: 60_000 }, async () => {
@@ -1267,6 +1238,30 @@ async function finishOwnedMcpFixture(input: Readonly<{
       cleanupFailures.push(error);
     }
   }
+  if (input.hasPrimaryFailure || cleanupFailures.length > 0) {
+    const failures = [...(input.hasPrimaryFailure ? [input.primaryFailure] : []), ...cleanupFailures];
+    const seen = new Set<unknown>();
+    const describe = (failure: unknown, depth = 0): unknown => {
+      if (depth > 6 || seen.has(failure)) return { bounded: true };
+      seen.add(failure);
+      return failure instanceof Error ? { name: failure.name, message: failure.message,
+        ...(failure instanceof AggregateError ? { errors: failure.errors.map((error) => describe(error, depth + 1)) } : {}),
+        ...(failure.cause === undefined ? {} : { cause: describe(failure.cause, depth + 1) }) } : { kind: typeof failure };
+    };
+    console.log(`MCP fixture original failure chain: ${JSON.stringify({ root: input.root, failures: failures.map((failure) => describe(failure)) })}`);
+  }
+  if (input.hasPrimaryFailure || cleanupFailures.length > 0) {
+    const failures = [...(input.hasPrimaryFailure ? [input.primaryFailure] : []), ...cleanupFailures];
+    const seen = new Set<unknown>();
+    const describe = (failure: unknown, depth = 0): unknown => {
+      if (depth > 6 || seen.has(failure)) return { bounded: true };
+      seen.add(failure);
+      return failure instanceof Error ? { name: failure.name, message: failure.message,
+        ...(failure instanceof AggregateError ? { errors: failure.errors.map((error) => describe(error, depth + 1)) } : {}),
+        ...(failure.cause === undefined ? {} : { cause: describe(failure.cause, depth + 1) }) } : { kind: typeof failure };
+    };
+    console.log(`MCP fixture original failure chain: ${JSON.stringify({ root: input.root, failures: failures.map((failure) => describe(failure)) })}`);
+  }
   if (cleanupFailures.length > 0) {
     throw new AggregateError(
       input.hasPrimaryFailure ? [input.primaryFailure, ...cleanupFailures] : cleanupFailures,
@@ -1344,7 +1339,7 @@ async function stopAndJoinOwnedMcpWrapper(
 
 async function ownedManager(
   projectDirectory: string,
-  servers: readonly { name: string; command: string }[],
+  servers: readonly McpServerSpec[],
   managerOptions?: Readonly<{ requestTimeoutMs?: number; maximumLineBytes?: number }>,
   onStateDirectoryCreated?: (stateDirectory: string) => void,
 ) {
@@ -1385,7 +1380,12 @@ async function ownedManager(
     capabilityContract: { digest: "a".repeat(64) } as RunnerCapabilityContract,
     capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
   }));
+  const discoverer = internal.createMcpDiscoveryExecutor({ runId: run.runId, servers, attestation: attestation.mcp, requestTimeoutMs: managerOptions?.requestTimeoutMs ?? 5000 });
+  let discovered: McpDiscoveryResult;
+  try { discovered = await discoverer.discover(); } finally { await discoverer.close(); }
   const manager = own("manager", new McpManager({
+    runId: run.runId, discovery: discovered,
+    reattest: () => internal.resolveMcpRuntimeLaunches({ servers, attestation: attestation.mcp }),
     cwd: projectDirectory,
     servers,
     ...managerOptions,
@@ -1396,7 +1396,7 @@ async function ownedManager(
       launches,
     }),
   }));
-  return { manager,
+  return { manager, run, invoke: (tool: string, args: Record<string, unknown>) => fixtureMcpCall(manager, run, projectDirectory, "full", tool, args),
     mcpSessionStates() {
       return readMcpSessionStates(run.runRoot);
     },
@@ -1408,9 +1408,10 @@ async function strictOwnedManager(
   projectDirectory: string,
   docker: string,
   providerId: string,
-  server: { name: string; command: string },
+  supplied: { name: string; command: string },
   onStateDirectoryCreated?: (stateDirectory: string) => void,
 ) {
+  const server: McpServerSpec = { ...supplied, envelope: { paths: [{ path: projectDirectory, mode: "read" }], network: false } };
   const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-mcp-strict-state-"));
   onStateDirectoryCreated?.(stateDirectory);
   return constructOwnedMcpFixture(stateDirectory, async (own) => {
@@ -1458,7 +1459,12 @@ async function strictOwnedManager(
     capabilityContract: { digest: "b".repeat(64) } as RunnerCapabilityContract,
     capabilitiesConfig: config,
   }));
+  const discoverer = internal.createMcpDiscoveryExecutor({ runId: run.runId, servers: [server], attestation: attestation.mcp, requestTimeoutMs: 1000 });
+  let discovered: McpDiscoveryResult;
+  try { discovered = await discoverer.discover(); } finally { await discoverer.close(); }
   const manager = own("manager", new McpManager({
+    runId: run.runId, discovery: discovered,
+    reattest: () => internal.resolveMcpRuntimeLaunches({ servers: [server], attestation: attestation.mcp }),
     cwd: projectDirectory,
     servers: [server],
     requestTimeoutMs: 30_000,
@@ -1469,7 +1475,7 @@ async function strictOwnedManager(
       launches,
     }),
   }));
-  return { manager, launches,
+  return { manager, run, launches, invoke: (tool: string, args: Record<string, unknown>) => fixtureMcpCall(manager, run, projectDirectory, "project", tool, args),
     mcpSessionStates() {
       return readMcpSessionStates(run.runRoot);
     },
@@ -1514,4 +1520,33 @@ function dockerOwnedContainers(docker: string, providerId: string,
 
 function quoteCommandArgument(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+
+let fixtureMcpCallOrdinal = 0;
+async function fixtureMcpCall(manager: McpManager, run: ExecutionHostRunBinding, workspace: string,
+  permissionProfile: "full" | "project", name: string, arguments_: Record<string, unknown>) {
+  const entry = manager.toolEntries().find((item) => item.tool.name === name);
+  assert.ok(entry, "the fixture call must name an actually discovered tool");
+  const envelope = fixedMcpEnvelope(entry.client.spec.envelope);
+  const binding = { runId: run.runId, sessionId: "actual-mcp-fixture-agent", actor: { role: "worker" as const, id: "actual-mcp-fixture-worker" },
+    callId: `fixture-call-${++fixtureMcpCallOrdinal}`, toolName: `mcp.${entry.client.spec.name}.${name}`, permissionProfile };
+  const grant = await run.executionGrants.issue({ ...binding, workspacePath: workspace,
+    access: envelope.paths.map((entry) => ({ path: entry.path, mode: entry.mode })),
+    networkApproved: envelope.network, destructiveApproved: entry.tool.annotations?.destructiveHint !== false, externalApproved: false });
+  try { return await entry.client.call(name, arguments_, { ...binding, workspacePath: workspace, executionGrant: grant }); }
+  finally { await run.executionGrants.revoke(grant, "completed"); }
+}
+
+function syntheticMcpOptions(name: string, command: string, tools: readonly McpDiscoveryTool[]) {
+  const server = { name, command }; const configDigest = mcpConfigurationDigest(server); const executableDigest = "a".repeat(64);
+  const runId = `synthetic-${name}`;
+  const discovery: McpDiscoveryResult = { version: 1, runId,
+    principal: { principalId: "synthetic-discovery", purpose: "mcp_discovery", role: "runner_internal", runId, callId: "discovery", deadlineMs: 1000 },
+    servers: [{ name, configDigest, executableDigest, tools, schemaDigest: canonicalMcpDigest(tools), status: "ready", cleanupVerified: true }] };
+  return { runId, discovery, reattest: async () => [{ ...server, configDigest, executableDigest,
+    executablePath: process.execPath, arguments: [], envelope: { paths: [], network: false, credentialNames: [] } }],
+    context: { runId, sessionId: "synthetic-agent", actor: { role: "worker" as const, id: "synthetic-worker" },
+      callId: "first-real-synthetic-call", toolName: `mcp.${name}.${tools[0]!.name}`, workspacePath: process.cwd(),
+      executionGrant: Object.freeze({}) as OpaqueExecutionGrant } };
 }

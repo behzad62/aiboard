@@ -1,3 +1,6 @@
+import { McpManager, createMcpTools } from "../src/mcp-tools.js";
+import { ToolBroker } from "../src/tool-broker.js";
+import type { ExecutionHostRunBinding } from "../src/execution-host.js";
 import assert from "node:assert/strict";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import { createHash } from "node:crypto";
@@ -66,15 +69,32 @@ test("production composition settles its owned MCP and run binding while retaini
   let failNextMcpSettlement = false;
   let modelConstructionPrefix: string[] | undefined;
   const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
-  const executionHost = createExecutionHost({
+  const baseHost = createExecutionHost({
     projectRoot: fixture.project,
     stateDirectory: fixture.state,
     artifacts,
   });
+  const bindings = new Map<string, ExecutionHostRunBinding>();
+  const managers = new Map<string, McpManager>();
+  const executionHost = { ...baseHost, bindRun: async (input: Parameters<typeof baseHost.bindRun>[0]) => {
+    const binding = await baseHost.bindRun(input); bindings.set(input.runId, binding); return binding;
+  } };
+  const exerciseLiveMcp = async (id: string) => {
+    const binding = bindings.get(id)!;
+    assert.deepEqual(binding.streamingState.listSessionIds(), [], "factory discovery must not eagerly create an adopted live server");
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: fixture.project, artifacts, executionGrants: binding.executionGrants });
+    for (const tool of createMcpTools(managers.get(id)!, artifacts)) broker.register(tool);
+    const output = await broker.invoke({ type: "tool_call", callId: `first:${id}`, name: "mcp.docs.lookup", arguments: { query: "owned" } },
+      { runId: id, sessionId: `actual-agent:${id}`, actor: { role: "worker", id: "actual-worker" }, workspacePath: fixture.project });
+    assert.equal(output.isError, false, JSON.stringify(output));
+    assert.equal(binding.streamingState.listSessionIds().length, 1);
+    assert.deepEqual(binding.executionGrants.activeSnapshots(), []);
+  };
   const internalExecutionContext = createRunnerInternalExecutionContext({
     projectDirectory: fixture.project,
     stateDirectory: fixture.state,
   });
+  let passed = false;
   try {
     const baseline = await captureGitBaseline({
       projectPath: fixture.project,
@@ -85,7 +105,10 @@ test("production composition settles its owned MCP and run binding while retaini
       name: "docs",
       command: `${quoteShell(process.execPath)} ${quoteShell(fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url)))}`,
     }];
-    const mcpStatus = createLiveMcpStatusRegistry(servers);
+    const registry = createLiveMcpStatusRegistry(servers);
+    const mcpStatus = { ...registry, register: (id: string, source: Parameters<typeof registry.register>[1]) => {
+      managers.set(id, source as McpManager); return registry.register(id, source);
+    } };
     const config: RunnerCapabilitiesConfig = { extensions: [], languageServers: [] };
     const attestation = await internalExecutionContext.attestConfiguredCapabilities({
       mcpServers: servers,
@@ -175,8 +198,10 @@ test("production composition settles its owned MCP and run binding while retaini
     assert.equal(mcpStatus.status()[0]?.status, "ready");
     assert.equal(mcpStatus.status()[0]?.toolCount, 1);
 
+    await exerciseLiveMcp(runId);
     const otherRunId = "execution_host_mcp_order_other";
     otherHandle = await factory.create(await factory.prepareSpec(buildSpec(otherRunId)));
+    await exerciseLiveMcp(otherRunId);
     await waitForProcess(() =>
       retainedStreamingOutputCount(fixture.state, runId) === 0 &&
       retainedStreamingOutputCount(fixture.state, otherRunId) === 0,
@@ -208,6 +233,7 @@ test("production composition settles its owned MCP and run binding while retaini
     assert.deepEqual(executionHost.activeRunIds(), []);
     await otherHandle.close();
     otherHandle = undefined;
+    passed = true;
   } finally {
     if (handle) {
       await Promise.resolve(handle.close()).catch(() => undefined);
@@ -220,7 +246,7 @@ test("production composition settles its owned MCP and run binding while retaini
     await factory?.close();
     await internalExecutionContext.close();
     await executionHost.close();
-    fixture.cleanup();
+    if (passed) fixture.cleanup();
   }
 });
 

@@ -1,3 +1,4 @@
+import { configureMcpServers } from "./mcp-configuration.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -409,12 +410,18 @@ function isHelpRequested(args: string[]): boolean {
 function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
   const mcpServers: McpServerSpec[] = [];
+  const mcpEnvelopes: string[] = [];
   const allowOrigins: string[] = [];
   const allowOriginSet = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     if (!flag?.startsWith("--")) {
       throw new Error(`invalid_arguments: Unknown token ${flag ?? "argument"}.`);
+    }
+    if (flag === "--mcp-envelope") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error("invalid_arguments: Expected name=JSON after --mcp-envelope.");
+      mcpEnvelopes.push(value); index += 1; continue;
     }
     if (flag === "--mcp") {
       const value = args[index + 1];
@@ -488,7 +495,7 @@ function parseArguments(args: string[]): CliOptions {
     stateDirectory,
     port,
     token,
-    mcpServers,
+    mcpServers: [...configureMcpServers(mcpServers, mcpEnvelopes)],
     allowOrigins,
     ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
   };
@@ -527,6 +534,7 @@ function printHelp(): void {
     "  --token <string>        Authentication token. Auto-generated if omitted.",
     "  --capabilities-config <path>  Absolute trusted JSON configuration outside the project.",
     "  --mcp <name=command>    Register MCP server; can be repeated.",
+    "  --mcp-envelope <name=JSON> Fixed paths/network/credential requirements; defaults to no extra access.",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
     "                         Defaults to loopback origins + aiboard.me.",
     "  --help, -h              Show this help text.",

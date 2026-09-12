@@ -1,3 +1,4 @@
+import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
@@ -268,7 +269,7 @@ function spawnSubagentTool(
             clock,
           })
         : broker;
-      const result = await runAgentLoop({
+      const result = await withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => runAgentLoop({
         model,
         registry: toolRuntime,
         context: {
@@ -284,7 +285,7 @@ function spawnSubagentTool(
         onCheckpoint: async (checkpoint) => {
           await options.sessions.checkpoint(sessionId, checkpoint, clock());
         },
-      });
+      }));
       if (result.status !== "subagent_returned") {
         const reason = result.status === "suspended"
           ? `${result.reason}${result.error ? `: ${result.error}` : ""}`

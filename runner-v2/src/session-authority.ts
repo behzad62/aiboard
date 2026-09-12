@@ -241,6 +241,49 @@ export interface SessionAuthority {
   }>;
 }
 
+
+const LEASE_AUTHORITY_CONTEXTS = new WeakMap<SessionAuthority, {
+  read(sessionId: string): Readonly<StreamingSessionRecord>;
+  claims(sessionId: string): ConsumedExecutionGrantClaims;
+}>();
+const SESSION_LEASE_OWNERSHIP: unique symbol = Symbol("runner-session-lease-ownership");
+export interface SessionLeaseOwnership { readonly [SESSION_LEASE_OWNERSHIP]: true }
+const SESSION_LEASE_PROOFS = new WeakMap<object, {
+  used: boolean; record: Readonly<StreamingSessionRecord>; authority: SessionAuthority;
+}>();
+
+/** Only an actual authority that committed a current adopted session can move
+ * isolation cleanup beyond the original call. This is not permission to write
+ * or deliver: every later operation still needs a fresh actual call grant.
+ */
+export function authorizeSessionLeaseOwnership(authority: SessionAuthority, sessionId: string): SessionLeaseOwnership {
+  const context = LEASE_AUTHORITY_CONTEXTS.get(authority);
+  if (!context) throw new SessionAuthorityError("authorization_forged", "Session lease proof authority is invalid.");
+  const record = context.read(sessionId);
+  assertCurrentConsumedExecutionGrantClaims(context.claims(sessionId));
+  const token = Object.freeze({ [SESSION_LEASE_OWNERSHIP]: true as const });
+  SESSION_LEASE_PROOFS.set(token, { used: false, record, authority });
+  return token;
+}
+export function consumeSessionLeaseOwnership(token: SessionLeaseOwnership, expected: Readonly<{
+  runId: string; leaseId: string; providerId: string; invocationId: string; providerIdentity: string; grantId: string;
+  access: readonly StreamingSessionAccess[];
+}>): string {
+  const proof = SESSION_LEASE_PROOFS.get(token);
+  if (!proof || proof.used) throw new SessionAuthorityError("authorization_forged", "Session lease proof is invalid or already used.");
+  const context = LEASE_AUTHORITY_CONTEXTS.get(proof.authority)!;
+  const record = context.read(proof.record.sessionId);
+  const claims = context.claims(record.sessionId);
+  assertCurrentConsumedExecutionGrantClaims(claims);
+  if (record.ownerId !== proof.record.ownerId || record.fencingToken !== proof.record.fencingToken ||
+      record.runId !== expected.runId || record.lease.leaseId !== expected.leaseId || record.lease.providerId !== expected.providerId ||
+      record.lease.invocationId !== expected.invocationId || record.lease.providerIdentity !== expected.providerIdentity ||
+      claims.grantId !== expected.grantId || JSON.stringify(record.lease.access) !== JSON.stringify(expected.access))
+    throw new SessionAuthorityError("binding_mismatch", "Session lease proof does not match the exact adopted lease owner.");
+  proof.used = true;
+  return record.sessionId;
+}
+
 export function createSessionAuthority(options: SessionAuthorityOptions): SessionAuthority {
   const writer = getStreamingSessionStoreWriter(options.sessions);
   const kernelWriter = getStreamingSessionKernelWriter(options.sessions);
@@ -280,7 +323,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
     reservedLaunchIds.add(launchId);
     return authorization;
   };
-  return Object.freeze({
+  const authority: SessionAuthority = Object.freeze({
     stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization {
       return stageLaunchInternal(input);
     },
@@ -692,6 +735,21 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       return Object.freeze({ record: released });
     },
   });
+  LEASE_AUTHORITY_CONTEXTS.set(authority, {
+    read: (sessionId) => {
+      const record = options.sessions.store.readBySession(sessionId);
+      if (!record || record.state !== "active" || record.cleanupOwner !== "session_authority")
+        throw new SessionAuthorityError("session_unavailable", "No active adopted session owns this isolation lease.");
+      assertCurrentSessionLease(record, clock);
+      return record;
+    },
+    claims: (sessionId) => {
+      const claims = retainedClaims.get(sessionId);
+      if (!claims) throw new SessionAuthorityError("authorization_forged", "The original live launch claims are unavailable for lease transfer.");
+      return claims;
+    },
+  });
+  return authority;
 }
 
 export function assertSessionEnvelopeSubset(

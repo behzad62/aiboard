@@ -317,7 +317,7 @@ test("Runner internal context retries a transient owned-kernel close failure", a
   }
 });
 
-test("static MCP attestation preserves commands that require the existing public shell contract", async () => {
+test("static MCP attestation refuses shell-dependent commands before any pre-run effect", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-internal-shell-command-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -333,21 +333,10 @@ test("static MCP attestation preserves commands that require the existing public
       ? `set "RUNNER_MCP_COMPAT=1" && ${direct}`
       : `RUNNER_MCP_COMPAT=1 ${direct}`;
     const servers = [{ name: "shell-compatible", command: shellCommand }];
-    const attestation = await context.attestConfiguredCapabilities({
-      mcpServers: servers,
-      capabilitiesConfig: { extensions: [], languageServers: [] },
-    });
-    assert.match(attestation.mcp[0]!.executableDigest, /^[a-f0-9]{64}$/);
-    const result = await context.createMcpDiscoveryExecutor({
-      runId: "run-shell-compatible",
-      servers,
-      attestation: attestation.mcp,
-      requestTimeoutMs: 5_000,
-      shutdownTimeoutMs: 2_000,
-      terminationTimeoutMs: 15_000,
-    }).discover();
-    assert.equal(result.servers[0]?.status, "ready");
-    assert.deepEqual(result.servers[0]?.tools.map((tool) => tool.name), ["lookup"]);
+    await assert.rejects(context.attestConfiguredCapabilities({ mcpServers: servers, capabilitiesConfig: { extensions: [], languageServers: [] } }),
+      (error: unknown) => error instanceof Error && (error as { code?: string }).code === "mcp_command_invalid");
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(methodLog), false);
   } finally {
     await context.close();
     await rm(root, { recursive: true, force: true });

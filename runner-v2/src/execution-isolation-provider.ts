@@ -1,3 +1,4 @@
+import { consumeSessionLeaseOwnership, type SessionLeaseOwnership } from "./session-authority.js";
 import { createHash } from "node:crypto";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -260,6 +261,14 @@ export function createExecutionIsolationRegistry(
   return registry;
 }
 
+const SELECTOR_SESSION_TRANSFERS = new WeakMap<ExecutionIsolationSelector, (selection: ExecutionIsolationSelection, proof: SessionLeaseOwnership) => void>();
+/** Private composition handoff; no new execution rights or provider acquisition. */
+export function transferExecutionIsolationLeaseToSession(selector: ExecutionIsolationSelector, selection: ExecutionIsolationSelection, proof: SessionLeaseOwnership): void {
+  const transfer = SELECTOR_SESSION_TRANSFERS.get(selector);
+  if (!transfer) throw new ExecutionIsolationError("isolation_lease_invalid", "Isolation selector ownership authority is invalid.");
+  transfer(selection, proof);
+}
+
 export function createExecutionIsolationSelector(
   registry: ExecutionIsolationRegistry,
   options: { readonly clock?: () => Date; readonly statePath?: string } = {},
@@ -279,6 +288,7 @@ export function createExecutionIsolationSelector(
     selection: Extract<ExecutionIsolationSelection, { lease: unknown }>;
     runId: string;
     disposeRevoker?: () => void;
+    sessionOwner?: string;
     visibleLease?: ExecutionIsolationLease;
     providerCleaned?: Readonly<{ status: "revoked" | "blocked"; blocker: string }>;
   }>();
@@ -321,7 +331,7 @@ export function createExecutionIsolationSelector(
     return operation;
   };
 
-  return Object.freeze({
+  const selector: ExecutionIsolationSelector = Object.freeze({
     async acquire(input: {
       permissionProfile: PermissionProfile;
       intent: ExecutionInvocationIntent;
@@ -487,6 +497,20 @@ export function createExecutionIsolationSelector(
       return options.statePath ? await readExecutionEnforcementState(options.statePath) : emptyEnforcementState();
     },
   });
+  SELECTOR_SESSION_TRANSFERS.set(selector, (selection, proof) => {
+    if (selection.enforcement === "unconfined_explicit_full") throw new ExecutionIsolationError("isolation_lease_invalid", "Unconfined execution has no transferable isolation lease.");
+    const owned = active.get(selection.lease.leaseId);
+    if (!owned || owned.selection !== selection || owned.providerCleaned || terminalOperations.has(selection))
+      throw new ExecutionIsolationError("isolation_lease_invalid", "Isolation lease is not exclusively owned for session transfer.");
+    if (owned.sessionOwner) throw new ExecutionIsolationError("isolation_lease_invalid", "Isolation cleanup ownership was already transferred.");
+    owned.sessionOwner = consumeSessionLeaseOwnership(proof, { runId: owned.runId, leaseId: selection.lease.leaseId,
+      providerId: selection.providerId, invocationId: selection.lease.invocationId, providerIdentity: selection.lease.providerIdentity,
+      grantId: selection.lease.grantId, access: selection.lease.grantedAccess });
+    // Synchronous durable-proof check and revoker detachment: revocation cannot
+    // slip between them and release a newly adopted server's isolation lease.
+    owned.disposeRevoker?.(); owned.disposeRevoker = undefined;
+  });
+  return selector;
 }
 
 function validateRecoveryResult(

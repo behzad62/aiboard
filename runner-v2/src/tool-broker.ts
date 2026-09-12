@@ -389,7 +389,7 @@ export class ToolBroker implements AgentToolRuntime {
         // execution retains the actual owner-selected run isolation profile.
         permissionProfile: this.git?.permissionProfile ?? this.permissionProfile,
         workspacePath: this.workspacePath,
-        access: (access.paths?.length
+        access: (access.paths !== undefined
           ? access.paths.map((entry) => ({
               path: entry.path,
               mode: entry.access === "read" ? "read" as const : "write" as const,

@@ -699,7 +699,7 @@ test("CLI rejects a syntactically invalid changed active extension before prefli
   }
 });
 
-test("CLI closes per-run MCP discovery and public facades when active extension startup fails before readiness", async (t) => {
+test("CLI closes discovery without launching live MCP when active extension startup fails before readiness", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-capability-recovery-snapshot-start-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -775,7 +775,7 @@ test("CLI closes per-run MCP discovery and public facades when active extension 
     assert.equal(outcome.stdout, "");
     assert.match(outcome.stderr, /fixture snapshot start failed/i);
     const mcpPids = readFileSync(mcpMarker, "utf8").trim().split("\n").map(Number);
-    assert.equal(mcpPids.length, 2, "discovery and the per-run public manager each get one closed process");
+    assert.equal(mcpPids.length, 1, "only ephemeral discovery may launch before any actual MCP tool call");
     await waitForProcessesToExit(mcpPids, 10_000);
     assert.equal(
       mcpPids.every((pid) => !processExists(pid)),
@@ -798,7 +798,7 @@ test("CLI closes per-run MCP discovery and public facades when active extension 
   }
   await finishOwnedCliFixture(root, primaryFailure, async () => {
     const mcpPids = readFileSync(mcpMarker, "utf8").trim().split("\n").map(Number);
-    assert.equal(mcpPids.length, 2, "both discovery and public ownership must be accounted for");
+    assert.equal(mcpPids.length, 1, "the exact ephemeral discovery process must be accounted for");
     assert.ok(mcpPids.every((pid) => Number.isSafeInteger(pid) && pid > 0));
     assert.equal(mcpPids.some(processExists), false, "live MCP processes prevent fixture deletion");
     const runRoot = join(state, "builds", runnerRunStateSegment(runId));
@@ -808,20 +808,8 @@ test("CLI closes per-run MCP discovery and public facades when active extension 
       join(runRoot, "streaming-sessions.sqlite"), key, { readOnly: true },
     );
     try {
-      const sessions = kernel.store.listSessionIds();
-      assert.ok(sessions.length > 0, "CLI exit alone is not proof of public session cleanup");
-      for (const sessionId of sessions) {
-        assert.equal(kernel.store.readBySession(sessionId)?.state, "released");
-      }
-      const launches = kernel.store.listHostLaunchIds();
-      assert.ok(launches.length > 0);
-      for (const launchId of launches) {
-        const launch = kernel.store.readHostLaunch(launchId)!;
-        assert.ok(launch.state === "released" || (
-          launch.state === "handed_off" &&
-          kernel.store.readBySession(launch.sessionId)?.state === "released"
-        ));
-      }
+      assert.deepEqual(kernel.store.listSessionIds(), [], "no real tool call means no live MCP session may have been adopted");
+      assert.deepEqual(kernel.store.listHostLaunchIds(), [], "lazy readiness must not perform a public MCP launch");
     } finally {
       kernel.store.close();
     }

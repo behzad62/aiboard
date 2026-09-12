@@ -1,0 +1,38 @@
+{
+  "at": "2026-09-12T05:49:34.846677+00:00",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "runner-v2/tsconfig.json",
+        "--noEmit"
+      ],
+      "exitCode": 0
+    },
+    {
+      "name": "eslint",
+      "command": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "runner-v2/src",
+        "runner-v2/test"
+      ],
+      "exitCode": 0
+    },
+    {
+      "name": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "runner-v2"
+      ],
+      "exitCode": 0
+    }
+  ],
+  "sourcesUnchanged": true
+}

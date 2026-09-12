@@ -1,35 +1,24 @@
+import { McpSessionManager } from "./mcp-session-manager.js";
+import type { McpDiscoveryResult, McpRuntimeServerLaunch } from "./runner-internal-execution-context.js";
+import type { StreamingSessionEnvelope } from "./streaming-session-store.js";
 import { createHash } from "node:crypto";
 
 import type {
   NativeTool,
+  ToolExecutionContext,
   ToolContentBlock,
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 
-export interface McpServerSpec {
-  name: string;
-  command: string;
-}
+import type { McpServerSpec } from "./mcp-configuration.js";
+export type { McpServerSpec } from "./mcp-configuration.js";
 
-interface McpToolDescription {
-  name: string;
-  description?: string;
-  inputSchema?: Record<string, unknown>;
-  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
-}
-
-interface McpCallResult {
+export interface McpCallResult {
   content?: Array<Record<string, unknown>>;
   structuredContent?: unknown;
   isError?: boolean;
-}
-
-interface PendingRequest {
-  resolve(value: unknown): void;
-  reject(error: Error): void;
-  timeout: NodeJS.Timeout;
 }
 
 export interface McpServerStatus {
@@ -40,13 +29,17 @@ export interface McpServerStatus {
   error?: string;
 }
 
-const MAX_MCP_LINE_BYTES = 1024 * 1024;
-
 export interface McpTransportWriter {
   write(payload: Uint8Array, timeoutMs: number): Promise<void>;
 }
 
+export interface McpRequestOwner {
+  readonly context: Readonly<ToolExecutionContext>;
+  readonly envelope: StreamingSessionEnvelope;
+}
 export interface McpTransportOpenRequest {
+  readonly owner?: McpRequestOwner;
+  readonly expected?: McpDiscoveryResult["servers"][number];
   readonly server: McpServerSpec;
   readonly handshake: (writer: McpTransportWriter) => Promise<string>;
   readonly onOutput: (stream: "stdout" | "stderr", bytes: Uint8Array) => void | Promise<void>;
@@ -54,6 +47,7 @@ export interface McpTransportOpenRequest {
 }
 
 export interface McpOwnedTransport extends McpTransportWriter {
+  request?<T>(owner: McpRequestOwner, perform: (writer: McpTransportWriter) => Promise<T>, timeoutMs: number): Promise<T>;
   closeVerified(): Promise<void>;
 }
 
@@ -131,249 +125,12 @@ function aggregateMcpStatus(
   };
 }
 
-class McpStdioClient {
-  private transport: McpOwnedTransport | undefined;
-  private readonly pending = new Map<number, PendingRequest>();
-  private nextId = 1;
-  private tools: McpToolDescription[] = [];
-  private state: McpServerStatus["status"] = "stopped";
-  private error: string | undefined;
-  private outputBuffer = Buffer.alloc(0);
-  private closePromise: Promise<void> | undefined;
-  private failureCleanupPromise: Promise<void> | undefined;
-  private closeComplete = false;
-
-  constructor(
-    readonly spec: McpServerSpec,
-    private readonly requestTimeoutMs: number,
-    private readonly transportFactory: McpTransportFactory,
-    private readonly maximumLineBytes: number,
-  ) {}
-
-  async start(): Promise<void> {
-    if (this.transport) return;
-    if (this.closeComplete) throw new Error(`MCP server ${this.spec.name} is closed.`);
-    this.state = "starting";
-    this.error = undefined;
-    let openingFailure: Error | undefined;
-    try {
-      const transport = await this.transportFactory.open({
-        server: this.spec,
-        onOutput: (stream, bytes) => {
-          if (stream === "stdout") this.receiveBytes(bytes);
-        },
-        onFailure: (error) => {
-          openingFailure ??= error;
-          this.transportFailed(error);
-        },
-        handshake: async (writer) => {
-          const initialized = await this.requestWith(writer, "initialize", {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "aiboard-runner-v2", version: "2" },
-          });
-          await this.notifyWith(writer, "notifications/initialized", {});
-          const listed = await this.requestWith(writer, "tools/list", {}) as { tools?: unknown };
-          this.tools = Array.isArray(listed?.tools)
-            ? listed.tools.filter(isMcpTool)
-            : [];
-          return createHash("sha256").update(JSON.stringify({ initialized, listed })).digest("hex");
-        },
-      });
-      this.transport = transport;
-      if (openingFailure) {
-        this.transportFailed(openingFailure);
-        throw openingFailure;
-      }
-      this.state = "ready";
-    } catch (error) {
-      this.state = "error";
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.recordFailure(failure);
-      this.rejectPending(failure);
-      throw error;
-    }
-  }
-
-  definitions(): McpToolDescription[] {
-    return this.tools.map((tool) => ({ ...tool, inputSchema: tool.inputSchema ? { ...tool.inputSchema } : undefined }));
-  }
-
-  async call(name: string, arguments_: Record<string, unknown>): Promise<McpCallResult> {
-    if (this.state !== "ready") throw new Error(`MCP server ${this.spec.name} is not ready.`);
-    return await this.request("tools/call", { name, arguments: arguments_ }) as McpCallResult;
-  }
-
-  status(): McpServerStatus {
-    return {
-      name: this.spec.name,
-      command: this.spec.command,
-      status: this.state,
-      toolCount: this.tools.length,
-      ...(this.error ? { error: this.error } : {}),
-    };
-  }
-
-  async close(): Promise<void> {
-    if (this.closeComplete) return;
-    if (this.closePromise) return await this.closePromise;
-    const transport = this.transport;
-    this.rejectPending(new Error("MCP server stopped."));
-    const attempt = (async () => {
-      if (transport) await transport.closeVerified();
-      if (this.transport === transport) this.transport = undefined;
-      this.state = "stopped";
-      this.tools = [];
-      this.error = undefined;
-      this.closeComplete = true;
-    })();
-    this.closePromise = attempt;
-    try {
-      await attempt;
-    } catch (error) {
-      this.state = "error";
-      this.recordCleanupFailure(error);
-      throw error;
-    } finally {
-      if (this.closePromise === attempt) this.closePromise = undefined;
-    }
-  }
-
-  private request(method: string, params: unknown): Promise<unknown> {
-    const transport = this.transport;
-    if (!transport) return Promise.reject(new Error(`MCP server ${this.spec.name} is not running.`));
-    return this.requestWith(transport, method, params);
-  }
-
-  private requestWith(
-    writer: McpTransportWriter,
-    method: string,
-    params: unknown,
-  ): Promise<unknown> {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`MCP request timed out: ${method}.`));
-      }, this.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timeout });
-      const payload = Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-      void writer.write(payload, Math.min(this.requestTimeoutMs, 30_000)).catch((error) => {
-        const pending = this.pending.get(id);
-        if (!pending) return;
-        this.pending.delete(id);
-        clearTimeout(pending.timeout);
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
-  }
-
-  private async notifyWith(
-    writer: McpTransportWriter,
-    method: string,
-    params: unknown,
-  ): Promise<void> {
-    const payload = Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
-    await writer.write(payload, Math.min(this.requestTimeoutMs, 30_000));
-  }
-
-  private receiveBytes(bytes: Uint8Array): void {
-    let offset = 0;
-    for (let index = 0; index < bytes.byteLength; index += 1) {
-      if (bytes[index] !== 0x0a) continue;
-      if (!this.appendOutput(bytes.subarray(offset, index))) return;
-      const line = this.outputBuffer.at(-1) === 0x0d
-        ? this.outputBuffer.subarray(0, -1)
-        : this.outputBuffer;
-      this.outputBuffer = Buffer.alloc(0);
-      this.receiveLine(line.toString("utf8"));
-      offset = index + 1;
-    }
-    this.appendOutput(bytes.subarray(offset));
-  }
-
-  private appendOutput(bytes: Uint8Array): boolean {
-    if (this.outputBuffer.byteLength + bytes.byteLength > this.maximumLineBytes) {
-      this.transportFailed(new Error("MCP response exceeded its line bound."));
-      return false;
-    }
-    if (bytes.byteLength > 0) {
-      this.outputBuffer = Buffer.concat([this.outputBuffer, Buffer.from(bytes)]);
-    }
-    return true;
-  }
-
-  private receiveLine(line: string): void {
-    let message: Record<string, unknown>;
-    try {
-      message = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      return;
-    }
-    if (typeof message.id !== "number") return;
-    const pending = this.pending.get(message.id);
-    if (!pending) return;
-    this.pending.delete(message.id);
-    clearTimeout(pending.timeout);
-    if (record(message.error)) {
-      pending.reject(new Error(
-        typeof message.error.message === "string"
-          ? message.error.message
-          : "MCP request failed."
-      ));
-    } else {
-      pending.resolve(message.result);
-    }
-  }
-
-  private rejectPending(error: Error): void {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(error);
-    }
-    this.pending.clear();
-  }
-
-  private transportFailed(error: Error): void {
-    if (this.state === "stopped") return;
-    this.state = "error";
-    this.recordFailure(error);
-    this.tools = [];
-    this.outputBuffer = Buffer.alloc(0);
-    this.rejectPending(error);
-    const transport = this.transport;
-    if (transport) this.scheduleFailureCleanup(transport);
-  }
-
-  private scheduleFailureCleanup(transport: McpOwnedTransport): void {
-    if (this.closeComplete || this.failureCleanupPromise) return;
-    const attempt = (async () => {
-      try {
-        await transport.closeVerified();
-        if (this.transport === transport) this.transport = undefined;
-      } catch (error) {
-        this.recordCleanupFailure(error);
-      }
-    })();
-    this.failureCleanupPromise = attempt;
-    void attempt.finally(() => {
-      if (this.failureCleanupPromise === attempt) this.failureCleanupPromise = undefined;
-    });
-  }
-
-  private recordFailure(error: Error): void {
-    if (!this.error) this.error = error.message;
-  }
-
-  private recordCleanupFailure(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
-    const diagnostic = `MCP cleanup verification failed: ${message}`;
-    if (!this.error) this.error = diagnostic;
-    else if (!this.error.includes(diagnostic)) this.error = `${this.error}; ${diagnostic}`;
-  }
-}
-
 export interface McpManagerOptions {
+  readonly runId?: string;
+  readonly discovery?: McpDiscoveryResult;
+  readonly reattest?: () => Promise<readonly McpRuntimeServerLaunch[]>;
+  readonly maximumRestarts?: number;
+  readonly maximumSessions?: number;
   cwd: string;
   servers: readonly McpServerSpec[];
   requestTimeoutMs?: number;
@@ -382,67 +139,7 @@ export interface McpManagerOptions {
   transportFactory: McpTransportFactory;
 }
 
-export class McpManager {
-  private readonly clients: McpStdioClient[];
-
-  constructor(options: McpManagerOptions) {
-    const names = new Set<string>();
-    for (const server of options.servers) {
-      if (!/^[a-z][a-z0-9_-]{0,31}$/.test(server.name)) {
-        throw new Error(`MCP server name ${server.name} is invalid.`);
-      }
-      if (!server.command.trim()) throw new Error(`MCP server ${server.name} has no command.`);
-      if (names.has(server.name)) throw new Error(`Duplicate MCP server ${server.name}.`);
-      names.add(server.name);
-    }
-    this.clients = options.servers.map((server) =>
-      new McpStdioClient(
-        server,
-        options.requestTimeoutMs ?? 120_000,
-        options.transportFactory,
-        maximumMcpLineBytes(options.maximumLineBytes),
-      )
-    );
-  }
-
-  async start(): Promise<void> {
-    await Promise.all(this.clients.map(async (client) => {
-      try {
-        await client.start();
-      } catch {
-        // One optional MCP server must not prevent the native kernel from starting.
-      }
-    }));
-  }
-
-  toolEntries(): Array<{ client: McpStdioClient; tool: McpToolDescription }> {
-    return this.clients.flatMap((client) =>
-      client.definitions().map((tool) => ({ client, tool }))
-    );
-  }
-
-  status(): McpServerStatus[] {
-    return this.clients.map((client) => client.status());
-  }
-
-  async close(): Promise<void> {
-    const settled = await Promise.allSettled(this.clients.map((client) => client.close()));
-    const failures = settled
-      .filter((entry): entry is PromiseRejectedResult => entry.status === "rejected")
-      .map((entry) => entry.reason);
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "MCP manager cleanup could not be verified.");
-    }
-  }
-}
-
-function maximumMcpLineBytes(value: number | undefined): number {
-  if (value === undefined) return MAX_MCP_LINE_BYTES;
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_MCP_LINE_BYTES) {
-    throw new Error("MCP response line bound is invalid.");
-  }
-  return value;
-}
+export class McpManager extends McpSessionManager {}
 
 export function createMcpTools(
   manager: McpManager,
@@ -462,13 +159,9 @@ export function createMcpTools(
         effect: "external",
       },
       validate: objectInput,
-      assessAccess: () => ({
-        capability: `mcp.${client.spec.name}.${tool.name}`,
-        external: true,
-        destructive: tool.annotations?.destructiveHint !== false,
-      }),
-      execute: async (input) => await mcpOutput(
-        await client.call(tool.name, input),
+      assessAccess: (_input, context) => client.access(context),
+      execute: async (input, context) => await mcpOutput(
+        await client.call(tool.name, input, context),
         artifacts,
         `${client.spec.name}.${tool.name}`
       ),
@@ -547,10 +240,6 @@ function objectInput(input: unknown): ValidationResult<Record<string, unknown>> 
   return record(input)
     ? { ok: true, value: input }
     : { ok: false, issues: ["MCP arguments must be an object"] };
-}
-
-function isMcpTool(value: unknown): value is McpToolDescription {
-  return record(value) && typeof value.name === "string" && value.name.trim().length > 0;
 }
 
 function record(value: unknown): value is Record<string, unknown> {

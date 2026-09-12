@@ -3475,3 +3475,221 @@ function pickHostControl(value: unknown) {
     backendFencingToken: input?.fence?.fencingToken,
   };
 }
+
+
+for (const kind of ["memory", "sqlite"] as const) test(`MCP request scope ${kind} uses one launch authorization for bounded write and delivery`, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const root = await mkdtemp(join(tmpdir(), "p682-request-store-"));
+  t.diagnostic(`exact synthetic request store acquired: ${root}`);
+  const path = join(root, "sessions.sqlite"); const key = Buffer.alloc(32, 71);
+  const kernel = kind === "sqlite" ? openSqliteStreamingSessionStore(path, key) : createInMemoryStreamingSessionStore();
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { kernel, evidence });
+  const originalAcquire = f.runtimeOptions.channel.acquire;
+  const writes: Buffer[] = [];
+  f.setChannelAcquire(async () => { const original = await originalAcquireWithoutOverride(); return { ...original,
+    write: async (_metadata: unknown, bytes: Uint8Array) => { writes.push(Buffer.from(bytes)); } }; });
+  async function originalAcquireWithoutOverride() {
+    f.setChannelAcquire(undefined); const value = await originalAcquire();
+    return value;
+  }
+  let passed = false;
+  try {
+    const facade = await f.runtime.open(f.request);
+    assert.equal(typeof facade.request, "function", "the adopted facade must support one exact request authorization");
+    const operation = { sessionId: facade.sessionId, operation: "request" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const assertion = { ...operation, binding: f.request.binding };
+    const auth = facade.authorizeFirstOperation(operation);
+    let escaped: Parameters<Parameters<typeof facade.request>[2]>[0] | undefined;
+    const result = await facade.request(auth, assertion, async (io) => {
+      escaped = io; await io.write(Buffer.from("one"), 100);
+      await assert.rejects(io.write(Buffer.from("second"), 100), /one|single|request/i);
+      const bytes = Buffer.from("reply");
+      const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+      const emitted = f.emit({ metadata, bytes, acknowledge: async () => undefined });
+      try { assert.equal(await io.waitForOutput(), true); let text = "";
+        assert.equal(await io.deliverOutput(async (_stream, payload) => { text = Buffer.from(payload).toString(); }), true);
+        return text;
+      } finally { await emitted; }
+    }, 1_000);
+    assert.equal(result, "reply"); assert.deepEqual(writes, [Buffer.from("one")]);
+    await assert.rejects(escaped!.write(Buffer.from("escaped"), 100), /closed|request/i);
+    await assert.rejects(facade.request(auth, assertion, async () => undefined, 1_000), /used|replay|request/i);
+    await assert.rejects(facade.write(auth, assertion, Buffer.from("wrong operation"), 100), /operation/i);
+    assert.throws(() => facade.authorizeFirstOperation(operation), /second|consumed/i);
+    const binding = { ...f.request.binding, callId: "fresh-exact-call" };
+    const grant = await f.grants.issue({ ...binding, workspacePath: process.cwd(), access: [], networkApproved: false, externalApproved: false, destructiveApproved: false });
+    const next = facade.authorizeOperation({ ...operation, binding, grant });
+    await facade.request(next, { ...operation, binding }, async (io) => { await io.write(Buffer.from("fresh"), 100); }, 1_000);
+    assert.equal(writes.length, 2);
+    await f.grants.revoke(grant, "completed");
+    passed = true;
+  } finally {
+    await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1_000 });
+    assert.equal(kernel.store.readBySession("stream-1")?.state, "released");
+    kernel.store.close();
+    if (passed) { await rm(root, { recursive: true }); t.diagnostic(`closed synthetic request store removed: ${root}`); }
+    else t.diagnostic(`closed synthetic request store retained: ${root}`);
+  }
+}));
+
+test("MCP request scope rechecks revoked authority at the queued byte effect and rejects escaped channels", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  let writes = 0;
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined,
+    detach: async () => undefined, write: async () => { writes++; } }));
+  const facade = await f.runtime.open(f.request);
+  try {
+    assert.equal(typeof facade.request, "function");
+    const operation = { sessionId: facade.sessionId, operation: "request" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const auth = facade.authorizeFirstOperation(operation);
+    await assert.rejects(facade.request(auth, { ...operation, binding: f.request.binding }, async (io) => {
+      const pending = io.write(Buffer.from("must-not-be-sent"), 100);
+      await f.grants.revoke(f.request.grant, "cancelled");
+      await pending;
+    }, 1_000), /revoked|current|authorization/i);
+    assert.equal(writes, 0, "a grant revoked between queueing and effect cannot write");
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1_000 }); f.kernel.store.close(); }
+}));
+
+
+test("MCP fixed envelope is refused before isolation and process launch when the real call lacks rights", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  try {
+    await assert.rejects(f.runtime.open({ ...f.request, envelope: { ...f.request.envelope, networkApproved: true } }));
+    assert.equal(f.launchCalls, 0, "a final adoption refusal is too late to prevent an unauthorized process");
+    assert.equal(f.calls.includes("isolate"), false);
+  } finally { await f.grants.revokeAll("cleanup"); f.kernel.store.close(); }
+}));
+
+test("MCP owned shutdown closes stdin before shared cleanup escalation without minting a new call", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const events: string[] = [];
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { events.push("shared-quiesce"); return "cleaned"; }, undefined, { evidence });
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined,
+    closeInput: async () => { events.push("stdin-close"); }, waitForTerminal: async () => { events.push("terminal-observe"); }, detach: async () => undefined }));
+  await f.runtime.open(f.request);
+  await f.grants.revoke(f.request.grant, "completed");
+  try {
+    await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000, gracefulShutdownMs: 50 });
+    assert.deepEqual(events.slice(0, 2), ["stdin-close", "terminal-observe"]);
+    assert.ok(events.indexOf("shared-quiesce") > events.indexOf("stdin-close"));
+    assert.equal(f.kernel.store.readBySession("stream-1")!.state, "released");
+    assert.deepEqual(f.grants.activeSnapshots(), []);
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+
+for (const mode of ["durable-transfer", "no-transfer", "forged-proof", "wrong-lease", "revoked-before-transfer"] as const)
+test(`MCP isolation cleanup ownership ${mode} never outlives an unowned original call`, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const isolation = await import("../src/execution-isolation-provider.js");
+  const session = await import("../src/session-authority.js");
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  const binding = { ...f.request.binding, permissionProfile: "project" as const, callId: "strict-parent" };
+  const grant = await f.grants.issue({ ...binding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: false, networkApproved: false });
+  let releases = 0;
+  const provider: import("../src/execution-isolation-provider.js").ExecutionIsolationProvider = {
+    attest: async () => ({ attestationVersion: 1, providerId: "strict-fixture", verified: true, mechanism: "synthetic-exact",
+      exactGrantWriteConfinement: true, interactiveAttach: true,
+      capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "enforced" } }),
+    attestExecution: async () => undefined,
+    acquire: async (input) => ({ leaseId: "strict-real-lease", providerId: input.providerId, invocationId: input.intent.invocationId,
+      grantId: input.grant.grantId, grantedAccess: input.grant.access, acquiredAt: now, state: "active", providerIdentity: input.implementationDigest }),
+    release: async () => { releases++; }, recoverOwned: async () => ({ cleaned: 0, blockers: [] }), acknowledgeRecovery: async () => undefined,
+  };
+  const selector = isolation.createExecutionIsolationSelector(isolation.createExecutionIsolationRegistry([
+    isolation.createExecutionIsolationProviderRegistration({ stableProviderId: "strict-fixture", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), provider }),
+  ]), { clock: () => new Date(now) });
+  let selected: import("../src/execution-isolation-provider.js").ExecutionIsolationSelection | undefined;
+  const runtime = createStreamingProcessSessionRuntime({ ...f.runtimeOptions, isolation: {
+    acquire: async ({ claims, launchId }) => {
+      selected = await selector.acquire({ permissionProfile: "project", grant: claims, intent: { invocationId: launchId,
+        runId: claims.runId, sessionId: claims.sessionId, kind: "mcp_server", executable: "fixture", arguments: [], workingDirectory: process.cwd(), requestedCapabilities: ["write_confinement"] } });
+      assert.equal(selected.enforcement, "write_confinement_exact_grant");
+      if (selected.enforcement !== "write_confinement_exact_grant") assert.fail("strict selection required");
+      return { leaseId: selected.lease.leaseId, providerId: selected.providerId, invocationId: selected.lease.invocationId,
+        providerIdentity: selected.lease.providerIdentity, acquiredAt: selected.lease.acquiredAt, access: selected.lease.grantedAccess };
+    },
+    release: async () => { if (selected) await selector.release(selected); },
+  } });
+  try {
+    const facade = await runtime.open({ ...f.request, binding, grant });
+    if (mode !== "no-transfer") {
+      if (mode === "revoked-before-transfer") await f.grants.revoke(grant, "cancelled");
+      if (mode === "forged-proof") assert.throws(() => isolation.transferExecutionIsolationLeaseToSession(selector, selected!, {} as never), /authority|proof|forged/i);
+      else if (mode === "revoked-before-transfer") assert.throws(() => session.authorizeSessionLeaseOwnership(f.authority, facade.sessionId), /revoked|current/i);
+      else {
+        const proof = session.authorizeSessionLeaseOwnership(f.authority, facade.sessionId);
+        if (mode === "wrong-lease") {
+          assert.throws(() => isolation.transferExecutionIsolationLeaseToSession(selector, { ...selected! } as never, proof), /owned|lease|authority/i);
+        } else {
+          isolation.transferExecutionIsolationLeaseToSession(selector, selected!, proof);
+          assert.throws(() => isolation.transferExecutionIsolationLeaseToSession(selector, selected!, proof), /used|transferred|proof/i);
+        }
+      }
+    }
+    await f.grants.revoke(grant, "completed");
+    assert.equal(releases, mode === "durable-transfer" ? 0 : 1, "only a verified durable owner may retain strict isolation after original-call completion");
+    if (mode === "durable-transfer") {
+      const nextBinding = { ...binding, callId: "fresh-after-transfer" };
+      const next = await f.grants.issue({ ...nextBinding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: false, networkApproved: false });
+      const operation = { sessionId: facade.sessionId, operation: "request" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+      const auth = facade.authorizeOperation({ ...operation, binding: nextBinding, grant: next });
+      await facade.request(auth, { ...operation, binding: nextBinding }, async () => undefined, 1000);
+      await f.grants.revoke(next, "completed"); assert.equal(releases, 0);
+    }
+  } finally {
+    await runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 });
+    assert.equal(releases, 1, "the same exact retained lease is physically released once");
+    assert.deepEqual(selector.activeLeases(), []); await f.grants.revokeAll("cleanup"); f.kernel.store.close();
+  }
+}));
+
+
+for (const role of ["subagent", "verifier"] as const) test(`MCP session preserves the actual ${role} identity rather than fabricating a worker`, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  const binding = { ...f.request.binding, actor: { role, id: `actual-${role}` }, callId: `actual-${role}-call` };
+  const grant = await f.grants.issue({ ...binding, workspacePath: process.cwd(), access: [], externalApproved: false, networkApproved: false, destructiveApproved: false });
+  try {
+    const facade = await f.runtime.open({ ...f.request, binding, grant });
+    assert.deepEqual(facade.record.actor, binding.actor);
+    assert.deepEqual(f.kernel.store.readHostLaunch(f.request.launchId)!.actor, binding.actor);
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); await f.grants.revokeAll("cleanup"); f.kernel.store.close(); }
+}));
+
+
+test("MCP request retains its owner through the authorized response deadline without extending a grant", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  let current = Date.parse(now);
+  const clock = () => new Date(current);
+  const authority = createSessionAuthority({ grants: f.grants, sessions: f.kernel, clock });
+  const runtime = createStreamingProcessSessionRuntime({ ...f.runtimeOptions, sessions: authority, clock });
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined,
+    write: async () => undefined, detach: async () => undefined }));
+  try {
+    const facade = await runtime.open(f.request);
+    const operation = { sessionId: "stream-1", operation: "request" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const authorization = facade.authorizeFirstOperation(operation);
+    const originalExpiresAt = f.grants.activeSnapshots()[0]!.expiresAt;
+    await facade.request(authorization, { ...operation, binding: f.request.binding }, async (io) => {
+      current += 90_000;
+      await io.write(Buffer.from("bounded-long-request"), 1000);
+    }, 100_000);
+    assert.equal(f.grants.activeSnapshots()[0]!.expiresAt, originalExpiresAt);
+    assert.ok(Date.parse(f.kernel.store.readBySession("stream-1")!.leaseExpiresAt) > current);
+  } finally { await runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); await f.grants.revokeAll("cleanup"); f.kernel.store.close(); }
+}));
+
+
+test("MCP graceful shutdown joins stdin-close acknowledgement before changing cleanup ownership", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  let releaseClose!: () => void; const held = new Promise<void>((resolve) => { releaseClose = resolve; });
+  const events: string[] = [];
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { events.push("shared-quiesce"); return "cleaned"; }, undefined, { evidence });
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined,
+    closeInput: async () => { events.push("stdin-close-start"); await held; events.push("stdin-close-acknowledged"); },
+    waitForTerminal: async () => { events.push("terminal-observe"); }, detach: async () => undefined }));
+  await f.runtime.open(f.request);
+  const closing = f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000, gracefulShutdownMs: 10 });
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, 35));
+    assert.deepEqual(events, ["stdin-close-start"], "the grace timer cannot orphan a late input acknowledgement under an old fence");
+  } finally { releaseClose(); await closing; f.kernel.store.close(); }
+  assert.ok(events.indexOf("shared-quiesce") > events.indexOf("stdin-close-acknowledged"));
+}));

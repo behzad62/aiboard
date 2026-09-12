@@ -171,6 +171,15 @@ export function createStreamingOutputController(options: {
       const expected = Object.freeze({ ...assertion, sessionId: options.sessionId, operation: "family_delivery" as const });
       return await deliverNext(deliver, () => options.assertAuthorization(authorization, expected));
     },
+    async deliverForRequest(
+      authorization: SessionOperationAuthorization,
+      assertion: OperationAuthorizationAssertion,
+      deliver: (stream: StreamingOutputStream, bytes: Uint8Array) => Promise<void>,
+      assertCurrent: () => void,
+    ): Promise<boolean> {
+      const expected = Object.freeze({ ...assertion, sessionId: options.sessionId, operation: "request" as const });
+      return await deliverNext(deliver, () => { assertCurrent(); options.assertAuthorization(authorization, expected); });
+    },
     async deliverNextPrivately(
       deliver: (stream: StreamingOutputStream, bytes: Uint8Array) => Promise<void>,
     ): Promise<boolean> {

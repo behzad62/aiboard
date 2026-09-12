@@ -1,3 +1,6 @@
+import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
+import { McpRpcPeer, parseMcpToolList } from "./mcp-rpc-peer.js";
+import { McpConfigurationError, parseMcpCommand, snapshotMcpServerSpec, mcpConfigurationDigest, fixedMcpEnvelope, type McpFixedEnvelope } from "./mcp-configuration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
@@ -23,19 +26,12 @@ import {
 } from "./runner-internal-process-kernel.js";
 
 const MAX_MCP_LINE_BYTES = 1024 * 1024;
-const MAX_MCP_TOOLS = 1_024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000;
 const DEFAULT_TERMINATION_TIMEOUT_MS = 15_000;
 const GIT_PREFLIGHT_TIMEOUT_MS = 30_000;
 const GIT_PREFLIGHT_TERMINATION_TIMEOUT_MS = 15_000;
-const MCP_SHELL_LAUNCHER_SOURCE = [
-  'const { spawn } = require("node:child_process");',
-  'const command = Buffer.from(process.argv[1], "base64url").toString("utf8");',
-  'const child = spawn(command, { shell: true, stdio: "inherit", windowsHide: true });',
-  'child.once("error", (error) => { process.stderr.write(String(error)); process.exitCode = 1; });',
-  'child.once("exit", (code) => { process.exitCode = code ?? 1; });',
-].join("");
+
 
 export interface RunnerInternalPrincipal {
   readonly role: "runner_internal";
@@ -94,6 +90,7 @@ export interface McpDiscoveryExecutor {
 
 /** Freshly re-attested executable identity for one run-owned public MCP server. */
 export interface McpRuntimeServerLaunch {
+  readonly envelope: McpFixedEnvelope;
   readonly name: string;
   readonly command: string;
   readonly executablePath: string;
@@ -142,6 +139,7 @@ export interface RunnerInternalExecutionContext {
 }
 
 interface TrustedMcpAttestation extends McpConfigurationAttestation {
+  readonly envelope: McpFixedEnvelope;
   readonly command: string;
   readonly executablePath: string;
   readonly imageExecutable?: string;
@@ -276,7 +274,7 @@ export function createRunnerInternalExecutionContext(
       const active = new Set<DiscoveryClient>();
       const executor: McpDiscoveryExecutor = Object.freeze({
         async discover() {
-          if (started) throw new Error("MCP discovery already completed or is in progress.");
+          if (started || complete || closePromise) throw new Error("MCP discovery already completed, closed, or is in progress.");
           if (closed) throw new Error("Runner internal execution context is closed.");
           started = true;
           const servers = await Promise.all(trusted.map(async (server) => {
@@ -384,6 +382,7 @@ export function createRunnerInternalExecutionContext(
       return Object.freeze(trusted.map((server) => deepFreeze({
         name: server.name,
         command: server.command,
+        envelope: server.envelope,
         executablePath: server.executablePath,
         ...(server.imageExecutable ? { imageExecutable: server.imageExecutable } : {}),
         arguments: [...server.arguments],
@@ -422,19 +421,15 @@ export function createRunnerInternalExecutionContext(
 
 class DiscoveryClient {
   private owned: RunnerInternalOwnedProcess | undefined;
+  private acquisition: Promise<RunnerInternalOwnedProcess> | undefined;
   private closed = false;
   private closeComplete = false;
   private closePromise: Promise<void> | undefined;
-  private nextId = 1;
-  private outputBuffer = Buffer.alloc(0);
   private stderrBytes = 0;
   private protocolFailure: Error | undefined;
   private removeOutputSink: (() => void) | undefined;
-  private readonly pending = new Map<number, {
-    resolve(value: unknown): void;
-    reject(error: Error): void;
-    timeout: NodeJS.Timeout;
-  }>();
+  private readonly peer = new McpRpcPeer({ maximumLineBytes: MAX_MCP_LINE_BYTES,
+    onFailure: (error) => { this.protocolFailure = error; } });
 
   constructor(private readonly options: {
     readonly server: TrustedMcpAttestation;
@@ -454,7 +449,8 @@ class DiscoveryClient {
       this.options.cwd,
       this.options.environment,
     );
-    const owned = await this.options.processKernel.launch({
+    if (this.closed) throw new Error("MCP discovery closed before process acquisition.");
+    this.acquisition = this.options.processKernel.launch({
       principalId: this.options.principal.principalId,
       callId: `${this.options.principal.callId}:${this.options.server.name}`,
       runId: this.options.principal.runId!,
@@ -464,8 +460,9 @@ class DiscoveryClient {
       workingDirectory: this.options.cwd,
       environment: this.options.environment,
       access: [{ canonicalPath: this.options.cwd, mode: "read" }],
-    });
-    this.owned = owned;
+    }).then((owned) => { this.owned = owned; return owned; });
+    const owned = await this.acquisition;
+    if (this.closed) throw new Error("MCP discovery closed during process acquisition.");
     this.removeOutputSink = owned.setOutputSink((metadata, bytes) => {
       if (metadata.stream === "stderr") {
         this.stderrBytes += bytes.byteLength;
@@ -474,16 +471,16 @@ class DiscoveryClient {
         }
         return;
       }
-      this.receiveBytes(bytes);
+      this.peer.feed("stdout", bytes);
     });
-    await this.request("initialize", {
+    await this.peer.request(owned, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: "aiboard-runner-v2-discovery", version: "2" },
-    });
-    this.notify("notifications/initialized", {});
-    const result = await this.request("tools/list", {});
-    return parseTools(result);
+    }, this.options.requestTimeoutMs);
+    await this.peer.notify(owned, "notifications/initialized", {}, this.options.requestTimeoutMs);
+    const result = await this.peer.request(owned, "tools/list", {}, this.options.requestTimeoutMs);
+    return parseMcpToolList(result);
   }
 
   async closeVerified(): Promise<void> {
@@ -500,114 +497,28 @@ class DiscoveryClient {
   }
 
   private async closeVerifiedOnce(): Promise<void> {
-    const owned = this.owned;
     this.closed = true;
-    this.rejectPending(new Error("MCP discovery transport closed."));
+    const protocolFailed = this.protocolFailure !== undefined;
+    this.peer.close(new Error("MCP discovery transport closed."));
+    // Retain and join the exact acquisition. A concurrent close cannot certify
+    // an empty owner while a process may still arrive from the owned kernel.
+    await this.acquisition?.catch(() => undefined);
+    const owned = this.owned;
     if (!owned) return;
     await owned.closeVerified({
       shutdownTimeoutMs: this.options.shutdownTimeoutMs,
       terminationTimeoutMs: this.options.terminationTimeoutMs,
-      forceImmediately: this.protocolFailure !== undefined,
+      forceImmediately: protocolFailed,
     });
     this.removeOutputSink?.();
     this.removeOutputSink = undefined;
     this.owned = undefined;
   }
 
-  private request(method: string, params: unknown): Promise<unknown> {
-    const owned = this.owned;
-    if (!owned) return Promise.reject(new Error("MCP discovery transport is not running."));
-    if (this.protocolFailure) return Promise.reject(this.protocolFailure);
-    const id = this.nextId++;
-    return new Promise((resolveRequest, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`MCP discovery request timed out: ${method}.`));
-      }, this.options.requestTimeoutMs);
-      this.pending.set(id, { resolve: resolveRequest, reject, timeout });
-      const payload = Buffer.from(
-        `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
-      );
-      void owned.write(payload, Math.min(this.options.requestTimeoutMs, 30_000))
-        .catch((error) => {
-          const pending = this.pending.get(id);
-          if (!pending) return;
-          this.pending.delete(id);
-          clearTimeout(pending.timeout);
-          pending.reject(error instanceof Error ? error : new Error(String(error)));
-        });
-    });
-  }
-
-  private notify(method: string, params: unknown): void {
-    const owned = this.owned;
-    if (!owned || this.protocolFailure) return;
-    const payload = Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
-    void owned.write(payload, Math.min(this.options.requestTimeoutMs, 30_000))
-      .catch((error) => this.failProtocol(
-        error instanceof Error ? error.message : String(error),
-      ));
-  }
-
-  private receiveBytes(bytes: Uint8Array): void {
-    if (this.protocolFailure) return;
-    let offset = 0;
-    for (let index = 0; index < bytes.byteLength; index += 1) {
-      if (bytes[index] !== 0x0a) continue;
-      if (!this.appendOutput(bytes.subarray(offset, index))) return;
-      const line = this.outputBuffer.at(-1) === 0x0d
-        ? this.outputBuffer.subarray(0, -1)
-        : this.outputBuffer;
-      this.outputBuffer = Buffer.alloc(0);
-      this.receiveLine(line.toString("utf8"));
-      offset = index + 1;
-    }
-    this.appendOutput(bytes.subarray(offset));
-  }
-
-  private appendOutput(bytes: Uint8Array): boolean {
-    if (this.outputBuffer.byteLength + bytes.byteLength > MAX_MCP_LINE_BYTES) {
-      this.failProtocol("MCP discovery response exceeded its line bound.");
-      return false;
-    }
-    if (bytes.byteLength > 0) {
-      this.outputBuffer = Buffer.concat([this.outputBuffer, Buffer.from(bytes)]);
-    }
-    return true;
-  }
-
   private failProtocol(message: string): void {
-    if (this.protocolFailure) return;
-    this.protocolFailure = new Error(message);
-    this.outputBuffer = Buffer.alloc(0);
-    this.rejectPending(this.protocolFailure);
+    this.peer.close(new Error(message));
   }
 
-  private receiveLine(line: string): void {
-    if (Buffer.byteLength(line) > MAX_MCP_LINE_BYTES) {
-      this.failProtocol("MCP discovery response exceeded its line bound.");
-      return;
-    }
-    let message: Record<string, unknown>;
-    try { message = JSON.parse(line) as Record<string, unknown>; }
-    catch { return; }
-    if (typeof message.id !== "number") return;
-    const pending = this.pending.get(message.id);
-    if (!pending) return;
-    this.pending.delete(message.id);
-    clearTimeout(pending.timeout);
-    if (recordOrUndefined(message.error)) {
-      pending.reject(new Error("MCP discovery request failed."));
-    } else pending.resolve(message.result);
-  }
-
-  private rejectPending(error: Error): void {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(error);
-    }
-    this.pending.clear();
-  }
 }
 
 async function attestMcpConfigurations(
@@ -616,7 +527,8 @@ async function attestMcpConfigurations(
   environment: Readonly<Record<string, string>>,
 ): Promise<readonly TrustedMcpAttestation[]> {
   const names = new Set<string>();
-  return await Promise.all(servers.map(async (server) => {
+  return await Promise.all(servers.map(async (supplied) => {
+    const server = snapshotMcpServerSpec(supplied);
     const name = safeId(server.name, "MCP server name");
     if (names.has(name)) throw new Error(`Duplicate MCP server ${name}.`);
     names.add(name);
@@ -636,7 +548,8 @@ async function attestMcpConfigurations(
       ...(executable.imageExecutable ? { imageExecutable: executable.imageExecutable } : {}),
       arguments: executable.arguments,
       executableDigest: executable.digest,
-      configDigest: digestJson({ name, command: server.command }),
+      envelope: fixedMcpEnvelope(server.envelope),
+      configDigest: mcpConfigurationDigest(server),
     });
   }));
 }
@@ -653,6 +566,7 @@ function matchAttestations(
     const server = servers[index];
     if (!trusted || !server || trusted.name !== server.name ||
         trusted.command !== server.command ||
+        trusted.configDigest !== mcpConfigurationDigest(server) ||
         trusted.configDigest !== attestation.configDigest ||
         trusted.executableDigest !== attestation.executableDigest) {
       throw new Error("MCP discovery attestation authority is invalid.");
@@ -661,57 +575,18 @@ function matchAttestations(
   });
 }
 
-function parseTools(value: unknown): readonly McpDiscoveryTool[] {
-  const result = record(value);
-  if (!Array.isArray(result.tools) || result.tools.length > MAX_MCP_TOOLS) {
-    throw new Error("MCP discovery tools/list result is invalid.");
-  }
-  const tools = result.tools.map((value) => {
-    const tool = record(value);
-    if (typeof tool.name !== "string" || !tool.name.trim() || tool.name.length > 256) {
-      throw new Error("MCP discovery tool name is invalid.");
-    }
-    const parsed = {
-      name: tool.name,
-      ...(typeof tool.description === "string" ? { description: tool.description } : {}),
-      ...(recordOrUndefined(tool.inputSchema)
-        ? { inputSchema: structuredClone(tool.inputSchema as Record<string, unknown>) }
-        : {}),
-      ...(recordOrUndefined(tool.annotations)
-        ? { annotations: parseAnnotations(tool.annotations) }
-        : {}),
-    };
-    if (Buffer.byteLength(JSON.stringify(parsed)) > MAX_MCP_LINE_BYTES) {
-      throw new Error("MCP discovery tool schema exceeds its bound.");
-    }
-    return deepFreeze(parsed);
-  });
-  return Object.freeze(tools);
-}
-
-function parseAnnotations(value: unknown) {
-  const annotations = record(value);
-  return deepFreeze({
-    ...(typeof annotations.readOnlyHint === "boolean"
-      ? { readOnlyHint: annotations.readOnlyHint }
-      : {}),
-    ...(typeof annotations.destructiveHint === "boolean"
-      ? { destructiveHint: annotations.destructiveHint }
-      : {}),
-  });
-}
-
 async function reattestTrustedMcpServer(
   server: TrustedMcpAttestation,
-  cwd: string,
-  environment: Readonly<Record<string, string>>,
+  _cwd: string,
+  _environment: Readonly<Record<string, string>>,
 ): Promise<void> {
-  const executable = await configuredExecutableIdentity(server.command, cwd, environment);
+  // The attested absolute path, not a second PATH search, is the launch identity.
+  // Hash fresh bytes through a stable descriptor and refuse replacement. The
+  // immutable configuration already owns the exact parsed argv/image token.
+  const executable = await canonicalExecutableIdentity(server.executablePath, "MCP pinned executable");
   if (normalizePath(executable.path) !== normalizePath(server.executablePath) ||
-      executable.digest !== server.executableDigest ||
-      executable.imageExecutable !== server.imageExecutable ||
-      JSON.stringify(executable.arguments) !== JSON.stringify(server.arguments)) {
-    throw new Error("MCP executable identity changed after static attestation.");
+      executable.digest !== server.executableDigest) {
+    throw new McpConfigurationError("mcp_executable_unavailable", "MCP executable identity changed after static attestation.");
   }
 }
 
@@ -725,12 +600,7 @@ async function configuredExecutableIdentity(
   imageExecutable?: string;
   arguments: readonly string[];
 }>> {
-  let argv: readonly string[];
-  try {
-    argv = parseConfiguredCommand(command);
-  } catch {
-    return await configuredShellIdentity(command);
-  }
+  const argv = parseMcpCommand(command);
   const token = argv[0]!;
   for (const candidate of configuredExecutableCandidates(token, cwd, environment)) {
     try {
@@ -742,28 +612,11 @@ async function configuredExecutableIdentity(
       });
     } catch {}
   }
-  return await configuredShellIdentity(command);
+  throw new McpConfigurationError("mcp_executable_unavailable", "The exact MCP executable is unavailable; shell fallback is not permitted.");
 }
 
 function portableImageExecutable(token: string): boolean {
   return !isAbsolute(token) && !/[\\/]/u.test(token);
-}
-
-async function configuredShellIdentity(
-  command: string,
-): Promise<Readonly<{ path: string; digest: string; arguments: readonly string[] }>> {
-  const identity = await canonicalExecutableIdentity(
-    process.execPath,
-    "MCP behavior-neutral shell launcher executable",
-  );
-  return Object.freeze({
-    ...identity,
-    arguments: Object.freeze([
-      "-e",
-      MCP_SHELL_LAUNCHER_SOURCE,
-      Buffer.from(command, "utf8").toString("base64url"),
-    ]),
-  });
 }
 
 function configuredExecutableCandidates(
@@ -799,54 +652,14 @@ async function canonicalExecutableIdentity(
     throw new Error(`${label} identity is invalid.`);
   }
   if (process.platform !== "win32") await access(actual, fsConstants.X_OK);
-  const bytes = await readFile(actual);
+  const digest = await hashExecutableDescriptor(actual);
   if (normalizePath(resolve(await realpath(candidate))) !== normalizePath(actual)) {
     throw new Error(`${label} identity changed during attestation.`);
   }
   return Object.freeze({
     path: actual,
-    digest: createHash("sha256").update(bytes).digest("hex"),
+    digest,
   });
-}
-
-function parseConfiguredCommand(command: string): readonly string[] {
-  const argv: string[] = [];
-  let token = "";
-  let tokenStarted = false;
-  let quote: "'" | '"' | undefined;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index]!;
-    if (!quote && /\s/.test(character)) {
-      if (tokenStarted) {
-        argv.push(token);
-        token = "";
-        tokenStarted = false;
-      }
-      continue;
-    }
-    if (!quote && /[\0\r\n&|;<>]/.test(character)) {
-      throw new Error("MCP configured command requires unsupported shell evaluation.");
-    }
-    if (character === '"' || (character === "'" && process.platform !== "win32")) {
-      tokenStarted = true;
-      if (!quote) { quote = character as "'" | '"'; continue; }
-      if (quote === character) { quote = undefined; continue; }
-    }
-    if (character === "\\" && process.platform !== "win32" && quote !== "'" &&
-        index + 1 < command.length) {
-      token += command[++index]!;
-      tokenStarted = true;
-      continue;
-    }
-    token += character;
-    tokenStarted = true;
-  }
-  if (quote) throw new Error("MCP configured command has an unterminated quote.");
-  if (tokenStarted) argv.push(token);
-  if (argv.length === 0 || argv.some((argument) => argument.includes("\0"))) {
-    throw new Error("MCP configured command is invalid.");
-  }
-  return Object.freeze(argv);
 }
 
 function environmentValue(
@@ -921,11 +734,6 @@ function canonicalJson(value: unknown): string {
       `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function record(value: unknown): Record<string, unknown> {
-  if (!recordOrUndefined(value)) throw new Error("MCP discovery response is invalid.");
-  return value;
 }
 
 function recordOrUndefined(value: unknown): value is Record<string, unknown> {
