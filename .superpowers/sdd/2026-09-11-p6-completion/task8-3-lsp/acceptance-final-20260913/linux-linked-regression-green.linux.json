@@ -1,0 +1,10 @@
+{
+  "id": "linux-linked-regression-green",
+  "groups": [
+    {
+      "tests": [
+        "linked-output-spill-storage"
+      ]
+    }
+  ]
+}

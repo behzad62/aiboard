@@ -1,0 +1,758 @@
+{
+  "at": "2026-09-13T19:17:15.567Z",
+  "note": "Read actual red and restored-green terminal receipts and failure logs, not accepted flags. Superseded whole-file hashes are explicitly reported; final complete-file execution establishes current integration coverage.",
+  "proofs": [
+    {
+      "id": "supervisor-stream-error",
+      "target": "runner-v2/src/managed-process-supervisor.mjs",
+      "test": "runner-v2/test/windows-job-supervisor-input.test.ts",
+      "red": {
+        "receiptSha256": "03d59934d23444b373c504f515bd3da2eb6dc41e71b876e34efc3daea897c55b",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - Windows Job supervisor retains exact ownership after input-pipe error (interactive=true)",
+          "not ok 2 - Windows Job supervisor retains exact ownership after input-pipe error (interactive=false)"
+        ],
+        "sourceSha256": "e9a9c0045d8a864ada62799614ffe104c1f2906f7e46e7a40093443a73a6fe59",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "ae09d9380f01fe3650ee2eda0a449cbf7ba52ba4706be4556f64440486d82736",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 2,
+        "sourceSha256": "91c31e2cf41f2d52e45535abb9b8e4afcad1beab37724e134f385240ff5a8202",
+        "testSha256": "42a23e7f516a119c84f35188676a8f98dd1fc2ec311097b3aeb5c9c79db5b43e",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "91c31e2cf41f2d52e45535abb9b8e4afcad1beab37724e134f385240ff5a8202",
+        "testSha256": "42a23e7f516a119c84f35188676a8f98dd1fc2ec311097b3aeb5c9c79db5b43e",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "logical-frame-interleaving",
+      "target": "runner-v2/src/execution-host-lsp-transport.ts",
+      "test": "runner-v2/test/lsp-transport-framing.test.ts",
+      "red": {
+        "receiptSha256": "928214f0821ae97d29c623d61ae4d405581df2b3bbef1cccd3a791e51e672682",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP shared chunking serializes whole frames against concurrent server-control replies",
+          "not ok 2 - LSP shared chunking never issues a queued frame after a failed predecessor"
+        ],
+        "sourceSha256": "9d4ea4fdd4d8828335cd9f0bc313d23fb42e0ee978123107d2ef465552f6e421",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "a5cfc09d8f3759d2eb1fdd2987e68d184e611f5115dcfbc4c6a0f34613141ded",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 2,
+        "sourceSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+        "testSha256": "7946cf863420ca58dc3b6528546289e0b9fc7f4f40db3740dc48fbe3785bf14f",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+        "testSha256": "7946cf863420ca58dc3b6528546289e0b9fc7f4f40db3740dc48fbe3785bf14f",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "code-authority-dropped",
+      "target": "runner-v2/src/code-intelligence-tools.ts",
+      "test": "runner-v2/test/language-invocation-propagation.test.ts",
+      "red": {
+        "receiptSha256": "027f0ef1c2c8ba66eac1490f79166bdfca5d0224b17134818aae505aa32fa49b",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP invocation propagates the exact original code.workspace_symbols grant and identity",
+          "not ok 2 - LSP invocation propagates the exact original code.definition grant and identity",
+          "not ok 3 - LSP invocation propagates the exact original code.references grant and identity",
+          "not ok 4 - LSP invocation propagates the exact original code.diagnostics grant and identity"
+        ],
+        "sourceSha256": "9aa2d93fd00e7fe5051caccffaaeff9a1729b31bf3085fabe297a25038a575b8",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "3a5aac364a3ed6dc95ae5ca695532a488c8585e6cabba16564117e5530e8a965",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 5,
+        "sourceSha256": "963bb0c0749dfdff1a432627cfefcd9e5c826300181d2489821ee4cabbc6a2b9",
+        "testSha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "963bb0c0749dfdff1a432627cfefcd9e5c826300181d2489821ee4cabbc6a2b9",
+        "testSha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "filesystem-authority-dropped",
+      "target": "runner-v2/src/filesystem-tools.ts",
+      "test": "runner-v2/test/language-invocation-propagation.test.ts",
+      "red": {
+        "receiptSha256": "f5e0db5b47a1f6558202cc65eb70aa0384982d0d744a7c4f6bc574ab10db0e86",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP invocation propagates the exact original fs.write grant and identity"
+        ],
+        "sourceSha256": "3a9a026601273bfb8e6b9d76cb44755caf7b4b53fbf743720861bd13f99ae5f7",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "fb1dd08c2178a05c5b5b228358fe27f5cf84369badef01716da8477933f6a41f",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "53283532f098fad4c6153ec969eeb5c4e37d8ccaa99fa1f314478101f969a81c",
+        "testSha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "53283532f098fad4c6153ec969eeb5c4e37d8ccaa99fa1f314478101f969a81c",
+        "testSha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "extension-prototype-grant-leak",
+      "target": "runner-v2/src/language-provider-router.ts",
+      "test": "runner-v2/test/lsp-server-control.test.ts",
+      "red": {
+        "receiptSha256": "05834c9bcc4a29c633ac41b2d0d645275bf452860df7a72250888b222ed9c845",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP router never forwards opaque grants to an extension object with an LSP prototype"
+        ],
+        "sourceSha256": "037c43e469fbaca3eb56dbf6d42821824666a637ac01a2ea0fe4da10493be552",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "1849fffad001655c9e8a6cd69aa45d53d79bf2f70c64408929d163b2bfea8a1c",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "e9c44f60af7a1e79e8614a04c3d6050837395279880620c481ccf1657c06d7b1",
+        "testSha256": "c7c3df8cfa02439dfc0f2f9f003d7912e5c6700f622489c6cd7695b800627e8a",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "e9c44f60af7a1e79e8614a04c3d6050837395279880620c481ccf1657c06d7b1",
+        "testSha256": "c7c3df8cfa02439dfc0f2f9f003d7912e5c6700f622489c6cd7695b800627e8a",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "language-write-ceiling-removed",
+      "target": "runner-v2/src/streaming-request-operation.ts",
+      "test": "runner-v2/test/streaming-language-operation.test.ts",
+      "red": {
+        "receiptSha256": "1c1fb8d2f6eb6d153e87d5b6506b3f9f78f910bcb04b56ca33baa6e6e95f1b08",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP compound call stops at its protocol-write ceiling and retains revocation checks"
+        ],
+        "sourceSha256": "debd84f2665ce238140efed0ce970e3d6c957ff3baafdd3667eeb321d589f121",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "8201d997c835464ea4b4b76810c8fdbd5c20d91a62b8995c361d058b2fe31a4c",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608",
+        "testSha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608",
+        "testSha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "mcp-one-write-widened",
+      "target": "runner-v2/src/streaming-request-operation.ts",
+      "test": "runner-v2/test/streaming-language-operation.test.ts",
+      "red": {
+        "receiptSha256": "2eb48ae71582421695c3e8229dde31796355ea574201506e2deda101eda910ba",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP and MCP operation kinds share exclusivity without widening MCP single-write authority"
+        ],
+        "sourceSha256": "7c1f330fa536bb26511d44a372496be720ac1cc4325d2ead77b3d3663d21b533",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "a91af830a105e143432b2c483e57c3741931367c8b058a06575a46f68402175e",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608",
+        "testSha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608",
+        "testSha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "strict-host-refusal-removed",
+      "target": "runner-v2/src/execution-host-lsp-transport.ts",
+      "test": "runner-v2/test/lsp-transport-authority.test.ts",
+      "red": {
+        "receiptSha256": "30fe650e706b41ae1f335a10241f6ecc323f04444324b68cb247640fe3a3c699",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP shared transport rejects strict-host-only before backend launch or invented grant"
+        ],
+        "sourceSha256": "6298bfcfd93b5a3c40320cbb4626e21aa46b1056df4fda6d5ad023c2462c6bc6",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "82f48547fe582dff17cb5cc9f28f71591069bb209c33124834c201b8890605e5",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+        "testSha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+        "testSha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "ambient-discovery-fallback",
+      "target": "runner-v2/src/language-server-executable.ts",
+      "test": "runner-v2/test/language-environment.test.ts",
+      "red": {
+        "receiptSha256": "d2cb53b6d0ff1db3e882b6f50f593b9835b854249ea172ecc200e502c9f37c3c",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP executable resolution uses only the explicitly prepared environment, never ambient PATH"
+        ],
+        "sourceSha256": "53571cfb3008e8d9474590a524fa2e94db389995784733e323d309a184829cd7",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "62d15fd7752778916db6e3b53e2084649484f393b13d911c978a966f3c47c9c2",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "69b87dd2f216d77bd8737959d44f5106aecad8fb026edd9d83bb57395150c2d6",
+        "testSha256": "eea15c89a0b2d62a58c1185c99f467d9aa37b4b97ac0c2211475fe2b0727a007",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "69b87dd2f216d77bd8737959d44f5106aecad8fb026edd9d83bb57395150c2d6",
+        "testSha256": "eea15c89a0b2d62a58c1185c99f467d9aa37b4b97ac0c2211475fe2b0727a007",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "worker-lifecycle-join-removed",
+      "target": "runner-v2/src/worker-runtime.ts",
+      "test": "runner-v2/test/lsp-caller-audit.test.ts",
+      "red": {
+        "receiptSha256": "fe61e9f708e2d0ffae84c9966bfbd89e19f78fb195558c1047883c14af80ec72",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP worker architect and subagent loops join their language ownership boundary"
+        ],
+        "sourceSha256": "d1c1123e045ee64cb61feb1a944a9b2feb111d0cdd32545b7531eef5f68b4e3f",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "595cc0cf78aabd5c3874ff7688b3a8a3748dcea431458bcc61895fa97f14e7c9",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "133df3c2d390e1dac137429763166bb912c8387d6abea4d1f082a8e86f4dcfb5",
+        "testSha256": "8f8336c378b90dcf2a5acf03fa2caf92cb52de052c9269bc97c20eefe8c8b785",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "133df3c2d390e1dac137429763166bb912c8387d6abea4d1f082a8e86f4dcfb5",
+        "testSha256": "8f8336c378b90dcf2a5acf03fa2caf92cb52de052c9269bc97c20eefe8c8b785",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "rpc-replay-restored",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-shared-client.test.ts",
+      "red": {
+        "receiptSha256": "e0bf702596d4634dad29084f9c475d25d10730cc620a3939a67b14b4da7b86af",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP shared client never replays a crashed request and reopens documents only on a fresh invocation"
+        ],
+        "sourceSha256": "e5449416eaa6dd991866d4e6c15697b7f2cc156551897cd14f7a2d359c9e6ab6",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "3eb2c84dfec40c6263b2cd7c8aa9a4c320542507aab055fb75ce95c3d986301a",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+        "testSha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e",
+        "retainedRoots": []
+      },
+      "manifest": "continue-20260912/material-results.json",
+      "current": {
+        "sourceSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+        "testSha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "takeover-wait-before-relinquish",
+      "target": "runner-v2/src/streaming-process-session-runtime.ts",
+      "test": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "red": {
+        "receiptSha256": "c2c237f7f674fcb05da927f9724eb538e68dcdfa51616a3bdefb401c8e3abba4",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - C2 round7 live cleanup takes over accepted output before ACK-gated quiescence"
+        ],
+        "sourceSha256": "ab9a79da4b216f3566a57ccfdd4ef410a9d625dcda569189740c2891f809da84",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "419a37770535f45c0bc030efc4aa1990506a61953dae69c63a6d43a67f55de79",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b",
+        "testSha256": "21b4d7efcc653f35aa4e68beb9a7fe7115123258c089696f4bbff71ed0c46c5e",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b",
+        "testSha256": "21b4d7efcc653f35aa4e68beb9a7fe7115123258c089696f4bbff71ed0c46c5e",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "grace-rejects-admitted-effect",
+      "target": "runner-v2/src/streaming-process-session-runtime.ts",
+      "test": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "red": {
+        "receiptSha256": "83d27779b479c5a619db87d9358ced3e416e2242972eaa4c90ee7fb0e21acd77",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP grace expiry joins an already admitted parser delivery before cleanup changes ownership"
+        ],
+        "sourceSha256": "a63dcff6e0e5c03ba856fa81a29abffc7e51db2a554df81b78599ce9cc13c05f",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "d532d06b1cb0a7cba0b2f644c0296abe9164ca2017460802faaae17a29740f34",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b",
+        "testSha256": "21b4d7efcc653f35aa4e68beb9a7fe7115123258c089696f4bbff71ed0c46c5e",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b",
+        "testSha256": "21b4d7efcc653f35aa4e68beb9a7fe7115123258c089696f4bbff71ed0c46c5e",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "private-delivery-drops-authority",
+      "target": "runner-v2/src/streaming-output-controller.ts",
+      "test": "runner-v2/test/streaming-output-v2.test.ts",
+      "red": {
+        "receiptSha256": "91b57ff334bcf8d15a0a3237e58e15d157033caaf7dca9d976c1ec9888613d59",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - private cleanup delivery refuses stale authority before effect without poisoning replay"
+        ],
+        "sourceSha256": "d2dd0edae1a92824ade56b529a4a51bafa139dae89941358632da8eb6f6765e6",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "c1e9c18546568681c6440c00c767a77870539c312c69bf311a9c619e5522a404",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "2f79bb2ef0ea682c4925ed6440e746e130b8f9a625df589889ba88740819f2ba",
+        "testSha256": "dceaef541c763dc229e7a0e8f8051ab413d5aab3c1f62c3db366c4d09c302172",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "2f79bb2ef0ea682c4925ed6440e746e130b8f9a625df589889ba88740819f2ba",
+        "testSha256": "dceaef541c763dc229e7a0e8f8051ab413d5aab3c1f62c3db366c4d09c302172",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "job-empty-replay-window",
+      "target": "runner-v2/src/windows-job-process-channel.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "red": {
+        "receiptSha256": "53218177d4ea8fb93f6de8bc1c9bf63f9ab28cfe2b00901224d539056c06b80b",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - Windows Job reattachment exposes pending replay without starting a reader or ACK"
+        ],
+        "sourceSha256": "0fcf71126976b0927e1afb79932f6efd49bdd415dd0ed7595220bfa5550eac5f",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "88f55a4d3576151ef9d0e80758843c3be816942f4e62646ec6b5a214efc30cd4",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "a3a7f87848938dd09010886a15ae3d95925af9b92d74ece6cd38bfaed6179fd8",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "a3a7f87848938dd09010886a15ae3d95925af9b92d74ece6cd38bfaed6179fd8",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "job-frame-not-persisted",
+      "target": "runner-v2/src/windows-job-process-host.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "red": {
+        "receiptSha256": "aeaab78b5bf4b5ac2259457b67bd7b76b6e4c1d04b83141058be51f190119109",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - Windows Job output reservation survives host reopen without coalescing an accepted frame"
+        ],
+        "sourceSha256": "ed2c4446c46156cc1df195fdcb002e48ab8c35110eb689347331d0b9a7d4a311",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "3b3d54506a0d9c69a3b638a09a2b92ee981b8338e82a9c7afc5b0c6180ea8299",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "job-digest-not-verified",
+      "target": "runner-v2/src/windows-job-process-host.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "red": {
+        "receiptSha256": "73b7b2c1f75418d69f693b9b4d9991ab32bf7dee32aea81d8a6944f17671a41f",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - Windows Job retained replay refuses changed bytes before exposing metadata"
+        ],
+        "sourceSha256": "3b4efb72a74bc2059d5d60bf363e5eca0af6c09f7b813d41a892059f54d016ae",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "52ea82573b4a8048ae43bff075642d32bfe93bf2f1b60402462b9b19a0161a62",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "job-ack-not-exact",
+      "target": "runner-v2/src/windows-job-process-host.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "red": {
+        "receiptSha256": "e44d5fb400c5c74f14f0130f6d5ff719583a8d231e51d4c34519cea17050dc2c",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - Windows Job replay reservation bounds aggregate bytes and refuses a non-exact ACK"
+        ],
+        "sourceSha256": "d605c0767ee8cfeb16c7f9dd35c72309b151a14a8d082a4bc7d9813c8c030ef1",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "be460d30e1846a0de82f505d5f270cb1bcabe5783097db2abdba7cd89df1d16f",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+        "testSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "shutdown-omits-exit-budget",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-shared-client.test.ts",
+      "red": {
+        "receiptSha256": "10fa6ccfa172b7f264c80768ead484505d886bea97751174d16fed134922d02a",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP shared shutdown budgets response and acknowledged exit as serial bounded phases"
+        ],
+        "sourceSha256": "3ff90cb53ea66f07fc9dc3633c65b85e12a9598e2a57b20e34294617db19e890",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "1ca642b41e74a98280ac7ed5f8fb5116edef9bcdfdc64573d2e00628281a1c73",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "bbebcc58b57033e5f75e0e95eb63d23349400c7c0acaf58a49b2dd787d3cf94b",
+        "testSha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e",
+        "retainedRoots": []
+      },
+      "manifest": "resume-20260912/causal-faults.json",
+      "current": {
+        "sourceSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+        "testSha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e",
+        "sameSource": false,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "chunk-channel-bound",
+      "target": "runner-v2/src/execution-host-lsp-transport.ts",
+      "test": "runner-v2/test/lsp-transport-authority.test.ts",
+      "red": {
+        "receiptSha256": "4b200eae456bc02f2c502e91f8b922a6a5d242b9367012b28c6967827a413d58",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP shared transport uses the real launching call and fresh exact language request authority"
+        ],
+        "sourceSha256": "dfe368a476326b2f51522be2adf34e027615f184ac6f10c63d04fe19b1fecf0e",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "7c4e3aae59dc35b18c94d8f6e7b72c2585bb78e7728a11c0c17d08741de6368a",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "5389f383ad3a5cd2ac3d2d720758ebe745af6f7f456fd16b9c87781175360441",
+        "testSha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd",
+        "retainedRoots": []
+      },
+      "current": {
+        "sourceSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+        "testSha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd",
+        "sameSource": false,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "language-phase-budget",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-invocation-lifetime.test.ts",
+      "red": {
+        "receiptSha256": "e53e1f8455a734e8b40ed78dd57098725e585da399f282cf7b72fd42ac0b71c1",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP language operation budget lets the typed write timeout settle before the shared ownership deadline"
+        ],
+        "sourceSha256": "bbebcc58b57033e5f75e0e95eb63d23349400c7c0acaf58a49b2dd787d3cf94b",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "9a49a5e7a535e6001e7d63e0c1f2a2300d62515b9bfec233db6147bbe40f4e85",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 1,
+        "sourceSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+        "testSha256": "c2bff570653a17ab90dadffa5aaf46917bf2447da6832891479bbc95cbcc71e1",
+        "retainedRoots": []
+      },
+      "current": {
+        "sourceSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+        "testSha256": "c2bff570653a17ab90dadffa5aaf46917bf2447da6832891479bbc95cbcc71e1",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "portable-input",
+      "target": "runner-v2/src/portable-process-supervisor.mjs",
+      "test": "runner-v2/test/portable-supervisor-input.test.ts",
+      "red": {
+        "receiptSha256": "49559bd5beb00e45ecb7b557139ed110ede18e2bcde59059e3464386f0bdc203",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write",
+          "not ok 2 - portable supervisor refuses stale completed write acknowledgement without reissuing bytes",
+          "not ok 3 - portable supervisor retains settled input through temporary coordination refusal",
+          "not ok 4 - portable supervisor settles a synchronous input exception as failed without replay",
+          "not ok 5 - portable supervisor observes input stream errors without fabricating terminal ownership"
+        ],
+        "sourceSha256": "c982bae21937c7125cda63cf46d651d9d0109c417505e2f28a194699701d03d7",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "5ef2c9990b407737860e3ef692af1b352b724beaa0646f44d63ea75ab5398705",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 5,
+        "sourceSha256": "b180ffd176b627e937d2c8d9e556267a26d3894e0acd8dfa20f3603d6cd9e869",
+        "testSha256": "bbf09d19a82288bf73d0c31468ba11cd0fd652d0ec9cca13de45dc5fffc5b89f",
+        "retainedRoots": []
+      },
+      "manifest": "finish-20260913/portable-input-causal-result.json",
+      "current": {
+        "sourceSha256": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+        "testSha256": "bbf09d19a82288bf73d0c31468ba11cd0fd652d0ec9cca13de45dc5fffc5b89f",
+        "sameSource": false,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "posix-anchor",
+      "target": "runner-v2/src/portable-process-supervisor.mjs",
+      "test": "runner-v2/test/posix-anchor-release-takeover.test.ts",
+      "red": {
+        "receiptSha256": "cf859cb70a06c73ebc497d65117ed5311f16d18d87c46e81ae5407a3b37af486",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - POSIX supervisor joins an already consumed anchor release under current ownership: takeover",
+          "not ok 2 - POSIX supervisor joins an already consumed anchor release under current ownership: coordination"
+        ],
+        "sourceSha256": "b180ffd176b627e937d2c8d9e556267a26d3894e0acd8dfa20f3603d6cd9e869",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "24d90914d9b6a44c0990c2c2816baeb09c54a0c1f6dab0e5e5cbe073e5c42499",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 4,
+        "sourceSha256": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+        "testSha256": "754bd474272f487dfd0a1d94fda000bb99ca548ee5e4fff24a90f52141876511",
+        "retainedRoots": []
+      },
+      "manifest": "finish-20260913/posix-anchor-causal-result.json",
+      "current": {
+        "sourceSha256": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+        "testSha256": "754bd474272f487dfd0a1d94fda000bb99ca548ee5e4fff24a90f52141876511",
+        "sameSource": true,
+        "sameTest": true
+      }
+    },
+    {
+      "id": "descendant-fixture",
+      "target": "runner-v2/test/fixtures/lsp-server.mjs",
+      "test": "runner-v2/test/lsp-descendant-fixture.test.ts",
+      "red": {
+        "receiptSha256": "c254e1fcbff8196dee4fa4c2f16014b9e75dbf14ba133916157d3ba671dba7dd",
+        "exitCode": 1,
+        "unchanged": true,
+        "failedTests": [
+          "not ok 1 - LSP native descendant fixture remains in its attested linux ownership domain"
+        ],
+        "sourceSha256": "a8c79ee265f44c893f20d736d31075483e25830f11330490a5160a4441ff0b9e",
+        "parseOrLoadError": false
+      },
+      "green": {
+        "receiptSha256": "34c2c0aa1cf4d1541f631f6133fe9812d7a56bc682dde93ae92450b00faf1016",
+        "exitCode": 0,
+        "unchanged": true,
+        "passed": 2,
+        "sourceSha256": "ae3678d0c109e768249bc2a18d4102c9ceaaaf5bdaab22f57b8fb47949a758f8",
+        "testSha256": "6fa90de2ca5b269eec1b43126310a1c2f7e6e4e7a30740321079badccd907211",
+        "retainedRoots": []
+      },
+      "manifest": "finish-20260913/descendant-causal-result.json",
+      "current": {
+        "sourceSha256": "ae3678d0c109e768249bc2a18d4102c9ceaaaf5bdaab22f57b8fb47949a758f8",
+        "testSha256": "6fa90de2ca5b269eec1b43126310a1c2f7e6e4e7a30740321079badccd907211",
+        "sameSource": true,
+        "sameTest": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "at": "2026-09-13T19:38:40.711Z",
+  "root": "C:/Users/b_a_s/AppData/Local/Temp/aiboard-git-inspection-44myvG",
+  "readOnly": true,
+  "sessions": [],
+  "launches": [],
+  "entries": [
+    {
+      "path": "C:/Users/b_a_s/AppData/Local/Temp/aiboard-git-inspection-44myvG/managed",
+      "entries": []
+    },
+    {
+      "path": "C:/Users/b_a_s/AppData/Local/Temp/aiboard-git-inspection-44myvG/managed-job-host",
+      "entries": []
+    }
+  ],
+  "files": [
+    {
+      "path": "runtime/streaming-sessions.key",
+      "sha256": "437c995f1db0aec9681ff259f4cd143acff45b9f14df11c9d1a2bb1884797939"
+    },
+    {
+      "path": "runtime/streaming-sessions.sqlite",
+      "sha256": "98cd402e92458c0655029398dcdebc92e4f995635ca045b9e7025f62bbce8f13"
+    },
+    {
+      "path": "runtime/subprocess-runtime.key",
+      "sha256": "18f6156e49fccacbe405a2d647a264e613ae8e5f118f82818665cd00a8157fe6"
+    },
+    {
+      "path": "runtime/subprocess-runtime.sqlite",
+      "sha256": "44140f4d54951dd568c47ad05679a33f1c20fb42b0c0650a175754f6a84edf21"
+    }
+  ],
+  "note": "Retained Git inspection failure evidence. Observation is not a release certification. No records changed, roots deleted or signals issued; no authentication keys or supervisor tokens exposed."
+}

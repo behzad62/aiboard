@@ -101,6 +101,7 @@ async function main(): Promise<void> {
       projectDirectory: options.projectPath,
       stateDirectory: options.stateDirectory,
       processKernel: executionHost.internalProcesses,
+      ambientEnvironment: executionHost.filteredEnvironmentSource(),
     });
     resources.internalExecutionContext = internalExecutionContext;
 
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
       capabilitiesConfig,
       options.stateDirectory,
       options.projectPath,
+      executionHost.filteredEnvironmentSource(),
     );
     const providerConfigs = new EncryptedProviderConfigStore(
       join(options.stateDirectory, "provider-configs.enc"),
@@ -323,6 +325,7 @@ async function validateActiveRecoveryCapabilityContracts(
   capabilitiesConfig: RunnerCapabilitiesConfig,
   stateDirectory: string,
   projectDirectory: string,
+  environment: Readonly<Record<string, string>>,
 ): Promise<void> {
   const specs = new SqliteBuildSpecStore(join(stateDirectory, "build-specs.sqlite"));
   const failures: unknown[] = [];
@@ -334,6 +337,7 @@ async function validateActiveRecoveryCapabilityContracts(
         await preflightRecoveredRunnerCapabilities({
           spec,
           config: capabilitiesConfig,
+          environment,
           projectDirectory,
           stateDirectory,
           reservedToolNames: RUNNER_BUILTIN_TOOL_NAMES,

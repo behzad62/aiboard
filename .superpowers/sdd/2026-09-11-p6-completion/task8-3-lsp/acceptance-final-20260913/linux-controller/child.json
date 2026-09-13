@@ -1,0 +1,14 @@
+{
+  "pid": 17396,
+  "identity": {
+    "Id": 17396,
+    "StartTimeUtc": "2026-09-13T19:21:52.5363474Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 29120,
+  "spawnedAt": "2026-09-13T19:21:52.852Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-acceptance-gate.mjs"
+  ]
+}

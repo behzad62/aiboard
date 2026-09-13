@@ -1,3 +1,4 @@
+import { languageInvocation } from "./language-intelligence.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
@@ -912,7 +913,7 @@ async function successRevision(
       const result = await diagnostics.diagnostics({
         root: context.workspacePath,
         path: displayPath(context, path),
-      }, context.signal);
+      }, context.signal, languageInvocation(context));
       if (result.status === "unsupported_language") {
         metadata.diagnosticsSkipped = "unsupported_language";
       } else {

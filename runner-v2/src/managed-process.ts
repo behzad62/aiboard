@@ -579,8 +579,9 @@ export class ManagedProcessService {
     owner: WindowsJobOwnershipKey,
     offsets: { readonly stdout: number; readonly stderr: number },
     fence?: WindowsJobWriterFence,
+    maximumBytes?: number,
   ): ManagedProcessOutputRead | Promise<ManagedProcessOutputRead> {
-    return this.windowsJobHost.readOwnedOutput(processId, owner, offsets, fence);
+    return this.windowsJobHost.readOwnedOutput(processId, owner, offsets, fence, maximumBytes);
   }
 
   async probeActiveJobCreateClose(): Promise<boolean> {

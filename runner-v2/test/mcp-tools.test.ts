@@ -1,3 +1,4 @@
+import { McpProtocolError } from "../src/mcp-rpc-peer.js";
 import { canonicalMcpDigest, mcpConfigurationDigest, fixedMcpEnvelope, type McpServerSpec } from "../src/mcp-configuration.js";
 import type { ToolExecutionContext } from "../src/agent-contracts.js";
 import type { McpDiscoveryResult, McpDiscoveryTool } from "../src/runner-internal-execution-context.js";
@@ -635,7 +636,7 @@ test("MCP stdio schemas become audited native tools with artifact-backed images"
       actor: { role: "worker", id: "worker_1" },
       workspacePath: root,
     });
-    assert.equal(result.isError, false);
+    assert.equal(result.isError, false, JSON.stringify(result));
     assert.equal(result.content.some((block) => block.type === "text" && block.text === "found:runner"), true);
     const image = result.content.find((block) => block.type === "artifact");
     assert.ok(image?.type === "artifact");
@@ -717,7 +718,7 @@ test("strict public MCP uses the separately attested portable image command and 
     await portable.manager.start();
     assert.deepEqual(portable.manager.status().map(({ status, toolCount }) => ({ status, toolCount })), [
       { status: "ready", toolCount: 1 },
-    ]);
+    ], JSON.stringify(portable.manager.status()));
     const result = await portable.invoke("lookup", { query: "strict" });
     const second = await portable.invoke("lookup", { query: "same-session-fresh-grant" });
     assert.equal(second.content?.[0]?.text, "found:same-session-fresh-grant");
@@ -815,7 +816,8 @@ for (const mode of ["self-exit", "oversized-line"] as const) {
   // This positive setup now includes an actual lazy first launch/handshake;
   // the trigger still must self-exit (not merely time out), exactly once. Tight
   // write/request deadline behavior is covered separately by gated RPC tests.
-  const requestTimeoutMs = mode === "oversized-line" ? 60_000 : 15_000;
+  // Cold lazy invocation includes initialize, tools/list, and the actual RPC: three existing phase windows.
+  const requestTimeoutMs = mode === "oversized-line" ? 60_000 : 3 * 15_000;
   // Bounded whole-fixture allowance: initialize/tools-list request windows,
   // initialized notification write, existing PID marker wait, real call,
   // release observation, and one verified-close window. All values are
@@ -872,10 +874,10 @@ for (const mode of ["self-exit", "oversized-line"] as const) {
       const callResult = await settlePostReadyCallAndAssertTrigger(observedCall, triggerMarker, stage);
       assert.equal(callResult.status, "rejected");
       if (callResult.status === "rejected") {
-        assert.match(
-          callResult.reason instanceof Error ? callResult.reason.message : String(callResult.reason),
-          /exited|line bound|transport|stopped|cleanup/i,
-        );
+        assert.ok(callResult.reason instanceof McpProtocolError);
+        assert.equal(callResult.reason.outcome, "outcome_unknown", "an admitted crash cannot be called not sent");
+        assert.ok(["mcp_write_outcome_unknown", "mcp_transport_unavailable", "mcp_output_limit"].includes(callResult.reason.code));
+        assert.equal(fixtureOwner.manager.status()[0]?.error, callResult.reason.message);
       }
       try {
         await waitFor(() => fixtureOwner.manager.status()[0]?.status === "error" &&
@@ -885,7 +887,7 @@ for (const mode of ["self-exit", "oversized-line"] as const) {
         throw new Error(`Post-ready cleanup did not settle: status=${JSON.stringify(fixtureOwner.manager.status())}; sessions=${JSON.stringify(fixtureOwner.mcpSessionStates())}; childAlive=${processExists(serverPid)}.`, { cause: error });
       }
       assert.equal(fixtureOwner.manager.status()[0]?.toolCount, 0);
-      assert.match(fixtureOwner.manager.status()[0]?.error ?? "", /exited|line bound|transport/i);
+      assert.ok(fixtureOwner.manager.status()[0]?.error, "the typed failed call remains published as an error");
       assert.doesNotMatch(fixtureOwner.manager.status()[0]?.error ?? "", /cleanup verification failed/i);
       assert.deepEqual(fixtureOwner.mcpSessionStates(), ["released"]);
       stage("release assertion reached");
@@ -1017,7 +1019,7 @@ test("closing an owned MCP transport stops a sustained pending-output pump after
   }
 });
 
-test("public MCP manager crash recovery cleans its exact launched server tree without relaunch", { timeout: 60_000 }, async () => {
+test("public MCP manager crash recovery cleans its exact launched server tree without relaunch", { timeout: 130_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-mcp-manager-crash-"));
   const projectDirectory = join(root, "project");
   const stateDirectory = join(root, "state");
@@ -1064,7 +1066,8 @@ test("public MCP manager crash recovery cleans its exact launched server tree wi
     closed = observeOwnedMcpWrapper(crashed);
     crashed.stderr!.setEncoding("utf8");
     crashed.stderr!.on("data", (chunk: string) => { stderr += chunk; });
-    await waitFor(() => existsSync(readyMarker) && existsSync(serverMarker) && existsSync(descendantMarker), 20_000);
+    // Discovery plus lazy handshake must finish before the intentional wrapper crash.
+    await waitFor(() => existsSync(readyMarker) && existsSync(serverMarker) && existsSync(descendantMarker), 70_000);
     let closeDeadline: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race([
       closed,

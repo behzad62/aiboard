@@ -1,10 +1,13 @@
+import type { LspClient } from "../src/lsp-client.js";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import { ownedLspTest as test, disposeLspTestRoot } from "./support/lsp-test-scope.js";
+import { createTestLspLanguageProvider } from "./support/lsp-language-fixture.js";
+import { fileURLToPath } from "node:url";
 
 import type { LanguageProviderDescriptor } from "../src/language-intelligence.js";
 import {
@@ -12,7 +15,7 @@ import {
   LspLanguageProviderError,
 } from "../src/lsp-language-provider.js";
 
-const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
+const fixtureServer = fileURLToPath(new URL("./fixtures/lsp-server.mjs", import.meta.url));
 const descriptor: LanguageProviderDescriptor = {
   id: "fixture.python-lsp",
   displayName: "Fixture Python LSP",
@@ -141,7 +144,7 @@ test("LSP provider rejects escaped inputs and out-of-workspace server URIs", asy
     );
   } finally {
     await provider.close().catch(() => undefined);
-    rmSync(root, { recursive: true, force: true });
+    await disposeLspTestRoot(root);
   }
 });
 
@@ -177,7 +180,7 @@ test("LSP provider rejects malformed ranges and oversized server-result files", 
     );
   } finally {
     await oversized.close().catch(() => undefined);
-    rmSync(root, { recursive: true, force: true });
+    await disposeLspTestRoot(root);
   }
 });
 
@@ -241,6 +244,14 @@ test("LSP provider ignores stale publish diagnostics after a bounded wait", asyn
     LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
     LSP_FIXTURE_PUBLISH_STALE_VERSION: "1",
   }, 1_000, 80);
+  const client = (fixture.provider as unknown as { client: LspClient }).client;
+  const originalWait = client.waitForPublishedDiagnosticsOrUnversioned.bind(client);
+  let waitedMs = Number.NaN; let waits = 0;
+  client.waitForPublishedDiagnosticsOrUnversioned = async (...args) => {
+    const at = performance.now(); waits++;
+    try { return await originalWait(...args); }
+    finally { waitedMs = performance.now() - at; }
+  };
   try {
     await fixture.provider.definition({
       root: fixture.workspace,
@@ -257,10 +268,11 @@ test("LSP provider ignores stale publish diagnostics after a bounded wait", asyn
     assert.deepEqual(result.results, []);
     assert.equal(result.truncated, false);
     assert.ok(
-      elapsedMs >= 50 && elapsedMs < 400,
-      `stale publish diagnostics wait should use its 80ms bound, received ${elapsedMs.toFixed(1)}ms`,
+      waits === 1 && waitedMs >= 50 && waitedMs < 400 && elapsedMs >= waitedMs,
+      `the actual stale diagnostic wait must use its80ms bound: wait=${waitedMs.toFixed(1)}ms; complete authenticated call=${elapsedMs.toFixed(1)}ms`,
     );
   } finally {
+    client.waitForPublishedDiagnosticsOrUnversioned = originalWait;
     await fixture.close();
   }
 });
@@ -292,7 +304,7 @@ function providerFixture(
     provider,
     close: async () => {
       await provider.close().catch(() => undefined);
-      rmSync(root, { recursive: true, force: true });
+      await disposeLspTestRoot(root);
     },
   };
 }
@@ -304,7 +316,7 @@ function createProvider(
   requestTimeoutMs = 500,
   publishDiagnosticsWaitTimeoutMs?: number,
 ): LspLanguageProvider {
-  return new LspLanguageProvider({
+  return createTestLspLanguageProvider({
     descriptor,
     workspaceRoot,
     projectConfig: join(workspaceRoot, "pyproject.toml"),
@@ -319,7 +331,7 @@ function createProvider(
         : { publishDiagnosticsWaitTimeoutMs }),
       shutdownTimeoutMs: 500,
       restartLimit: 1,
-      env: { ...process.env, ...environment },
+      env: { ...environment },
     },
   });
 }

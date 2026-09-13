@@ -1,0 +1,22 @@
+{
+  "pid": 19304,
+  "identity": {
+    "Id": 19304,
+    "StartTimeUtc": "2026-09-13T19:40:46.4767466Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 12084,
+  "spawnedAt": "2026-09-13T19:40:46.748Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP shared transport uses the real launching call and fresh exact language request authority$",
+    "runner-v2/test/lsp-transport-authority.test.ts"
+  ]
+}

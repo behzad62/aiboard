@@ -1,3 +1,7 @@
+import type { LanguageInvocationContext } from "./language-intelligence.js";
+import type { LspTransportFactory } from "./lsp-transport.js";
+import { LspClientError } from "./lsp-client.js";
+import { resolveLanguageServerExecutable, assertLanguageServerExecutableIdentity } from "./language-server-executable.js";
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import {
   basename,
@@ -56,6 +60,8 @@ export interface LanguageProviderRouterOptions {
   extensionProviders: readonly RegisteredLanguageProvider[];
   configuredServers: readonly ConfiguredLanguageServer[];
   maxAuditRecords?: number;
+  lspTransportFactory?: LspTransportFactory;
+  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 interface ProviderCandidate {
@@ -92,6 +98,9 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   readonly descriptor: LanguageProviderDescriptor;
 
   private readonly candidates: ProviderCandidate[];
+  private readonly lspTransportFactory?: LspTransportFactory;
+  private readonly environment: Readonly<Record<string, string | undefined>>;
+  private readonly configuredOwners = new Map<LspLanguageProvider, string>();
   private readonly builtInProvider: LanguageIntelligenceProvider;
   private readonly extensionProviderInstances: LanguageIntelligenceProvider[];
   private readonly configuredProviders = new Map<string, LspLanguageProvider>();
@@ -104,6 +113,8 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   private closed = false;
 
   constructor(options: LanguageProviderRouterOptions) {
+    this.lspTransportFactory = options.lspTransportFactory;
+    this.environment = Object.freeze({ ...options.environment });
     this.maxAuditRecords = boundedInteger(
       options.maxAuditRecords ?? DEFAULT_MAX_AUDIT_RECORDS,
       "maxAuditRecords",
@@ -155,14 +166,15 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   async workspaceSymbols(
     query: WorkspaceSymbolsQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<WorkspaceSymbol>> {
     const selection = this.select("workspace_symbols", query.root);
     if (!selection) return unsupported();
-    const provider = this.provider(selection);
+    const provider = this.provider(selection, invocation);
     this.audit("workspace_symbols", selection);
     const providerRoot = this.queryRoot(selection);
     return this.rebaseResult(
-      await provider.workspaceSymbols({ ...query, root: providerRoot }, signal),
+      await this.invoke(provider, "workspaceSymbols", { ...query, root: providerRoot }, signal, invocation),
       selection,
       providerRoot,
     );
@@ -171,31 +183,34 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
   async definition(
     query: PositionQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeLocation>> {
-    return await this.positionQuery("definition", query, signal);
+    return await this.positionQuery("definition", query, signal, invocation);
   }
 
   async references(
     query: PositionQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeLocation>> {
-    return await this.positionQuery("references", query, signal);
+    return await this.positionQuery("references", query, signal, invocation);
   }
 
   async diagnostics(
     query: DiagnosticsQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeDiagnostic>> {
     const selection = this.select("diagnostics", query.root, query.path);
     if (!selection) return unsupported();
-    const provider = this.provider(selection);
+    const provider = this.provider(selection, invocation);
     this.audit("diagnostics", selection);
     const providerRoot = this.queryRoot(selection);
-    return this.rebaseResult(await provider.diagnostics({
+    return this.rebaseResult(await this.invoke(provider, "diagnostics", {
       ...query,
       root: providerRoot,
       ...(selection.path ? { path: selection.path } : {}),
-    }, signal), selection, providerRoot);
+    }, signal, invocation), selection, providerRoot);
   }
 
   providerMetadata(): LanguageProviderAuditMetadata[] {
@@ -213,24 +228,43 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     return this.records.map((record) => ({ ...record }));
   }
 
-  /** Starts every configured stdio server so startup rejects an unusable capability atomically. */
+  /** Static preflight records identity only. Lazy LSP cannot consume a model
+   * grant, spawn, or broaden permissions during capability construction. */
   async preflightConfiguredServers(workspaceRoot: string): Promise<void> {
     this.assertOpen();
     const root = existingDirectory(workspaceRoot);
     for (const candidate of this.candidates) {
-      if (candidate.source !== "configured") continue;
-      const marker = matchedRootMarker(root, undefined, candidate.descriptor.rootMarkers);
-      const provider = this.provider({
-        candidate,
-        callerRoot: root,
-        providerRoot: marker?.projectRoot ?? root,
-        ...(marker?.projectConfig ? { projectConfig: marker.projectConfig } : {}),
-      });
-      if (!(provider instanceof LspLanguageProvider)) {
-        throw new Error(`Configured language provider ${candidate.descriptor.id} has an invalid implementation.`);
+      const configured = candidate.configured;
+      if (!configured) continue;
+      if (configured.commandIdentity) await assertLanguageServerExecutableIdentity(configured.commandIdentity);
+      else {
+        const identity = await resolveLanguageServerExecutable(configured.command, { commandSearchDirectory: root, environment: this.environment });
+        configured.command = identity.path; configured.commandIdentity = identity;
       }
-      await provider.preflight();
     }
+  }
+
+  async closeAgent(owner: Pick<LanguageInvocationContext, "runId" | "sessionId" | "actor">): Promise<void> {
+    const key = languageOwnerKey(owner); const failures: unknown[] = [];
+    for (const [provider, agent] of this.configuredOwners) {
+      if (agent !== key) continue;
+      try {
+        await provider.close();
+        this.configuredOwners.delete(provider);
+        for (const [id, current] of this.configuredProviders) if (current === provider) this.configuredProviders.delete(id);
+        const index = this.ownedProviders.indexOf(provider); if (index >= 0) this.ownedProviders.splice(index, 1);
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Exact agent language-server cleanup remains unverified.");
+  }
+
+  private async invoke<M extends "workspaceSymbols" | "definition" | "references" | "diagnostics">(
+    provider: LanguageIntelligenceProvider, method: M, query: Parameters<LanguageIntelligenceProvider[M]>[0],
+    signal?: AbortSignal, invocation?: LanguageInvocationContext,
+  ): Promise<Awaited<ReturnType<LanguageIntelligenceProvider[M]>>> {
+    // Do not pass execution grants to built-ins or extension-provided objects.
+    const call = provider[method].bind(provider) as (...args: unknown[]) => Promise<Awaited<ReturnType<LanguageIntelligenceProvider[M]>>>;
+    return await (this.configuredOwners.has(provider as LspLanguageProvider) ? call(query, signal, invocation) : call(query, signal));
   }
 
   async close(): Promise<void> {
@@ -267,6 +301,7 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       throw new AggregateError(failures, "One or more language providers failed to close.");
     }
     this.configuredProviders.clear();
+    this.configuredOwners.clear();
     this.ownedProviders.length = 0;
   }
 
@@ -274,10 +309,11 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     operation: "definition" | "references",
     query: PositionQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeLocation>> {
     const selection = this.select(operation, query.root, query.path);
     if (!selection) return unsupported();
-    const provider = this.provider(selection);
+    const provider = this.provider(selection, invocation);
     this.audit(operation, selection);
     const providerRoot = this.queryRoot(selection);
     const routed = {
@@ -286,8 +322,8 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       ...(selection.path ? { path: selection.path } : {}),
     };
     const result = operation === "definition"
-      ? await provider.definition(routed, signal)
-      : await provider.references(routed, signal);
+      ? await this.invoke(provider, "definition", routed, signal, invocation)
+      : await this.invoke(provider, "references", routed, signal, invocation);
     return this.rebaseResult(result, selection, providerRoot);
   }
 
@@ -329,14 +365,19 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
     return undefined;
   }
 
-  private provider(selection: ProviderSelection): LanguageIntelligenceProvider {
+  private provider(selection: ProviderSelection, invocation?: LanguageInvocationContext): LanguageIntelligenceProvider {
     if (selection.candidate.provider) return selection.candidate.provider;
     const configured = selection.candidate.configured;
     if (!configured) throw new Error("Language provider candidate has no implementation.");
-    const key = `${configured.descriptor.id}\0${pathKey(selection.providerRoot)}`;
+    if (!invocation?.executionGrant || !invocation.runId || !invocation.sessionId || !invocation.actor?.id || !invocation.callId || !invocation.toolName)
+      throw new LspClientError("invalid_configuration", "Configured language provider requires the original invocation grant authority.");
+    if (!this.lspTransportFactory) throw new LspClientError("invalid_configuration", "Configured LSP requires an injected run-owned execution graph.");
+    const agent = languageOwnerKey(invocation);
+    const key = `${configured.descriptor.id}\0${pathKey(selection.providerRoot)}\0${agent}`;
     const existing = this.configuredProviders.get(key);
     if (existing) return existing;
     this.assertOpen();
+    if (this.configuredProviders.size >= 128) throw new LspClientError("too_many_pending_requests", "Configured LSP session count is bounded.");
     const provider = new LspLanguageProvider({
       descriptor: configured.descriptor,
       workspaceRoot: selection.providerRoot,
@@ -346,6 +387,7 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
         ? { maxDocumentBytes: configured.maxDocumentBytes }
         : {}),
       client: {
+        transportFactory: this.lspTransportFactory,
         command: configured.command,
         args: configured.args,
         ...(configured.commandIdentity
@@ -369,6 +411,7 @@ export class LanguageProviderRouter implements LanguageIntelligenceProvider {
       },
     });
     this.configuredProviders.set(key, provider);
+    this.configuredOwners.set(provider, agent);
     this.ownedProviders.push(provider);
     return provider;
   }
@@ -600,4 +643,8 @@ function boundedInteger(value: number, name: string, minimum: number, maximum: n
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function languageOwnerKey(owner: Pick<LanguageInvocationContext, "runId" | "sessionId" | "actor">): string {
+  return JSON.stringify([owner.runId, owner.actor.role, owner.actor.id, owner.sessionId]);
 }

@@ -1,3 +1,6 @@
+import { createLinkedTestOutputSpillStorage } from "./support/linked-output-spill-storage.js";
+import { BoundedProtocolQueue } from "../src/bounded-protocol-queue.js";
+import { StreamingOutputError } from "../src/streaming-output-controller.js";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { createHash, createHmac } from "node:crypto";
@@ -461,7 +464,7 @@ async function round6Fixture(t: { diagnostic(message: string): void }, phase: "a
     output: { ...fixture.runtimeOptions.output, artifacts, createEvidenceSpool: () => {
       const index = spools.length;
       const spool = new BoundedOutputSpool({ spillRoot: join(root, `spool-${spools.length}`), projectRoot: process.cwd(), ownershipId: "round6", artifactStore: artifacts,
-        storage: { ...createNodeOutputSpillStorage(), attest: async () => ({ currentPrincipalPrivacy: true, identityStableDeletion: true, unlinkedEntries: false }),
+        storage: { ...createLinkedTestOutputSpillStorage(), attest: async () => ({ currentPrincipalPrivacy: true, identityStableDeletion: true, unlinkedEntries: false }),
           removeIdentityStable: async (path, identity) => { const entry = await lstat(path); assert.equal(`${entry.dev.toString()}:${entry.ino.toString()}`, identity); await unlink(path); } } }); spools.push(spool);
       return { write: spool.write.bind(spool), cleanup: async () => { events.push(`cleanup-${index}`); await spool.cleanup(); }, finalize: async () => { events.push("finalize"); return await spool.finalize(); } };
     } },
@@ -615,7 +618,7 @@ for (const boundary of ["normal", "retained_attempt", "before_delete", "after_de
       createEvidenceSpool: () => {
         const spool = new BoundedOutputSpool({ spillRoot: join(directory, `diagnostic-${spools.length}`),
           projectRoot: process.cwd(), ownershipId: "c3-test", tailBytes: 1024, spillBytes: 1024,
-          storage: { ...createNodeOutputSpillStorage(),
+          storage: { ...createLinkedTestOutputSpillStorage(),
             attest: async () => ({ currentPrincipalPrivacy: true, identityStableDeletion: true, unlinkedEntries: false }),
             removeIdentityStable: async (path, identity) => {
               const entry = await lstat(path);
@@ -3692,4 +3695,127 @@ test("MCP graceful shutdown joins stdin-close acknowledgement before changing cl
     assert.deepEqual(events, ["stdin-close-start"], "the grace timer cannot orphan a late input acknowledgement under an old fence");
   } finally { releaseClose(); await closing; f.kernel.store.close(); }
   assert.ok(events.indexOf("shared-quiesce") > events.indexOf("stdin-close-acknowledged"));
+}));
+
+
+test("LSP owned protocol shutdown precedes shared escalation and cannot escape its cleanup scope", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const events: string[] = [];
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { events.push("quiesce"); return "cleaned"; }, undefined, { evidence });
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: () => () => undefined,
+    write: async (_metadata: unknown, bytes: Uint8Array) => { events.push(Buffer.from(bytes).toString()); }, detach: async () => undefined }));
+  await f.runtime.open(f.request);
+  let escaped: { write(payload: Uint8Array, timeoutMs: number): Promise<void> } | undefined;
+  try {
+    await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000, gracefulShutdownMs: 100,
+      gracefulProtocol: async (io: { write(payload: Uint8Array, timeoutMs: number): Promise<void> }) => { escaped = io; await io.write(Buffer.from("shutdown"), 100); await io.write(Buffer.from("exit"), 100); },
+    } as Parameters<typeof f.runtime.cleanupOwnedSession>[0]);
+    assert.ok(escaped, "family shutdown must run under the retained shared cleanup owner");
+    assert.deepEqual(events, ["shutdown", "exit", "quiesce"]);
+    await assert.rejects(escaped.write(Buffer.from("late effect"), 100), /closed|deadline|scope/);
+    assert.equal(f.kernel.store.readBySession("stream-1")!.state, "released");
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+
+test("LSP failed startup uses exact shared pre-adoption cleanup and cannot clean an adopted launch as unstarted", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  // The original fixture defaults to outcome_unknown: that must block release.
+  // This positive case supplies real evidence support and verified fake host
+  // cleanup explicitly, as the corresponding C2/C3 cleanup contract requires.
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  try {
+    f.kernelWriter.prepareLaunch(f.preparedRecord("lsp-failed-open", "lsp-not-adopted"));
+    const cleanup = f.runtime.cleanupOwnedLaunch;
+    await cleanup({ launchId: "lsp-failed-open", timeoutMs: 1000 });
+    assert.equal(f.kernel.store.readHostLaunch("lsp-failed-open")!.state, "released");
+    assert.equal(f.kernel.store.readBySession("lsp-not-adopted"), undefined);
+    const effects = f.calls.length;
+    await cleanup({ launchId: "lsp-failed-open", timeoutMs: 1000 });
+    assert.equal(f.calls.length, effects, "terminal cleanup never repeats resource effects");
+    await f.runtime.open(f.request);
+    const adopted = f.kernel.store.readBySession("stream-1")!;
+    await assert.rejects(cleanup({ launchId: f.request.launchId, timeoutMs: 1000 }), /adopted/);
+    assert.deepEqual(f.kernel.store.readBySession("stream-1"), adopted);
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+for (const outcome of ["blocked", "outcome_unknown"] as const) test(`LSP failed startup retains exact ${outcome} cleanup rather than certifying release`, async () => {
+  const f = await makeFixture(2, outcome);
+  try {
+    f.kernelWriter.prepareLaunch(f.preparedRecord("lsp-uncertain-open", "lsp-not-adopted"));
+    await assert.rejects(f.runtime.cleanupOwnedLaunch({ launchId: "lsp-uncertain-open", timeoutMs: 1000 }),
+      (error: unknown) => error instanceof StreamingProcessSessionError && error.code === "cleanup_blocked");
+    const record = f.kernel.store.readHostLaunch("lsp-uncertain-open")!;
+    assert.equal(record.state, "cleanup_blocked");
+    assert.equal(record.cleanupOwner, "host_control");
+    assert.equal(record.effects.find((effect) => effect.kind === "cleanup")!.resources![0]!.status, "failed");
+    assert.equal(f.kernel.store.readBySession("lsp-not-adopted"), undefined);
+  } finally { f.kernel.store.close(); }
+});
+
+
+for (const milliseconds of [1000, 30000]) test(`LSP failed-launch cleanup binds its ${milliseconds}ms lifecycle budget before terminal output starts`, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  let current = Date.parse(now); const deadlines: number[] = [];
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence, clock: () => new Date(current) });
+  const runtime = createStreamingProcessSessionRuntime({ ...f.runtimeOptions,
+    host: { ...f.runtimeOptions.host, quiesce: async ({ deadlineAt }) => {
+      deadlines.push(deadlineAt); current += 1500; return "verified";
+    } },
+    handshake: { verify: async () => { throw new Error("exact initialization refusal"); } },
+  });
+  try {
+    const request = { ...f.request, failedLaunchCleanupTimeoutMs: milliseconds };
+    await assert.rejects(runtime.open(request));
+    assert.deepEqual(deadlines, [Date.parse(now) + milliseconds]);
+    const record = f.kernel.store.readHostLaunch(f.request.launchId)!;
+    assert.equal(record.state, milliseconds === 1000 ? "cleanup_blocked" : "released");
+    assert.equal(f.kernel.store.readBySession("stream-1"), undefined);
+    if (milliseconds === 30000) assert.equal(f.kernel.store.readOutputCheckpoint("stream-1"), undefined);
+  } finally { f.kernel.store.close(); }
+}));
+
+
+test("LSP grace expiry joins an already admitted parser delivery before cleanup changes ownership", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const payload = Buffer.alloc(4);
+  const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: 4, byteLength: 4, digest: createHash("sha256").update(payload).digest("hex") };
+  const f = await makeFixture(2, "cleaned", undefined, [metadata], 4, undefined, undefined, undefined, { evidence });
+  let releaseRead!: () => void; let enteredRead!: () => void;
+  const held = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const entered = new Promise<void>((resolve) => { enteredRead = resolve; });
+  const original = BoundedProtocolQueue.prototype.read; let armed = true; let deliveries = 0;
+  t.mock.method(BoundedProtocolQueue.prototype, "read", async function(this: BoundedProtocolQueue) {
+    const bytes = await original.call(this);
+    if (armed) { armed = false; enteredRead(); await held; }
+    return bytes;
+  });
+  const facade = await f.runtime.open(f.request);
+  const emission = f.emit({ metadata, bytes: payload, acknowledge: async () => undefined }).catch(() => undefined);
+  assert.equal(await facade.waitForOutput(), true, "the frame is durably admitted before the graceful timer starts");
+  const closing = f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000, gracefulShutdownMs: 10,
+    gracefulProtocol: async (io) => { await io.waitForOutput(); await io.deliverOutput(async () => { deliveries++; }); } });
+  void closing.catch(() => undefined);
+  try {
+    await entered; await new Promise<void>((resolve) => setTimeout(resolve, 35));
+    assert.equal(deliveries, 0);
+    releaseRead(); await closing; await emission;
+    assert.equal(deliveries, 1, "the admitted delivery remains within the same owned cleanup deadline even after its grace interval");
+    assert.equal(f.kernel.store.readBySession("stream-1")!.state, "released");
+    assert.equal(f.kernel.store.readOutputCheckpoint("stream-1"), undefined);
+  } finally { releaseRead(); await closing.catch(() => undefined); await emission; f.kernel.store.close(); }
+}));
+
+test("LSP graceful callback failure after a real effect cannot masquerade as a refused output delivery", async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
+  const payload = Buffer.alloc(4);
+  const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: 4, byteLength: 4, digest: createHash("sha256").update(payload).digest("hex") };
+  const f = await makeFixture(2, "cleaned", undefined, [metadata], 4, undefined, undefined, undefined, { evidence });
+  let deliveries = 0; await f.runtime.open(f.request);
+  const emission = f.emit({ metadata, bytes: payload, acknowledge: async () => undefined }).catch(() => undefined);
+  try {
+    await assert.rejects(f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000, gracefulShutdownMs: 100,
+      gracefulProtocol: async (io) => { await io.waitForOutput(); await io.deliverOutput(async () => {
+        deliveries++; throw new StreamingOutputError("authorization_required", "untrusted callback claiming definite refusal");
+      }); } }));
+    assert.equal(deliveries, 1);
+    assert.equal(f.kernel.store.readOutputCheckpoint("stream-1")!.outcome, "outcome_unknown");
+    assert.notEqual(f.kernel.store.readBySession("stream-1")!.state, "released");
+  } finally { await emission; f.kernel.store.close(); }
 }));

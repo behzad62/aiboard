@@ -1,3 +1,5 @@
+import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
+import type { LspTransportFactory } from "./lsp-transport.js";
 import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
 import { requireGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
@@ -323,7 +325,7 @@ export class NativeBuildFactory {
       capabilityContract: await createRunnerCapabilityContractSnapshot(
         config,
         this.options.stateDirectory,
-        { commandSearchDirectory: this.options.projectRoot },
+        { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
       ),
     };
   }
@@ -333,7 +335,7 @@ export class NativeBuildFactory {
     await validateRunnerCapabilityContract(
       spec.capabilityContract,
       this.capabilitiesConfig(),
-      { commandSearchDirectory: this.options.projectRoot },
+      { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
     );
   }
 
@@ -389,6 +391,7 @@ export class NativeBuildFactory {
       });
       assertIsolationRecoveryClear(hostRecovery.isolation);
       await cleanupRecoveredMcpTransports(executionHostBinding);
+      await cleanupRecoveredLspTransports(executionHostBinding);
       await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_host_binding");
     }
     let runMcpManager = this.options.mcpManager;
@@ -463,6 +466,11 @@ export class NativeBuildFactory {
     const gitContext = executionHostBinding?.git ?? this.options.gitForRun?.(spec);
     const runCapabilities = await createNativeRunCapabilities({
       git: gitContext,
+      environment: this.options.executionHost?.filteredEnvironmentSource() ?? {},
+      ...(executionHostBinding ? { lspTransportFactory: createExecutionHostLspTransportFactory({
+        run: executionHostBinding, permissionProfile: spec.permissionProfile,
+        environment: this.options.executionHost!.filteredEnvironmentSource(),
+      }) } : {}),
       config: {
         ...capabilitiesConfig,
         extensions: runnerCapabilitySnapshotExtensionDirectories(
@@ -1925,6 +1933,8 @@ function aggregateConstructionFailure(
 }
 
 export interface RunnerCapabilityPreflightOptions {
+  lspTransportFactory?: LspTransportFactory;
+  environment?: Readonly<Record<string, string | undefined>>;
   git?: RunGitExecutionContext;
   config: RunnerCapabilitiesConfig;
   projectDirectory: string;
@@ -1934,6 +1944,7 @@ export interface RunnerCapabilityPreflightOptions {
 }
 
 export interface RecoveredRunnerCapabilityPreflightOptions {
+  environment?: Readonly<Record<string, string | undefined>>;
   spec: Pick<NativeBuildSpec, "runId" | "capabilityContract">;
   config: RunnerCapabilitiesConfig;
   projectDirectory: string;
@@ -2047,6 +2058,7 @@ async function createNativeRunCapabilities(
 ): Promise<NativeRunCapabilities> {
   const config = await attestRunnerCapabilitiesLanguageServers(options.config, {
     commandSearchDirectory: options.projectDirectory,
+    environment: options.environment ?? {},
   });
   const builtInLanguage = new TypeScriptIntelligence(
     new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined),
@@ -2073,6 +2085,8 @@ async function createNativeRunCapabilities(
       builtInProvider: builtInLanguage,
       extensionProviders: registry.languageProviders(),
       configuredServers: config.languageServers,
+      lspTransportFactory: options.lspTransportFactory,
+      environment: options.environment ?? {},
     });
     return new NativeRunCapabilities(
       registry,
@@ -2191,6 +2205,7 @@ export async function preflightRecoveredRunnerCapabilities(
 ): Promise<void> {
   await validateRunnerCapabilityContract(options.spec.capabilityContract, options.config, {
     commandSearchDirectory: options.projectDirectory,
+    environment: options.environment ?? {},
   });
   const contract = options.spec.capabilityContract;
   if (!contract) {
@@ -2204,6 +2219,7 @@ export async function preflightRecoveredRunnerCapabilities(
   try {
     await attestRunnerCapabilitiesLanguageServers(contractConfig, {
       commandSearchDirectory: options.projectDirectory,
+    environment: options.environment ?? {},
     });
   } catch (error) {
     throw new RunnerCapabilityContractError(

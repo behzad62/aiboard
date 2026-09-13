@@ -1,3 +1,5 @@
+import type { LanguageInvocationContext } from "./language-intelligence.js";
+import { LspClientError } from "./lsp-client.js";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import {
@@ -142,12 +144,16 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
     }
   }
 
-  /** Starts and negotiates the configured server without issuing a code query. */
-  async preflight(): Promise<void> {
-    await this.client.start();
+  /** Configuration is attested before construction. No language server may be
+   * started by preflight without an actual ToolBroker invocation. */
+  async preflight(): Promise<void> {}
+
+  async workspaceSymbols(query: WorkspaceSymbolsQuery, signal?: AbortSignal, invocation?: LanguageInvocationContext): Promise<CodeIntelligenceResult<WorkspaceSymbol>> {
+    if (!invocation) throw new LspClientError("invalid_configuration", "Configured LSP requires the original language invocation grant authority.");
+    return await this.client.withInvocation(invocation, () => this.workspaceSymbolsAuthorized(query, signal));
   }
 
-  async workspaceSymbols(
+  private async workspaceSymbolsAuthorized(
     query: WorkspaceSymbolsQuery,
     signal?: AbortSignal,
   ): Promise<CodeIntelligenceResult<WorkspaceSymbol>> {
@@ -179,21 +185,36 @@ export class LspLanguageProvider implements LanguageIntelligenceProvider {
     );
   }
 
-  async definition(
+  async definition(query: PositionQuery, signal?: AbortSignal, invocation?: LanguageInvocationContext): Promise<CodeIntelligenceResult<CodeLocation>> {
+    if (!invocation) throw new LspClientError("invalid_configuration", "Configured LSP requires the original language invocation grant authority.");
+    return await this.client.withInvocation(invocation, () => this.definitionAuthorized(query, signal));
+  }
+
+  private async definitionAuthorized(
     query: PositionQuery,
     signal?: AbortSignal,
   ): Promise<CodeIntelligenceResult<CodeLocation>> {
     return await this.positionRequest("textDocument/definition", query, signal);
   }
 
-  async references(
+  async references(query: PositionQuery, signal?: AbortSignal, invocation?: LanguageInvocationContext): Promise<CodeIntelligenceResult<CodeLocation>> {
+    if (!invocation) throw new LspClientError("invalid_configuration", "Configured LSP requires the original language invocation grant authority.");
+    return await this.client.withInvocation(invocation, () => this.referencesAuthorized(query, signal));
+  }
+
+  private async referencesAuthorized(
     query: PositionQuery,
     signal?: AbortSignal,
   ): Promise<CodeIntelligenceResult<CodeLocation>> {
     return await this.positionRequest("textDocument/references", query, signal);
   }
 
-  async diagnostics(
+  async diagnostics(query: DiagnosticsQuery, signal?: AbortSignal, invocation?: LanguageInvocationContext): Promise<CodeIntelligenceResult<CodeDiagnostic>> {
+    if (!invocation) throw new LspClientError("invalid_configuration", "Configured LSP requires the original language invocation grant authority.");
+    return await this.client.withInvocation(invocation, () => this.diagnosticsAuthorized(query, signal));
+  }
+
+  private async diagnosticsAuthorized(
     query: DiagnosticsQuery,
     signal?: AbortSignal,
   ): Promise<CodeIntelligenceResult<CodeDiagnostic>> {

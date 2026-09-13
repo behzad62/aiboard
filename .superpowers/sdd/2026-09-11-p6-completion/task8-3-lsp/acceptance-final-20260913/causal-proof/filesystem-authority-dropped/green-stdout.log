@@ -1,0 +1,20 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-MacFy3"}
+# Subtest: LSP invocation propagates the exact original fs.write grant and identity
+ok 1 - LSP invocation propagates the exact original fs.write grant and identity
+  ---
+  duration_ms: 8.4058
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-MacFy3
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-MacFy3
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-MacFy3","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 226.8008

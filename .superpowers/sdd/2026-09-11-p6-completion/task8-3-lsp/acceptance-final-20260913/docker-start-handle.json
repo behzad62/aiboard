@@ -1,0 +1,6 @@
+{
+  "path": "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+  "startTimeUtc": "2026-09-13T18:59:08.4713577Z",
+  "pid": 23668,
+  "purpose": "Start installed Docker Desktop for existing cached-image acceptance environment; no install/pull/settings change"
+}

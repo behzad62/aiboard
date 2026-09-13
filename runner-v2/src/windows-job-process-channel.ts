@@ -35,7 +35,7 @@ export function createWindowsJobProcessChannelProvider(options: {
     await authority.service.claimOwnedFence(authority.processId, authority.owner, fence);
     await authority.reattest();
     const state = await authority.service.attachOwnedChannel(authority.processId, authority.owner, fence);
-    return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now);
+    return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? []);
   };
   return Object.freeze({
     version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
@@ -44,7 +44,7 @@ export function createWindowsJobProcessChannelProvider(options: {
     acquire,
     async reattach(binding: ProcessBackendBinding, fence: ProcessEffectFence) {
       const channel = await acquire(binding, fence);
-      return { version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, binding, channel, retainedWindow: [], cleanupBootstrap: channel.cleanupBootstrapObservation(), replayCapacityChunks: options.replayCapacityChunks, replayCapacityBytes: options.replayCapacityBytes, nextSequence: channel.nextWriteSequence(), inputClosed: channel.isInputClosed() };
+      return { version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, binding, channel, retainedWindow: channel.retainedWindow(), cleanupBootstrap: channel.cleanupBootstrapObservation(), replayCapacityChunks: options.replayCapacityChunks, replayCapacityBytes: options.replayCapacityBytes, nextSequence: channel.nextWriteSequence(), inputClosed: channel.isInputClosed() };
     },
   });
 }
@@ -67,8 +67,10 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     private readonly pollIntervalMs: number,
     private readonly maximumBytes: number,
     private readonly clock: () => number,
+    private readonly retainedOutput: readonly BackpressuredOutputMetadata[],
   ) {}
 
+  retainedWindow() { return this.retainedOutput.map((frame) => ({ ...frame })); }
   nextWriteSequence() { return this.nextSequence; }
   isInputClosed() { return this.inputClosed; }
 
@@ -207,7 +209,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
       this.assertOutputDeadline();
       const sink = this.sink;
       if (!sink || this.detached) return;
-      const unread = await this.authority.service.readOwnedOutput(this.authority.processId, this.authority.owner, this.offsets, this.authority.fence);
+      const unread = await this.authority.service.readOwnedOutput(this.authority.processId, this.authority.owner, this.offsets, this.authority.fence, this.maximumBytes);
       this.assertOutputDeadline();
       for (const stream of ["stdout", "stderr"] as const) {
         if (this.detached || this.sink !== sink) return;

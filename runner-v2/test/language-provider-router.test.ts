@@ -4,12 +4,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import test from "node:test";
+import { join } from "node:path";
+import { ownedLspTest as test, disposeLspTestRoot } from "./support/lsp-test-scope.js";
+import { LanguageProviderRouter } from "./support/lsp-language-fixture.js";
+import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 
 import type {
@@ -19,14 +20,13 @@ import type {
   LanguageProviderDescriptor,
 } from "../src/language-intelligence.js";
 import {
-  LanguageProviderRouter,
   LanguageProviderRoutingError,
 } from "../src/language-provider-router.js";
 import { RepositoryIntelligence } from "./support/git-fixture.js";
 import type { ConfiguredLanguageServer } from "../src/runner-capabilities-config.js";
 import { TypeScriptIntelligence } from "./support/git-fixture.js";
 
-const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
+const fixtureServer = fileURLToPath(new URL("./fixtures/lsp-server.mjs", import.meta.url));
 
 test("language routing prefers a matching root marker, then priority, with deterministic audit metadata", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-language-route-"));
@@ -67,7 +67,7 @@ test("language routing prefers a matching root marker, then priority, with deter
     }]);
   } finally {
     await router.close();
-    rmSync(root, { recursive: true, force: true });
+    await disposeLspTestRoot(root);
   }
 });
 
@@ -88,7 +88,9 @@ test("configured non-TypeScript LSP routes by extension and closes every owned p
     languageId: "python",
     command: process.execPath,
     args: [fixtureServer, "--fixture-exit-file", marker],
-    requestTimeoutMs: 500,
+    // Routing/root-selection tests use the existing bounded native allowance;
+    // a500ms direct-process startup race is not a routing assertion.
+    requestTimeoutMs: 5000,
     shutdownTimeoutMs: 500,
     restartLimit: 1,
     maxDocumentBytes: 128 * 1024,
@@ -112,7 +114,7 @@ test("configured non-TypeScript LSP routes by extension and closes every owned p
     await router.close();
   }
   await waitFor(() => existsSync(marker));
-  rmSync(root, { recursive: true, force: true });
+  await disposeLspTestRoot(root);
 });
 
 test("configured LSP creates a distinct inner-root provider for each nested file marker", async () => {
@@ -160,7 +162,7 @@ test("configured LSP creates a distinct inner-root provider for each nested file
     );
   } finally {
     await router.close();
-    rmSync(root, { recursive: true, force: true });
+    await disposeLspTestRoot(root);
   }
 });
 
@@ -187,7 +189,7 @@ test("nested built-in TypeScript results preserve caller-root-relative paths", a
     assert.equal(result.results[0]?.path, "nested project/src/main.ts");
   } finally {
     await router.close();
-    rmSync(root, { recursive: true, force: true });
+    await disposeLspTestRoot(root);
   }
 });
 
@@ -220,7 +222,7 @@ test("configured LSP treats a directory root marker as the project root", async 
     assert.deepEqual(rootRecords(rootLog)[0]?.rootUri, pathToFileURL(project).href);
   } finally {
     await router.close();
-    rmSync(root, { recursive: true, force: true });
+    await disposeLspTestRoot(root);
   }
 });
 
@@ -338,7 +340,9 @@ function configuredPythonServer(
     languageId: "python",
     command: process.execPath,
     args,
-    requestTimeoutMs: 500,
+    // Routing/root-selection tests use the existing bounded native allowance;
+    // a500ms direct-process startup race is not a routing assertion.
+    requestTimeoutMs: 5000,
     shutdownTimeoutMs: 500,
     restartLimit: 1,
     maxDocumentBytes: 128 * 1024,

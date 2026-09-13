@@ -1,0 +1,33 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-00bndh"}
+# Subtest: Windows Job retained replay refuses changed bytes before exposing metadata
+not ok 1 - Windows Job retained replay refuses changed bytes before exposing metadata
+  ---
+  duration_ms: 369.9636
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\windows-job-output-replay.test.ts:1:2731'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  operator: 'rejects'
+  stack: |-
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-output-replay.test.ts:53:3)
+    async withFixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-output-replay.test.ts:68:9)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# exact synthetic Job replay fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-job-replay-00bndh
+# synthetic authenticated Job failure retained, no OS workload was launched: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-job-replay-00bndh
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-00bndh","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 681.9824

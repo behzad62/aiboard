@@ -56,6 +56,7 @@ const outputOffsets = { stdout: 0, stderr: 0 };
 const retained = new Map();
 let retainedBytes = 0;
 let handledInput = 0;
+let pendingChannelInput;
 let revision = 0;
 let lastPublishedSignature;
 let handledControl = 0;
@@ -161,6 +162,8 @@ if (config.platform === "posix") {
   child.stdout.once("close", () => markPosixPipeClosed("stdout"));
   child.stderr.once("close", () => markPosixPipeClosed("stderr"));
 }
+// A pipe error belongs to its retained input callback, not process ownership.
+child.stdin.on("error", () => {});
 child.once("error", (error) => fail(error.message));
 child.once("exit", (code, signal) => {
   if (config.platform === "posix") {
@@ -392,6 +395,26 @@ function forgetRetiredOutput(name, metadata) {
 }
 
 function handleChannelInput() {
+  if (pendingChannelInput) {
+    const pending = pendingChannelInput;
+    if (!pending.settled) return;
+    const outcome = settlePortableSupervisorCommand({
+      expectedFence: { ownerId: pending.command.ownerId, fencingToken: pending.command.fencingToken },
+      readCurrentFence: readCurrentFenceStrict,
+      commit: (candidate, effect) => withCurrentFenceEffect(candidate.ownerId, candidate.fencingToken, effect),
+      apply: () => {
+        publishChannelInputAck(pending.command, pending.status);
+        retireChannelInput(pending.path, pending.command.sequence);
+        pendingChannelInput = undefined;
+      },
+      retireStale: () => {
+        retireChannelInput(pending.path, pending.command.sequence);
+        pendingChannelInput = undefined;
+      },
+    });
+    if ((outcome.status === "unavailable" && outcome.cause === "authority") || outcome.status === "outcome_unknown") throw outcome.error;
+    return;
+  }
   const expectedName = `input-${String(handledInput + 1).padStart(12, "0")}.json`;
   const path = join(channelInputDirectory, expectedName);
   if (!existsSync(path)) return;
@@ -413,8 +436,17 @@ function handleChannelInput() {
     commit: (candidate, effect) => withCurrentFenceEffect(candidate.ownerId, candidate.fencingToken, effect),
     apply: () => {
       if (command.type === "write") {
-        if (child.stdin.destroyed || !child.stdin.writable) publishChannelInputAck(command, "failed");
-        else { child.stdin.write(bytes); publishChannelInputAck(command, "acknowledged"); }
+        // Admission is fenced, but waiting for the callback cannot hold that
+        // fence: cleanup must remain able to stop a backpressured child. Keep
+        // the exact command until settlement; never issue its payload twice.
+        const pending = { command, path, settled: false, status: "failed" };
+        pendingChannelInput = pending;
+        if (child.stdin.destroyed || !child.stdin.writable) pending.settled = true;
+        else {
+          try { child.stdin.write(bytes, (error) => { pending.status = error ? "failed" : "acknowledged"; pending.settled = true; }); }
+          catch { pending.settled = true; }
+        }
+        return;
       } else if (command.type === "close_input") {
         child.stdin.end();
         publishChannelInputAck(command, "acknowledged");
@@ -656,7 +688,12 @@ function refreshPosixChildStatus() {
 function recordCausalPosixAnchorRelease(release) {
   if (!posixAnchorReleaseRequested || !posixAnchorReleaseAuthority || !posixSupervisorBirth) return false;
   const expectedSupervisor = { supervisorPid: process.pid, supervisorBirth: posixSupervisorBirth };
-  const outcome = withCurrentFenceEffect(posixAnchorReleaseAuthority.ownerId, posixAnchorReleaseAuthority.fencingToken, () => {
+  // This is observation of a previously fenced, consumed release, not a new
+  // release effect. A higher-fence cleanup owner may join its exact receipt.
+  const current = readCurrentFence();
+  if (!current || current.fencingToken < posixAnchorReleaseAuthority.fencingToken ||
+      (current.fencingToken === posixAnchorReleaseAuthority.fencingToken && current.ownerId !== posixAnchorReleaseAuthority.ownerId)) return false;
+  const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
     const latestRelease = readJson(anchorReleasePath);
     if (!isExactPosixAnchorRelease(release, config.nonce, posixWorkloadGroup, expectedSupervisor, posixAnchorReleaseAuthority) ||
         !isExactPosixAnchorRelease(latestRelease, config.nonce, posixWorkloadGroup, expectedSupervisor, posixAnchorReleaseAuthority)) return false;

@@ -78,7 +78,7 @@ export interface StreamingRuntimeOptions {
   };
   readonly waitUntilDeadline?: (deadlineAt: number) => Promise<void>;
 }
-export interface StreamingOpenRequest { readonly sessionId: string; readonly launchId: string; readonly grant: OpaqueExecutionGrant; readonly binding: ExecutionGrantBinding; readonly envelope: StreamingSessionEnvelope; readonly protocolStreams?: readonly StreamingOutputStream[]; readonly signal?: AbortSignal }
+export interface StreamingOpenRequest { readonly failedLaunchCleanupTimeoutMs?: number; readonly sessionId: string; readonly launchId: string; readonly grant: OpaqueExecutionGrant; readonly binding: ExecutionGrantBinding; readonly envelope: StreamingSessionEnvelope; readonly protocolStreams?: readonly StreamingOutputStream[]; readonly signal?: AbortSignal }
 
 export interface StreamingHandshakeControl {
   write(payload: Uint8Array, timeoutMs: number): Promise<void>;
@@ -89,7 +89,7 @@ export interface StreamingHandshakeControl {
 type OutputController = ReturnType<typeof createStreamingOutputController>;
 type FinalizedEvidence = Awaited<ReturnType<ReturnType<typeof createProtocolEvidenceTee>["finalize"]>>;
 interface AttachmentEvidence { readonly tee: ReturnType<typeof createProtocolEvidenceTee>; finalizing?: Promise<FinalizedEvidence>; finalizedEvidence?: FinalizedEvidence; cleanup?: Promise<void> }
-interface PrivateAttachment { gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
+interface PrivateAttachment { gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
 interface AdoptedCleanupContext { ownerId: string; fencingToken: number; live?: PrivateAttachment; cleanup?: PrivateAttachment; detachChannel?: FakeStreamingChannel; detachSettlement?: Promise<BackpressuredOutputSettlement>; detachOutputFailed?: boolean; control?: AdoptedBackendControl; evidenceContinuable: boolean; retainedCount: number }
 interface AdoptedCleanupRun {
   readonly ownerId: string;
@@ -682,8 +682,14 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       const errors: unknown[] = [];
       if (!attachment.cleanupRelinquished) {
         try { await attachment.writeTail; } catch (error) { errors.push(error); }
-        attachment.output.relinquishForCleanupTakeover();
+        // Stop new intake, then reject pending family acknowledgements without
+        // poisoning their durable checkpoint. Intake itself awaits those ACKs;
+        // joining it first would prevent the evidence-only owner from taking over.
+        // Join after relinquishment so evidence writes cannot overlap reattachment.
         try { attachment.unsubscribe(); } catch (error) { errors.push(error); }
+        attachment.output.relinquishForCleanupTakeover();
+        try { await attachment.intakeTail; } catch (error) { errors.push(error); }
+        if (errors.length) throw new AggregateError(errors, "Streaming attachment cleanup takeover could not settle live intake.");
         try { attachment.unobserve(); } catch (error) { errors.push(error); }
         attachment.cleanupRelinquished = true;
       }
@@ -1148,6 +1154,8 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     disposition: "backend_unavailable" | "outcome_unknown",
     live?: PrivateAttachment,
   ): Promise<void> => {
+    const protocolSettlement = (live ?? attachments.get(sessionId))?.gracefulProtocolSettlement;
+    if (protocolSettlement) await bounded(protocolSettlement, Math.max(1, run.deadlineAt - clock().getTime()));
     const closingInput = (live ?? attachments.get(sessionId))?.gracefulInputClose;
     if (closingInput) await bounded(closingInput, Math.max(1, run.deadlineAt - clock().getTime()));
     if (closingInput && clock().getTime() >= run.deadlineAt) throw runnerSessionError("cleanup_blocked", "Graceful input acknowledgement exceeded the cleanup ownership deadline.");
@@ -1243,6 +1251,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
 
   return Object.freeze({
     async open(request: StreamingOpenRequest) {
+      const failedCleanupMs = request.failedLaunchCleanupTimeoutMs ?? 1000;
+      if (!Number.isSafeInteger(failedCleanupMs) || failedCleanupMs < 1 || failedCleanupMs > 30000)
+        throw runnerSessionError("launch_failed", "Failed-launch cleanup lifecycle bound is invalid.");
       throwIfAborted(request.signal);
       const staged = options.sessions.stageLaunch({ sessionId: request.sessionId, launchId: request.launchId, grant: request.grant, binding: request.binding });
       const claims = options.sessions.validateStagedLaunch(staged, request);
@@ -1260,7 +1271,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         if (durable.state === "isolated" && backendBinding) durable = writer.transitionLaunch({ type: "begin_launch", launchId: request.launchId, ownerId: durable.ownerId, fencingToken: durable.fencingToken, expectedRevision: durable.revision, at: clock().toISOString() });
         if (durable.state === "launching" && backendBinding) writer.transitionLaunch({ type: "bind_backend", launchId: request.launchId, ownerId: durable.ownerId, fencingToken: durable.fencingToken, expectedRevision: durable.revision, backendBinding, at: clock().toISOString() });
       };
-      const settleCleanup = () => cleanupPromise ??= activeEffect.then(async () => { bindKnownResults(); await runHostCleanup(request.launchId, 1_000); });
+      const settleCleanup = () => cleanupPromise ??= activeEffect.then(async () => { bindKnownResults(); await runHostCleanup(request.launchId, failedCleanupMs); });
       const revoker = await registerConsumedExecutionGrantRevoker(claims, settleCleanup);
       const effect = <T>(kind: NonNullable<typeof activeEffectKind>, operation: () => Promise<T>) => {
         effectPending = true; activeEffectKind = kind;
@@ -1274,7 +1285,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         return abortable(promise, request.signal);
       };
       const cleanupOpenResources = async () => {
-        await activeEffect; bindKnownResults(); await runHostCleanup(request.launchId, 1_000);
+        await activeEffect; bindKnownResults(); await runHostCleanup(request.launchId, failedCleanupMs);
       };
       const blockUnresolvedEffect = () => {
         let record = options.kernel.store.readHostLaunch(request.launchId);
@@ -1335,16 +1346,20 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         host = writer.transitionLaunch({ type: "verify_handshake", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, handshakeDigest, at: clock().toISOString() });
         const adopted = options.sessions.finalizeLaunch({ staged, launchId: request.launchId, sessionId: request.sessionId, ownerId, fencingToken: 1, expectedRevision: host.revision, lease, backendBinding, handshakeDigest, envelope: request.envelope });
         attachments.set(request.sessionId, attachment); revoker.dispose();
-        return Object.freeze({
-          sessionId: request.sessionId, record: adopted.record,
-          request: createStreamingRequestOperation({
+        const executionState = { active: false };
+        const scopedRequest = (operation: "request" | "language_request") => createStreamingRequestOperation({
+            operation, executionState,
             sessionId: request.sessionId,
             retainOwnership: (timeoutMs) => { renewOwnedSessionLease(request.sessionId, clock().getTime() + timeoutMs); },
             assert: (authorization, expected) => options.sessions.assertOperationAuthorization(authorization, expected),
             write: (payload, timeoutMs, assertCurrent) => writeAttachment(attachment!, payload, timeoutMs, assertCurrent),
             waitForOutput: (signal) => attachment!.output.waitForPending(signal),
             deliver: (authorization, expected, deliver, assertCurrent) => attachment!.output.deliverForRequest(authorization, expected, deliver, assertCurrent),
-          }),
+          });
+        return Object.freeze({
+          sessionId: request.sessionId, record: adopted.record,
+          request: scopedRequest("request"),
+          languageRequest: scopedRequest("language_request"),
           authorizeFirstOperation: (operation: LaunchOperationAuthorizationRequest) => {
             renewOwnedSessionLease(request.sessionId);
             return options.sessions.authorizeLaunchOperation(operation);
@@ -1403,8 +1418,21 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         throw runnerSessionError(activeEffectKind === "handshake" ? "handshake_refused" : "launch_failed", activeEffectKind === "handshake" ? "Streaming handshake was refused." : "Streaming provider launch phase failed.");
       }
     },
+    async cleanupOwnedLaunch(input: { readonly launchId: string; readonly timeoutMs: number; readonly signal?: AbortSignal }) {
+      if (!input.launchId || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1 || input.timeoutMs > 3_600_000)
+        throw runnerSessionError("cleanup_blocked", "Exact failed-launch cleanup bounds are invalid.");
+      throwIfAborted(input.signal);
+      const record = options.kernel.store.readHostLaunch(input.launchId);
+      if (!record || record.state === "released") return Object.freeze({ released: true as const });
+      if (record.state === "handed_off") throw runnerSessionError("cleanup_blocked", "An adopted session requires its session cleanup owner.");
+      await bounded(runHostCleanup(input.launchId, input.timeoutMs, input.signal), input.timeoutMs, input.signal);
+      if (options.kernel.store.readHostLaunch(input.launchId)?.state !== "released")
+        throw runnerSessionError("cleanup_blocked", "Failed-launch cleanup has not certified exact resource release.");
+      return Object.freeze({ released: true as const });
+    },
     async cleanupOwnedSession(input: {
       readonly gracefulShutdownMs?: number;
+      readonly gracefulProtocol?: (io: StreamingHandshakeControl & { readonly signal: AbortSignal }) => Promise<void>;
       readonly sessionId: string;
       readonly timeoutMs: number;
       readonly signal?: AbortSignal;
@@ -1417,7 +1445,54 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       if (!record || record.state === "released") return Object.freeze({ released: true as const });
       const attachment = attachments.get(input.sessionId);
       const deadlineAt = clock().getTime() + input.timeoutMs;
-      if (input.gracefulShutdownMs !== undefined) {
+      if (input.gracefulProtocol && attachment && record.state === "active" &&
+          record.ownerId === attachment.outputOwnerId && record.fencingToken === attachment.outputFencingToken) {
+        const graceMs = Math.min(input.gracefulShutdownMs ?? 2000, input.timeoutMs);
+        if (!Number.isSafeInteger(graceMs) || graceMs < 1) throw runnerSessionError("cleanup_blocked", "Graceful protocol bound is invalid.");
+        renewOwnedSessionLease(input.sessionId, deadlineAt);
+        attachment.gracefulProtocolSettlement ??= (async () => {
+          await attachment.writeTail;
+          const abort = new AbortController(); let open = true; let writes = 0;
+          const deliveries = new Set<Promise<unknown>>();
+          const assertCleanupOwner = () => {
+            if (clock().getTime() >= deadlineAt) throw runnerSessionError("cleanup_blocked", "Owned graceful protocol cleanup deadline expired.");
+            const current = options.kernel.store.readBySession(input.sessionId);
+            if (!current || current.ownerId !== record.ownerId || current.fencingToken !== record.fencingToken || current.state !== "active")
+              throw runnerSessionError("cleanup_blocked", "Owned graceful protocol authority changed.");
+          };
+          const assertOwned = () => {
+            if (!open || abort.signal.aborted) throw runnerSessionError("cleanup_blocked", "Owned graceful protocol scope is closed.");
+            assertCleanupOwner();
+          };
+          const io = Object.freeze({ signal: abort.signal,
+            write: async (payload: Uint8Array, timeoutMs: number) => {
+              assertOwned(); if (++writes > 16) throw runnerSessionError("cleanup_blocked", "Owned graceful protocol write bound exceeded.");
+              await writeAttachment(attachment, payload, Math.min(timeoutMs, Math.max(1, deadlineAt - clock().getTime())), assertOwned);
+            },
+            waitForOutput: async (signal?: AbortSignal) => {
+              assertOwned(); return await attachment.output.waitForPending(signal ? AbortSignal.any([abort.signal, signal]) : abort.signal);
+            },
+            deliverOutput: async (deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>) => {
+              // Grace expiry closes admission, not an already admitted delivery.
+              // Its exact owner/deadline is still rechecked before the parser
+              // effect; a refusal there cancels intent instead of claiming an
+              // unknown callback effect. Escalation joins every such delivery.
+              assertOwned(); const delivery = attachment.output.deliverNextPrivately(deliver, assertCleanupOwner);
+              deliveries.add(delivery); try { return await delivery; } finally { deliveries.delete(delivery); }
+            },
+          });
+          const protocol = Promise.resolve().then(() => input.gracefulProtocol!(io));
+          // Refused shutdown is not release proof. Once its issuing scope is
+          // closed, only joined writes/delivery may finish; shared escalation
+          // still certifies the entire cleanup conjunction.
+          try { await bounded(protocol, graceMs, input.signal); }
+          catch { /* protocol refusal escalates through the same cleanup owner */ }
+          finally { open = false; abort.abort(); }
+          await bounded(Promise.all([attachment.writeTail, ...deliveries]), Math.max(1, deadlineAt - clock().getTime()));
+        })();
+        await bounded(attachment.gracefulProtocolSettlement, Math.max(1, deadlineAt - clock().getTime()), input.signal);
+      }
+      if (input.gracefulShutdownMs !== undefined && !input.gracefulProtocol) {
         if (!Number.isSafeInteger(input.gracefulShutdownMs) || input.gracefulShutdownMs < 1 || input.gracefulShutdownMs > input.timeoutMs)
           throw runnerSessionError("cleanup_blocked", "Graceful shutdown bound is invalid.");
         if (attachment && record.state === "active" && record.ownerId === attachment.outputOwnerId && record.fencingToken === attachment.outputFencingToken) {

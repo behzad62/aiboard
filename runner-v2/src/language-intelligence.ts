@@ -1,3 +1,12 @@
+import type { ToolExecutionContext } from "./agent-contracts.js";
+
+/** Internal call identity. Router forwards this only to configured LSP, never
+ * to built-in or extension providers. The original opaque grant is retained. */
+export type LanguageInvocationContext = Readonly<ToolExecutionContext>;
+export function languageInvocation(context: ToolExecutionContext): LanguageInvocationContext {
+  return Object.freeze({ ...context, actor: Object.freeze({ ...context.actor }) });
+}
+
 export interface CodeLocation {
   path: string;
   line: number;
@@ -59,19 +68,24 @@ export interface LanguageIntelligenceProvider {
   workspaceSymbols(
     query: WorkspaceSymbolsQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<WorkspaceSymbol>>;
   definition(
     query: PositionQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeLocation>>;
   references(
     query: PositionQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeLocation>>;
   diagnostics(
     query: DiagnosticsQuery,
     signal?: AbortSignal,
+    invocation?: LanguageInvocationContext,
   ): Promise<CodeIntelligenceResult<CodeDiagnostic>>;
+  closeAgent?(owner: Pick<ToolExecutionContext, "runId" | "sessionId" | "actor">): Promise<void>;
   close(): Promise<void>;
 }
 

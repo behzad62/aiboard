@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 
 let input = Buffer.alloc(0);
@@ -7,6 +7,7 @@ let clientProcessId = null;
 let shutdownRequested = false;
 let outputQueue = Promise.resolve();
 const pendingDiagnosticPublications = new Set();
+const heldDiagnosticPublications = new Map();
 const documents = new Map();
 const cancellations = [];
 const blocked = new Set();
@@ -92,6 +93,9 @@ async function handle(message) {
     const pauseMarker = process.env.LSP_FIXTURE_PAUSE_STDIN_FILE;
     if (pauseMarker) {
       process.stdin.pause();
+      // Pausing the only referenced input handle otherwise lets Node exit;
+      // this fixture must remain alive to exercise a genuinely blocked pipe.
+      setInterval(() => {}, 1000);
       writeFileSync(pauseMarker, JSON.stringify({ pid: process.pid }));
     }
     return;
@@ -220,6 +224,11 @@ async function handle(message) {
   }
   if (method === "fixture/block") {
     blocked.add(message.id);
+    const marker = process.env.LSP_FIXTURE_BLOCK_RECEIVED_FILE;
+    if (marker) {
+      writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid, requestId: message.id }));
+      renameSync(marker + ".tmp", marker);
+    }
     return;
   }
   if (method === "fixture/malformed") {
@@ -267,9 +276,12 @@ function startDescendantFixture() {
     const descendant = spawn(process.execPath, ["-e", [
       "const { writeFileSync } = require('node:fs');",
       "writeFileSync(process.env.LSP_FIXTURE_DESCENDANT_PID_FILE, JSON.stringify({ pid: process.pid, parentPid: process.ppid }));",
+      "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
     ].join("")], {
-      detached: true,
+      // Windows Job ownership includes detached children; POSIX group ownership
+      // covers descendants that do not deliberately escape with setsid.
+      detached: process.platform === "win32",
       stdio: "ignore",
       windowsHide: true,
     });
@@ -335,7 +347,13 @@ async function publishDiagnostics(uri, version) {
 function queuePublishDiagnostics(uri, version) {
   const delayedVersion = Number(process.env.LSP_FIXTURE_DELAY_VERSIONLESS_VERSION ?? "0");
   const delayMs = Number(process.env.LSP_FIXTURE_DELAY_VERSIONLESS_MS ?? "0");
+  const holdUntilVersion = Number(process.env.LSP_FIXTURE_HOLD_VERSIONLESS_UNTIL_VERSION ?? "0");
   const task = (async () => {
+    // Causal test schedule: the delayed old report is emitted only after the
+    // explicitly requested newer report, independent of host transport speed.
+    if (process.env.LSP_FIXTURE_PUBLISH_WITHOUT_VERSION === "1" && version === delayedVersion && holdUntilVersion > version) {
+      await new Promise((resolve) => heldDiagnosticPublications.set(uri, { version: holdUntilVersion, resolve }));
+    }
     if (
       process.env.LSP_FIXTURE_PUBLISH_WITHOUT_VERSION === "1" &&
       version === delayedVersion &&
@@ -345,6 +363,8 @@ function queuePublishDiagnostics(uri, version) {
       await delay(delayMs);
     }
     await publishDiagnostics(uri, version);
+    const pending = heldDiagnosticPublications.get(uri);
+    if (pending && version >= pending.version) { heldDiagnosticPublications.delete(uri); pending.resolve(); }
   })();
   pendingDiagnosticPublications.add(task);
   void task.finally(() => pendingDiagnosticPublications.delete(task));

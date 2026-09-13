@@ -1,0 +1,21 @@
+{
+  "pid": 3248,
+  "identity": {
+    "Id": 3248,
+    "StartTimeUtc": "2026-09-13T19:44:31.0412438Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 38644,
+  "spawnedAt": "2026-09-13T19:44:31.346Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/cli-capabilities-config.test.ts"
+  ]
+}

@@ -1,0 +1,892 @@
+TAP version 13
+# Subtest: LSP agent boundary joins only the original exact language owner before returning
+ok 1 - LSP agent boundary joins only the original exact language owner before returning
+  ---
+  duration_ms: 1.6491
+  type: 'test'
+  ...
+# Subtest: LSP agent exit retains primary undefined and cleanup failures
+ok 2 - LSP agent exit retains primary undefined and cleanup failures
+  ---
+  duration_ms: 0.3804
+  type: 'test'
+  ...
+# Subtest: LSP agent exit retains primary false and cleanup failures
+ok 3 - LSP agent exit retains primary false and cleanup failures
+  ---
+  duration_ms: 0.1394
+  type: 'test'
+  ...
+# Subtest: LSP agent exit retains primary Error: agent failed and cleanup failures
+ok 4 - LSP agent exit retains primary Error: agent failed and cleanup failures
+  ---
+  duration_ms: 0.1286
+  type: 'test'
+  ...
+# Subtest: LSP-free agent lifecycles do not add side effects
+ok 5 - LSP-free agent lifecycles do not add side effects
+  ---
+  duration_ms: 0.1243
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-env-Sho21x"}
+# Subtest: LSP executable resolution uses only the explicitly prepared environment, never ambient PATH
+ok 6 - LSP executable resolution uses only the explicitly prepared environment, never ambient PATH
+  ---
+  duration_ms: 10.7006
+  type: 'test'
+  ...
+# static language environment fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-env-Sho21x
+# static language environment fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-env-Sho21x
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-env-Sho21x","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-executable-v8IXJi"}
+# Subtest: LSP re-attestation uses bounded descriptor reads and revalidates replacement bytes without ambient lookup
+ok 7 - LSP re-attestation uses bounded descriptor reads and revalidates replacement bytes without ambient lookup
+  ---
+  duration_ms: 48.8341
+  type: 'test'
+  ...
+# exact non-native executable identity root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-executable-v8IXJi
+# closed non-native executable identity root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-executable-v8IXJi
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-executable-v8IXJi","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-J5HAUe"}
+# Subtest: LSP invocation propagates the exact original code.workspace_symbols grant and identity
+ok 8 - LSP invocation propagates the exact original code.workspace_symbols grant and identity
+  ---
+  duration_ms: 5.3926
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-J5HAUe
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-VDyDWO"}
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-J5HAUe
+# Subtest: LSP invocation propagates the exact original code.definition grant and identity
+ok 9 - LSP invocation propagates the exact original code.definition grant and identity
+  ---
+  duration_ms: 1.1472
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-VDyDWO
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-VDyDWO
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-VXDaAY"}
+# Subtest: LSP invocation propagates the exact original code.references grant and identity
+ok 10 - LSP invocation propagates the exact original code.references grant and identity
+  ---
+  duration_ms: 1.0133
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-VXDaAY
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-VXDaAY
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-EXEQz9"}
+# Subtest: LSP invocation propagates the exact original code.diagnostics grant and identity
+ok 11 - LSP invocation propagates the exact original code.diagnostics grant and identity
+  ---
+  duration_ms: 0.924
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-EXEQz9
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-EXEQz9
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-H42lGW"}
+# Subtest: LSP invocation propagates the exact original fs.write grant and identity
+ok 12 - LSP invocation propagates the exact original fs.write grant and identity
+  ---
+  duration_ms: 4.8336
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-H42lGW
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-H42lGW
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-J5HAUe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-VDyDWO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-VXDaAY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-EXEQz9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-H42lGW","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-provider-HrQGHH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-typescript-provider-kS6oYD"}
+# Subtest: code.* tools preserve their contracts while dispatching through a generic provider
+ok 13 - code.* tools preserve their contracts while dispatching through a generic provider
+  ---
+  duration_ms: 20.9061
+  type: 'test'
+  ...
+# Subtest: the built-in TypeScript engine satisfies the provider contract without an external server
+ok 14 - the built-in TypeScript engine satisfies the provider contract without an external server
+  ---
+  duration_ms: 234.6595
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-provider-HrQGHH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-typescript-provider-kS6oYD","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-route-fvIjSE"}
+# Subtest: language routing prefers a matching root marker, then priority, with deterministic audit metadata
+ok 15 - language routing prefers a matching root marker, then priority, with deterministic audit metadata
+  ---
+  duration_ms: 9.097
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-language-route-fvIjSE
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-lsp-Ω-bMhPLW"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-4gUpKA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-vYtfZa"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-v2TNIo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-IMaxU6"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-nested-roots-gQDrVt"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-rr5oI4"}
+# Subtest: configured non-TypeScript LSP routes by extension and closes every owned process
+ok 16 - configured non-TypeScript LSP routes by extension and closes every owned process
+  ---
+  duration_ms: 15379.8522
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-language-lsp-Ω-bMhPLW
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-4gUpKA
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-KpsCKF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-SRpF4J"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Xm50up"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-typescript-caller-root-XQDOhT"}
+# Subtest: configured LSP creates a distinct inner-root provider for each nested file marker
+ok 17 - configured LSP creates a distinct inner-root provider for each nested file marker
+  ---
+  duration_ms: 21954.7172
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-language-nested-roots-gQDrVt
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-rr5oI4
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-directory-marker-QoDA4e"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-5N689k"}
+# Subtest: nested built-in TypeScript results preserve caller-root-relative paths
+ok 18 - nested built-in TypeScript results preserve caller-root-relative paths
+  ---
+  duration_ms: 252.668
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-language-typescript-caller-root-XQDOhT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Zv3oPZ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-do8Et2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-B3byz7"}
+# Subtest: configured LSP treats a directory root marker as the project root
+ok 19 - configured LSP treats a directory root marker as the project root
+  ---
+  duration_ms: 15497.9718
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-language-directory-marker-QoDA4e
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-5N689k
+# Subtest: language routing rejects provider identity collisions before any query
+ok 20 - language routing rejects provider identity collisions before any query
+  ---
+  duration_ms: 0.5685
+  type: 'test'
+  ...
+# Subtest: router close retries only failed providers in the original reverse order
+ok 21 - router close retries only failed providers in the original reverse order
+  ---
+  duration_ms: 0.4747
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-route-fvIjSE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-lsp-Ω-bMhPLW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-4gUpKA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-vYtfZa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-v2TNIo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-IMaxU6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-nested-roots-gQDrVt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-rr5oI4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-KpsCKF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-SRpF4J","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Xm50up","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-typescript-caller-root-XQDOhT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-language-directory-marker-QoDA4e","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-5N689k","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Zv3oPZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-do8Et2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-B3byz7","existsAtExit":false}
+# Subtest: LSP migrated family contains no direct launch signal shell or ambient environment fallback
+ok 22 - LSP migrated family contains no direct launch signal shell or ambient environment fallback
+  ---
+  duration_ms: 46.4812
+  type: 'test'
+  ...
+# Subtest: LSP caller policy rejects aliased process launch without executing the source
+ok 23 - LSP caller policy rejects aliased process launch without executing the source
+  ---
+  duration_ms: 0.5654
+  type: 'test'
+  ...
+# Subtest: LSP caller policy rejects dynamic process launch without executing the source
+ok 24 - LSP caller policy rejects dynamic process launch without executing the source
+  ---
+  duration_ms: 0.233
+  type: 'test'
+  ...
+# Subtest: LSP caller policy rejects numeric cleanup without executing the source
+ok 25 - LSP caller policy rejects numeric cleanup without executing the source
+  ---
+  duration_ms: 0.1361
+  type: 'test'
+  ...
+# Subtest: LSP caller policy rejects shell fallback without executing the source
+ok 26 - LSP caller policy rejects shell fallback without executing the source
+  ---
+  duration_ms: 0.1125
+  type: 'test'
+  ...
+# Subtest: LSP caller policy rejects ambient credentials without executing the source
+ok 27 - LSP caller policy rejects ambient credentials without executing the source
+  ---
+  duration_ms: 0.1282
+  type: 'test'
+  ...
+# Subtest: LSP transport never mints a replacement model-call grant or launches through a private bootstrap
+ok 28 - LSP transport never mints a replacement model-call grant or launches through a private bootstrap
+  ---
+  duration_ms: 6.3388
+  type: 'test'
+  ...
+# Subtest: LSP worker architect and subagent loops join their language ownership boundary
+ok 29 - LSP worker architect and subagent loops join their language ownership boundary
+  ---
+  duration_ms: 9.5306
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-partial Ω-uP9YV7"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-KojaQ4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-sLNqRS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-oLlcAS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-failures-c8ImT5"}
+# Subtest: LSP client initializes over partial frames, synchronizes exact versions, cancels, and shuts down
+ok 30 - LSP client initializes over partial frames, synchronizes exact versions, cancels, and shuts down
+  ---
+  duration_ms: 20821.8483
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-partial Ω-uP9YV7
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zr0JT6"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-zIfwKq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Uw2zSd"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-stdin backpressure-D9kJVv"}
+# Subtest: LSP client returns typed bounded errors for missing executables, malformed frames, and timeouts
+ok 31 - LSP client returns typed bounded errors for missing executables, malformed frames, and timeouts
+  ---
+  duration_ms: 37073.837
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-failures-c8ImT5
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-RQHHcM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-Huvz6u"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-kSDq5g"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-late shared acquisition-eb4ESE"}
+# Subtest: LSP client settles cancellation before a backpressured pipe and bounds the failed session
+ok 32 - LSP client settles cancellation before a backpressured pipe and bounds the failed session
+  ---
+  duration_ms: 21050.1703
+  type: 'test'
+  ...
+# exact LSP fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-stdin backpressure-D9kJVv
+# verified shared backpressure close: 5861 ms
+# certified LSP root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-stdin backpressure-D9kJVv
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-stdin backpressure-D9kJVv
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-cmd launcher-CbmUnf"}
+# Subtest: LSP client close joins a late shared acquisition without private bootstrap or unhandled rejection
+ok 33 - LSP client close joins a late shared acquisition without private bootstrap or unhandled rejection
+  ---
+  duration_ms: 3.0158
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-late shared acquisition-eb4ESE
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-o7TvBv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-9R4hpY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-lUomso"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-space Ω launch-aMpZCD"}
+# Subtest: LSP client launches a safe Windows command-shell shim through the Job Object host
+ok 34 - LSP client launches a safe Windows command-shell shim through the Job Object host
+  ---
+  duration_ms: 17968.8594
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-cmd launcher-CbmUnf
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Dt0JiN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-qGJc5n"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-EJ73tQ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-attested executable Ω-jXurJ1"}
+# Subtest: LSP client launches a direct executable in a space and Unicode workspace
+ok 35 - LSP client launches a direct executable in a space and Unicode workspace
+  ---
+  duration_ms: 15887.0183
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-space Ω launch-aMpZCD
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OuaOdV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-e5Q2WM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-g8YnmG"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-restart-limit-KRDjOx"}
+# Subtest: LSP client launches the attested canonical executable and rejects a byte replacement before spawn
+ok 36 - LSP client launches the attested canonical executable and rejects a byte replacement before spawn
+  ---
+  duration_ms: 14307.2984
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-attested executable Ω-jXurJ1
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ioQu8T"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-XaAn46"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-gmvSLk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-forced-shutdown-GVc8ea"}
+# Subtest: LSP client cannot bypass the restart limit through an explicit start
+ok 37 - LSP client cannot bypass the restart limit through an explicit start
+  ---
+  duration_ms: 15006.0674
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-restart-limit-KRDjOx
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-uuNW0B"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-TGtGqF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-yaKmVm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-close termination retry-4APn93"}
+# Subtest: LSP client force-closes a server that does not answer shutdown
+ok 38 - LSP client force-closes a server that does not answer shutdown
+  ---
+  duration_ms: 15571.6497
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-forced-shutdown-GVc8ea
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-VVhOkj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-oN3RaL"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-fS0oan"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-versionless publish diagnostics-GM7yZX"}
+# Subtest: LSP client retries termination after a failed close while the server remains live
+ok 39 - LSP client retries termination after a failed close while the server remains live
+  ---
+  duration_ms: 15449.9565
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-close termination retry-4APn93
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OYXaRq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-PoPD9M"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-LhWUVu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-versionless stale diagnostics-hSlyrd"}
+# Subtest: LSP client retains a fast versionless publish as explicitly non-authoritative
+ok 40 - LSP client retains a fast versionless publish as explicitly non-authoritative
+  ---
+  duration_ms: 15184.4938
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-versionless publish diagnostics-GM7yZX
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-f80PCM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-WzThtF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-UySydI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-explicit stale diagnostics-IXBxwh"}
+# Subtest: LSP client never relabels delayed versionless v1 diagnostics as authoritative v2
+ok 41 - LSP client never relabels delayed versionless v1 diagnostics as authoritative v2
+  ---
+  duration_ms: 15210.5751
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-versionless stale diagnostics-hSlyrd
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ntLSKi"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-3VkjUv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-OSCjLN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-descendant Ω-WOU5xE"}
+# Subtest: LSP client rejects an explicit stale publish after an explicitly versioned current result
+ok 42 - LSP client rejects an explicit stale publish after an explicitly versioned current result
+  ---
+  duration_ms: 15645.9356
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-explicit stale diagnostics-IXBxwh
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-EwhrWs"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-YM33OS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-RRAjH3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-restart-o6kOsP"}
+# Subtest: LSP client shutdown owns and terminates language-server descendants
+ok 43 - LSP client shutdown owns and terminates language-server descendants
+  ---
+  duration_ms: 15148.9196
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-descendant Ω-WOU5xE
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-oRjBvf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-QAYcTh"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-1qQqYv"}
+# Subtest: LSP client restarts a crashed server only within the configured limit and reopens documents
+ok 44 - LSP client restarts a crashed server only within the configured limit and reopens documents
+  ---
+  duration_ms: 28550.6612
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-restart-o6kOsP
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-partial Ω-uP9YV7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-KojaQ4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-sLNqRS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-oLlcAS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-failures-c8ImT5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zr0JT6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-zIfwKq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Uw2zSd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-stdin backpressure-D9kJVv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-RQHHcM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-Huvz6u","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-kSDq5g","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-late shared acquisition-eb4ESE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-cmd launcher-CbmUnf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-o7TvBv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-9R4hpY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-lUomso","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-space Ω launch-aMpZCD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Dt0JiN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-qGJc5n","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-EJ73tQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-attested executable Ω-jXurJ1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OuaOdV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-e5Q2WM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-g8YnmG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-restart-limit-KRDjOx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ioQu8T","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-XaAn46","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-gmvSLk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-forced-shutdown-GVc8ea","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-uuNW0B","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-TGtGqF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-yaKmVm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-close termination retry-4APn93","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-VVhOkj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-oN3RaL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-fS0oan","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-versionless publish diagnostics-GM7yZX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OYXaRq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-PoPD9M","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-LhWUVu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-versionless stale diagnostics-hSlyrd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-f80PCM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-WzThtF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-UySydI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-explicit stale diagnostics-IXBxwh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ntLSKi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-3VkjUv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-OSCjLN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-descendant Ω-WOU5xE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-EwhrWs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-YM33OS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-RRAjH3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-restart-o6kOsP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-oRjBvf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-QAYcTh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-1qQqYv","existsAtExit":false}
+# Subtest: LSP native descendant fixture remains in its attested linux ownership domain
+ok 45 - LSP native descendant fixture remains in its attested linux ownership domain
+  ---
+  duration_ms: 0.9017
+  type: 'test'
+  ...
+# Subtest: LSP native descendant fixture remains in its attested win32 ownership domain
+ok 46 - LSP native descendant fixture remains in its attested win32 ownership domain
+  ---
+  duration_ms: 0.3791
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lsp-envelope-TNuJg5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Q2yxYw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-Nph3kr"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-a4YdBU"}
+# Subtest: LSP actual shared launch scrubs inherited credentials and persists explicit unconfined Full disclosure
+ok 47 - LSP actual shared launch scrubs inherited credentials and persists explicit unconfined Full disclosure
+  ---
+  duration_ms: 16801.9423
+  type: 'test'
+  ...
+# exact LSP envelope root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lsp-envelope-TNuJg5
+# verified LSP envelope root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lsp-envelope-TNuJg5
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lsp-envelope-TNuJg5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Q2yxYw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-Nph3kr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-a4YdBU","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-invalid-init-yqhfj2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-fPRzuI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-QYmCIw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-t8F0KK"}
+# Subtest: LSP real invalid initialization keeps its protocol code and verifies every pre-adoption resource
+ok 48 - LSP real invalid initialization keeps its protocol code and verifies every pre-adoption resource
+  ---
+  duration_ms: 14037.4624
+  type: 'test'
+  ...
+# exact failed-initialize fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-invalid-init-yqhfj2
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-invalid-init-yqhfj2
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-invalid-init-yqhfj2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-fPRzuI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-QYmCIw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-t8F0KK","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-QO2gO0"}
+# Subtest: LSP preserves its first protocol_error protocol cause when shared transport subsequently becomes unavailable
+ok 49 - LSP preserves its first protocol_error protocol cause when shared transport subsequently becomes unavailable
+  ---
+  duration_ms: 6.8554
+  type: 'test'
+  ...
+# exact synthetic LSP lifetime root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-QO2gO0
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-ZPBRY9"}
+# closed synthetic LSP lifetime root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-QO2gO0
+# Subtest: LSP preserves its first frame_too_large protocol cause when shared transport subsequently becomes unavailable
+ok 50 - LSP preserves its first frame_too_large protocol cause when shared transport subsequently becomes unavailable
+  ---
+  duration_ms: 1.5224
+  type: 'test'
+  ...
+# exact synthetic LSP lifetime root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-ZPBRY9
+# closed synthetic LSP lifetime root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-ZPBRY9
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-DDeCMH"}
+# Subtest: LSP preserves its first process_exited protocol cause when shared transport subsequently becomes unavailable
+ok 51 - LSP preserves its first process_exited protocol cause when shared transport subsequently becomes unavailable
+  ---
+  duration_ms: 1.2297
+  type: 'test'
+  ...
+# exact synthetic LSP lifetime root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-DDeCMH
+# closed synthetic LSP lifetime root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-DDeCMH
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-IOSopU"}
+# Subtest: LSP preserves its first request_timeout protocol cause when shared transport subsequently becomes unavailable
+ok 52 - LSP preserves its first request_timeout protocol cause when shared transport subsequently becomes unavailable
+  ---
+  duration_ms: 1.2371
+  type: 'test'
+  ...
+# exact synthetic LSP lifetime root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-IOSopU
+# closed synthetic LSP lifetime root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-IOSopU
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-CH0m7d"}
+# Subtest: LSP caller failure is bounded independently of retained exact cleanup
+ok 53 - LSP caller failure is bounded independently of retained exact cleanup
+  ---
+  duration_ms: 1.7074
+  type: 'test'
+  ...
+# exact synthetic LSP lifetime root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-CH0m7d
+# closed synthetic LSP lifetime root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-CH0m7d
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-F3CMZL"}
+# Subtest: LSP queued invocations time out or cancel without borrowing an active writer
+ok 54 - LSP queued invocations time out or cancel without borrowing an active writer
+  ---
+  duration_ms: 68.3148
+  type: 'test'
+  ...
+# exact synthetic LSP lifetime root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-F3CMZL
+# closed synthetic LSP lifetime root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-lifetime-F3CMZL
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-language-budget-QDWmVY"}
+# Subtest: LSP language operation budget lets the typed write timeout settle before the shared ownership deadline
+ok 55 - LSP language operation budget lets the typed write timeout settle before the shared ownership deadline
+  ---
+  duration_ms: 92.2367
+  type: 'test'
+  ...
+# exact synthetic LSP language-budget root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-language-budget-QDWmVY
+# closed synthetic LSP language-budget root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-language-budget-QDWmVY
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-QO2gO0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-ZPBRY9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-DDeCMH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-IOSopU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-CH0m7d","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-lifetime-F3CMZL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-language-budget-QDWmVY","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-provider Ω-9zrMty"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-HZmvAH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-u3PPF5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-dbxNLH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-MgPz0U"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-containment-oyBZd2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-Gy4EB6"}
+# Subtest: LSP provider maps non-TypeScript symbols, UTF-16 locations, references, and diagnostics
+ok 56 - LSP provider maps non-TypeScript symbols, UTF-16 locations, references, and diagnostics
+  ---
+  duration_ms: 17708.7957
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-provider Ω-9zrMty
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-HZmvAH
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-4FPkxf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-MXqfDu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QABIiq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-hostile-result-YrK6Iw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-pAmGnA"}
+# Subtest: LSP provider rejects escaped inputs and out-of-workspace server URIs
+ok 57 - LSP provider rejects escaped inputs and out-of-workspace server URIs
+  ---
+  duration_ms: 15422.3604
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-containment-oyBZd2
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-Gy4EB6
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-PN0CG3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-FbMvJk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-nHTqE5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-WEhXNU"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-XLKxuE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-q3Iufw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-X5z8yx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-push diagnostics-MAWQ2U"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-FDyrdM"}
+# Subtest: LSP provider rejects malformed ranges and oversized server-result files
+ok 58 - LSP provider rejects malformed ranges and oversized server-result files
+  ---
+  duration_ms: 32581.696
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-hostile-result-YrK6Iw
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-WEhXNU
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-pAmGnA
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-9pVrqq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-SRzYsH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-8BncHS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-versionless push diagnostics-sPQ76y"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-vfVeWT"}
+# Subtest: LSP provider uses bounded, version-matched publish diagnostics when pull is unavailable
+ok 59 - LSP provider uses bounded, version-matched publish diagnostics when pull is unavailable
+  ---
+  duration_ms: 15160.4112
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-push diagnostics-MAWQ2U
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-FDyrdM
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-1QyaeM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-JcO7nx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-4L1PD2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-partial diagnostics-8YqdFY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-qp8lEG"}
+# Subtest: LSP provider preserves push-only versionless diagnostics with explicit freshness metadata
+ok 60 - LSP provider preserves push-only versionless diagnostics with explicit freshness metadata
+  ---
+  duration_ms: 14183.2144
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-versionless push diagnostics-sPQ76y
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-vfVeWT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OzduQM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-MTCveV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-IwTlrp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-stale push diagnostics-KiA3ia"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-GwzYJs"}
+# Subtest: LSP provider uses cached publish diagnostics when only document pull is negotiated
+ok 61 - LSP provider uses cached publish diagnostics when only document pull is negotiated
+  ---
+  duration_ms: 15147.8606
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-partial diagnostics-8YqdFY
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-qp8lEG
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-JWTVQ0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-v0eM0T"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-OFGeQL"}
+# Subtest: LSP provider ignores stale publish diagnostics after a bounded wait
+ok 62 - LSP provider ignores stale publish diagnostics after a bounded wait
+  ---
+  duration_ms: 14935.8079
+  type: 'test'
+  ...
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-lsp-stale push diagnostics-KiA3ia
+# certified LSP compatibility root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-external-state-GwzYJs
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-provider Ω-9zrMty","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-HZmvAH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-u3PPF5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-dbxNLH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-MgPz0U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-containment-oyBZd2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-Gy4EB6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-4FPkxf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-MXqfDu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QABIiq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-hostile-result-YrK6Iw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-pAmGnA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-PN0CG3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-FbMvJk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-nHTqE5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-WEhXNU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-XLKxuE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-q3Iufw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-X5z8yx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-push diagnostics-MAWQ2U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-FDyrdM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-9pVrqq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-SRzYsH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-8BncHS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-versionless push diagnostics-sPQ76y","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-vfVeWT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-1QyaeM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-JcO7nx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-4L1PD2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-partial diagnostics-8YqdFY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-qp8lEG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OzduQM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-MTCveV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-IwTlrp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-lsp-stale push diagnostics-KiA3ia","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-external-state-GwzYJs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-JWTVQ0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-v0eM0T","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-OFGeQL","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-EhfMub"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-FG3RFe"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-C8jKTs"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-0bon7Z"}
+# Subtest: LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+ok 63 - LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+  ---
+  duration_ms: 25225.6208
+  type: 'test'
+  ...
+# exact native LSP fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-EhfMub
+# actual code grant, actual post-write grant, separate agent, protocol shutdown and shared release verified
+# certified native LSP fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-EhfMub
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-EhfMub","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-FG3RFe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-C8jKTs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-0bon7Z","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-router-pTC737"}
+# Subtest: LSP router preflight is static and configured queries require the original authorization
+ok 64 - LSP router preflight is static and configured queries require the original authorization
+  ---
+  duration_ms: 126.0178
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-router-4algAd"}
+# Subtest: LSP router separates agent identities and joins only the terminating agent's owned sessions
+ok 65 - LSP router separates agent identities and joins only the terminating agent's owned sessions
+  ---
+  duration_ms: 11.1668
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-router-pTC737","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-router-4algAd","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-server-control-5j6AZh"}
+# Subtest: LSP workspace/configuration server reply stays in the exact active scope across external output callbacks
+ok 66 - LSP workspace/configuration server reply stays in the exact active scope across external output callbacks
+  ---
+  duration_ms: 7.3862
+  type: 'test'
+  ...
+# synthetic server-control root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-server-control-5j6AZh
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-server-control-6M7Ias"}
+# closed server-control root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-server-control-5j6AZh
+# Subtest: LSP window/workDoneProgress/create server reply stays in the exact active scope across external output callbacks
+ok 67 - LSP window/workDoneProgress/create server reply stays in the exact active scope across external output callbacks
+  ---
+  duration_ms: 1.6434
+  type: 'test'
+  ...
+# synthetic server-control root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-server-control-6M7Ias
+# closed server-control root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-server-control-6M7Ias
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-server-control-YHSpNF"}
+# Subtest: LSP workspace/applyEdit server reply stays in the exact active scope across external output callbacks
+ok 68 - LSP workspace/applyEdit server reply stays in the exact active scope across external output callbacks
+  ---
+  duration_ms: 1.2498
+  type: 'test'
+  ...
+# synthetic server-control root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-server-control-YHSpNF
+# closed server-control root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-server-control-YHSpNF
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-extension-boundary-Gnw2Tm"}
+# Subtest: LSP router never forwards opaque grants to an extension object with an LSP prototype
+ok 69 - LSP router never forwards opaque grants to an extension object with an LSP prototype
+  ---
+  duration_ms: 3.275
+  type: 'test'
+  ...
+# synthetic extension-boundary root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-extension-boundary-Gnw2Tm
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-server-control-5j6AZh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-server-control-6M7Ias","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-server-control-YHSpNF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-extension-boundary-Gnw2Tm","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-0AQ1NP"}
+# Subtest: LSP shared client preserves framing, document versions and exact invocation without private spawn
+ok 70 - LSP shared client preserves framing, document versions and exact invocation without private spawn
+  ---
+  duration_ms: 8.6938
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-vkaoW4"}
+# Subtest: LSP shared client never replays a crashed request and reopens documents only on a fresh invocation
+ok 71 - LSP shared client never replays a crashed request and reopens documents only on a fresh invocation
+  ---
+  duration_ms: 3.1828
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-ZPrpAY"}
+# Subtest: LSP response cannot report success before the shared write acknowledgement
+ok 72 - LSP response cannot report success before the shared write acknowledgement
+  ---
+  duration_ms: 1.6419
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-W43zIQ"}
+# Subtest: LSP fresh invocation may restart a cancelled non-idle session without changing the original error retryability
+ok 73 - LSP fresh invocation may restart a cancelled non-idle session without changing the original error retryability
+  ---
+  duration_ms: 1.6724
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-ta9SpI"}
+# Subtest: LSP provider callback validation errors retain their exact type without poisoning a quiescent protocol
+ok 74 - LSP provider callback validation errors retain their exact type without poisoning a quiescent protocol
+  ---
+  duration_ms: 1.6826
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-HQfxrb"}
+# Subtest: LSP shared shutdown budgets response and acknowledged exit as serial bounded phases
+ok 75 - LSP shared shutdown budgets response and acknowledged exit as serial bounded phases
+  ---
+  duration_ms: 1.5093
+  type: 'test'
+  ...
+# closed synthetic shutdown-budget root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-shutdown-budget-HQfxrb
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-0AQ1NP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-vkaoW4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-ZPrpAY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-W43zIQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-client-ta9SpI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-HQfxrb","existsAtExit":false}
+# Subtest: LSP shared transport rejects missing before backend launch or invented grant
+ok 76 - LSP shared transport rejects missing before backend launch or invented grant
+  ---
+  duration_ms: 0.8236
+  type: 'test'
+  ...
+# Subtest: LSP shared transport rejects foreign-run before backend launch or invented grant
+ok 77 - LSP shared transport rejects foreign-run before backend launch or invented grant
+  ---
+  duration_ms: 0.1179
+  type: 'test'
+  ...
+# Subtest: LSP shared transport rejects strict-host-only before backend launch or invented grant
+ok 78 - LSP shared transport rejects strict-host-only before backend launch or invented grant
+  ---
+  duration_ms: 0.0703
+  type: 'test'
+  ...
+# Subtest: LSP shared transport uses the real launching call and fresh exact language request authority
+ok 79 - LSP shared transport uses the real launching call and fresh exact language request authority
+  ---
+  duration_ms: 340.3476
+  type: 'test'
+  ...
+# Subtest: LSP failed initialization retains its typed cause and joins exact shared launch cleanup
+ok 80 - LSP failed initialization retains its typed cause and joins exact shared launch cleanup
+  ---
+  duration_ms: 115.1516
+  type: 'test'
+  ...
+# Subtest: LSP shared chunking serializes whole frames against concurrent server-control replies
+ok 81 - LSP shared chunking serializes whole frames against concurrent server-control replies
+  ---
+  duration_ms: 175.1899
+  type: 'test'
+  ...
+# Subtest: LSP shared chunking never issues a queued frame after a failed predecessor
+ok 82 - LSP shared chunking never issues a queued frame after a failed predecessor
+  ---
+  duration_ms: 170.9248
+  type: 'test'
+  ...
+1..82
+# tests 82
+# suites 0
+# pass 82
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 507067.2766

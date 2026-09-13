@@ -1,0 +1,163 @@
+{
+  "faultCount": 26,
+  "inputDigest": "ce13787bb2b1af11feb9a49ef8493b5a6171b0fbce47dbffb8a621bd87248987",
+  "proofs": [
+    {
+      "id": "supervisor-stream-error",
+      "target": "runner-v2/src/managed-process-supervisor.mjs",
+      "test": "runner-v2/test/windows-job-supervisor-input.test.ts",
+      "proof": "causal-proof/supervisor-stream-error/proof.json"
+    },
+    {
+      "id": "logical-frame-interleaving",
+      "target": "runner-v2/src/execution-host-lsp-transport.ts",
+      "test": "runner-v2/test/lsp-transport-framing.test.ts",
+      "proof": "causal-proof/logical-frame-interleaving/proof.json"
+    },
+    {
+      "id": "code-authority-dropped",
+      "target": "runner-v2/src/code-intelligence-tools.ts",
+      "test": "runner-v2/test/language-invocation-propagation.test.ts",
+      "proof": "causal-proof/code-authority-dropped/proof.json"
+    },
+    {
+      "id": "filesystem-authority-dropped",
+      "target": "runner-v2/src/filesystem-tools.ts",
+      "test": "runner-v2/test/language-invocation-propagation.test.ts",
+      "proof": "causal-proof/filesystem-authority-dropped/proof.json"
+    },
+    {
+      "id": "extension-prototype-grant-leak",
+      "target": "runner-v2/src/language-provider-router.ts",
+      "test": "runner-v2/test/lsp-server-control.test.ts",
+      "proof": "causal-proof/extension-prototype-grant-leak/proof.json"
+    },
+    {
+      "id": "language-write-ceiling-removed",
+      "target": "runner-v2/src/streaming-request-operation.ts",
+      "test": "runner-v2/test/streaming-language-operation.test.ts",
+      "proof": "causal-proof/language-write-ceiling-removed/proof.json"
+    },
+    {
+      "id": "mcp-one-write-widened",
+      "target": "runner-v2/src/streaming-request-operation.ts",
+      "test": "runner-v2/test/streaming-language-operation.test.ts",
+      "proof": "causal-proof/mcp-one-write-widened/proof.json"
+    },
+    {
+      "id": "strict-host-refusal-removed",
+      "target": "runner-v2/src/execution-host-lsp-transport.ts",
+      "test": "runner-v2/test/lsp-transport-authority.test.ts",
+      "proof": "causal-proof/strict-host-refusal-removed/proof.json"
+    },
+    {
+      "id": "ambient-discovery-fallback",
+      "target": "runner-v2/src/language-server-executable.ts",
+      "test": "runner-v2/test/language-environment.test.ts",
+      "proof": "causal-proof/ambient-discovery-fallback/proof.json"
+    },
+    {
+      "id": "worker-lifecycle-join-removed",
+      "target": "runner-v2/src/worker-runtime.ts",
+      "test": "runner-v2/test/lsp-caller-audit.test.ts",
+      "proof": "causal-proof/worker-lifecycle-join-removed/proof.json"
+    },
+    {
+      "id": "rpc-replay-restored",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-shared-client.test.ts",
+      "proof": "causal-proof/rpc-replay-restored/proof.json"
+    },
+    {
+      "id": "takeover-wait-before-relinquish",
+      "target": "runner-v2/src/streaming-process-session-runtime.ts",
+      "test": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "proof": "causal-proof/takeover-wait-before-relinquish/proof.json"
+    },
+    {
+      "id": "grace-rejects-admitted-effect",
+      "target": "runner-v2/src/streaming-process-session-runtime.ts",
+      "test": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "proof": "causal-proof/grace-rejects-admitted-effect/proof.json"
+    },
+    {
+      "id": "private-delivery-drops-authority",
+      "target": "runner-v2/src/streaming-output-controller.ts",
+      "test": "runner-v2/test/streaming-output-v2.test.ts",
+      "proof": "causal-proof/private-delivery-drops-authority/proof.json"
+    },
+    {
+      "id": "job-empty-replay-window",
+      "target": "runner-v2/src/windows-job-process-channel.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "proof": "causal-proof/job-empty-replay-window/proof.json"
+    },
+    {
+      "id": "job-frame-not-persisted",
+      "target": "runner-v2/src/windows-job-process-host.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "proof": "causal-proof/job-frame-not-persisted/proof.json"
+    },
+    {
+      "id": "job-digest-not-verified",
+      "target": "runner-v2/src/windows-job-process-host.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "proof": "causal-proof/job-digest-not-verified/proof.json"
+    },
+    {
+      "id": "job-ack-not-exact",
+      "target": "runner-v2/src/windows-job-process-host.ts",
+      "test": "runner-v2/test/windows-job-output-replay.test.ts",
+      "proof": "causal-proof/job-ack-not-exact/proof.json"
+    },
+    {
+      "id": "language-phase-budget",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-invocation-lifetime.test.ts",
+      "proof": "causal-proof/language-phase-budget/proof.json"
+    },
+    {
+      "id": "posix-anchor",
+      "target": "runner-v2/src/portable-process-supervisor.mjs",
+      "test": "runner-v2/test/posix-anchor-release-takeover.test.ts",
+      "proof": "causal-proof/posix-anchor/proof.json"
+    },
+    {
+      "id": "descendant-fixture",
+      "target": "runner-v2/test/fixtures/lsp-server.mjs",
+      "test": "runner-v2/test/lsp-descendant-fixture.test.ts",
+      "proof": "causal-proof/descendant-fixture/proof.json"
+    },
+    {
+      "id": "current-shutdown-budget",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-shared-client.test.ts",
+      "proof": "causal-proof/current-shutdown-budget/proof.json"
+    },
+    {
+      "id": "current-chunk-limit",
+      "target": "runner-v2/src/execution-host-lsp-transport.ts",
+      "test": "runner-v2/test/lsp-transport-authority.test.ts",
+      "proof": "causal-proof/current-chunk-limit/proof.json"
+    },
+    {
+      "id": "current-portable-callback",
+      "target": "runner-v2/src/portable-process-supervisor.mjs",
+      "test": "runner-v2/test/portable-supervisor-input.test.ts",
+      "proof": "causal-proof/current-portable-callback/proof.json"
+    },
+    {
+      "id": "current-raw-launch-policy",
+      "target": "runner-v2/src/lsp-client.ts",
+      "test": "runner-v2/test/lsp-caller-audit.test.ts",
+      "proof": "causal-proof/current-raw-launch-policy/proof.json"
+    },
+    {
+      "id": "linked-test-storage-contract",
+      "target": "runner-v2/test/support/linked-output-spill-storage.ts",
+      "test": "runner-v2/test/linked-output-spill-storage.test.ts",
+      "proof": "causal-proof/linked-test-storage-contract/proof.json"
+    }
+  ],
+  "note": "Proof logs and input manifests copied byte-for-byte from recorded runs; source provenance and hashes retained. Three older whole-file-source proofs were refreshed on final source. Linked test-adapter corrections changed no product source or existing assertions; affected complete test files were rerun."
+}

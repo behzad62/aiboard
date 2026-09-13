@@ -1,0 +1,133 @@
+{
+  "id": "grace-rejects-admitted-effect",
+  "target": "runner-v2/src/streaming-process-session-runtime.ts",
+  "test": "runner-v2/test/streaming-process-session-runtime.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green",
+  "sourceFinalSha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b",
+  "testFinalSha256": "909b9f3fd8cc3146df5d009e640b9795985df791cb44401d14596261c89dc044",
+  "redReceipt": {
+    "id": "rev-grace-rejects-admitted-effect-red",
+    "startedAt": "2026-09-12T15:46:17.927Z",
+    "finishedAt": "2026-09-12T15:46:18.761Z",
+    "wrapperPid": 53868,
+    "testPid": 35644,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP\\ grace\\ expiry\\ joins\\ an\\ already\\ admitted\\ parser\\ delivery\\ before\\ cleanup\\ changes\\ ownership$",
+      "runner-v2/test/streaming-process-session-runtime.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r12-alignment-7j4LSl"
+    ]
+  },
+  "greenReceipt": {
+    "id": "rev-grace-rejects-admitted-effect-green",
+    "startedAt": "2026-09-12T15:46:18.815Z",
+    "finishedAt": "2026-09-12T15:46:19.555Z",
+    "wrapperPid": 28484,
+    "testPid": 53756,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP\\ grace\\ expiry\\ joins\\ an\\ already\\ admitted\\ parser\\ delivery\\ before\\ cleanup\\ changes\\ ownership$",
+      "runner-v2/test/streaming-process-session-runtime.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-terminal.json",
+      "sha256": "83d27779b479c5a619db87d9358ced3e416e2242972eaa4c90ee7fb0e21acd77"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-inputs-before.json",
+      "sha256": "236abfb7f02fec1c73f6bf643acc9b3868088231690022c4413cc998306fc75a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-inputs-after.json",
+      "sha256": "236abfb7f02fec1c73f6bf643acc9b3868088231690022c4413cc998306fc75a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-stdout.log",
+      "sha256": "3ca3cec62ff9a9d67009cdd9eef839adf6f3ecd3bde91823ecbffab00db9c9f2"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-wrapper.json",
+      "sha256": "5793f041182b91a210b6e53ec9c47ff56d9e361433cb0858fc9fc93169c95c24"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/red-child.json",
+      "sha256": "243bbc51ebb0e785a8c2f6f061fe7e5fd02950b525912e815163d27e52f78a07"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-terminal.json",
+      "sha256": "d532d06b1cb0a7cba0b2f644c0296abe9164ca2017460802faaae17a29740f34"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-inputs-before.json",
+      "sha256": "994e8c6fe368a1f0ea1911bfe46cd8529c9990537d27a115e4820097bcd1dec1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-inputs-after.json",
+      "sha256": "994e8c6fe368a1f0ea1911bfe46cd8529c9990537d27a115e4820097bcd1dec1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-stdout.log",
+      "sha256": "f1b6f47c38f092be30b9c10a0179aab477457a00692415728d97b4ef1bbba0b4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-wrapper.json",
+      "sha256": "2b751bde5638dfefcc4476e89d0cb9e025941803cfeff22227937cbb104aaafd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-grace-rejects-admitted-effect-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/grace-rejects-admitted-effect/green-child.json",
+      "sha256": "4fd3c5dcf37f6f5b8cfe8d4bdeffe0ee6cce060170aa9c689675c1c0d8200d6f"
+    }
+  ]
+}

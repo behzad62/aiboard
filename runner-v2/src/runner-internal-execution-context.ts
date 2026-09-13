@@ -3,7 +3,7 @@ import { McpRpcPeer, parseMcpToolList } from "./mcp-rpc-peer.js";
 import { McpConfigurationError, parseMcpCommand, snapshotMcpServerSpec, mcpConfigurationDigest, fixedMcpEnvelope, type McpFixedEnvelope } from "./mcp-configuration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import {
@@ -216,7 +216,7 @@ export function createRunnerInternalExecutionContext(
       );
       const lsp = await attestRunnerCapabilitiesLanguageServers(
         input.capabilitiesConfig,
-        { commandSearchDirectory: projectDirectory },
+        { commandSearchDirectory: projectDirectory, environment },
       );
       const visibleMcp = trusted.map((entry) => {
         const visible = deepFreeze({

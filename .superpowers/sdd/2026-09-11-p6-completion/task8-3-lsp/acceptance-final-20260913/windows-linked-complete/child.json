@@ -1,0 +1,24 @@
+{
+  "pid": 10456,
+  "identity": {
+    "Id": 10456,
+    "StartTimeUtc": "2026-09-13T19:44:31.0655196Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 31212,
+  "spawnedAt": "2026-09-13T19:44:31.378Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/bounded-output-spool.test.ts",
+    "runner-v2/test/evidence-continuation.test.ts",
+    "runner-v2/test/streaming-process-session-runtime.test.ts",
+    "runner-v2/test/linked-output-spill-storage.test.ts"
+  ]
+}

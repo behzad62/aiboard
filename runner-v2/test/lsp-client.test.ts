@@ -1,3 +1,7 @@
+import { createOwnedLspFixture } from "./support/lsp-owned-fixture.js";
+import { ownedLspTest as test, disposeLspTestRoot } from "./support/lsp-test-scope.js";
+import type { LspTransportFactory } from "../src/lsp-transport.js";
+import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
 import assert from "node:assert/strict";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 import {
@@ -7,26 +11,26 @@ import {
   mkdtempSync,
   writeFileSync,
 } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LspClient, LspClientError } from "../src/lsp-client.js";
 import { resolveLanguageServerExecutable } from "../src/language-server-executable.js";
 
-const fixtureServer = resolve("runner-v2/test/fixtures/lsp-server.mjs");
-const stalledWindowsJobHost = resolve("runner-v2/test/fixtures/lsp-stalled-job-host.ps1");
+const fixtureServer = fileURLToPath(new URL("./fixtures/lsp-server.mjs", import.meta.url));
 
 test("LSP client initializes over partial frames, synchronizes exact versions, cancels, and shuts down", async () => {
   const fixture = workspace("partial Ω");
   const exitMarker = join(fixture.root, "server-exit.json");
+  const blockMarker = join(fixture.root, "server-block-received.json");
   const client = fixture.client({
     env: {
       LSP_FIXTURE_PARTIAL: "1",
       LSP_FIXTURE_EXIT_FILE: exitMarker,
       LSP_FIXTURE_CANCEL_RESPONSE: "1",
+      LSP_FIXTURE_BLOCK_RECEIVED_FILE: blockMarker,
     },
   });
   try {
@@ -57,10 +61,21 @@ test("LSP client initializes over partial frames, synchronizes exact versions, c
 
     const controller = new AbortController();
     const blocked = client.request("fixture/block", {}, controller.signal);
-    setTimeout(() => controller.abort(new Error("test cancellation")), 20);
-    await assert.rejects(blocked, isLspError("request_cancelled"));
+    // Cancellation must target a received RPC, not asynchronous grant/discovery
+    // work that happened to take longer than a host-dependent 20 ms timer.
+    void blocked.catch(() => undefined);
+    try {
+      await waitFor(() => existsSync(blockMarker));
+      const admitted = JSON.parse(await readFile(blockMarker, "utf8"));
+      assert.equal(admitted.pid, state.pid);
+      assert.equal(typeof admitted.requestId, "number");
+      controller.abort(new Error("test cancellation after exact server admission"));
+      await assert.rejects(blocked, isLspError("request_cancelled"));
+    } finally { controller.abort(); await blocked.catch(() => undefined); }
     const afterCancellation = await client.request<FixtureState>("fixture/state", {});
-    assert.equal(afterCancellation.cancellations.length, 1);
+    assert.notEqual(afterCancellation.pid, state.pid, "uncertain cancellation requires a fresh authorized process, not implicit call replay");
+    assert.equal(processExists(state.pid), false);
+    assert.equal(afterCancellation.cancellations.length, 0);
 
     await assert.rejects(
       client.openDocument({
@@ -77,8 +92,8 @@ test("LSP client initializes over partial frames, synchronizes exact versions, c
     await waitFor(() => !processExists(state.pid));
     assert.equal(JSON.parse(await readFile(exitMarker, "utf8")).shutdownRequested, true);
     assert.deepEqual(client.stats(), {
-      starts: 1,
-      restarts: 0,
+      starts: 2,
+      restarts: 1,
       state: "closed",
       openDocuments: 0,
     });
@@ -90,7 +105,7 @@ test("LSP client initializes over partial frames, synchronizes exact versions, c
 
 test("LSP client returns typed bounded errors for missing executables, malformed frames, and timeouts", async () => {
   const fixture = workspace("failures");
-  const missing = new LspClient({
+  const missing = fixture.client({
     command: join(fixture.root, "missing-language-server.exe"),
     workspaceRoot: fixture.workspace,
     requestTimeoutMs: 100,
@@ -156,7 +171,7 @@ test("LSP client returns typed bounded errors for missing executables, malformed
     await oversized.close().catch(() => undefined);
   }
 
-  const timeout = fixture.client({ requestTimeoutMs: 500, restartLimit: 0 });
+  const timeout = fixture.client({ requestTimeoutMs: 500, restartLimit: 1 });
   try {
     await timeout.start();
     await assert.rejects(
@@ -164,7 +179,8 @@ test("LSP client returns typed bounded errors for missing executables, malformed
       isLspError("request_timeout"),
     );
     const state = await timeout.request<FixtureState>("fixture/state", {});
-    assert.equal(state.cancellations.length, 1);
+    assert.equal(state.cancellations.length, 0, "a fresh process cannot inherit a cancelled call");
+    assert.equal(timeout.stats().restarts, 1);
   } finally {
     await timeout.close().catch(() => undefined);
     await fixture.close();
@@ -204,6 +220,7 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
       version: 1,
       text: "x".repeat(8 * 1024 * 1024),
     }), settlements);
+    await waitFor(() => client.stats().openDocuments === 1); // exact first invocation is inside document synchronization
     const timedOut = observeSettlement(
       "timeout",
       client.request("fixture/block", {}),
@@ -223,7 +240,20 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
     await rejectsBefore(backpressuredWrite, 2_000, isLspError("write_failed"));
     assert.deepEqual(settlements, ["abort", "timeout", "write"]);
     assert.equal(client.stats().state, "failed");
-    await completesBefore(client.close(), 1_500);
+    // The shared owner must join an issued backend write (the Job host retains
+    // its 5 s control effect) before certifying the six cleanup facts. The old
+    // private-process 1.5 s bound is not the shared 30 s lifecycle contract.
+    const cleanupStarted = Date.now();
+    await completesBefore(client.close(), 30_000);
+    t.diagnostic(`verified shared backpressure close: ${Date.now() - cleanupStarted} ms`);
+    const run = await fixture.ensure();
+    for (const id of run.streamingState.listSessionIds()) {
+      const session = run.streamingState.readSession(id)!;
+      assert.equal(session.state, "released");
+      const facts = session.effects.flatMap((effect) => effect.progress?.resources ?? []);
+      assert.equal(facts.length, 6);
+      assert.ok(facts.every((fact) => fact.status === "verified"), "every shared cleanup fact must be verified before close succeeds");
+    }
     await waitFor(() => !processExists(serverPid));
     await waitFor(() => !processExists(descendantPid));
     assert.equal(client.stats().state, "closed");
@@ -249,77 +279,42 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
   }
 });
 
-test("LSP client bounds a stalled Windows Job-host bootstrap without an unhandled rejection", {
-  skip: process.platform !== "win32",
-}, async () => {
-  const fixture = workspace("stalled job host bootstrap");
-  assert.throws(
-    () => fixture.client({ windowsJobHostPathForTest: "relative.ps1" }),
-    isLspError("invalid_configuration"),
-  );
-  const pidMarker = join(fixture.root, "stalled-job-host.pid");
-  const unhandled: unknown[] = [];
-  const onUnhandled = (reason: unknown) => unhandled.push(reason);
-  process.on("unhandledRejection", onUnhandled);
-  const client = new LspClient({
-    command: process.execPath,
-    args: Array.from(
-      { length: 128 },
-      (_value, index) => `${index}:`.padEnd(3_500, "x"),
-    ),
-    workspaceRoot: fixture.workspace,
-    env: {
-      ...process.env,
-      LSP_FIXTURE_STALLED_JOB_HOST_PID_FILE: pidMarker,
-    },
-    writeTimeoutMs: 1_000,
-    shutdownTimeoutMs: 250,
-    restartLimit: 0,
-    windowsJobHostPathForTest: stalledWindowsJobHost,
-  });
-  let hostPid = 0;
-  let hasPrimaryFailure = false; let primaryFailure: unknown;
+test("LSP client close joins a late shared acquisition without private bootstrap or unhandled rejection", async () => {
+  const fixture = workspace("late shared acquisition");
+  let entered!: () => void; const started = new Promise<void>((r) => { entered = r; });
+  let release!: () => void; const held = new Promise<void>((r) => { release = r; });
+  let closed = 0; const unhandled: unknown[] = [];
+  const listener = (error: unknown) => unhandled.push(error); process.on("unhandledRejection", listener);
+  const transportFactory: LspTransportFactory = { open: async () => { entered(); await held; return {
+    withInvocation: async () => { throw new Error("closed acquisition cannot run an operation"); },
+    closeVerified: async () => { closed++; },
+  }; } };
+  const client = new LspClient({ command: process.execPath, workspaceRoot: fixture.workspace, transportFactory });
+  const opening = client.withInvocation({ runId: "late-run", sessionId: "agent", actor: { role: "worker", id: "worker" }, callId: "late-call", toolName: "code.diagnostics", workspacePath: fixture.workspace, executionGrant: {} as OpaqueExecutionGrant }, async () => undefined);
+  void opening.catch(() => undefined);
   try {
-    await rejectsBefore(client.start(), 2_000, isLspError("write_failed"));
-    await new Promise((resolvePromise) => setImmediate(resolvePromise));
-    assert.deepEqual(unhandled, []);
-    await waitFor(() => existsSync(pidMarker));
-    hostPid = Number(await readFile(pidMarker, "utf8"));
-    assert.ok(Number.isSafeInteger(hostPid) && hostPid > 0);
-    await completesBefore(client.close(), 1_000);
-    await waitFor(() => !processExists(hostPid));
-  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
-  finally {
-    process.removeListener("unhandledRejection", onUnhandled);
-    await finalizeCertifiedFixture({
-      fixtureName: "LSP client bounds a stalled Windows Job-host bootstrap without an unhandled rejection", root: fixture.root, hasPrimaryFailure, primaryFailure,
-      cleanup: async () => { await client.close(); },
-      certify: async () => {
-        assert.equal(client.stats().state, "closed");
-        if (!hostPid && existsSync(pidMarker)) hostPid = Number(await readFile(pidMarker, "utf8"));
-        assert.ok(Number.isSafeInteger(hostPid) && hostPid > 0, "the exact acquired process observation is required");
-        try { process.kill(hostPid, 0); throw new Error("Owned fixture process remains live after cleanup."); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-      },
-      removeRoot: () => fixture.close(),
-    });
-  }
+    await started; const closing = client.close(); await Promise.resolve(); assert.equal(closed, 0);
+    release(); await completesBefore(closing, 1000);
+    await assert.rejects(opening, isLspError("client_closed"));
+    assert.equal(closed, 1); assert.deepEqual(unhandled, []); assert.equal(client.stats().state, "closed");
+  } finally { release(); await client.close(); process.removeListener("unhandledRejection", listener); await fixture.close(); }
 });
 
-test("LSP client launches a safe Windows command-shell shim through the Job Object host", async () => {
+test("LSP client launches a safe Windows command-shell shim through the Job Object host", { skip: process.platform !== "win32" ? "Windows batch semantics are verified on native Windows." : false }, async () => {
   const fixture = workspace("cmd launcher");
   const shim = join(fixture.root, "fixture-language-server.cmd");
   writeFileSync(
     shim,
     `@echo off\r\n"${process.execPath}" "${fixtureServer}" %*\r\n`,
   );
-  const client = new LspClient({
+  const client = fixture.client({
     command: shim,
+    args: [],
     workspaceRoot: fixture.workspace,
     requestTimeoutMs: 3_000,
     shutdownTimeoutMs: 500,
     restartLimit: 0,
-    env: { ...process.env },
+    env: {},
   });
   try {
     await client.start();
@@ -360,14 +355,15 @@ test("LSP client launches the attested canonical executable and rejects a byte r
     commandSearchDirectory: fixture.root,
     environment: resolvedEnvironment,
   });
-  const client = new LspClient({
+  const client = fixture.client({
     command: identity.path,
+    args: [],
     attestedCommand: identity,
     workspaceRoot: fixture.workspace,
     requestTimeoutMs: 3_000,
     shutdownTimeoutMs: 500,
     restartLimit: 0,
-    env: resolvedEnvironment,
+    env: {},
   });
   try {
     await client.start();
@@ -375,13 +371,14 @@ test("LSP client launches the attested canonical executable and rejects a byte r
     assert.equal(state.rootUri, pathToFileURL(fixture.workspace).href);
     await client.close();
 
-    const replaced = new LspClient({
+    const replaced = fixture.client({
       command: identity.path,
+      args: [],
       attestedCommand: identity,
       workspaceRoot: fixture.workspace,
       requestTimeoutMs: 500,
       restartLimit: 0,
-      env: resolvedEnvironment,
+      env: {},
     });
     writeFileSync(launcher, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
     if (process.platform !== "win32") chmodSync(launcher, 0o755);
@@ -401,9 +398,9 @@ test("LSP client cannot bypass the restart limit through an explicit start", asy
     await client.start();
     await assert.rejects(
       client.request("fixture/crash", {}),
-      isLspError("process_exited"),
+      isLspCrashOutcome,
     );
-    await assert.rejects(client.start(), isLspError("process_exited"));
+    await assert.rejects(client.start(), isLspCrashOutcome);
     assert.equal(client.stats().starts, 1);
   } finally {
     await client.close().catch(() => undefined);
@@ -439,7 +436,7 @@ test("LSP client retries termination after a failed close while the server remai
     requestTimeoutMs: 500,
     shutdownTimeoutMs: 100,
     env: { LSP_FIXTURE_IGNORE_SHUTDOWN: "1" },
-    processTreeTerminationHook: async (terminate: () => Promise<void>) => {
+    ownedCloseHook: async (terminate: () => Promise<void>) => {
       terminationAttempts += 1;
       if (terminationAttempts === 1) {
         throw new Error("injected process-tree termination failure");
@@ -514,7 +511,7 @@ test("LSP client never relabels delayed versionless v1 diagnostics as authoritat
       LSP_FIXTURE_DIAGNOSTICS_MODE: "push",
       LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: "1",
       LSP_FIXTURE_DELAY_VERSIONLESS_VERSION: "1",
-      LSP_FIXTURE_DELAY_VERSIONLESS_MS: "40",
+      LSP_FIXTURE_HOLD_VERSIONLESS_UNTIL_VERSION: "2",
       LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: "1",
     },
   });
@@ -632,6 +629,8 @@ test("LSP client restarts a crashed server only within the configured limit and 
       version: 7,
       text: "value = 7\n",
     });
+    await assert.rejects(recovered.request("fixture/crashOnce", {}), isLspCrashOutcome);
+    assert.equal(recovered.stats().starts, 1, "failed requests must not be retried autonomously");
     const result = await recovered.request<{ recovered: boolean }>("fixture/crashOnce", {});
     assert.equal(result.recovered, true);
     assert.deepEqual(recovered.stats(), {
@@ -652,9 +651,12 @@ test("LSP client restarts a crashed server only within the configured limit and 
     await exhausted.start();
     await assert.rejects(
       exhausted.request("fixture/crash", {}),
-      isLspError("process_exited"),
+      isLspCrashOutcome,
     );
+    assert.equal(exhausted.stats().restarts, 0);
+    await assert.rejects(exhausted.request("fixture/crash", {}), isLspCrashOutcome);
     assert.equal(exhausted.stats().restarts, 1);
+    await assert.rejects(exhausted.start(), isLspCrashOutcome);
   } finally {
     await exhausted.close().catch(() => undefined);
     await fixture.close();
@@ -674,7 +676,9 @@ function processExists(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+    throw error;
   }
 }
 
@@ -682,44 +686,38 @@ function workspace(name: string) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-lsp-${name}-`));
   const workspacePath = join(root, "workspace Ω");
   mkdirSync(workspacePath);
+  const owned = createOwnedLspFixture(root, workspacePath);
   const file = join(workspacePath, "main.py");
   writeFileSync(file, "😀value = 1\nprint(value)\n");
   return {
     root,
     workspace: workspacePath,
+    ensure: owned.ensure,
     file,
-    client(overrides: Partial<ConstructorParameters<typeof LspClient>[0]> = {}) {
-      return new LspClient({
+    client(overrides: Partial<ConstructorParameters<typeof LspClient>[0]> & { ownedCloseHook?: (close: () => Promise<void>) => Promise<void> } = {}) {
+      const { ownedCloseHook, ...configuration } = overrides;
+      return owned.client({
         command: process.execPath,
         args: [fixtureServer],
         workspaceRoot: workspacePath,
         requestTimeoutMs: 500,
         shutdownTimeoutMs: 500,
         restartLimit: 1,
-        ...overrides,
-        env: {
-          ...process.env,
-          ...overrides.env,
-        },
-      });
+        ...configuration,
+        env: { ...overrides.env },
+      }, ownedCloseHook);
     },
-    close: () => removeFixtureRoot(root),
+    close: async () => { await owned.close(); await disposeLspTestRoot(root); },
   };
 }
 
-async function removeFixtureRoot(root: string): Promise<void> {
-  const retryableCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
-  const maxAttempts = 200;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await rm(root, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (!code || !retryableCodes.has(code) || attempt >= maxAttempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
+// Both existing typed outcomes are retryable only by a FRESH authorized call.
+// The native fixture exits synchronously and may beat the shared write ACK.
+// The synthetic protocol tests separately require exact process_exited identity
+// when termination is observed after an acknowledged write.
+function isLspCrashOutcome(error: unknown): boolean {
+  return error instanceof LspClientError && error.retryable === true &&
+    (error.code === "process_exited" || error.code === "write_failed" || (error.code === "process_error" && error.cause instanceof Error && error.message.includes("unknown and is not replayed")));
 }
 
 function isLspError(code: string) {
@@ -747,7 +745,9 @@ function observeSettlement<T>(
   promise: Promise<T>,
   settlements: string[],
 ): Promise<T> {
-  return promise.finally(() => settlements.push(label));
+  const observed = promise.finally(() => settlements.push(label));
+  void observed.catch(() => undefined); // assertions below still receive the original rejection
+  return observed;
 }
 
 async function completesBefore<T>(promise: Promise<T>, deadlineMs: number): Promise<T> {

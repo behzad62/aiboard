@@ -251,6 +251,11 @@ function launchWindowsJob() {
     { windowsHide: true, shell: false, stdio: ["pipe", "pipe", "pipe"] }
   );
   backendInput = backend.stdin;
+  // A failed/terminated child emits a stream error in addition to invoking the
+  // outstanding write callback. That callback owns the input failure; the
+  // event must not crash this supervisor before exact Job/output cleanup is
+  // attested. Input failure alone is never no-launch or terminal proof.
+  backendInput.on("error", () => {});
   if (config.interactive) {
     backend.stdout.on("readable", () => drainInteractiveOutput("stdout", backend.stdout));
     backend.stderr.on("readable", () => drainInteractiveOutput("stderr", backend.stderr));

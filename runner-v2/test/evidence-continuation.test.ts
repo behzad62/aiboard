@@ -1,3 +1,4 @@
+import { createLinkedTestOutputSpillStorage } from "./support/linked-output-spill-storage.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { lstat, mkdtemp, rm, unlink } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
-import { BoundedOutputSpool, createNodeOutputSpillStorage } from "../src/bounded-output-spool.js";
+import { BoundedOutputSpool } from "../src/bounded-output-spool.js";
 import { verifyFinalizedEvidence, createEvidenceContinuation, EVIDENCE_MAX_BYTES, EVIDENCE_MAX_PAGES, initialEvidenceContinuation, parseEvidenceContinuation } from "../src/evidence-continuation.js";
 import { getStreamingSessionKernelWriter, openSqliteStreamingSessionStore, parseOutputCheckpointRecord } from "../src/streaming-session-store.js";
 import { createStreamingOutputController, type StreamingOutputMetadata } from "../src/streaming-output-controller.js";
@@ -28,7 +29,7 @@ async function fixture(t: test.TestContext) {
   const open = (store = artifacts) => {
     const spool = new BoundedOutputSpool({ spillRoot: join(root, `spool-${spools.length}`), ownershipId: "fixture",
       projectRoot: process.cwd(), tailBytes: 1024, spillBytes: 1024, artifactStore: store,
-      storage: { ...createNodeOutputSpillStorage(), attest: async () => ({ currentPrincipalPrivacy: true, identityStableDeletion: true, unlinkedEntries: false }),
+      storage: { ...createLinkedTestOutputSpillStorage(), attest: async () => ({ currentPrincipalPrivacy: true, identityStableDeletion: true, unlinkedEntries: false }),
         removeIdentityStable: async (path, identity) => { const stat = await lstat(path); assert.equal(`${stat.dev}:${stat.ino}`, identity); await unlink(path); } } });
     spools.push(spool);
     return createEvidenceContinuation({ kernel, sessionId: "session", ownerId: "owner", fencingToken: 1, artifacts: store, spool });

@@ -1,0 +1,7 @@
+{
+  "id": "current-chunk-limit-green",
+  "tests": [
+    "runner-v2/test/lsp-transport-authority.test.ts"
+  ],
+  "pattern": "^LSP shared transport uses the real launching call and fresh exact language request authority$"
+}

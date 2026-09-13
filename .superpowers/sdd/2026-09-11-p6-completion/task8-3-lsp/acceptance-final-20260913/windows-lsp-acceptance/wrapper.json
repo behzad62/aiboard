@@ -1,0 +1,68 @@
+{
+  "pid": 41940,
+  "identity": {
+    "Id": 41940,
+    "StartTimeUtc": "2026-09-13T19:04:02.6393154Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-13T19:04:02.706Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\windows-lsp-acceptance.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/language-agent-lifecycle.test.ts",
+    "runner-v2/test/language-environment.test.ts",
+    "runner-v2/test/language-executable-integrity.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts",
+    "runner-v2/test/language-provider-compatibility.test.ts",
+    "runner-v2/test/language-provider-router.test.ts",
+    "runner-v2/test/lsp-caller-audit.test.ts",
+    "runner-v2/test/lsp-client.test.ts",
+    "runner-v2/test/lsp-descendant-fixture.test.ts",
+    "runner-v2/test/lsp-host-envelope.test.ts",
+    "runner-v2/test/lsp-initialize-rejection.test.ts",
+    "runner-v2/test/lsp-invocation-lifetime.test.ts",
+    "runner-v2/test/lsp-language-provider.test.ts",
+    "runner-v2/test/lsp-real-host.test.ts",
+    "runner-v2/test/lsp-router-authority.test.ts",
+    "runner-v2/test/lsp-server-control.test.ts",
+    "runner-v2/test/lsp-shared-client.test.ts",
+    "runner-v2/test/lsp-transport-authority.test.ts",
+    "runner-v2/test/lsp-transport-framing.test.ts"
+  ],
+  "spec": {
+    "id": "windows-lsp-acceptance",
+    "tests": [
+      "runner-v2/test/language-agent-lifecycle.test.ts",
+      "runner-v2/test/language-environment.test.ts",
+      "runner-v2/test/language-executable-integrity.test.ts",
+      "runner-v2/test/language-invocation-propagation.test.ts",
+      "runner-v2/test/language-provider-compatibility.test.ts",
+      "runner-v2/test/language-provider-router.test.ts",
+      "runner-v2/test/lsp-caller-audit.test.ts",
+      "runner-v2/test/lsp-client.test.ts",
+      "runner-v2/test/lsp-descendant-fixture.test.ts",
+      "runner-v2/test/lsp-host-envelope.test.ts",
+      "runner-v2/test/lsp-initialize-rejection.test.ts",
+      "runner-v2/test/lsp-invocation-lifetime.test.ts",
+      "runner-v2/test/lsp-language-provider.test.ts",
+      "runner-v2/test/lsp-real-host.test.ts",
+      "runner-v2/test/lsp-router-authority.test.ts",
+      "runner-v2/test/lsp-server-control.test.ts",
+      "runner-v2/test/lsp-shared-client.test.ts",
+      "runner-v2/test/lsp-transport-authority.test.ts",
+      "runner-v2/test/lsp-transport-framing.test.ts"
+    ]
+  }
+}

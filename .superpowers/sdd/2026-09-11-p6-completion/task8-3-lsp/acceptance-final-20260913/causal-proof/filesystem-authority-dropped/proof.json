@@ -1,0 +1,133 @@
+{
+  "id": "filesystem-authority-dropped",
+  "target": "runner-v2/src/filesystem-tools.ts",
+  "test": "runner-v2/test/language-invocation-propagation.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green",
+  "sourceFinalSha256": "53283532f098fad4c6153ec969eeb5c4e37d8ccaa99fa1f314478101f969a81c",
+  "testFinalSha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9",
+  "redReceipt": {
+    "id": "fault-filesystem-authority-dropped-red",
+    "startedAt": "2026-09-12T17:26:13.735Z",
+    "finishedAt": "2026-09-12T17:26:14.518Z",
+    "wrapperPid": 170772,
+    "testPid": 166928,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP invocation propagates the exact original fs",
+      "runner-v2/test/language-invocation-propagation.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-zG8Fc1"
+    ]
+  },
+  "greenReceipt": {
+    "id": "fault-filesystem-authority-dropped-green",
+    "startedAt": "2026-09-12T17:26:14.561Z",
+    "finishedAt": "2026-09-12T17:26:16.018Z",
+    "wrapperPid": 11856,
+    "testPid": 71504,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP invocation propagates the exact original fs",
+      "runner-v2/test/language-invocation-propagation.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-terminal.json",
+      "sha256": "f5e0db5b47a1f6558202cc65eb70aa0384982d0d744a7c4f6bc574ab10db0e86"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-inputs-before.json",
+      "sha256": "eaafaaa262656f11be298a231a288ce366922ea5711680b80e70598efe68ecd8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-inputs-after.json",
+      "sha256": "eaafaaa262656f11be298a231a288ce366922ea5711680b80e70598efe68ecd8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-stdout.log",
+      "sha256": "464e18b87020e5a5021225c56a6f63311dd5ae63ee1ac32aa2c63a07733ca48a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-wrapper.json",
+      "sha256": "d391d42e2e2e748db3b1880d2392d2200f429d518714fb6f1015b8a84febcaa0"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/red-child.json",
+      "sha256": "54aa47942f855f0b16dabd5cf6935cdec0e4b8d9ddea5228addc229376835b98"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-terminal.json",
+      "sha256": "fb1dd08c2178a05c5b5b228358fe27f5cf84369badef01716da8477933f6a41f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-inputs-before.json",
+      "sha256": "49bf534e86e76b3ade4110ea31c51acad909315f8fbd7575784139234a732ac4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-inputs-after.json",
+      "sha256": "49bf534e86e76b3ade4110ea31c51acad909315f8fbd7575784139234a732ac4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-stdout.log",
+      "sha256": "36520d682da4a0da927e886a635aff4bdfb779254933bb76e072076de30b78b8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-wrapper.json",
+      "sha256": "fea887b305d14b5a9312702b7e28fbf83f3641fe3e4f3e63c11c3bbad7599f5e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-filesystem-authority-dropped-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/filesystem-authority-dropped/green-child.json",
+      "sha256": "da634adb49b8d7ab68fa0eed1de33b64327841a9de5a62eb93208ce01ffbced3"
+    }
+  ]
+}

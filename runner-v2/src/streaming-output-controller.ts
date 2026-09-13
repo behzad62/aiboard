@@ -177,13 +177,14 @@ export function createStreamingOutputController(options: {
       deliver: (stream: StreamingOutputStream, bytes: Uint8Array) => Promise<void>,
       assertCurrent: () => void,
     ): Promise<boolean> {
-      const expected = Object.freeze({ ...assertion, sessionId: options.sessionId, operation: "request" as const });
+      const expected = Object.freeze({ ...assertion, sessionId: options.sessionId, operation: assertion.operation === "language_request" ? "language_request" as const : "request" as const });
       return await deliverNext(deliver, () => { assertCurrent(); options.assertAuthorization(authorization, expected); });
     },
     async deliverNextPrivately(
       deliver: (stream: StreamingOutputStream, bytes: Uint8Array) => Promise<void>,
+      assertCurrent?: () => void,
     ): Promise<boolean> {
-      return await deliverNext(deliver);
+      return await deliverNext(deliver, assertCurrent);
     },
     waitForPending(signal?: AbortSignal): Promise<boolean> {
       if (pending[0]?.ready) return Promise.resolve(true);

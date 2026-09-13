@@ -1,0 +1,24 @@
+{
+  "id": "cli-complete-recheck",
+  "startedAt": "2026-09-13T19:44:30.691Z",
+  "finishedAt": "2026-09-13T19:45:35.865Z",
+  "wrapperPid": 38644,
+  "testPid": 3248,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 418,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/cli-capabilities-config.test.ts"
+  ],
+  "rootCount": 22,
+  "retainedRoots": []
+}

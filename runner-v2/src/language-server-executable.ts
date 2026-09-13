@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
+import { lstat, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, resolve, sep } from "node:path";
 
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
@@ -38,7 +38,7 @@ export async function resolveLanguageServerExecutable(
     throw new Error("Language server command must be a non-empty string without NUL bytes.");
   }
   const cwd = resolve(options.commandSearchDirectory ?? process.cwd());
-  const environment = options.environment ?? process.env;
+  const environment = options.environment ?? Object.freeze({});
   const platform = options.platform ?? process.platform;
   const searchesPath = isBareCommand(command);
   const candidates = languageServerCommandCandidates(command, {
@@ -104,7 +104,7 @@ export function languageServerCommandCandidates(
   options: LanguageServerCommandCandidateOptions = {},
 ): string[] {
   const cwd = resolve(options.commandSearchDirectory ?? process.cwd());
-  const environment = options.environment ?? process.env;
+  const environment = options.environment ?? Object.freeze({});
   const platform = options.platform ?? process.platform;
   const hasSeparator = command.includes(sep) || command.includes("/") || command.includes("\\");
   const bases = isAbsolute(command)
@@ -217,10 +217,10 @@ async function identifyExecutable(
     }
     launcher = "native";
   }
-  const source = await readFile(canonical);
+  const digest = await hashExecutableDescriptor(canonical);
   return {
     path: canonical,
-    digest: createHash("sha256").update(source).digest("hex"),
+    digest,
     launcher,
   };
 }

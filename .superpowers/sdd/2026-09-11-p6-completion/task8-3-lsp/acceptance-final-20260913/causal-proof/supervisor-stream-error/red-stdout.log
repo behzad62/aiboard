@@ -1,0 +1,64 @@
+TAP version 13
+# Subtest: Windows Job supervisor retains exact ownership after input-pipe error (interactive=true)
+not ok 1 - Windows Job supervisor retains exact ownership after input-pipe error (interactive=true)
+  ---
+  duration_ms: 5.3415
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\windows-job-supervisor-input.test.ts:1:405'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception: an emitted input-stream error must not crash the supervisor before its retained cleanup can be certified
+    Actual message: "pending pipe was closed by owned Job termination"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'pending pipe was closed by owned Job termination'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-supervisor-input.test.ts:30:63)
+    getActual (node:assert:611:5)
+    strict.doesNotThrow (node:assert:779:32)
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-supervisor-input.test.ts:30:10)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-supervisor-input.test.ts:30:10)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: Windows Job supervisor retains exact ownership after input-pipe error (interactive=false)
+not ok 2 - Windows Job supervisor retains exact ownership after input-pipe error (interactive=false)
+  ---
+  duration_ms: 1.6558
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\windows-job-supervisor-input.test.ts:1:405'
+  failureType: 'testCodeFailure'
+  error: |-
+    Got unwanted exception: an emitted input-stream error must not crash the supervisor before its retained cleanup can be certified
+    Actual message: "pending pipe was closed by owned Job termination"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+  error: 'pending pipe was closed by owned Job termination'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-supervisor-input.test.ts:30:63)
+    getActual (node:assert:611:5)
+    strict.doesNotThrow (node:assert:779:32)
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-supervisor-input.test.ts:30:10)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  operator: 'doesNotThrow'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-supervisor-input.test.ts:30:10)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 200.3912

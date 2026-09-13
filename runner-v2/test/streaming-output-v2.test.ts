@@ -159,3 +159,30 @@ function outputFixture(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array)
 }
 
 function meta(bytes: Uint8Array, stream: "stdout" | "stderr" = "stdout"): StreamingOutputMetadata { return { stream, sequence: 1, startOffset: 0, endOffset: bytes.byteLength, byteLength: bytes.byteLength, digest: createHash("sha256").update(bytes).digest("hex") }; }
+
+
+test("private cleanup delivery refuses stale authority before effect without poisoning replay", async () => {
+  let effects = 0; let current = true;
+  const f = outputFixture(async () => undefined);
+  const payload = Buffer.from("late"); const metadata = meta(payload);
+  const pending = f.controller.accept(metadata, payload);
+  void pending.catch(() => undefined);
+  const read = f.queue.read.bind(f.queue);
+  f.queue.read = async () => { const bytes = await read(); current = false; return bytes; };
+  const assertCurrent = () => { if (!current) throw new Error("exact cleanup authority expired before effect"); };
+  const deliver = async () => { effects++; };
+  try {
+    assert.equal(await f.controller.waitForPending(), true);
+    await assert.rejects(f.controller.deliverNextPrivately(deliver, assertCurrent),
+      (error: unknown) => error instanceof StreamingOutputError && error.code === "authorization_required");
+    assert.equal(effects, 0, "a refused pre-effect delivery never calls the parser");
+    const checkpoint = f.kernel.store.readOutputCheckpoint("stream-1")!;
+    assert.equal(checkpoint.outcome, "active");
+    assert.equal(checkpoint.streams[0]!.consumingIntent, null);
+    assert.deepEqual(checkpoint.streams[0]!.accepted, [metadata]);
+    current = true;
+    assert.equal(await f.controller.deliverNextPrivately(deliver, assertCurrent), true);
+    assert.deepEqual(await pending, metadata);
+    assert.equal(effects, 1, "the exactly retained bytes are delivered once after fresh authority");
+  } finally { f.controller.cancel(); await pending.catch(() => undefined); f.kernel.store.close(); }
+});

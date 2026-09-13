@@ -15,6 +15,9 @@ export interface StreamingRequestChannel {
  */
 export function createStreamingRequestOperation(input: Readonly<{
   sessionId: string;
+  /** Internal family discriminator; MCP retains exactly one write. */
+  operation?: "request" | "language_request";
+  executionState?: { active: boolean };
   retainOwnership?(timeoutMs: number): void;
   assert(authorization: SessionOperationAuthorization, expected: OperationAuthorizationAssertion): void;
   write(payload: Uint8Array, timeoutMs: number, assertCurrent: () => void): Promise<void>;
@@ -23,7 +26,9 @@ export function createStreamingRequestOperation(input: Readonly<{
     deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>, assertCurrent: () => void): Promise<boolean>;
 }>) {
   const used = new WeakSet<object>();
-  let active = false;
+  const executionState = input.executionState ?? { active: false };
+  const operation = input.operation ?? "request";
+  const maximumWrites = operation === "language_request" ? 256 : 1;
   return async function request<T>(
     authorization: SessionOperationAuthorization,
     assertion: OperationAuthorizationAssertion,
@@ -33,20 +38,20 @@ export function createStreamingRequestOperation(input: Readonly<{
   ): Promise<T> {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3_600_000) throw new Error("Session request timeout is invalid.");
     if (signal?.aborted) throw new Error("Session request was cancelled.");
-    const expected = Object.freeze({ ...assertion, sessionId: input.sessionId, operation: "request" as const,
+    const expected = Object.freeze({ ...assertion, sessionId: input.sessionId, operation,
       binding: Object.freeze({ ...assertion.binding, actor: Object.freeze({ ...assertion.binding.actor }) }),
       requestAccess: Object.freeze(assertion.requestAccess.map((entry) => Object.freeze({ ...entry }))),
       credentialNames: Object.freeze([...assertion.credentialNames]) });
     input.assert(authorization, expected);
-    if (active) throw new Error("A session request is already in progress.");
+    if (executionState.active) throw new Error("A session request is already in progress.");
     if (used.has(authorization)) throw new Error("Session request authorization was already used.");
     // Renew only after a current authorization has been verified, before its
     // asynchronous effect starts. This is host ownership, not grant lifetime.
     input.retainOwnership?.(timeoutMs);
-    used.add(authorization); active = true;
+    used.add(authorization); executionState.active = true;
     const abort = new AbortController();
     const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
-    let open = true; let written = false;
+    let open = true; let writes = 0;
     const pending = new Set<Promise<unknown>>();
     const assertCurrent = () => {
       if (!open) throw new Error("Session request channel is closed.");
@@ -63,8 +68,8 @@ export function createStreamingRequestOperation(input: Readonly<{
     const io: StreamingRequestChannel = Object.freeze({
       async write(payload: Uint8Array, writeTimeoutMs: number) {
         assertCurrent();
-        if (written) throw new Error("A session request permits only one request write.");
-        written = true;
+        if (writes >= maximumWrites) throw new Error(maximumWrites === 1 ? "A session request permits only one request write." : "A language request exceeded its bounded protocol writes.");
+        writes++;
         await observe(input.write(new Uint8Array(payload), Math.min(timeoutMs, writeTimeoutMs), assertCurrent));
         assertCurrent();
       },
@@ -97,7 +102,7 @@ export function createStreamingRequestOperation(input: Readonly<{
       if (additional.length) throw new AggregateError(failed ? [primary, ...additional] : additional, "Session request effects did not settle successfully.");
       if (failed) throw primary;
       assertCurrent(); return result!;
-    }).finally(() => { active = false; });
+    }).finally(() => { executionState.active = false; });
     void execution.catch(() => undefined);
     try { return await Promise.race([execution, cancelled]); }
     finally { open = false; if (timer) clearTimeout(timer); abort.abort(); }

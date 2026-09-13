@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-09-13T19:41:17.857Z",
+  "finishedAt": "2026-09-13T19:41:28.364Z",
+  "wrapperPid": 36256,
+  "compileExit": 0,
+  "exitCode": 1,
+  "containerId": "aaaf503be59ecb03ef85b7af6f69b7f1028b707746bb84b1505c8a60cbf78367",
+  "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+  "state": {
+    "Status": "exited",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 1,
+    "Error": "",
+    "StartedAt": "2026-09-13T19:41:25.947446941Z",
+    "FinishedAt": "2026-09-13T19:41:28.060218513Z"
+  },
+  "copiedEvidence": true,
+  "removed": false,
+  "absenceVerified": false,
+  "inputsUnchanged": true
+}

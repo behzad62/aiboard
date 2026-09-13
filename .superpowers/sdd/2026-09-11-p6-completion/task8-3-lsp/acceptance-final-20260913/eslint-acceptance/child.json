@@ -1,0 +1,16 @@
+{
+  "pid": 35416,
+  "identity": {
+    "Id": 35416,
+    "StartTimeUtc": "2026-09-13T19:46:23.1594714Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 15340,
+  "spawnedAt": "2026-09-13T19:46:23.468Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ]
+}

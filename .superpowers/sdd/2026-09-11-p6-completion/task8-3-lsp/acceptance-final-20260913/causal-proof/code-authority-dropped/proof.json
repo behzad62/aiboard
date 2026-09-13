@@ -1,0 +1,134 @@
+{
+  "id": "code-authority-dropped",
+  "target": "runner-v2/src/code-intelligence-tools.ts",
+  "test": "runner-v2/test/language-invocation-propagation.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green",
+  "sourceFinalSha256": "963bb0c0749dfdff1a432627cfefcd9e5c826300181d2489821ee4cabbc6a2b9",
+  "testFinalSha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9",
+  "redReceipt": {
+    "id": "fault-code-authority-dropped-red",
+    "startedAt": "2026-09-12T17:26:12.246Z",
+    "finishedAt": "2026-09-12T17:26:12.944Z",
+    "wrapperPid": 81944,
+    "testPid": 136640,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/language-invocation-propagation.test.ts"
+    ],
+    "rootCount": 5,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-5ONsBZ",
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-XwWOSN",
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-2gaXvf",
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-yr5985"
+    ]
+  },
+  "greenReceipt": {
+    "id": "fault-code-authority-dropped-green",
+    "startedAt": "2026-09-12T17:26:12.989Z",
+    "finishedAt": "2026-09-12T17:26:13.682Z",
+    "wrapperPid": 103852,
+    "testPid": 32412,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/language-invocation-propagation.test.ts"
+    ],
+    "rootCount": 5,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-terminal.json",
+      "sha256": "027f0ef1c2c8ba66eac1490f79166bdfca5d0224b17134818aae505aa32fa49b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-inputs-before.json",
+      "sha256": "f7f4f88a7e6b9ca380fd4e7a723e71d02056749a15028a2f2492a7b6861a80cf"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-inputs-after.json",
+      "sha256": "f7f4f88a7e6b9ca380fd4e7a723e71d02056749a15028a2f2492a7b6861a80cf"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-stdout.log",
+      "sha256": "66116fc21fba33eceb7b7ab10ae4e52da5a0a0b34f5631f8876e7c6bf89c7ee7"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-wrapper.json",
+      "sha256": "485f1686f3caa668b2b1cb315644fedd9b97ca11c4e5d3cc392f8ab1d49c4715"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/red-child.json",
+      "sha256": "60e862c3b6df13bda3daee04c422dc54129a3e3373154624d51274d8c1985c74"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-terminal.json",
+      "sha256": "3a5aac364a3ed6dc95ae5ca695532a488c8585e6cabba16564117e5530e8a965"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-inputs-before.json",
+      "sha256": "c844adad47933d514991448cec9313430668e4874c37689e9b15bd7080818c03"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-inputs-after.json",
+      "sha256": "c844adad47933d514991448cec9313430668e4874c37689e9b15bd7080818c03"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-stdout.log",
+      "sha256": "ac581a95a05bd4d003998eab1a641461547191f04f3695fd2645c325c9e0589a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-wrapper.json",
+      "sha256": "1655230dab4f76be4cdfefb490b9285d66bad27a6d4ee8a331e8b63ae435b617"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-code-authority-dropped-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/code-authority-dropped/green-child.json",
+      "sha256": "a70d2e5c8556135a1bee45fc5b9aa396fc75b15af792c68fa10f9a83c6217f85"
+    }
+  ]
+}

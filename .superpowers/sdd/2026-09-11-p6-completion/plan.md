@@ -9,8 +9,8 @@ Canonical sources: docs/superpowers/plans/2026-08-26-runner-v2-robust-build-impr
 | B3 close-out | Audit original B3.1-B3.4 and exact accepted source/real integration; preserve historical exclusions; explicit8.0B exit unlocks8.1 | VERIFIED at7f6fbcb1; b3-closeout-proof.json |
 | 8.1 Git | Explicit injected runtime-backed Git runner, exact run/call/grant scope, binary/typed/error compatibility, no ambient/global/raw fallback; all production owners wired and focused tests/faults | VERIFIED:605/605 Windows affected checks;91/91 actual Linux contracts;15 material guards; Task8.2 eligible |
 | 8.2 MCP | Attested lazy exact-agent/run/envelope sessions, bounded protocol, fresh per-call authority/restart limits, discovery and cleanup; compatibility tests/faults | VERIFIED: final503/503 Windows;132/132 Linux;16 material guards; Task8.3 eligible; historical exclusions preserved |
-| 8.3 LSP | Shared session lifecycle; exact authority from code/filesystem diagnostics; framing/restart/attestation/cancellation preserved; focused tests/faults | PENDING |
-| 8.4 managed | Portable shared-session facade; extracted Job host cannot depend on facade; distinct start/stop/poll cancellation; durable compatibility and cleanup tests | PENDING |
+| 8.3 LSP | Shared session lifecycle; exact authority from code/filesystem diagnostics; framing/restart/attestation/cancellation preserved; focused tests/faults | VERIFIED: 2,159 Windows passes; 751 Linux passes; 26 causal guards; exact inputs/resources audited; Task 8.4 eligible |
+| 8.4 managed | Portable shared-session facade; extracted Job host cannot depend on facade; distinct start/stop/poll cancellation; durable compatibility and cleanup tests | ELIGIBLE — NOT STARTED; Task 8.3 accepted; no implementation in this assignment |
 | 8.5 launch audit | Negative local-provider inventory or actual migration; precise adapter allowlist and aliased/dynamic/shell/ambient bypass mutations; Task8 exit | PENDING |
 | 9 Git hardening | Central safe environment/config/indirect execution policy; hostile hook/filter/helper/etc fixtures remain inert; typed refusal and exact grant/cleanup | PENDING |
 | 10 filesystem fence | Sole revalidated mutation seam, expected revision, create-only/move/delete identity and alias/hardlink checks; documented non-CAS external race | PENDING |
@@ -33,3 +33,7 @@ Foundation committed first as7e814765. Caller migration is verified; see task8-1
 ## Task8.2 accepted — 2026-09-12
 
 Task8.2 implementation and original family requirements are self-reviewed and verified; see task8-2-mcp/report.md, task8-2-gate.json and input/evidence manifests. Final Windows503/503, Linux132/132 including native POSIX descendant lifecycle, sixteen material reversals detected, TypeScript/ESLint0. Final accepted Windows acquisitions518/518 removed by verified owners. Earlier failed/synthetic diagnostics and three older cleanup-blocked native records remain explicit historical exclusions, never relabeled released. Protected222 files unchanged. Next is8.3 LSP; P6 remains incomplete and P6.5 locked. No later task started or remote publication.
+
+## Task 8.3 accepted — 2026-09-13T19:53:22.717Z
+
+Original Family 8.3 requirements, shared lifecycle and callers are verified by the authorized controller self-review. See task8-3-lsp/report.md and task8-3-gate.json. Final accepted file matrix: Windows 2,159 passes with one POSIX-only skip; actual Linux 751 passes with one Windows-only skip; 26 material fault proofs. Protected 10,206 files unchanged. Retained closed synthetic/failure evidence is explicitly classified, not relabeled released. Task 8.4 is eligible but unimplemented; P6 and later gates remain incomplete. No push.

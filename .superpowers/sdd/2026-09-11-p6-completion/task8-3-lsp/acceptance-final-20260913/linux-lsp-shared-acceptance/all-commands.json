@@ -1,0 +1,110 @@
+[
+  {
+    "exe": "C:\\Program Files\\nodejs\\node.exe",
+    "args": [
+      "node_modules/typescript/bin/tsc",
+      "-p",
+      "runner-v2/tsconfig.json",
+      "--noEmit",
+      "false",
+      "--rootDir",
+      ".",
+      "--outDir",
+      "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\linux-lsp-shared-acceptance\\bundle",
+      "--sourceMap",
+      "false",
+      "--incremental",
+      "false"
+    ],
+    "id": "compile"
+  },
+  {
+    "exe": "docker",
+    "args": [
+      "image",
+      "inspect",
+      "node:24-alpine",
+      "--format",
+      "{{.Id}} {{.Os}} {{.Architecture}}"
+    ],
+    "id": "image"
+  },
+  {
+    "exe": "docker",
+    "args": [
+      "create",
+      "--pull=never",
+      "--name",
+      "aiboard-task83-60413139-65e",
+      "--label",
+      "com.aiboard.task83=60413139-65ef-4a20-8092-019aa164f7dd",
+      "--init",
+      "--network",
+      "none",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--pids-limit",
+      "128",
+      "--memory",
+      "768m",
+      "--tmpfs",
+      "/tmp:rw,exec,nosuid,nodev,size=384m,mode=1777",
+      "--user",
+      "node",
+      "--mount",
+      "type=bind,source=D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\linux-lsp-shared-acceptance\\bundle,target=/work,readonly",
+      "--mount",
+      "type=bind,source=D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\typescript,target=/work/node_modules/typescript,readonly",
+      "--workdir",
+      "/work",
+      "--env",
+      "AIBOARD_C5_CAPTURE_ROOTS=1",
+      "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+      "node",
+      "--input-type=module",
+      "-e",
+      "import fs from 'node:fs';import path from 'node:path';import crypto from 'node:crypto';import {spawnSync} from 'node:child_process';\nconst local='/home/node/task83-runtime';fs.writeFileSync('/tmp/task83-runtime-ownership.json',JSON.stringify({local,source:'/work',at:new Date().toISOString(),pid:process.pid}));fs.cpSync('/work',local,{recursive:true,errorOnExist:true,force:false});process.chdir(local);\nconst walk=p=>fs.readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(p,e.name)):[path.join(p,e.name)]);const snapshot=()=>walk(local).sort().map(p=>({path:path.relative(local,p),sha256:crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}));const before=snapshot();fs.writeFileSync('/tmp/task83-runtime-inputs-before.json',JSON.stringify(before));const child=spawnSync(process.execPath,['contract-gate.mjs'],{stdio:'inherit'});const after=snapshot();fs.writeFileSync('/tmp/task83-runtime-inputs-after.json',JSON.stringify(after));const unchanged=JSON.stringify(before)===JSON.stringify(after);fs.writeFileSync('/tmp/task83-runtime-terminal.json',JSON.stringify({exitCode:child.status,signal:child.signal,unchanged,pid:child.pid}));fs.cpSync('/tmp','/home/node/task83-tmp-evidence',{recursive:true});process.exitCode=unchanged?(child.status??1):97;"
+    ],
+    "id": "create"
+  },
+  {
+    "exe": "docker",
+    "args": [
+      "start",
+      "--attach",
+      "0a4a7bc9609011b5b09e0feb11d0b88525447a16fd365cb6c45aef3d31a56e3e"
+    ],
+    "id": "test"
+  },
+  {
+    "exe": "docker",
+    "args": [
+      "inspect",
+      "0a4a7bc9609011b5b09e0feb11d0b88525447a16fd365cb6c45aef3d31a56e3e",
+      "--format",
+      "{{json .State}}"
+    ],
+    "id": "state"
+  },
+  {
+    "exe": "docker",
+    "args": [
+      "inspect",
+      "0a4a7bc9609011b5b09e0feb11d0b88525447a16fd365cb6c45aef3d31a56e3e",
+      "--format",
+      "{{index .Config.Labels \"com.aiboard.task83\"}}"
+    ],
+    "id": "label"
+  },
+  {
+    "exe": "docker",
+    "args": [
+      "cp",
+      "0a4a7bc9609011b5b09e0feb11d0b88525447a16fd365cb6c45aef3d31a56e3e:/home/node/task83-tmp-evidence",
+      "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\linux-lsp-shared-acceptance\\tmp-evidence"
+    ],
+    "id": "copy-evidence"
+  }
+]

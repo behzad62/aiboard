@@ -118,6 +118,7 @@ export type SessionOperation =
   | "write"
   | "close_input"
   | "request"
+  | "language_request"
   | "stop"
   | "graceful_shutdown"
   | "subscribe"
@@ -967,7 +968,7 @@ function assertOperationRequestShape(request: LaunchOperationAuthorizationReques
 }
 
 function isSessionOperation(value: unknown): value is SessionOperation {
-  return value === "write" || value === "close_input" || value === "request" || value === "stop" ||
+  return value === "write" || value === "close_input" || value === "request" || value === "language_request" || value === "stop" ||
     value === "graceful_shutdown" || value === "subscribe" || value === "parse_delivery" ||
     value === "input_control" || value === "protocol_response" || value === "family_delivery";
 }

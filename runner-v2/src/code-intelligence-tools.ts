@@ -1,3 +1,4 @@
+import { languageInvocation } from "./language-intelligence.js";
 import { resolve } from "node:path";
 
 import type {
@@ -64,7 +65,7 @@ export function createCodeIntelligenceTools(
         query: input.query as string,
         ...(input.kind !== undefined ? { kind: input.kind as string } : {}),
         ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
-      }, context.signal),
+      }, context.signal, languageInvocation(context)),
     ),
     positionTool("code.definition", "Resolve the symbol definition at a source position", options),
     positionTool("code.references", "Find references to the symbol at a source position", options),
@@ -82,7 +83,7 @@ export function createCodeIntelligenceTools(
           root: requiredWorkspace(context),
           ...(path === "." ? {} : { path }),
           ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
-        }, context.signal);
+        }, context.signal, languageInvocation(context));
       },
     ),
   ];
@@ -113,8 +114,8 @@ function positionTool(
         ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
       };
       return name === "code.definition"
-        ? await options.language.definition(query, context.signal)
-        : await options.language.references(query, context.signal);
+        ? await options.language.definition(query, context.signal, languageInvocation(context))
+        : await options.language.references(query, context.signal, languageInvocation(context));
     },
   );
 }

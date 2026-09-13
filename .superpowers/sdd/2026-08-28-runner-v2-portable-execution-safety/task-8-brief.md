@@ -1,5 +1,7 @@
 ### Task 8: P6.4e — Route managed, LSP, MCP, Git, and local-provider processes
 
+> **Current execution checkpoint — 2026-09-13T19:53:22.717Z: Task 8.3 LSP is VERIFIED.** Windows 2,159 passes and Linux 751 passes, applicable opposite-platform skips covered, 26 causal guards, exact source/resource/protection audit. Task 8.4 is eligible but NOT implemented. P6/Task 8 overall remain incomplete. Proof: `.superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/report.md` and `task8-3-gate.json`. This checkpoint supersedes earlier routing checkpoints, never their retained failed evidence.
+
 > **Current execution checkpoint — 2026-09-11:** packet8.0B/B3 and **Task8.1 Git are VERIFIED**. The current56-file Windows affected graph passed605/605, actual Linux contract commands passed91/91, all367 source inputs matched, and controller self-review/static/resource gates passed. **Next: Task8.2 MCP.** Task8 as a whole, P6.4e and P6 remain in progress; P6.5/P6.6/P7 are not unlocked. Current proof: `.superpowers/sdd/2026-09-11-p6-completion/task8-1-final/report.md` and `task8-1-gate.json`. This supersedes earlier checkpoints below for execution routing, not their historical evidence.
 
 **Canonical authority:**

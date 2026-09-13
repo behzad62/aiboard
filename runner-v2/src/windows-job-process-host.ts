@@ -1,11 +1,13 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
+
+import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
 
 const PROTOCOL = "aiboard-managed-process/v1";
 const DEFAULT_DEADLINE_MS = 5_000;
@@ -38,7 +40,7 @@ export interface WindowsJobProcessHost {
   signalOwned(processId: string, signal: "SIGTERM" | "SIGINT" | "SIGKILL", owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot>;
   reconcileOwned(processId: string, owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
   releaseOwned(processId: string, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
-  readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence): WindowsJobOutputRead | Promise<WindowsJobOutputRead>;
+  readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence, maximumBytes?: number): WindowsJobOutputRead | Promise<WindowsJobOutputRead>;
   probeActiveJobCreateClose(): Promise<boolean>;
   attachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
   writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
@@ -50,6 +52,8 @@ export interface WindowsJobChannelState {
   readonly nextSequence: number; readonly inputClosed: boolean;
   readonly outputOffsets: { readonly stdout: number; readonly stderr: number };
   readonly outputSequences: { readonly stdout: number; readonly stderr: number };
+  /** Exact persisted read frames, verified against retained bytes under the attachment fence. */
+  readonly retainedOutput?: readonly BackpressuredOutputMetadata[];
   readonly snapshot: WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean };
 }
 export interface WindowsJobProcessHostOptions {
@@ -74,6 +78,7 @@ interface HostRecord extends WindowsJobOwnershipKey {
   interactive?: boolean; nextInputSequence?: number; inputClosed?: boolean;
   outputOffsets?: { stdout: number; stderr: number };
   outputSequences?: { stdout: number; stderr: number };
+  outputFrames?: Partial<Record<"stdout" | "stderr", BackpressuredOutputMetadata>>;
   currentFence?: WindowsJobWriterFence;
 }
 interface SupervisorStatus {
@@ -264,16 +269,45 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }
   }
 
-  async readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence): Promise<WindowsJobOutputRead> {
+  async readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence, maximumBytes = this.maxPollBytes): Promise<WindowsJobOutputRead> {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw new WindowsJobHostError("process_control_unavailable", "Windows Job output read bound is invalid.");
+    const limit = Math.min(maximumBytes, this.maxPollBytes);
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
     return await this.withFenceEffect(record, fence, "read", async (current) => {
       this.assertActive(current);
-      // Keep status re-attestation and the evidence read in one durable fence
-      // turn so high-volume output does not pay for two equivalent lock commits.
       await this.authenticatedStatus(current);
-      const stdout = unreadBytes(current.stdoutPath, offsets.stdout, this.maxPollBytes);
-      const stderr = unreadBytes(current.stderrPath, offsets.stderr, this.maxPollBytes);
-      return { stdout, stderr, next: { stdout: offsets.stdout + stdout.byteLength, stderr: offsets.stderr + stderr.byteLength } };
+      if (!current.interactive) {
+        const stdout = unreadBytes(current.stdoutPath, offsets.stdout, limit);
+        const stderr = unreadBytes(current.stderrPath, offsets.stderr, limit);
+        return { stdout, stderr, next: { stdout: offsets.stdout + stdout.byteLength, stderr: offsets.stderr + stderr.byteLength } };
+      }
+      const consumed = current.outputOffsets ?? { stdout: 0, stderr: 0 };
+      if (offsets.stdout !== consumed.stdout || offsets.stderr !== consumed.stderr)
+        throw new WindowsJobHostError("process_control_unavailable", "Windows Job interactive output cursor is not its exact acknowledged position.");
+      const frames = { ...current.outputFrames };
+      const output: { stdout: Uint8Array; stderr: Uint8Array } = { stdout: new Uint8Array(), stderr: new Uint8Array() };
+      let remaining = limit; let changed = false;
+      // A read fixes its frame before bytes reach a consumer. Preserve every
+      // unacknowledged frame across host restart and append-only pipe growth;
+      // otherwise reattachment could silently change an accepted digest/length.
+      for (const stream of ["stdout", "stderr"] as const) {
+        const frame = frames[stream];
+        if (!frame) continue;
+        output[stream] = this.readRetainedOutputFrame(current, stream, frame);
+        remaining -= output[stream].byteLength;
+      }
+      if (remaining < 0) throw new WindowsJobHostError("process_control_unavailable", "Windows Job retained replay exceeds its aggregate byte bound.");
+      for (const stream of ["stdout", "stderr"] as const) {
+        if (frames[stream] || remaining === 0) continue;
+        const bytes = unreadBytes(stream === "stdout" ? current.stdoutPath : current.stderrPath, consumed[stream], remaining);
+        if (bytes.byteLength === 0) continue;
+        frames[stream] = { stream, sequence: (current.outputSequences?.[stream] ?? 0) + 1,
+          startOffset: consumed[stream], endOffset: consumed[stream] + bytes.byteLength,
+          byteLength: bytes.byteLength, digest: createHash("sha256").update(bytes).digest("hex") };
+        output[stream] = bytes; remaining -= bytes.byteLength; changed = true;
+      }
+      if (changed) { current.outputFrames = frames; this.persist(current); this.records.set(processId, current); }
+      return { ...output, next: { stdout: offsets.stdout + output.stdout.byteLength, stderr: offsets.stderr + output.stderr.byteLength } };
     });
   }
 
@@ -306,6 +340,12 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         inputClosed: current.inputClosed === true,
         outputOffsets: { ...(current.outputOffsets ?? { stdout: 0, stderr: 0 }) },
         outputSequences: { ...(current.outputSequences ?? { stdout: 0, stderr: 0 }) },
+        retainedOutput: (["stdout", "stderr"] as const).flatMap((stream) => {
+          const frame = current.outputFrames?.[stream];
+          if (!frame) return [];
+          this.readRetainedOutputFrame(current, stream, frame);
+          return [{ ...frame }];
+        }),
         snapshot: { ...this.snapshot(current), ownershipReleased: status.ownershipReleased },
       };
     });
@@ -344,6 +384,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.assertOutputFiles(current);
       const offsets = current.outputOffsets ?? { stdout: 0, stderr: 0 };
       if (!Number.isSafeInteger(endOffset) || endOffset < offsets[stream]) throw new WindowsJobHostError("process_control_unavailable", "Windows Job output acknowledgement is invalid.");
+      const frame = current.outputFrames?.[stream];
+      if (frame) {
+        this.readRetainedOutputFrame(current, stream, frame);
+        if (endOffset !== frame.endOffset) throw new WindowsJobHostError("process_control_unavailable", "Windows Job output acknowledgement must match the exact retained frame.");
+      }
       const acknowledged = await supervisorRequest<{ acknowledged: true; stream: "stdout" | "stderr"; endOffset: number; status: SupervisorStatus }>(current.supervisor, "/ack-output", "POST", { stream, endOffset, fence }, this.stopDeadlineMs + 250);
       if (acknowledged.acknowledged !== true || acknowledged.stream !== stream || acknowledged.endOffset !== endOffset)
         throw new WindowsJobHostError("process_control_unavailable", "Windows Job supervisor output acknowledgement is invalid.");
@@ -353,6 +398,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       current.outputOffsets = { ...offsets, [stream]: endOffset };
       const sequences = current.outputSequences ?? { stdout: 0, stderr: 0 };
       current.outputSequences = { ...sequences, [stream]: sequences[stream] + 1 };
+      if (frame) { const frames = { ...current.outputFrames }; delete frames[stream]; current.outputFrames = frames; }
       if (acknowledged.status.status === "stopped") this.assertJobOutputSettled(current, acknowledged.status);
       current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current);
     });
@@ -441,6 +487,18 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         !Number.isSafeInteger(status.retainedOutputBytes) || status.retainedOutputBytes < 0)
       throw new WindowsJobHostError("process_control_unavailable", "Windows Job retained-output status is missing or invalid.");
     this.assertOutputFiles(record);
+  }
+  private readRetainedOutputFrame(record: HostRecord, stream: "stdout" | "stderr", frame: BackpressuredOutputMetadata): Uint8Array {
+    const offset = record.outputOffsets?.[stream] ?? 0;
+    const sequence = (record.outputSequences?.[stream] ?? 0) + 1;
+    if (!frame || frame.stream !== stream || frame.sequence !== sequence || frame.startOffset !== offset ||
+        !Number.isSafeInteger(frame.byteLength) || frame.byteLength < 1 || frame.byteLength > this.maxPollBytes ||
+        !Number.isSafeInteger(frame.endOffset) || frame.endOffset !== offset + frame.byteLength || !/^[a-f0-9]{64}$/.test(frame.digest))
+      throw new WindowsJobHostError("process_control_unavailable", "Windows Job retained output identity is invalid.");
+    const bytes = unreadBytes(stream === "stdout" ? record.stdoutPath : record.stderrPath, offset, frame.byteLength);
+    if (bytes.byteLength !== frame.byteLength || createHash("sha256").update(bytes).digest("hex") !== frame.digest)
+      throw new WindowsJobHostError("process_control_unavailable", "Windows Job retained output bytes or digest changed.");
+    return bytes;
   }
   private assertOutputFiles(record: HostRecord): void {
     for (const path of [record.stdoutPath, record.stderrPath]) {

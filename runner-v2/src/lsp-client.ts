@@ -1,4 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
+import { languageInvocation, type LanguageInvocationContext } from "./language-intelligence.js";
+import type { LspTransportFactory, LspOwnedTransport, LspProtocolWriter } from "./lsp-transport.js";
 import {
   lstatSync,
   realpathSync,
@@ -8,12 +11,11 @@ import {
   basename,
   dirname,
   isAbsolute,
-  join,
   relative,
   resolve,
   sep,
 } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import {
   assertLanguageServerExecutableIdentity,
@@ -27,12 +29,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_WRITE_TIMEOUT_MS = 2_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 128;
+const MAX_SHARED_LANGUAGE_REQUEST_TIMEOUT_MS = 3_600_000;
 const MAX_STDERR_BYTES = 8 * 1024;
-const WINDOWS_JOB_HOST_CONTROL_PREFIX = "@aiboard-lsp-job-host:";
-const WINDOWS_JOB_HOST_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "managed-process-job-host.ps1",
-);
 
 export type LspClientErrorCode =
   | "invalid_configuration"
@@ -66,6 +64,7 @@ export class LspClientError extends Error {
 
 export interface LspClientOptions {
   command: string;
+  transportFactory?: LspTransportFactory;
   /** Runner-owned byte identity for the exact command passed to spawn. */
   attestedCommand?: LanguageServerExecutableIdentity;
   args?: readonly string[];
@@ -79,12 +78,7 @@ export interface LspClientOptions {
   restartLimit?: number;
   maxFrameBytes?: number;
   maxPendingRequests?: number;
-  /** Test-only fault seam; production always uses the bundled Job-host script. */
-  windowsJobHostPathForTest?: string;
-  /** Test-only fault seam; production uses the supplied process-tree terminator directly. */
-  processTreeTerminationHook?: (
-    terminate: () => Promise<void>,
-  ) => Promise<void>;
+
 }
 
 export interface LspDocumentInput {
@@ -130,25 +124,16 @@ interface PublishedDiagnosticsCache {
 }
 
 interface ProcessSession {
+  protocolWriter?: LspProtocolWriter;
   generation: number;
-  child: ChildProcessWithoutNullStreams;
+  transport?: LspOwnedTransport;
+  cleanup?: Promise<void>;
   buffer: Buffer;
   stderr: Buffer;
   initialized: boolean;
   diagnosticSupport: LspDiagnosticSupport;
   expectedExit: boolean;
-  windowsJobHost?: JobHostStartup;
   failure?: LspClientError;
-  exited: Promise<void>;
-  resolveExited(): void;
-}
-
-interface JobHostStartup {
-  buffer: string;
-  settled: boolean;
-  ready: Promise<void>;
-  resolve(): void;
-  reject(error: LspClientError): void;
 }
 
 interface PendingRequest {
@@ -160,6 +145,8 @@ interface PendingRequest {
   onAbort?: () => void;
   signal?: AbortSignal;
   cancellationError?: LspClientError;
+  writeSettled?: boolean;
+  reply?: { success: boolean; value: unknown };
   settled: boolean;
   resolve(value: unknown): void;
   reject(error: unknown): void;
@@ -201,8 +188,15 @@ export class LspClient {
   private readonly restartLimit: number;
   private readonly maxFrameBytes: number;
   private readonly maxPendingRequests: number;
-  private readonly windowsJobHostPath: string;
-  private readonly processTreeTerminationHook?: LspClientOptions["processTreeTerminationHook"];
+  private readonly transportFactory?: LspTransportFactory;
+  private readonly invocation = new AsyncLocalStorage<LanguageInvocationContext>();
+  private readonly writer = new AsyncLocalStorage<LspProtocolWriter>();
+  private readonly serverReplies = new Set<Promise<void>>();
+  private closeRequested = false;
+  private invocationTail: Promise<void> = Promise.resolve();
+  private waitingInvocations = 0;
+  private readonly queuedInvocationWaiters = new Set<(error: LspClientError) => void>();
+  private capabilityDigest?: string;
   private readonly documents = new Map<string, OpenDocument>();
   private readonly diagnostics = new Map<string, PublishedDiagnosticsCache>();
   private readonly diagnosticWaiters = new Set<PublishedDiagnosticsWaiter>();
@@ -284,14 +278,76 @@ export class LspClient {
       options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS,
       "maxPendingRequests",
     );
-    this.windowsJobHostPath = validateWindowsJobHostPathForTest(
-      options.windowsJobHostPathForTest,
-    );
-    this.processTreeTerminationHook = options.processTreeTerminationHook;
+    this.transportFactory = options.transportFactory;
+  }
+
+  /** One original ToolBroker call owns its complete document/query exchange. */
+  async withInvocation<T>(context: LanguageInvocationContext, perform: () => Promise<T>): Promise<T> {
+    this.assertNotClosed();
+    if (!context.executionGrant || !context.callId || !context.toolName || !context.runId || !context.sessionId || !context.actor?.id)
+      throw configurationError("Configured LSP requires the exact ToolBroker grant/run/agent/call identity.");
+    if (context.signal?.aborted) throw new LspClientError("request_cancelled", "LSP invocation was cancelled before launch.");
+    const exact = languageInvocation(context);
+    if (this.waitingInvocations >= this.maxPendingRequests)
+      throw new LspClientError("too_many_pending_requests", "LSP invocation queue reached its pending bound.");
+    const execute = () => this.invocation.run(exact, async () => {
+      await this.start();
+      const session = this.requireRunningSession();
+      let callbackFailed = false; let callbackFailure: unknown;
+      try {
+        return await session.transport!.withInvocation(exact, (writer) => this.withProtocolWriter(session, writer, async () => {
+          let result: T;
+          try { result = await perform(); }
+          catch (error) { callbackFailed = true; callbackFailure = error; throw error; }
+          await Promise.all([...this.serverReplies]);
+          return result;
+        // One language_request owns serial document/protocol writes plus the RPC.
+        // Keep the existing caller-visible request/write timers unchanged, but
+        // let either typed phase settle before the shared ownership deadline.
+        }), Math.min(MAX_SHARED_LANGUAGE_REQUEST_TIMEOUT_MS, this.requestTimeoutMs + this.writeTimeoutMs));
+      } catch (error) {
+        if (!session.failure && callbackFailed && error === callbackFailure && !(error instanceof LspClientError)) throw error;
+        const failure = session.failure ?? asLspError(error, exact.signal?.aborted ? "request_cancelled" : "process_error", true);
+        if (failure.code !== "response_error" && !["document_already_open", "document_not_open", "stale_document_version", "path_outside_workspace"].includes(failure.code)) {
+          this.failSession(session, failure);
+          // Caller cancellation/protocol deadlines do not wait for physical
+          // cleanup. failSession retains that exact cleanup promise; close and
+          // a later fresh-call restart must join it before claiming release.
+        }
+        throw failure;
+      }
+    });
+    let entered = false; let queuedFailure: LspClientError | undefined;
+    let rejectQueued!: (error: LspClientError) => void;
+    const cancelled = new Promise<never>((_resolve, reject) => { rejectQueued = reject; });
+    const failQueued = (error: LspClientError) => {
+      if (!entered && !queuedFailure) { queuedFailure = error; rejectQueued(error); }
+    };
+    const onAbort = () => failQueued(new LspClientError("request_cancelled", "Queued LSP invocation was cancelled before protocol effects."));
+    const timer = setTimeout(() => failQueued(new LspClientError("request_timeout", "Queued LSP invocation exceeded its request deadline before protocol effects.")), this.requestTimeoutMs);
+    this.queuedInvocationWaiters.add(failQueued);
+    exact.signal?.addEventListener("abort", onAbort, { once: true });
+    if (exact.signal?.aborted) onAbort();
+    this.waitingInvocations++;
+    const running = this.invocationTail.then(async () => {
+      if (queuedFailure) throw queuedFailure;
+      this.assertNotClosed();
+      entered = true; clearTimeout(timer); this.queuedInvocationWaiters.delete(failQueued);
+      return await execute();
+    }).finally(() => { this.waitingInvocations--; });
+    // A cancelled queued caller keeps an observed ticket until its predecessor
+    // settles, but that ticket can never write or borrow the predecessor grant.
+    this.invocationTail = running.then(() => undefined, () => undefined);
+    try { return await Promise.race([running, cancelled]); }
+    finally {
+      clearTimeout(timer); this.queuedInvocationWaiters.delete(failQueued);
+      exact.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   async start(): Promise<void> {
     this.assertNotClosed();
+    if (!this.invocation.getStore()) throw configurationError("LSP startup requires an exact authorized language invocation.");
     if (this.state === "running" && this.session?.initialized) return;
     if (this.startPromise) return await this.startPromise;
     if (this.restartPromise) {
@@ -303,7 +359,8 @@ export class LspClient {
         "Language server is not running.",
         true,
       );
-      if (!failure.retryable || !(await this.restartAfterFailure(this.session))) {
+      const freshCallMayRestart = failure.retryable || failure.code === "request_cancelled" || failure.code === "request_timeout";
+      if (!freshCallMayRestart || !(await this.restartAfterFailure(this.session))) {
         throw failure;
       }
       return;
@@ -323,33 +380,11 @@ export class LspClient {
       throw new LspClientError("protocol_error", "LSP request method is required.");
     }
     this.assertNotClosed();
-    while (true) {
-      let attemptedSession: ProcessSession | undefined;
-      try {
-        await this.start();
-        const session = this.requireRunningSession();
-        attemptedSession = session;
-        return await this.requestOnSession<T>(
-          session,
-          method,
-          params,
-          signal,
-          this.requestTimeoutMs,
-        );
-      } catch (error) {
-        if (
-          !(error instanceof LspClientError) ||
-          !error.retryable ||
-          signal?.aborted ||
-          this.state === "closing" ||
-          this.state === "closed"
-        ) {
-          throw error;
-        }
-        const failed = attemptedSession ?? this.session;
-        if (!failed || !(await this.restartAfterFailure(failed))) throw error;
-      }
-    }
+    await this.start();
+    const session = this.requireRunningSession();
+    // A failed operation is never replayed on a new process. A later distinct
+    // ToolBroker invocation may spend the restart budget with a fresh grant.
+    return await this.requestOnSession<T>(session, method, params, signal, this.requestTimeoutMs);
   }
 
   async openDocument(input: LspDocumentInput): Promise<void> {
@@ -586,162 +621,86 @@ export class LspClient {
 
   private async closeInternal(): Promise<void> {
     if (this.state === "closed") return;
+    this.closeRequested = true;
     this.state = "closing";
-    const session = this.session;
-    if (session && !processSessionExited(session)) {
-      if (!session.expectedExit) {
-        if (session.initialized && !session.failure) {
-          try {
-            await this.requestOnSession(
-              session,
-              "shutdown",
-              null,
-              undefined,
-              this.shutdownTimeoutMs,
-            );
-            session.expectedExit = true;
-            await this.notifyOnSession(session, "exit", null);
-            if (!session.windowsJobHost) {
-              await this.terminateSessionProcessTree(session);
-            }
-          } catch {
-            session.expectedExit = true;
-            await this.terminateSessionProcessTree(session, "SIGTERM");
-          }
-        } else {
-          session.expectedExit = true;
-          await this.terminateSessionProcessTree(session, "SIGTERM");
-        }
-      } else {
-        await this.terminateSessionProcessTree(session, "SIGTERM");
-      }
-      if (!(await waitForProcessExit(session, this.shutdownTimeoutMs))) {
-        await this.terminateSessionProcessTree(session, "SIGKILL");
-        if (!(await waitForProcessExit(session, this.shutdownTimeoutMs))) {
-          const failure = new LspClientError(
-            "process_error",
-            "Language server did not exit after forced shutdown.",
-          );
-          this.rejectPending(() => true, failure);
-          this.documents.clear();
-          this.diagnostics.clear();
-          this.state = "failed";
-          throw failure;
-        }
-      }
-    }
     const closed = new LspClientError("client_closed", "LSP client is closed.");
+    for (const reject of this.queuedInvocationWaiters) reject(closed);
     this.rejectPending(() => true, closed);
     this.settleDiagnosticWaiters(undefined);
-    this.documents.clear();
-    this.diagnostics.clear();
-    this.session = undefined;
-    this.state = "closed";
+    await this.startPromise?.catch(() => undefined);
+    await this.restartPromise?.catch(() => undefined);
+    if (this.session) {
+      try { await this.retireSession(this.session, !this.session.failure); }
+      catch (error) { this.state = "failed"; throw asLspError(error, "process_error", false); }
+    }
+    await this.invocationTail;
+    this.documents.clear(); this.diagnostics.clear(); this.session = undefined; this.state = "closed";
   }
 
-  private async terminateSessionProcessTree(
-    session: ProcessSession,
-    signal: NodeJS.Signals = "SIGTERM",
-  ): Promise<void> {
-    const terminate = async () => await terminateProcessTree(
-      session.child,
-      signal,
-      session.windowsJobHost !== undefined,
-    );
-    if (this.processTreeTerminationHook) {
-      await this.processTreeTerminationHook(terminate);
-    } else {
-      await terminate();
-    }
+  private async retireSession(session: ProcessSession, graceful: boolean): Promise<void> {
+    if (session.cleanup) return await session.cleanup;
+    const transport = session.transport;
+    if (!transport) return;
+    session.expectedExit = true;
+    const attempt = transport.closeVerified(graceful && session.initialized ? async (writer) => {
+      await this.withProtocolWriter(session, writer, async () => {
+        await this.requestOnSession(session, "shutdown", null, undefined, this.shutdownTimeoutMs);
+        await this.notifyOnSession(session, "exit", null);
+      });
+    } : undefined, this.shutdownTimeoutMs + this.writeTimeoutMs).then(() => { if (session.transport === transport) session.transport = undefined; });
+    session.cleanup = attempt;
+    try { await attempt; } finally { if (session.cleanup === attempt) session.cleanup = undefined; }
+  }
+
+  private async withProtocolWriter<T>(session: ProcessSession, writer: LspProtocolWriter, operation: () => Promise<T>): Promise<T> {
+    if (session.protocolWriter && session.protocolWriter !== writer)
+      throw new LspClientError("write_failed", "LSP protocol writer belongs to another active operation.");
+    session.protocolWriter = writer;
+    try { return await this.writer.run(writer, operation); }
+    finally { if (session.protocolWriter === writer) session.protocolWriter = undefined; }
   }
 
   private async startSession(restart: boolean): Promise<void> {
     this.assertNotClosed();
+    const invocation = this.invocation.getStore();
+    if (!invocation || !this.transportFactory) throw configurationError("LSP requires its injected shared transport and exact invocation authority.");
     this.state = restart ? "restarting" : "starting";
     if (this.attestedCommand) {
-      try {
-        await assertLanguageServerExecutableIdentity(this.attestedCommand);
-      } catch (error) {
-        this.state = "failed";
-        throw new LspClientError(
-          "invalid_configuration",
-          `Language server executable attestation failed: ${boundedMessage(error)}.`,
-          false,
-          { cause: error },
-        );
-      }
+      try { await assertLanguageServerExecutableIdentity(this.attestedCommand); }
+      catch (cause) { this.state = "failed"; throw new LspClientError("invalid_configuration", `Language server executable attestation failed: ${boundedMessage(cause)}.`, false, { cause }); }
     }
-    const generation = this.nextGeneration++;
-    let resolveExited!: () => void;
-    const exited = new Promise<void>((resolvePromise) => {
-      resolveExited = resolvePromise;
-    });
-    const usesWindowsJobHost = process.platform === "win32";
-    const child = spawn(
-      usesWindowsJobHost ? "powershell.exe" : this.command,
-      usesWindowsJobHost
-        ? [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            this.windowsJobHostPath,
-            "--aiboard-lsp-pipe",
-          ]
-        : this.args,
-      {
-      cwd: this.workspaceRoot,
-      env: this.env,
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-    const windowsJobHost = usesWindowsJobHost ? createJobHostStartup() : undefined;
-    const session: ProcessSession = {
-      generation,
-      child,
-      buffer: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      initialized: false,
-      diagnosticSupport: { textDocumentPull: false, workspacePull: false },
-      expectedExit: false,
-      ...(windowsJobHost ? { windowsJobHost } : {}),
-      exited,
-      resolveExited,
-    };
-    this.session = session;
-    this.starts += 1;
-    child.stdout.on("data", (chunk: Buffer) => this.consumeStdout(session, chunk));
-    child.stderr.on("data", (chunk: Buffer) => this.consumeStderr(session, chunk));
-    child.stdin.on("error", (error) => this.failSession(session, new LspClientError(
-      "write_failed",
-      `Language server input failed: ${boundedMessage(error)}.`,
-      true,
-      { cause: error },
-    )));
-    child.on("exit", (code, signal) => this.onProcessExit(session, code, signal));
-    child.on("error", (error) => this.onProcessError(session, error));
+    const session: ProcessSession = { generation: this.nextGeneration++, buffer: Buffer.alloc(0), stderr: Buffer.alloc(0), initialized: false,
+      diagnosticSupport: { textDocumentPull: false, workspacePull: false }, expectedExit: false };
+    this.session = session; this.starts++;
     try {
-      await waitForSpawn(child);
+      const transport = await this.transportFactory.open({ command: this.command, arguments: this.args, workspaceRoot: this.workspaceRoot,
+        ...(this.attestedCommand ? { attestedCommand: this.attestedCommand } : {}),
+        ...(this.env ? { explicitEnvironment: this.env } : {}), invocation,
+        initialize: (writer) => this.withProtocolWriter(session, writer, () => this.initializeSession(session)),
+        onOutput: (stream, bytes) => {
+          const consume = () => { if (stream === "stdout") this.consumeStdout(session, Buffer.from(bytes)); else this.consumeStderr(session, Buffer.from(bytes)); };
+          // Pipe callbacks do not inherit the invoking writer's async context.
+          // Carry only this exact currently-owned protocol writer, whose shared
+          // operation independently rechecks authority before every response.
+          return session.protocolWriter ? this.writer.run(session.protocolWriter, consume) : consume();
+        },
+        onFailure: (error) => this.failSession(session, asLspError(error, "process_exited", true)),
+      });
+      session.transport = transport;
+      if (this.closeRequested || session.failure) {
+        await this.retireSession(session, false);
+        throw session.failure ?? new LspClientError("client_closed", "LSP owner closed during acquisition.");
+      }
+      this.state = "running";
     } catch (error) {
-      const failure = new LspClientError(
-        "spawn_failed",
-        `Language server failed to start: ${boundedMessage(error)}.`,
-        false,
-        { cause: error },
-      );
-      this.failSession(session, failure);
-      this.state = "failed";
+      const failure = asLspError(error, "spawn_failed", false); this.failSession(session, failure);
+      try { await this.retireSession(session, false); }
+      catch (cleanup) { throw new LspClientError(failure.code, failure.message + " Shared launch cleanup remains unverified.", failure.retryable, { cause: new AggregateError([failure, cleanup]) }); }
       throw failure;
     }
-    try {
-      if (session.windowsJobHost) {
-        await this.bootstrapWindowsJobHost(session);
-      }
+  }
+
+  private async initializeSession(session: ProcessSession): Promise<string> {
       const initialized = await this.requestOnSession<Record<string, unknown>>(
         session,
         "initialize",
@@ -790,6 +749,10 @@ export class LspClient {
       }
       session.diagnosticSupport = negotiatedDiagnosticSupport(initialized.capabilities);
       await this.notifyOnSession(session, "initialized", {});
+      const digest = createHash("sha256").update(JSON.stringify(initialized.capabilities)).digest("hex");
+      if (this.capabilityDigest !== undefined && this.capabilityDigest !== digest)
+        throw new LspClientError("protocol_error", "Language server capabilities changed after the prior attested handshake.");
+      this.capabilityDigest = digest;
       session.initialized = true;
       for (const document of [...this.documents.values()]) {
         const reopened: OpenDocument = {
@@ -806,42 +769,18 @@ export class LspClient {
           },
         });
       }
-      this.state = "running";
-    } catch (error) {
-      const failure = asLspError(error, "protocol_error", true);
-      this.failSession(session, failure);
-      this.state = "failed";
-      throw failure;
-    }
+      return this.capabilityDigest!;
   }
 
   private async restartAfterFailure(failed: ProcessSession): Promise<boolean> {
-    if (
-      this.session &&
-      this.session.generation !== failed.generation &&
-      this.session.initialized &&
-      this.state === "running"
-    ) return true;
     if (this.restartPromise) return await this.restartPromise;
-    if (this.restarts >= this.restartLimit) return false;
-    this.restarts += 1;
+    if (this.restarts >= this.restartLimit || !this.invocation.getStore()) return false;
+    this.restarts++;
     this.restartPromise = (async () => {
-      failed.expectedExit = true;
-      await terminateProcessTree(failed.child, "SIGTERM", failed.windowsJobHost !== undefined);
-      if (!(await waitForProcessExit(failed, this.shutdownTimeoutMs))) {
-        await terminateProcessTree(failed.child, "SIGKILL", failed.windowsJobHost !== undefined);
-        if (!(await waitForProcessExit(failed, this.shutdownTimeoutMs))) {
-          throw new LspClientError(
-            "process_error",
-            "Crashed language server did not exit before restart.",
-          );
-        }
-      }
+      await this.retireSession(failed, false);
       await this.startSession(true);
       return true;
-    })().finally(() => {
-      this.restartPromise = undefined;
-    });
+    })().finally(() => { this.restartPromise = undefined; });
     return await this.restartPromise;
   }
 
@@ -901,6 +840,7 @@ export class LspClient {
       }
       this.pending.set(key, entry);
       void this.writeMessage(session, { jsonrpc: "2.0", id, method, params })
+        .then(() => { entry.writeSettled = true; if (entry.reply) this.settlePending(key, entry.reply.success, entry.reply.value); })
         .catch((error) => {
           this.settlePending(
             key,
@@ -919,104 +859,18 @@ export class LspClient {
     await this.writeMessage(session, { jsonrpc: "2.0", method, params });
   }
 
-  private async bootstrapWindowsJobHost(session: ProcessSession): Promise<void> {
-    const startup = session.windowsJobHost;
-    if (!startup) return;
-    const environment = Object.fromEntries(
-      Object.entries(this.env ?? process.env)
-        .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-    );
-    let bootstrap: string;
-    try {
-      const payload = JSON.stringify({
-        command: this.command,
-        args: this.args,
-        cwd: this.workspaceRoot,
-        env: environment,
-      });
-      bootstrap = JSON.stringify({
-        encoding: "base64-utf8-json",
-        payload: Buffer.from(payload, "utf8").toString("base64"),
-      });
-    } catch (error) {
-      throw new LspClientError(
-        "invalid_configuration",
-        "LSP Job Object bootstrap is not JSON serializable.",
-        false,
-        { cause: error },
-      );
-    }
-    if (Buffer.byteLength(bootstrap, "utf8") > 1024 * 1024) {
-      throw new LspClientError(
-        "invalid_configuration",
-        "LSP Job Object bootstrap exceeds its 1 MiB bound.",
-      );
-    }
-    await this.writeRaw(session, `${bootstrap}\n`);
-    let timeout: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        startup.ready,
-        new Promise<never>((_resolvePromise, rejectPromise) => {
-          timeout = setTimeout(() => rejectPromise(new LspClientError(
-            "spawn_failed",
-            "LSP Job Object host did not confirm startup before the deadline.",
-          )), Math.max(this.requestTimeoutMs, 5_000));
-        }),
-      ]);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
-  }
-
   private async writeRaw(session: ProcessSession, value: string | Buffer): Promise<void> {
-    if (session.failure || session.child.stdin.destroyed || !session.child.stdin.writable) {
-      throw session.failure ?? new LspClientError(
-        "write_failed",
-        "Language server input is not writable.",
-        true,
-      );
-    }
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      let settled = false;
-      const settle = (error?: LspClientError) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (error) {
-          this.failSession(session, error);
-          rejectPromise(error);
-        } else {
-          resolvePromise();
-        }
-      };
-      const timer = setTimeout(() => settle(new LspClientError(
-        "write_failed",
-        `Language server write exceeded ${this.writeTimeoutMs} ms.`,
-        true,
-      )), this.writeTimeoutMs);
-      try {
-        session.child.stdin.write(value, (error) => {
-          if (error) {
-            settle(new LspClientError(
-              "write_failed",
-              `Language server write failed: ${boundedMessage(error)}.`,
-              true,
-              { cause: error },
-            ));
-          } else {
-            settle();
-          }
-        });
-      } catch (error) {
-        settle(new LspClientError(
-          "write_failed",
-          `Language server write failed: ${boundedMessage(error)}.`,
-          true,
-          { cause: error },
-        ));
-      }
-    });
+    if (session.failure) throw session.failure;
+    const writer = this.writer.getStore();
+    if (!writer) throw configurationError("LSP bytes require a current exact shared protocol scope.");
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([Promise.resolve().then(() => writer.write(Buffer.from(value), this.writeTimeoutMs)), new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new LspClientError("write_failed", `Language server write exceeded ${this.writeTimeoutMs} ms.`, true)), this.writeTimeoutMs);
+      })]);
+    } catch (cause) {
+      const failure = asLspError(cause, "write_failed", true); this.failSession(session, failure); throw failure;
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   private async writeMessage(
@@ -1049,36 +903,6 @@ export class LspClient {
 
   private consumeStderr(session: ProcessSession, chunk: Buffer): void {
     session.stderr = boundedAppend(session.stderr, chunk, MAX_STDERR_BYTES);
-    const startup = session.windowsJobHost;
-    if (!startup || startup.settled) return;
-    startup.buffer += chunk.toString("utf8");
-    if (startup.buffer.length > MAX_STDERR_BYTES * 2) {
-      startup.buffer = startup.buffer.slice(-MAX_STDERR_BYTES);
-    }
-    while (true) {
-      const newline = startup.buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = startup.buffer.slice(0, newline).replace(/\r$/, "");
-      startup.buffer = startup.buffer.slice(newline + 1);
-      if (!line.startsWith(WINDOWS_JOB_HOST_CONTROL_PREFIX)) continue;
-      try {
-        const control = JSON.parse(line.slice(WINDOWS_JOB_HOST_CONTROL_PREFIX.length));
-        if (!isObject(control)) continue;
-        if (control.type === "started") {
-          startup.resolve();
-        } else if (control.type === "error") {
-          startup.reject(new LspClientError(
-            "spawn_failed",
-            `LSP Job Object host failed: ${boundedText(
-              typeof control.error === "string" ? control.error : "unknown startup error",
-              512,
-            )}.`,
-          ));
-        }
-      } catch {
-        // Non-control language-server stderr remains diagnostic text only.
-      }
-    }
   }
 
   private consumeStdout(session: ProcessSession, chunk: Buffer): void {
@@ -1152,7 +976,9 @@ export class LspClient {
       if (message.id === undefined) {
         this.handleNotification(message.method, message.params);
       } else {
-        void this.handleServerRequest(session, message.id, message.method, message.params);
+        if (this.serverReplies.size >= this.maxPendingRequests) throw new LspClientError("too_many_pending_requests", "LSP server-response bound was reached.");
+        const reply = this.handleServerRequest(session, message.id, message.method, message.params);
+        this.serverReplies.add(reply); void reply.finally(() => this.serverReplies.delete(reply)).catch(() => undefined);
       }
       return;
     }
@@ -1188,15 +1014,18 @@ export class LspClient {
           true,
         );
       }
-      this.settlePending(key, false, new LspClientError(
+      const error = new LspClientError(
         "response_error",
         `LSP request failed (${message.error.code}): ${boundedText(
           message.error.message,
           512,
         )}`,
-      ));
+      );
+      pending.reply = { success: false, value: error };
+      if (pending.writeSettled) this.settlePending(key, false, error);
     } else {
-      this.settlePending(key, true, message.result);
+      pending.reply = { success: true, value: message.result };
+      if (pending.writeSettled) this.settlePending(key, true, message.result);
     }
   }
 
@@ -1282,11 +1111,9 @@ export class LspClient {
         });
         return;
       }
-      if (
-        method === "window/workDoneProgress/create" ||
-        method === "client/registerCapability" ||
-        method === "client/unregisterCapability"
-      ) {
+      if (method === "client/registerCapability" || method === "client/unregisterCapability")
+        throw new LspClientError("protocol_error", "Language server capability schema changed; fresh configuration is required.");
+      if (method === "window/workDoneProgress/create") {
         await this.writeMessage(session, { jsonrpc: "2.0", id, result: null });
         return;
       }
@@ -1335,50 +1162,9 @@ export class LspClient {
     }
   }
 
-  private onProcessExit(
-    session: ProcessSession,
-    code: number | null,
-    signal: NodeJS.Signals | null,
-  ): void {
-    session.resolveExited();
-    session.windowsJobHost?.reject(new LspClientError(
-      "spawn_failed",
-      "LSP Job Object host exited before confirming startup.",
-    ));
-    if (session.expectedExit) return;
-    const detail = session.stderr.byteLength > 0
-      ? ` stderr: ${boundedText(session.stderr.toString("utf8"), 512)}`
-      : "";
-    const failure = session.failure ?? new LspClientError(
-      "process_exited",
-      `Language server exited unexpectedly (code ${String(code)}, signal ${String(signal)}).${detail}`,
-      true,
-    );
-    session.failure = failure;
-    this.rejectPending(
-      (pending) => pending.generation === session.generation,
-      failure,
-    );
-    this.settleDiagnosticWaiters(undefined);
-    if (this.session?.generation === session.generation && this.state !== "closed") {
-      this.state = "failed";
-    }
-  }
-
-  private onProcessError(session: ProcessSession, error: Error): void {
-    if (session.failure) return;
-    this.failSession(session, new LspClientError(
-      "process_error",
-      `Language server process error: ${boundedMessage(error)}.`,
-      true,
-      { cause: error },
-    ));
-  }
-
   private failSession(session: ProcessSession, error: LspClientError): void {
     if (session.failure) return;
     session.failure = error;
-    session.windowsJobHost?.reject(error);
     this.rejectPending(
       (pending) => pending.generation === session.generation,
       error,
@@ -1387,8 +1173,9 @@ export class LspClient {
     if (this.session?.generation === session.generation && this.state !== "closed") {
       this.state = "failed";
     }
-    void terminateProcessTree(session.child, "SIGTERM", session.windowsJobHost !== undefined)
-      .catch(() => undefined);
+    // Cleanup capability remains retained after any failure; close/restart will
+    // join or retry that same owner. No PID or signal fallback exists here.
+    if (session.transport) void this.retireSession(session, false).catch(() => undefined);
   }
 
   private containedPath(pathValue: string): string {
@@ -1421,7 +1208,7 @@ export class LspClient {
   }
 
   private assertNotClosed(): void {
-    if (this.state === "closed" || this.state === "closing") {
+    if (this.closeRequested || this.state === "closed" || this.state === "closing") {
       throw new LspClientError("client_closed", "LSP client is closed.");
     }
   }
@@ -1500,33 +1287,6 @@ function configurationError(message: string): LspClientError {
   return new LspClientError("invalid_configuration", message);
 }
 
-function validateWindowsJobHostPathForTest(value: string | undefined): string {
-  if (value === undefined) return WINDOWS_JOB_HOST_PATH;
-  if (
-    typeof value !== "string" ||
-    !isAbsolute(value) ||
-    value.includes("\0") ||
-    !value.toLowerCase().endsWith(".ps1")
-  ) {
-    throw configurationError("Test-only LSP Job-host path must be an absolute .ps1 file path.");
-  }
-  try {
-    const path = realpathSync(value);
-    if (!statSync(path).isFile() || !path.toLowerCase().endsWith(".ps1")) {
-      throw configurationError("Test-only LSP Job-host path must identify a .ps1 file.");
-    }
-    return path;
-  } catch (error) {
-    if (error instanceof LspClientError) throw error;
-    throw new LspClientError(
-      "invalid_configuration",
-      "Test-only LSP Job-host path must identify an existing .ps1 file.",
-      false,
-      { cause: error },
-    );
-  }
-}
-
 function negotiatedDiagnosticSupport(
   capabilities: Record<string, unknown>,
 ): LspDiagnosticSupport {
@@ -1538,121 +1298,6 @@ function negotiatedDiagnosticSupport(
     textDocumentPull: true,
     workspacePull: diagnosticProvider.workspaceDiagnostics === true,
   };
-}
-
-function createJobHostStartup(): JobHostStartup {
-  let resolveReady!: () => void;
-  let rejectReady!: (error: LspClientError) => void;
-  const ready = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolveReady = resolvePromise;
-    rejectReady = rejectPromise;
-  });
-  // Startup can fail before bootstrapWindowsJobHost reaches its await. Attach
-  // ownership immediately while preserving ready's original typed rejection.
-  void ready.catch(() => undefined);
-  const startup: JobHostStartup = {
-    buffer: "",
-    settled: false,
-    ready,
-    resolve: () => {
-      if (startup.settled) return;
-      startup.settled = true;
-      resolveReady();
-    },
-    reject: (error) => {
-      if (startup.settled) return;
-      startup.settled = true;
-      rejectReady(error);
-    },
-  };
-  return startup;
-}
-
-function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const onSpawn = () => {
-      cleanup();
-      resolvePromise();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      rejectPromise(error);
-    };
-    const cleanup = () => {
-      child.removeListener("spawn", onSpawn);
-      child.removeListener("error", onError);
-    };
-    child.once("spawn", onSpawn);
-    child.once("error", onError);
-  });
-}
-
-async function terminateProcessTree(
-  child: ChildProcessWithoutNullStreams,
-  signal: NodeJS.Signals = "SIGTERM",
-  windowsJobHost = false,
-): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === "win32" && windowsJobHost) {
-    try {
-      child.kill(signal);
-    } catch {}
-    return;
-  }
-  if (process.platform === "win32" && child.pid) {
-    await new Promise<void>((resolvePromise) => {
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        resolvePromise();
-      };
-      try {
-        const terminator = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-          shell: false,
-          windowsHide: true,
-          stdio: "ignore",
-        });
-        terminator.once("error", () => {
-          try {
-            child.kill(signal);
-          } catch {}
-          settle();
-        });
-        terminator.once("close", settle);
-      } catch {
-        try {
-          child.kill(signal);
-        } catch {}
-        settle();
-      }
-    });
-    return;
-  }
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
-  }
-  try {
-    child.kill(signal);
-  } catch {}
-}
-
-async function waitForProcessExit(
-  session: ProcessSession,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (session.child.exitCode !== null || session.child.signalCode !== null) return true;
-  return await Promise.race([
-    session.exited.then(() => true),
-    delay(timeoutMs).then(() => false),
-  ]);
-}
-
-function processSessionExited(session: ProcessSession): boolean {
-  return session.child.exitCode !== null || session.child.signalCode !== null;
 }
 
 function canonicalTarget(target: string): string {
@@ -1731,8 +1376,4 @@ function asLspError(
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }

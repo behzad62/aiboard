@@ -1,0 +1,22 @@
+{
+  "pid": 35032,
+  "identity": {
+    "Id": 35032,
+    "StartTimeUtc": "2026-09-13T19:40:44.8407183Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 22220,
+  "spawnedAt": "2026-09-13T19:40:45.103Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$",
+    "runner-v2/test/lsp-shared-client.test.ts"
+  ]
+}

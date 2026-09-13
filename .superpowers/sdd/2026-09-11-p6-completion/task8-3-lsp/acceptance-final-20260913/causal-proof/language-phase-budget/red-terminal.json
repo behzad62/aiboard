@@ -1,0 +1,27 @@
+{
+  "id": "lsp-language-budget-causal-red",
+  "startedAt": "2026-09-12T16:11:08.877Z",
+  "finishedAt": "2026-09-12T16:11:09.592Z",
+  "wrapperPid": 62588,
+  "testPid": 10336,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 410,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP language operation budget lets the typed write timeout settle before the shared ownership deadline$",
+    "runner-v2/test/lsp-invocation-lifetime.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-language-budget-1vGzqV"
+  ]
+}

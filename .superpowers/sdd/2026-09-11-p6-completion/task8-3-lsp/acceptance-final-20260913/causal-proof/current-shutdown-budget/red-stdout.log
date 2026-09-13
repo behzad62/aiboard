@@ -1,0 +1,35 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-UJ25fQ"}
+# Subtest: LSP shared shutdown budgets response and acknowledged exit as serial bounded phases
+not ok 1 - LSP shared shutdown budgets response and acknowledged exit as serial bounded phases
+  ---
+  duration_ms: 9.0137
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-shared-client.test.ts:3:4859'
+  failureType: 'testCodeFailure'
+  error: 'serial cleanup phases exceeded their shared grace budget'
+  code: 'write_failed'
+  name: 'LspClientError'
+  stack: |-
+    Object.write (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-shared-client.test.ts:118:38)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:868:63)
+    async LspClient.writeRaw (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:868:7)
+    async LspClient.writeMessage (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:901:5)
+    async LspClient.notifyOnSession (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:859:5)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:648:9)
+    async LspClient.withProtocolWriter (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:659:18)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:646:7)
+    async Object.closeVerified (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-shared-client.test.ts:129:9)
+    async LspClient.retireSession (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\lsp-client.ts:652:11)
+  ...
+# synthetic shutdown-budget failure retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-shutdown-budget-UJ25fQ
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-UJ25fQ","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 278.2658

@@ -1,3 +1,4 @@
+import { createLinkedTestOutputSpillStorage } from "./support/linked-output-spill-storage.js";
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdir, readFile, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -31,7 +32,7 @@ function spoolOptions(
   spillRoot: string,
   overrides: Partial<BoundedOutputSpoolOptions> = {}
 ): BoundedOutputSpoolOptions {
-  const storage = overrides.storage ?? createNodeOutputSpillStorage();
+  const storage = overrides.storage ?? createLinkedTestOutputSpillStorage();
   return {
     spillRoot,
     projectRoot: process.cwd(),
@@ -81,7 +82,7 @@ for (const [name, attestation] of [
 ] as const) {
   test(`continues tail-only without disk writes when ${name}`, async (t) => {
     const root = await temporaryRoot(t);
-    const nodeStorage = createNodeOutputSpillStorage();
+    const nodeStorage = createLinkedTestOutputSpillStorage();
     let rootPreparations = 0;
     let opens = 0;
     const storage: OutputSpillStorage = {
@@ -132,7 +133,7 @@ for (const [name, attestation] of [
 ] as const) {
   test(`strictly rejects ${name} before spill filesystem access`, async (t) => {
     const root = await temporaryRoot(t);
-    const nodeStorage = createNodeOutputSpillStorage();
+    const nodeStorage = createLinkedTestOutputSpillStorage();
     let opens = 0;
     const storage: OutputSpillStorage = {
       ...nodeStorage,
@@ -162,7 +163,7 @@ test("rejects accessor attestation fields without evaluating or rereading them",
     get identityStableDeletion() { getterReads += 1; return true; },
     get unlinkedEntries() { getterReads += 1; return false; },
   };
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     attest: async () => attestation,
@@ -194,7 +195,7 @@ test("rejects proxy attestations before traps can supply changing guarantees", a
       return Reflect.ownKeys(target);
     },
   });
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     attest: async () => attestation,
@@ -226,7 +227,7 @@ for (const [name, attestation] of [
     const root = await temporaryRoot(t);
     await writeFile(root, "foreign regular file");
     const storage: OutputSpillStorage = {
-      ...createNodeOutputSpillStorage(),
+      ...createLinkedTestOutputSpillStorage(),
       attest: async () => attestation as unknown as OutputSpillStorageAttestation,
     };
 
@@ -243,7 +244,7 @@ for (const [name, attestation] of [
 
 test("treats unavailable attestation as tail-only without trying disk", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let opens = 0;
   const storage: OutputSpillStorage = {
     ...nodeStorage,
@@ -279,7 +280,7 @@ test("built-in backend creates no spill when it cannot attest current-principal 
 
 test("rejects an attested principal mismatch before opening a spill entry", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let opens = 0;
   const storage: OutputSpillStorage = {
     ...nodeStorage,
@@ -330,7 +331,7 @@ test("an attested descriptor-only spill is artifact-ingested without a linked pa
   const root = await temporaryRoot(t);
   let retained = Buffer.alloc(0);
   let artifactBytes = Buffer.alloc(0);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     attest: async () => ({
@@ -369,7 +370,7 @@ test("an attested descriptor-only spill is artifact-ingested without a linked pa
 
 test("finalize seals synchronously, drains accepted writes, and rejects later writes before queueing", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const writeStarted = deferred<void>();
   const releaseWrite = deferred<void>();
   const storage: OutputSpillStorage = {
@@ -401,7 +402,7 @@ test("finalize seals synchronously, drains accepted writes, and rejects later wr
 
 test("cleanup seals synchronously, drains accepted writes, and cannot leak a later spill", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const writeStarted = deferred<void>();
   const releaseWrite = deferred<void>();
   const storage: OutputSpillStorage = {
@@ -434,7 +435,7 @@ test("cleanup seals synchronously, drains accepted writes, and cannot leak a lat
 
 test("cleanup propagates a terminal close failure after still removing the spill", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     openExclusive: async (path) => {
@@ -553,7 +554,7 @@ test("uses create-exclusive private spill files and finalizes them through Artif
   const root = await temporaryRoot(t);
   const artifactRoot = await temporaryRoot(t);
   const paths: string[] = [];
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     openExclusive: async (path) => {
@@ -587,7 +588,7 @@ test("uses create-exclusive private spill files and finalizes them through Artif
 
 test("converts spill open failure into typed lossy continuation", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     openExclusive: async () => { throw new Error("permission denied"); },
@@ -609,7 +610,7 @@ test("converts spill open failure into typed lossy continuation", async (t) => {
 
 test("keeps a marked lossy UTF-8 tail on a complete code-point boundary", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const spool = new BoundedOutputSpool(spoolOptions(root, {
     tailBytes: 64,
     spillBytes: 64,
@@ -626,7 +627,7 @@ test("keeps a marked lossy UTF-8 tail on a complete code-point boundary", async 
 
 test("converts spill write failure into typed lossy continuation", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     openExclusive: async (path): Promise<OutputSpillFile> => {
@@ -649,7 +650,7 @@ test("converts spill write failure into typed lossy continuation", async (t) => 
 
 test("converts spill close failure into typed loss and skips artifact ingestion", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     openExclusive: async (path): Promise<OutputSpillFile> => {
@@ -676,7 +677,7 @@ test("converts spill close failure into typed loss and skips artifact ingestion"
 
 test("marks artifact ingestion faults lossy and leaves cleanup repeatable", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const spool = new BoundedOutputSpool(spoolOptions(root, {
     artifactStore: { put: async () => { throw new Error("artifact unavailable"); } },
   }));
@@ -693,7 +694,7 @@ test("marks artifact ingestion faults lossy and leaves cleanup repeatable", asyn
 
 test("ingests bounded bytes from the identity-bound owned handle rather than the path", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let artifactBytes = "";
   const spool = new BoundedOutputSpool(spoolOptions(root, {
     storage: nodeStorage,
@@ -714,7 +715,7 @@ test("ingests bounded bytes from the identity-bound owned handle rather than the
 
 test("rejects an oversized sealed spill before artifact ingestion", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     openExclusive: async (path) => {
@@ -789,7 +790,7 @@ test("restart cleanup removes only private spill entries and is idempotent", asy
 
 test("restart cleanup removes an identity-proven abandoned spill and its owned root", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let opened!: OutputSpillFile;
   const spool = new BoundedOutputSpool(spoolOptions(root, {
     storage: {
@@ -862,7 +863,7 @@ test("rejects a permissive or differently owned existing private root", async (t
 
 test("an open failure never unlinks a candidate the spool did not create", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let foreignPath = "";
   const storage: OutputSpillStorage = {
     ...nodeStorage,
@@ -881,7 +882,7 @@ test("an open failure never unlinks a candidate the spool did not create", async
 
 test("C3 shared spool cleanup is idempotent after a replacement removes the exact empty owned root", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let openAttempts = 0;
   const storage: OutputSpillStorage = {
     ...nodeStorage,
@@ -911,7 +912,7 @@ test("C3 shared spool cleanup is idempotent after a replacement removes the exac
 
 test("C3 cached spool cleanup still refuses a missing ownership marker inside an existing root", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   const storage: OutputSpillStorage = {
     ...nodeStorage,
     attest: async () => ({
@@ -934,7 +935,7 @@ test("C3 cached spool cleanup still refuses a missing ownership marker inside an
 
 test("cleanup refuses a foreign regular file swapped over an owned spill identity", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let spillPath = "";
   const storage: OutputSpillStorage = {
     ...nodeStorage,
@@ -961,7 +962,7 @@ test("cleanup refuses a foreign regular file swapped over an owned spill identit
 
 test("linked-entry cleanup is enforced by the attested identity-stable adapter operation", async (t) => {
   const root = await temporaryRoot(t);
-  const nodeStorage = createNodeOutputSpillStorage();
+  const nodeStorage = createLinkedTestOutputSpillStorage();
   let spillPath = "";
   const storage: OutputSpillStorage = {
     ...nodeStorage,
