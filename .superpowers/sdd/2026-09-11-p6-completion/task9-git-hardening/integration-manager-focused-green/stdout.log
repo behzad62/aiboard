@@ -1,0 +1,90 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-ordered-LncG4I"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-conflict-XrQ980"}
+# Subtest: change sets integrate serially and retries do not duplicate commits
+ok 1 - change sets integrate serially and retries do not duplicate commits
+  ---
+  duration_ms: 4871.0853
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-attempt-base-iUJfsM"}
+# Subtest: integration conflicts are mechanical results and leave canonical integration clean
+ok 2 - integration conflicts are mechanical results and leave canonical integration clean
+  ---
+  duration_ms: 3748.5064
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-no-change-nomPkS"}
+# Subtest: a later attempt can integrate from the current integration revision
+ok 3 - a later attempt can integrate from the current integration revision
+  ---
+  duration_ms: 3646.7145
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-apply-Udb248"}
+# Subtest: evidence-backed no-change tasks integrate without fabricating commits
+ok 4 - evidence-backed no-change tasks integrate without fabricating commits
+  ---
+  duration_ms: 1563.3549
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-dirty-UJAC8C"}
+# Subtest: final handoff applies the integrated diff only after a successful dry run
+ok 5 - final handoff applies the integrated diff only after a successful dry run
+  ---
+  duration_ms: 4392.983
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-crash-repair-7JEBev"}
+# Subtest: final handoff rejects dirty projects without changing their worktree, index, or revision
+ok 6 - final handoff rejects dirty projects without changing their worktree, index, or revision
+  ---
+  duration_ms: 3020.662
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-real-crash-5EObxE"}
+# Subtest: a fresh manager repairs the exact journaled post-ref crash state
+ok 7 - a fresh manager repairs the exact journaled post-ref crash state
+  ---
+  duration_ms: 5094.8319
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-ignored-crash-OAaF4t"}
+# Subtest: the real apply path leaves a recoverable journal when the process dies after update-ref
+ok 8 - the real apply path leaves a recoverable journal when the process dies after update-ref
+  ---
+  duration_ms: 4738.0394
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-ignored-race-YWejZ4"}
+# Subtest: crash recovery never overwrites an ignored untracked target path
+ok 9 - crash recovery never overwrites an ignored untracked target path
+  ---
+  duration_ms: 4451.7357
+  type: 'test'
+  ...
+# Subtest: the live checkout rechecks ignored target paths after advancing the ref
+ok 10 - the live checkout rechecks ignored target paths after advancing the ref
+  ---
+  duration_ms: 4021.3179
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-ordered-LncG4I","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-conflict-XrQ980","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-attempt-base-iUJfsM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-no-change-nomPkS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-apply-Udb248","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-dirty-UJAC8C","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-crash-repair-7JEBev","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-real-crash-5EObxE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-ignored-crash-OAaF4t","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-ignored-race-YWejZ4","existsAtExit":false}
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 40609.0833

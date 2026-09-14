@@ -1,0 +1,32 @@
+{
+  "pid": 36464,
+  "identity": {
+    "Id": 36464,
+    "StartTimeUtc": "2026-09-14T19:50:48.0782733Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T19:50:48.111Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\hostile-matrix-post-causal-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "spec": {
+    "tests": [
+      "runner-v2/test/git-indirect-execution-policy.test.ts"
+    ],
+    "id": "hostile-matrix-post-causal-green"
+  }
+}

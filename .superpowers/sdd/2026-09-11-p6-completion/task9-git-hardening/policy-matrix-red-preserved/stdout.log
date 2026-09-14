@@ -1,0 +1,214 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-c9pgnP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G5NoMs"}
+# Subtest: Git policy installs the complete safe config/environment baseline
+not ok 1 - Git policy installs the complete safe config/environment baseline
+  ---
+  duration_ms: 6.5515
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:1254'
+  failureType: 'testCodeFailure'
+  error: |-
+    core.attributesFile=
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:40:15)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:31:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: Git policy preserves existing Runner command shapes including remotes, push and log patch output
+not ok 2 - Git policy preserves existing Runner command shapes including remotes, push and log patch output
+  ---
+  duration_ms: 1.8266
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:2192'
+  failureType: 'testCodeFailure'
+  error: "Git execution policy refused the command: Git command 'remote' is outside the offline Runner Git policy."
+  code: 'command_failed'
+  name: 'GitCommandError'
+  stack: |-
+    policyError (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-execution-policy.ts:86:10)
+    rejectGlobalArgumentInjection (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-execution-policy.ts:81:11)
+    prepareGitExecutionPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-execution-policy.ts:43:3)
+    prepare (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:20:16)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:60:30)
+    withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:22)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:52:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-YrNLlg"}
+# Subtest: Git policy refuses argv policy replacement, unsupported commands and mutating remote configuration
+not ok 3 - Git policy refuses argv policy replacement, unsupported commands and mutating remote configuration
+  ---
+  duration_ms: 2.3922
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:2608'
+  failureType: 'testCodeFailure'
+  error: |-
+    The validation function is expected to return "true". Received false
+    
+    Caught error:
+    
+    GitCommandError: Git execution policy refused the command: Git argument '-c' can replace Runner execution policy.
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async rejectsPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:24:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:81:17)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:67:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-RgM3Yy"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-UGU54Y"}
+# Subtest: Git policy refuses operations that would require an editor before Git can mutate
+not ok 4 - Git policy refuses operations that would require an editor before Git can mutate
+  ---
+  duration_ms: 1.7607
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:3186'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async rejectsPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:24:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:87:5)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:86:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: Git policy allows only narrowly enumerated caller Git environment and rejects canonical duplicates
+not ok 5 - Git policy allows only narrowly enumerated caller Git environment and rejects canonical duplicates
+  ---
+  duration_ms: 1.4477
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:3536'
+  failureType: 'testCodeFailure'
+  error: |-
+    The validation function is expected to return "true". Received false
+    
+    Caught error:
+    
+    GitCommandError: Git execution policy refused the command: Git environment override 'GIT_SSH_COMMAND' is not permitted.
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async rejectsPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:24:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:96:5)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:95:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-1Q0IRW"}
+# Subtest: Git policy refuses repository config capable of selecting indirect programs
+not ok 6 - Git policy refuses repository config capable of selecting indirect programs
+  ---
+  duration_ms: 2.9674
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:5046'
+  failureType: 'testCodeFailure'
+  error: 'hostile config include.path was not refused'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:130:33)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:127:5)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-c2LsXI"}
+# Subtest: Git policy refuses dangerous worktree and info attributes, including nested attributes
+not ok 7 - Git policy refuses dangerous worktree and info attributes, including nested attributes
+  ---
+  duration_ms: 2.2414
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:3:166'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async rejectsPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:24:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:143:7)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:140:5)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-tlBS43"}
+# Subtest: Git policy accepts benign repository config and attributes
+not ok 8 - Git policy accepts benign repository config and attributes
+  ---
+  duration_ms: 2.865
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:3:648'
+  failureType: 'testCodeFailure'
+  error: "Git execution policy refused the command: Git command 'remote' is outside the offline Runner Git policy."
+  code: 'command_failed'
+  name: 'GitCommandError'
+  stack: |-
+    policyError (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-execution-policy.ts:86:10)
+    rejectGlobalArgumentInjection (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-execution-policy.ts:81:11)
+    prepareGitExecutionPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-execution-policy.ts:43:3)
+    prepare (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:20:16)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:157:11)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:149:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-plcKTE"}
+# Subtest: Git policy refuses repository remote-helper transports selected by config
+not ok 9 - Git policy refuses repository remote-helper transports selected by config
+  ---
+  duration_ms: 2.374
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:3:1212'
+  failureType: 'testCodeFailure'
+  error: |-
+    The validation function is expected to return "true". Received false
+    
+    Caught error:
+    
+    GitCommandError: Git execution policy refused the command: Git command 'push' is outside the offline Runner Git policy.
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async rejectsPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:24:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:168:5)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:163:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-c9pgnP","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G5NoMs","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-YrNLlg","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-RgM3Yy","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-UGU54Y","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-1Q0IRW","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-c2LsXI","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-tlBS43","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-plcKTE","existsAtExit":true}
+1..9
+# tests 9
+# suites 0
+# pass 0
+# fail 9
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 276.3572

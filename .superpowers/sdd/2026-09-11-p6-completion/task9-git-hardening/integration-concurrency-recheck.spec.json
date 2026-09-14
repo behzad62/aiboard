@@ -1,0 +1,7 @@
+{
+  "id": "integration-concurrency-recheck",
+  "pattern": "^concurrent managers cannot delete the winning post-ref crash journal$",
+  "tests": [
+    "runner-v2/test/integration-manager.test.ts"
+  ]
+}

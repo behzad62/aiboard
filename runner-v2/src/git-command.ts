@@ -3,7 +3,8 @@ import type { GitCommandRunner } from "./git-runtime-runner.js";
 export type GitCommandErrorCode =
   | "git_unavailable"
   | "command_failed"
-  | "output_limit";
+  | "output_limit"
+  | "policy_refused";
 
 export interface GitCommandOptions {
   cwd: string;

@@ -1,0 +1,16 @@
+{
+  "pid": 5116,
+  "identity": {
+    "pid": 5116,
+    "unavailable": true
+  },
+  "wrapperPid": 25240,
+  "spawnedAt": "2026-09-14T19:55:17.645Z",
+  "command": [
+    "git",
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ]
+}

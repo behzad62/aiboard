@@ -1,0 +1,7 @@
+{
+  "tests": [
+    "runner-v2/test/integration-manager.test.ts"
+  ],
+  "id": "integration-manager-acceptance",
+  "pattern": "^(?!concurrent managers cannot delete the winning post-ref crash journal$).*"
+}

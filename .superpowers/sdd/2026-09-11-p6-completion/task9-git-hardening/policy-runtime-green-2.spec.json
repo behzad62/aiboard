@@ -1,0 +1,7 @@
+{
+  "id": "policy-runtime-green-2",
+  "tests": [
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "static-whitespace-final-green",
+  "executable": "git",
+  "args": [
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ]
+}

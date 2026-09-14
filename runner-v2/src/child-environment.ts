@@ -17,6 +17,7 @@ export interface RunnerOwnedChildEnvironmentCredentialResolver {
 
 export type ChildEnvironmentDecision =
   | { readonly kind: "removed_ambient"; readonly name: string }
+  | { readonly kind: "removed_explicit"; readonly name: string }
   | { readonly kind: "applied_explicit"; readonly name: string }
   | { readonly kind: "rejected_explicit"; readonly name: string }
   | { readonly kind: "granted_credential"; readonly name: string };
@@ -99,7 +100,16 @@ export function createChildEnvironmentFactory(
       const inheritedNames = names(environment);
 
       for (const [name, value] of sortedEntries(request.explicitOverrides ?? {})) {
-        if (value === undefined) continue;
+        if (value === undefined) {
+          if (!isEnvironmentName(name)) throw new Error("Child environment input is invalid.");
+          const inherited = environment.get(canonicalName(name));
+          if (inherited) {
+            environment.delete(canonicalName(name));
+            removedNames.push(inherited.name);
+          }
+          decisions.push({ kind: "removed_explicit", name });
+          continue;
+        }
         assertEnvironmentEntry(name, value);
         if (isForbiddenChildEnvironmentName(name)) decisions.push({ kind: "rejected_explicit", name });
         else {

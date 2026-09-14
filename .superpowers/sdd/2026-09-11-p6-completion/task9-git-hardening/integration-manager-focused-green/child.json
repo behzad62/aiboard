@@ -1,0 +1,22 @@
+{
+  "pid": 29552,
+  "identity": {
+    "Id": 29552,
+    "StartTimeUtc": "2026-09-14T16:07:57.9747914Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 21028,
+  "spawnedAt": "2026-09-14T16:07:58.251Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=change sets integrate serially|integration conflicts are mechanical|a later attempt can integrate|evidence-backed no-change|final handoff applies|final handoff rejects dirty|a fresh manager repairs|the real apply path leaves|crash recovery never overwrites|the live checkout rechecks",
+    "runner-v2/test/integration-manager.test.ts"
+  ]
+}

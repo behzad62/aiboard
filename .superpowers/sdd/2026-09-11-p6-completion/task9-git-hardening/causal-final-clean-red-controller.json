@@ -1,0 +1,58 @@
+{
+  "id": "causal-final-clean-red",
+  "pattern": "repository clean filter",
+  "sentinel": "clean-sentinel.txt",
+  "expected": "clean",
+  "beforeHash": "b1425d99a8cd46620934a9aebafea7f8000af0cc50c6b84ed6860c66a8da42db",
+  "afterHash": "b1425d99a8cd46620934a9aebafea7f8000af0cc50c6b84ed6860c66a8da42db",
+  "restoredExact": true,
+  "mutatedHash": "417d80b1fdd894181c72c6edd074b46997d04dff6bbbeb1da3f86cede8b64c93",
+  "replacements": [
+    {
+      "oldValue": "section === \"filter\"",
+      "newValue": "section === \"filter-disabled\""
+    },
+    {
+      "oldValue": "lower.startsWith(\"filter=\")",
+      "newValue": "lower.startsWith(\"filter-disabled=\")"
+    }
+  ],
+  "childExit": 1,
+  "terminal": {
+    "id": "causal-final-clean-red",
+    "startedAt": "2026-09-14T19:48:59.045Z",
+    "finishedAt": "2026-09-14T19:49:13.104Z",
+    "wrapperPid": 47920,
+    "testPid": 33820,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 437,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=repository clean filter",
+      "runner-v2/test/git-indirect-execution-policy.test.ts"
+    ],
+    "rootCount": 4,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-xp9yQo"
+    ]
+  },
+  "sentinelProof": {
+    "matches": [
+      {
+        "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task9-clean-filter-xp9yQo\\clean-sentinel.txt",
+        "content": "clean"
+      }
+    ]
+  },
+  "controllerError": null,
+  "finishedAt": "2026-09-14T19:49:13.113Z"
+}

@@ -1,0 +1,201 @@
+TAP version 13
+# Subtest: Git runtime returns exact non-UTF8 bytes through the shared bounded output artifact
+ok 1 - Git runtime returns exact non-UTF8 bytes through the shared bounded output artifact
+  ---
+  duration_ms: 1.9137
+  type: 'test'
+  ...
+# Subtest: Git runtime reconstructs text beyond the display tail without output-triggered termination
+ok 2 - Git runtime reconstructs text beyond the display tail without output-triggered termination
+  ---
+  duration_ms: 1.9855
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects exceeds-bound rather than silently presenting a partial Git result
+ok 3 - Git runtime rejects exceeds-bound rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.4254
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects lossy rather than silently presenting a partial Git result
+ok 4 - Git runtime rejects lossy rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.1718
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects missing-artifact rather than silently presenting a partial Git result
+ok 5 - Git runtime rejects missing-artifact rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.1492
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects short-spill rather than silently presenting a partial Git result
+ok 6 - Git runtime rejects short-spill rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.1711
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects corrupt-artifact rather than silently presenting a partial Git result
+ok 7 - Git runtime rejects corrupt-artifact rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.3281
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides pending cleanup
+ok 8 - Git allowFailure never hides pending cleanup
+  ---
+  duration_ms: 0.2146
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides failed cleanup
+ok 9 - Git allowFailure never hides failed cleanup
+  ---
+  duration_ms: 0.1404
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides not_required cleanup
+ok 10 - Git allowFailure never hides not_required cleanup
+  ---
+  duration_ms: 0.1755
+  type: 'test'
+  ...
+# Subtest: Git allowFailure preserves a verified nonzero result but normal execution throws the existing typed error
+ok 11 - Git allowFailure preserves a verified nonzero result but normal execution throws the existing typed error
+  ---
+  duration_ms: 0.397
+  type: 'test'
+  ...
+# Subtest: Git cancelled is not accepted by allowFailure
+ok 12 - Git cancelled is not accepted by allowFailure
+  ---
+  duration_ms: 0.151
+  type: 'test'
+  ...
+# Subtest: Git timed_out is not accepted by allowFailure
+ok 13 - Git timed_out is not accepted by allowFailure
+  ---
+  duration_ms: 0.0808
+  type: 'test'
+  ...
+# Subtest: Git cleanup_failed is not accepted by allowFailure
+ok 14 - Git cleanup_failed is not accepted by allowFailure
+  ---
+  duration_ms: 0.0776
+  type: 'test'
+  ...
+# Subtest: Git launch_failed is not accepted by allowFailure
+ok 15 - Git launch_failed is not accepted by allowFailure
+  ---
+  duration_ms: 0.0649
+  type: 'test'
+  ...
+# Subtest: Git snapshots caller arguments and explicit environment before asynchronous authorization
+not ok 16 - Git snapshots caller arguments and explicit environment before asynchronous authorization
+  ---
+  duration_ms: 1.887
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-runtime-runner.test.ts:1:5867'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    +   '--no-pager',
+    +   '-c',
+    +   'core.hooksPath=',
+    +   '-c',
+    +   'core.fsmonitor=false',
+    +   '-c',
+    +   'credential.helper=',
+    +   '-c',
+    +   'diff.external=',
+    +   '-c',
+    +   'core.askPass=',
+    +   '-c',
+    +   'core.editor=',
+        'status'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'status'
+  actual:
+    0: '--no-pager'
+    1: '-c'
+    2: 'core.hooksPath='
+    3: '-c'
+    4: 'core.fsmonitor=false'
+    5: '-c'
+    6: 'credential.helper='
+    7: '-c'
+    8: 'diff.external='
+    9: '-c'
+    10: 'core.askPass='
+    11: '-c'
+    12: 'core.editor='
+    13: 'status'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-runtime-runner.test.ts:102:10)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: Git validates request bounds before acquiring authority or executing anything
+ok 17 - Git validates request bounds before acquiring authority or executing anything
+  ---
+  duration_ms: 0.2011
+  type: 'test'
+  ...
+# Subtest: Git cannot use a foreign run context returned by its authority source
+ok 18 - Git cannot use a foreign run context returned by its authority source
+  ---
+  duration_ms: 0.1247
+  type: 'test'
+  ...
+# Subtest: Git retains an undefined execution failure and a subsequent authorization-release failure
+ok 19 - Git retains an undefined execution failure and a subsequent authorization-release failure
+  ---
+  duration_ms: 0.2248
+  type: 'test'
+  ...
+# Subtest: Git joins runtime completion before releasing its exact authorization
+ok 20 - Git joins runtime completion before releasing its exact authorization
+  ---
+  duration_ms: 5.6044
+  type: 'test'
+  ...
+# Subtest: Git live capture complete preserves exact bytes without falsifying diagnostic storage
+ok 21 - Git live capture complete preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 1.7987
+  type: 'test'
+  ...
+# Subtest: Git live capture incomplete preserves exact bytes without falsifying diagnostic storage
+ok 22 - Git live capture incomplete preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.5221
+  type: 'test'
+  ...
+# Subtest: Git live capture short preserves exact bytes without falsifying diagnostic storage
+ok 23 - Git live capture short preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.5364
+  type: 'test'
+  ...
+# Subtest: Git live capture over-bound preserves exact bytes without falsifying diagnostic storage
+ok 24 - Git live capture over-bound preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.5224
+  type: 'test'
+  ...
+1..24
+# tests 24
+# suites 0
+# pass 23
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 311.1682

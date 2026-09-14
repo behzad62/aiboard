@@ -1,0 +1,7 @@
+{
+  "id": "editor-argv-green",
+  "pattern": "operations that would require an editor",
+  "tests": [
+    "runner-v2/test/git-execution-policy.test.ts"
+  ]
+}

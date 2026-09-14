@@ -1,0 +1,21 @@
+{
+  "pid": 43472,
+  "identity": {
+    "Id": 43472,
+    "StartTimeUtc": "2026-09-14T15:25:18.7757950Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 13336,
+  "spawnedAt": "2026-09-14T15:25:19.039Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-runtime-integration.test.ts"
+  ]
+}

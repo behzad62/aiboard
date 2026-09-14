@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
@@ -14,7 +15,8 @@ test("real run-owned Git preserves binary bytes and closes exact nested command 
   const project = join(root, "project"); const state = join(root, "state");
   await mkdir(project); await mkdir(state);
   t.diagnostic(`acquired exact real Git fixture: ${root}`);
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")) });
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state,
+    artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const config = emptyRunnerCapabilitiesConfig();

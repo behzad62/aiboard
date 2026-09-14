@@ -1,0 +1,6 @@
+{
+  "id": "hostile-matrix-red",
+  "tests": [
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ]
+}

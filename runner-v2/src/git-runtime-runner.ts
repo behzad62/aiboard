@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ArtifactStore } from "./artifact-store.js";
 import { GitCommandError, type GitBinaryCommandResult, type GitCommandOptions, type GitCommandResult } from "./git-command.js";
+import { enforceGitRepositoryExecutionPolicy, prepareGitExecutionPolicy } from "./git-execution-policy.js";
 import type { OneShotCommandExecutor, OneShotCommandRequest, OneShotCommandResult } from "./one-shot-command-executor.js";
 import { parseProcessOutputDisposition, type ProcessOutputDisposition } from "./execution-safety-contracts.js";
 
@@ -36,16 +37,18 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
   const runBytes = async (requested: GitCommandOptions): Promise<GitBinaryCommandResult> => {
     // The caller must not change the command while its authority is acquired.
     const options = snapshotOptions(requested);
+    const policy = prepareGitExecutionPolicy(options);
     const authorization = await input.authorize(options);
     let failed = false; let primary: unknown; let result: GitBinaryCommandResult | undefined;
     try {
       if (authorization.context.runId !== input.runId) throw new Error("Git command run authority does not match its owning runtime.");
+      await enforceGitRepositoryExecutionPolicy(authorization.workingDirectory ?? options.cwd);
       const executed = await input.execution.execute({
         executable: input.executable,
         captureOutputBytes: Math.min(options.maxOutputBytes!, 128 * 1024 * 1024),
-        arguments: options.args,
+        arguments: policy.arguments,
         workingDirectory: authorization.workingDirectory ?? options.cwd,
-        ...(options.env ? { explicitEnvironment: options.env } : {}),
+        explicitEnvironment: policy.environment,
         timeoutMs: input.timeoutMs,
         context: authorization.context,
       });

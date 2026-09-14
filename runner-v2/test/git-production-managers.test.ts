@@ -7,6 +7,7 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { captureRunGitBaseline } from "../src/git-bootstrap.js";
 import { createExecutionHost, type ExecutionHostRunBinding } from "../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { WorkspaceManager } from "../src/workspace-manager.js";
 import { IntegrationManager } from "../src/integration-manager.js";
 import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
@@ -22,7 +23,8 @@ test("actual baseline task integration verification and historical Git use their
   await writeFile(join(project, ".gitattributes"), "*.txt text eol=lf\n");
   t.diagnostic(`exact native Git manager fixture acquired: ${root}`);
   const artifacts = new ArtifactStore(join(state, "artifacts"));
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts });
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts,
+    ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
   const config = emptyRunnerCapabilitiesConfig();
   const runId = "native-manager-routing";
   let run: ExecutionHostRunBinding | undefined;

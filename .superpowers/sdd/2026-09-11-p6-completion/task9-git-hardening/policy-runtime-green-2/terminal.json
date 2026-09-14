@@ -1,0 +1,25 @@
+{
+  "id": "policy-runtime-green-2",
+  "startedAt": "2026-09-14T15:16:05.767Z",
+  "finishedAt": "2026-09-14T15:16:06.967Z",
+  "wrapperPid": 17688,
+  "testPid": 42672,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts"
+  ],
+  "rootCount": 24,
+  "retainedRoots": []
+}

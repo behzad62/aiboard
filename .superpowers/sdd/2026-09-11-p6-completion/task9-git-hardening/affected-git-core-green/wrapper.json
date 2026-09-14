@@ -1,0 +1,60 @@
+{
+  "pid": 43504,
+  "identity": {
+    "Id": 43504,
+    "StartTimeUtc": "2026-09-14T15:27:11.9614907Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T15:27:11.997Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\affected-git-core-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-preflight.test.ts",
+    "runner-v2/test/git-repository.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/git-production-managers.test.ts",
+    "runner-v2/test/git-caller-audit.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-control-refusal.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/workspace-manager.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/child-environment.test.ts"
+  ],
+  "spec": {
+    "tests": [
+      "runner-v2/test/git-baseline.test.ts",
+      "runner-v2/test/git-bootstrap.test.ts",
+      "runner-v2/test/git-preflight.test.ts",
+      "runner-v2/test/git-repository.test.ts",
+      "runner-v2/test/git-run-context.test.ts",
+      "runner-v2/test/git-runtime-integration.test.ts",
+      "runner-v2/test/git-tools.test.ts",
+      "runner-v2/test/git-production-managers.test.ts",
+      "runner-v2/test/git-caller-audit.test.ts",
+      "runner-v2/test/git-caller-routing.test.ts",
+      "runner-v2/test/git-control-refusal.test.ts",
+      "runner-v2/test/change-set.test.ts",
+      "runner-v2/test/workspace-manager.test.ts",
+      "runner-v2/test/verification-workspace.test.ts",
+      "runner-v2/test/child-environment.test.ts"
+    ],
+    "id": "affected-git-core-green"
+  }
+}

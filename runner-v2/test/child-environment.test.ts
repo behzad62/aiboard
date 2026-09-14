@@ -57,6 +57,20 @@ test("prepares a public name-only capability while preserving safe platform vari
   assert.doesNotMatch(JSON.stringify(prepared), /SENTINEL_(?:AMBIENT_KEY|AUTH_TOKEN|HEADER|RUNNER_AUTH|HOSTILE_OVERRIDE)/);
 });
 
+test("explicit undefined removes an inherited safe variable by canonical name", () => {
+  const runner = factory();
+  const prepared = runner.prepare({
+    ambient: { PATH: "/bin", GIT_DIR: "/hostile/git-dir", SAFE_FLAG: "visible" },
+    explicitOverrides: { git_dir: undefined },
+  });
+  runner.withChildEnvironment(prepared.capability, (environment) => {
+    assert.equal(environment.GIT_DIR, undefined);
+    assert.equal(environment.git_dir, undefined);
+    assert.equal(environment.SAFE_FLAG, "visible");
+  });
+  assert.ok(prepared.audit.removedNames.some((name) => name.toLowerCase() === "git_dir"));
+});
+
 test("removes provider-prefixed credentials from ambient and explicit input but admits an exact grant", () => {
   const sentinel = "SYNTHETIC_PROVIDER_ENV_SENTINEL";
   const runner = factory({

@@ -1,0 +1,959 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-change-set-contract-RUrtB2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-change-set-ownership-sxGOv5"}
+# Subtest: change sets require exact current criterion evidence mappings
+ok 1 - change sets require exact current criterion evidence mappings
+  ---
+  duration_ms: 1508.0552
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-change-set-actor-ownership-2ZZ3S7"}
+# Subtest: criterion mappings reject evidence from another task or stale attempt
+ok 2 - criterion mappings reject evidence from another task or stale attempt
+  ---
+  duration_ms: 1394.1699
+  type: 'test'
+  ...
+# Subtest: criterion mappings bind evidence to the assigned worker or an attributed descendant
+ok 3 - criterion mappings bind evidence to the assigned worker or an attributed descendant
+  ---
+  duration_ms: 1445.8086
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-change-set-contract-RUrtB2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-change-set-ownership-sxGOv5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-change-set-actor-ownership-2ZZ3S7","existsAtExit":false}
+# Subtest: prepares a public name-only capability while preserving safe platform variables
+ok 4 - prepares a public name-only capability while preserving safe platform variables
+  ---
+  duration_ms: 6.99
+  type: 'test'
+  ...
+# Subtest: explicit undefined removes an inherited safe variable by canonical name
+ok 5 - explicit undefined removes an inherited safe variable by canonical name
+  ---
+  duration_ms: 0.2111
+  type: 'test'
+  ...
+# Subtest: removes provider-prefixed credentials from ambient and explicit input but admits an exact grant
+ok 6 - removes provider-prefixed credentials from ambient and explicit input but admits an exact grant
+  ---
+  duration_ms: 0.3324
+  type: 'test'
+  ...
+# Subtest: atomically consumes an authoritative opaque grant and exposes values only to the trusted callback once
+ok 7 - atomically consumes an authoritative opaque grant and exposes values only to the trusted callback once
+  ---
+  duration_ms: 0.3563
+  type: 'test'
+  ...
+# Subtest: rejects forged ids, replay, mismatched authoritative bindings, and expiry with generic errors
+ok 8 - rejects forged ids, replay, mismatched authoritative bindings, and expiry with generic errors
+  ---
+  duration_ms: 0.2899
+  type: 'test'
+  ...
+# Subtest: factory atomically blocks non-consuming and reentrant grant redemption attempts
+ok 9 - factory atomically blocks non-consuming and reentrant grant redemption attempts
+  ---
+  duration_ms: 0.1935
+  type: 'test'
+  ...
+# Subtest: snapshots a getter-backed opaque grant id before reservation and redemption
+ok 10 - snapshots a getter-backed opaque grant id before reservation and redemption
+  ---
+  duration_ms: 0.1662
+  type: 'test'
+  ...
+# Subtest: rejects non-credential, Runner, and canonical-colliding authoritative grant names
+ok 11 - rejects non-credential, Runner, and canonical-colliding authoritative grant names
+  ---
+  duration_ms: 0.2077
+  type: 'test'
+  ...
+# Subtest: contains resolver and untrusted failures without reflecting sentinel names or values
+ok 12 - contains resolver and untrusted failures without reflecting sentinel names or values
+  ---
+  duration_ms: 0.1591
+  type: 'test'
+  ...
+# Subtest: preserves reserved object-property environment names without adding environment hooks
+ok 13 - preserves reserved object-property environment names without adding environment hooks
+  ---
+  duration_ms: 0.1832
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-dirty-Hyccp3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-new-BoiJsa"}
+# Subtest: dirty repository baseline preserves branch, HEAD, index, status, and files
+ok 14 - dirty repository baseline preserves branch, HEAD, index, status, and files
+  ---
+  duration_ms: 1517.7204
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-unborn-yvTvbM"}
+# Subtest: non-repository bootstrap creates an initial safe baseline without global identity
+ok 15 - non-repository bootstrap creates an initial safe baseline without global identity
+  ---
+  duration_ms: 819.4067
+  type: 'test'
+  ...
+# Subtest: unborn repository bootstrap creates HEAD and applies safe ignore defaults
+ok 16 - unborn repository bootstrap creates HEAD and applies safe ignore defaults
+  ---
+  duration_ms: 766.4618
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-dirty-Hyccp3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-new-BoiJsa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-unborn-yvTvbM","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-wK9ukO"}
+# Subtest: baseline bootstrap full binds the real run/profile and closes its owner before returning
+ok 17 - baseline bootstrap full binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 8.7484
+  type: 'test'
+  ...
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-wK9ukO
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-wK9ukO
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-ocAaXX"}
+# Subtest: baseline bootstrap project binds the real run/profile and closes its owner before returning
+ok 18 - baseline bootstrap project binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 3.2058
+  type: 'test'
+  ...
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-ocAaXX
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-ocAaXX
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-es9BDm"}
+# Subtest: baseline bootstrap guarded binds the real run/profile and closes its owner before returning
+ok 19 - baseline bootstrap guarded binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 3.3691
+  type: 'test'
+  ...
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-es9BDm
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-es9BDm
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-history-JBLp1C"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-rCqHmO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-DoR8nC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-TXjc2u"}
+# Subtest: historical Git query owns separate transient state and exposes no active-run writer
+ok 20 - historical Git query owns separate transient state and exposes no active-run writer
+  ---
+  duration_ms: 142.8075
+  type: 'test'
+  ...
+# exact non-native historical fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-history-JBLp1C
+# historical fixture removed, original history unchanged: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-history-JBLp1C
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-wK9ukO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-ocAaXX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-es9BDm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-history-JBLp1C","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-rCqHmO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-DoR8nC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-TXjc2u","existsAtExit":true}
+# Subtest: migrated Git execution paths have no raw launch ambient environment or stateless compatibility fallback
+ok 21 - migrated Git execution paths have no raw launch ambient environment or stateless compatibility fallback
+  ---
+  duration_ms: 99.1891
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects aliased spawn without executing it
+ok 22 - Git family audit rejects aliased spawn without executing it
+  ---
+  duration_ms: 0.3996
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects namespace exec without executing it
+ok 23 - Git family audit rejects namespace exec without executing it
+  ---
+  duration_ms: 0.1855
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects dynamic import without executing it
+ok 24 - Git family audit rejects dynamic import without executing it
+  ---
+  duration_ms: 0.2583
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects require destructuring without executing it
+ok 25 - Git family audit rejects require destructuring without executing it
+  ---
+  duration_ms: 0.1343
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects ambient merge without executing it
+ok 26 - Git family audit rejects ambient merge without executing it
+  ---
+  duration_ms: 0.136
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects indexed ambient without executing it
+ok 27 - Git family audit rejects indexed ambient without executing it
+  ---
+  duration_ms: 0.1128
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects numeric signal without executing it
+ok 28 - Git family audit rejects numeric signal without executing it
+  ---
+  duration_ms: 0.0988
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects child handle kill without executing it
+ok 29 - Git family audit rejects child handle kill without executing it
+  ---
+  duration_ms: 0.0897
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects shell execution without executing it
+ok 30 - Git family audit rejects shell execution without executing it
+  ---
+  duration_ms: 0.1266
+  type: 'test'
+  ...
+# Subtest: Git family audit rejects PowerShell launcher without executing it
+ok 31 - Git family audit rejects PowerShell launcher without executing it
+  ---
+  duration_ms: 0.1837
+  type: 'test'
+  ...
+# Subtest: Git audit does not confuse documentation strings with process effects
+ok 32 - Git audit does not confuse documentation strings with process effects
+  ---
+  duration_ms: 0.1273
+  type: 'test'
+  ...
+# Subtest: every active production Git owner is explicitly composed and no test adapter is product-reachable
+ok 33 - every active production Git owner is explicitly composed and no test adapter is product-reachable
+  ---
+  duration_ms: 325.9864
+  type: 'test'
+  ...
+# Subtest: the non-Git package resolver scope is not a blanket ambient-environment exemption
+ok 34 - the non-Git package resolver scope is not a blanket ambient-environment exemption
+  ---
+  duration_ms: 0.2861
+  type: 'test'
+  ...
+# Subtest: Git compatibility wrappers delegate only to the explicit exact runner
+ok 35 - Git compatibility wrappers delegate only to the explicit exact runner
+  ---
+  duration_ms: 1.655
+  type: 'test'
+  ...
+# Subtest: Git wrappers refuse absent injection before any operating-system effect
+ok 36 - Git wrappers refuse absent injection before any operating-system effect
+  ---
+  duration_ms: 0.5625
+  type: 'test'
+  ...
+# Subtest: Git tools bind every subcommand to the actual ToolBroker call
+ok 37 - Git tools bind every subcommand to the actual ToolBroker call
+  ---
+  duration_ms: 0.6812
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-caller-xXktDj"}
+# Subtest: Repository intelligence uses its injected runner for every Git query
+ok 38 - Repository intelligence uses its injected runner for every Git query
+  ---
+  duration_ms: 5.1791
+  type: 'test'
+  ...
+# exact caller fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-caller-xXktDj
+# exact caller fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-caller-xXktDj
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-baseline-guard-4ohRBG"}
+# Subtest: Baseline refuses missing Git authority before changing a project or its index
+ok 39 - Baseline refuses missing Git authority before changing a project or its index
+  ---
+  duration_ms: 2.5377
+  type: 'test'
+  ...
+# exact baseline guard fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-baseline-guard-4ohRBG
+# exact baseline guard fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-baseline-guard-4ohRBG
+# Subtest: standalone preflight refuses an absent closed owner instead of constructing ambient execution
+ok 40 - standalone preflight refuses an absent closed owner instead of constructing ambient execution
+  ---
+  duration_ms: 0.4403
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-caller-xXktDj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-baseline-guard-4ohRBG","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-control-Er9qW9"}
+# Subtest: Git bootstrap API preserves typed strict refusal
+ok 41 - Git bootstrap API preserves typed strict refusal
+  ---
+  duration_ms: 57.5862
+  type: 'test'
+  ...
+# exact control fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-control-Er9qW9
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-control-8xoj0O"}
+# control fixture closed and removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-control-Er9qW9
+# Subtest: Git bootstrap API preserves untrusted-error redaction
+ok 42 - Git bootstrap API preserves untrusted-error redaction
+  ---
+  duration_ms: 26.824
+  type: 'test'
+  ...
+# exact control fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-control-8xoj0O
+# control fixture closed and removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-control-8xoj0O
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-control-Er9qW9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-control-8xoj0O","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-on8tau"}
+# Subtest: Git policy installs the complete safe config/environment baseline
+ok 43 - Git policy installs the complete safe config/environment baseline
+  ---
+  duration_ms: 9.4494
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-yn536O"}
+# Subtest: Git policy preserves existing Runner command shapes including remotes, push and log patch output
+ok 44 - Git policy preserves existing Runner command shapes including remotes, push and log patch output
+  ---
+  duration_ms: 9.3006
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-uND9kz"}
+# Subtest: Git policy refuses argv policy replacement, unsupported commands and mutating remote configuration
+ok 45 - Git policy refuses argv policy replacement, unsupported commands and mutating remote configuration
+  ---
+  duration_ms: 3.1039
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-cOgWV4"}
+# Subtest: Git policy refuses operations that would require an editor before Git can mutate
+ok 46 - Git policy refuses operations that would require an editor before Git can mutate
+  ---
+  duration_ms: 6.8012
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-7mMciB"}
+# Subtest: Git policy allows only narrowly enumerated caller Git environment and rejects canonical duplicates
+ok 47 - Git policy allows only narrowly enumerated caller Git environment and rejects canonical duplicates
+  ---
+  duration_ms: 3.7704
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-BLwlN4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-uPN7jP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-cKq0Do"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-jcTgbD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ZSb2Ev"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-x2YuTS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-vdk42c"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-926ztb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-I6tIXV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-6cY1aU"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ycRiwD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-gG77GS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-r2YTZK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-dCdBNu"}
+# Subtest: Git policy refuses repository config capable of selecting indirect programs
+ok 48 - Git policy refuses repository config capable of selecting indirect programs
+  ---
+  duration_ms: 56.9391
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-4FJxPc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-EhsyYN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G43Ujq"}
+# Subtest: Git policy refuses dangerous worktree and info attributes, including nested attributes
+ok 49 - Git policy refuses dangerous worktree and info attributes, including nested attributes
+  ---
+  duration_ms: 14.6596
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-SDJigB"}
+# Subtest: Git policy accepts benign repository config and attributes
+ok 50 - Git policy accepts benign repository config and attributes
+  ---
+  duration_ms: 7.6714
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ygkw7J"}
+# Subtest: Git policy refuses repository remote-helper transports selected by config
+ok 51 - Git policy refuses repository remote-helper transports selected by config
+  ---
+  duration_ms: 4.2198
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-on8tau","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-yn536O","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-uND9kz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-cOgWV4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-7mMciB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-BLwlN4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-uPN7jP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-cKq0Do","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-jcTgbD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ZSb2Ev","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-x2YuTS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-vdk42c","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-926ztb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-I6tIXV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-6cY1aU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ycRiwD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-gG77GS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-r2YTZK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-dCdBNu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-4FJxPc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-EhsyYN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G43Ujq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-SDJigB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ygkw7J","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-git-bounded-JgHqv1"}
+# Subtest: bounded Git execution times out by policy and verifies that its process is gone
+ok 52 - bounded Git execution times out by policy and verifies that its process is gone
+  ---
+  duration_ms: 15225.2179
+  type: 'test'
+  ...
+# exact Git fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-git-bounded-JgHqv1
+# certified Git root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-git-bounded-JgHqv1
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-git-tree-bounded-r2YTNe"}
+# Subtest: bounded Git execution verifies the complete process tree, including detached descendants
+ok 53 - bounded Git execution verifies the complete process tree, including detached descendants
+  ---
+  duration_ms: 15112.5283
+  type: 'test'
+  ...
+# exact Git fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-git-tree-bounded-r2YTNe
+# certified Git root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-git-tree-bounded-r2YTNe
+# Subtest: bounded internal execution retains output from a child that exits before sink registration
+ok 54 - bounded internal execution retains output from a child that exits before sink registration
+  ---
+  duration_ms: 2012.962
+  type: 'test'
+  ...
+# Subtest: Git preflight reports missing Git without trying to install it
+ok 55 - Git preflight reports missing Git without trying to install it
+  ---
+  duration_ms: 0.3471
+  type: 'test'
+  ...
+# Subtest: Git preflight parses Windows versions and enforces the minimum
+ok 56 - Git preflight parses Windows versions and enforces the minimum
+  ---
+  duration_ms: 0.3438
+  type: 'test'
+  ...
+# Subtest: Git preflight treats malformed successful output as unavailable
+ok 57 - Git preflight treats malformed successful output as unavailable
+  ---
+  duration_ms: 0.0935
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-git-bounded-JgHqv1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-git-tree-bounded-r2YTNe","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-managers-DPs0l3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-kYqaio"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-jaw6om"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-b54EEE"}
+# Subtest: actual baseline task integration verification and historical Git use their real run owner
+not ok 58 - actual baseline task integration verification and historical Git use their real run owner
+  ---
+  duration_ms: 61301.1919
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-production-managers.test.ts:1:1082'
+  failureType: 'testCodeFailure'
+  error: |-
+    git diff --binary --full-index 7a01fed8291ca793936cbccbebc08a446a630c6c 482d316616a01033858b084571a9593d4b9233ca -- failed with exit code 128: error: cannot spawn : No such file or directory
+    fatal: external diff died, stopping at app.txt
+  code: 'command_failed'
+  name: 'GitCommandError'
+  stack: |-
+    runBytes (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-runtime-runner.ts:78:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async run (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-runtime-runner.ts:89:22)
+    async createChangeSet (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\change-set.ts:110:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-production-managers.test.ts:47:20)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# exact native Git manager fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-native-git-managers-DPs0l3
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-managers-DPs0l3","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-kYqaio","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-jaw6om","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-b54EEE","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard git inspect Ggne1K"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspect-qOtoSo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-output-udCzcq"}
+# Subtest: repository inspection handles non-repositories and paths with spaces
+ok 59 - repository inspection handles non-repositories and paths with spaces
+  ---
+  duration_ms: 48.2619
+  type: 'test'
+  ...
+# Subtest: repository inspection attributes staged, unstaged, and untracked state
+ok 60 - repository inspection attributes staged, unstaged, and untracked state
+  ---
+  duration_ms: 468.5592
+  type: 'test'
+  ...
+# Subtest: Git command output is bounded and never routed through a shell
+ok 61 - Git command output is bounded and never routed through a shell
+  ---
+  duration_ms: 110.4002
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard git inspect Ggne1K","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspect-qOtoSo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-output-udCzcq","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-Km0XXW"}
+# Subtest: run Git context gives several commands distinct child authority under the same real ToolBroker call
+ok 62 - run Git context gives several commands distinct child authority under the same real ToolBroker call
+  ---
+  duration_ms: 12.8754
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-Km0XXW
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-GjS3I8"}
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-Km0XXW
+# Subtest: run Git context rejects changed actor/run/call identity even when reusing a genuine token
+ok 63 - run Git context rejects changed actor/run/call identity even when reusing a genuine token
+  ---
+  duration_ms: 3.455
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-GjS3I8
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-GjS3I8
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-ksfT7x"}
+# Subtest: model Git authority cannot escape its original access through the working directory
+ok 64 - model Git authority cannot escape its original access through the working directory
+  ---
+  duration_ms: 3.0325
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-ksfT7x
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-ksfT7x
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-QREAG5"}
+# Subtest: Git lifecycle uses declared run ownership, never a fabricated model actor or the unrestricted host state root
+ok 65 - Git lifecycle uses declared run ownership, never a fabricated model actor or the unrestricted host state root
+  ---
+  duration_ms: 6.9398
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-QREAG5
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-QREAG5
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-VhNVuG"}
+# Subtest: Git lifecycle refuses a foreign working directory and network command before grant issuance
+ok 66 - Git lifecycle refuses a foreign working directory and network command before grant issuance
+  ---
+  duration_ms: 2.8115
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-VhNVuG
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-Ge8GCs"}
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-VhNVuG
+# Subtest: Git lifecycle canonicalization refuses a junction escape from an owned working root
+ok 67 - Git lifecycle canonicalization refuses a junction escape from an owned working root
+  ---
+  duration_ms: 3.0884
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-Ge8GCs
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-Ge8GCs
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-Njltr9"}
+# Subtest: strict Git isolation unavailability is retained without another executable or Full retry
+ok 68 - strict Git isolation unavailability is retained without another executable or Full retry
+  ---
+  duration_ms: 3.1122
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-yeTa5P"}
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-Njltr9
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-Njltr9
+# Subtest: closed run and missing ToolBroker authority never fall back to stateless Git execution
+ok 69 - closed run and missing ToolBroker authority never fall back to stateless Git execution
+  ---
+  duration_ms: 2.4846
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-yeTa5P
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-yeTa5P
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-zmH5l2"}
+# Subtest: nested repository Git reads retain separate call identity across asynchronous interleaving
+ok 70 - nested repository Git reads retain separate call identity across asynchronous interleaving
+  ---
+  duration_ms: 4.2523
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-zmH5l2
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-zmH5l2
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-yIS0MC"}
+# Subtest: evidence revision read and its command share one original call without consuming it twice
+ok 71 - evidence revision read and its command share one original call without consuming it twice
+  ---
+  duration_ms: 5.4417
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-yIS0MC
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-yIS0MC
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-ixT68d"}
+# Subtest: scoped nested Git reads never manufacture lifecycle authority when no call is active
+ok 72 - scoped nested Git reads never manufacture lifecycle authority when no call is active
+  ---
+  duration_ms: 2.3584
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-ixT68d
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-ixT68d
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-VYr23l"}
+# Subtest: run-owned workspace cleanup permits its required exact ref inventory
+ok 73 - run-owned workspace cleanup permits its required exact ref inventory
+  ---
+  duration_ms: 5.6024
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-VYr23l
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-VYr23l
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-kHYScD"}
+# Subtest: historical inspection cannot reinterpret an admitted read verb as a ref mutation
+ok 74 - historical inspection cannot reinterpret an admitted read verb as a ref mutation
+  ---
+  duration_ms: 2.2929
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-kHYScD
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-kHYScD
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-0TyA86"}
+# Subtest: actual ToolBroker carries exact per-call Git authority without changing guarded approval policy
+ok 75 - actual ToolBroker carries exact per-call Git authority without changing guarded approval policy
+  ---
+  duration_ms: 5.4158
+  type: 'test'
+  ...
+# new synthetic Git context root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-0TyA86
+# released grants; removed exact root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-0TyA86
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-Km0XXW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-GjS3I8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-ksfT7x","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-QREAG5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-VhNVuG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-Ge8GCs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-Njltr9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-yeTa5P","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-zmH5l2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-yIS0MC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-ixT68d","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-VYr23l","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-kHYScD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-context-0TyA86","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-rRB1qc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Og8l2e"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7L8LnS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-pAiAvs"}
+# Subtest: real run-owned Git preserves binary bytes and closes exact nested command ownership
+ok 76 - real run-owned Git preserves binary bytes and closes exact nested command ownership
+  ---
+  duration_ms: 17681.5118
+  type: 'test'
+  ...
+# acquired exact real Git fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-native-git-rRB1qc
+# actual Git initialization, binary object write/read and authenticated cleanup verified
+# certified real Git fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-native-git-rRB1qc
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-rRB1qc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Og8l2e","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7L8LnS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-pAiAvs","existsAtExit":false}
+# Subtest: Git runtime returns exact non-UTF8 bytes through the shared bounded output artifact
+ok 77 - Git runtime returns exact non-UTF8 bytes through the shared bounded output artifact
+  ---
+  duration_ms: 6.2997
+  type: 'test'
+  ...
+# Subtest: Git runtime reconstructs text beyond the display tail without output-triggered termination
+ok 78 - Git runtime reconstructs text beyond the display tail without output-triggered termination
+  ---
+  duration_ms: 2.0405
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects exceeds-bound rather than silently presenting a partial Git result
+ok 79 - Git runtime rejects exceeds-bound rather than silently presenting a partial Git result
+  ---
+  duration_ms: 1.0131
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects lossy rather than silently presenting a partial Git result
+ok 80 - Git runtime rejects lossy rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.4195
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects missing-artifact rather than silently presenting a partial Git result
+ok 81 - Git runtime rejects missing-artifact rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.3086
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects short-spill rather than silently presenting a partial Git result
+ok 82 - Git runtime rejects short-spill rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.2938
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects corrupt-artifact rather than silently presenting a partial Git result
+ok 83 - Git runtime rejects corrupt-artifact rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.3198
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides pending cleanup
+ok 84 - Git allowFailure never hides pending cleanup
+  ---
+  duration_ms: 0.3636
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides failed cleanup
+ok 85 - Git allowFailure never hides failed cleanup
+  ---
+  duration_ms: 0.3501
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides not_required cleanup
+ok 86 - Git allowFailure never hides not_required cleanup
+  ---
+  duration_ms: 0.3126
+  type: 'test'
+  ...
+# Subtest: Git allowFailure preserves a verified nonzero result but normal execution throws the existing typed error
+ok 87 - Git allowFailure preserves a verified nonzero result but normal execution throws the existing typed error
+  ---
+  duration_ms: 0.5175
+  type: 'test'
+  ...
+# Subtest: Git cancelled is not accepted by allowFailure
+ok 88 - Git cancelled is not accepted by allowFailure
+  ---
+  duration_ms: 0.3967
+  type: 'test'
+  ...
+# Subtest: Git timed_out is not accepted by allowFailure
+ok 89 - Git timed_out is not accepted by allowFailure
+  ---
+  duration_ms: 0.2282
+  type: 'test'
+  ...
+# Subtest: Git cleanup_failed is not accepted by allowFailure
+ok 90 - Git cleanup_failed is not accepted by allowFailure
+  ---
+  duration_ms: 0.2118
+  type: 'test'
+  ...
+# Subtest: Git launch_failed is not accepted by allowFailure
+ok 91 - Git launch_failed is not accepted by allowFailure
+  ---
+  duration_ms: 0.2017
+  type: 'test'
+  ...
+# Subtest: Git snapshots caller arguments and explicit environment before asynchronous authorization
+ok 92 - Git snapshots caller arguments and explicit environment before asynchronous authorization
+  ---
+  duration_ms: 0.3081
+  type: 'test'
+  ...
+# Subtest: Git validates request bounds before acquiring authority or executing anything
+ok 93 - Git validates request bounds before acquiring authority or executing anything
+  ---
+  duration_ms: 0.2357
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-runtime-policy-1Qw1Td"}
+# Subtest: Git repository policy refuses after cwd authorization but before execution and releases exact command authority
+ok 94 - Git repository policy refuses after cwd authorization but before execution and releases exact command authority
+  ---
+  duration_ms: 5.0828
+  type: 'test'
+  ...
+# Subtest: Git cannot use a foreign run context returned by its authority source
+ok 95 - Git cannot use a foreign run context returned by its authority source
+  ---
+  duration_ms: 0.2521
+  type: 'test'
+  ...
+# Subtest: Git retains an undefined execution failure and a subsequent authorization-release failure
+ok 96 - Git retains an undefined execution failure and a subsequent authorization-release failure
+  ---
+  duration_ms: 0.4947
+  type: 'test'
+  ...
+# Subtest: Git joins runtime completion before releasing its exact authorization
+ok 97 - Git joins runtime completion before releasing its exact authorization
+  ---
+  duration_ms: 0.5824
+  type: 'test'
+  ...
+# Subtest: Git live capture complete preserves exact bytes without falsifying diagnostic storage
+ok 98 - Git live capture complete preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 2.6917
+  type: 'test'
+  ...
+# Subtest: Git live capture incomplete preserves exact bytes without falsifying diagnostic storage
+ok 99 - Git live capture incomplete preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.9197
+  type: 'test'
+  ...
+# Subtest: Git live capture short preserves exact bytes without falsifying diagnostic storage
+ok 100 - Git live capture short preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.9093
+  type: 'test'
+  ...
+# Subtest: Git live capture over-bound preserves exact bytes without falsifying diagnostic storage
+ok 101 - Git live capture over-bound preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.59
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-runtime-policy-1Qw1Td","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-tools-Igd2xA"}
+# Subtest: task-safe Git tools inspect and commit only the worker branch
+ok 102 - task-safe Git tools inspect and commit only the worker branch
+  ---
+  duration_ms: 2041.175
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-tools-Igd2xA","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-create exact-iFRPjA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-independent-verifier-UFdTag"}
+# Subtest: creates a detached verification worktree at the exact integration revision
+ok 103 - creates a detached verification worktree at the exact integration revision
+  ---
+  duration_ms: 2356.5645
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-reopen-1DGPNT"}
+# Subtest: independent verifier owns a clean workspace separate from final verification
+ok 104 - independent verifier owns a clean workspace separate from final verification
+  ---
+  duration_ms: 2896.1544
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-containment-Wl0z35"}
+# Subtest: reopens the same valid workspace and rejects dirty or wrong-revision workspaces
+ok 105 - reopens the same valid workspace and rejects dirty or wrong-revision workspaces
+  ---
+  duration_ms: 3451.6835
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-outside-dvuWs6"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-dirty-canonical-FT31So"}
+# Subtest: rejects a symlink, path escape, and unexpected existing verification directory
+ok 106 - rejects a symlink, path escape, and unexpected existing verification directory
+  ---
+  duration_ms: 1377.7994
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-cleanup-zvGDpT"}
+# Subtest: refuses a dirty canonical checkout before creating verification state
+ok 107 - refuses a dirty canonical checkout before creating verification state
+  ---
+  duration_ms: 1448.5031
+  type: 'test'
+  ...
+# Subtest: cleanup removes only the owned verification worktree and preserves integration history
+ok 108 - cleanup removes only the owned verification worktree and preserves integration history
+  ---
+  duration_ms: 2378.1505
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-create exact-iFRPjA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-independent-verifier-UFdTag","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-reopen-1DGPNT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-containment-Wl0z35","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-outside-dvuWs6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-dirty-canonical-FT31So","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-verification-cleanup-zvGDpT","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspaces-vogT5w"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-clean-ELOZmn"}
+# Subtest: task worktrees isolate concurrent edits and create attributable commits
+ok 109 - task worktrees isolate concurrent edits and create attributable commits
+  ---
+  duration_ms: 2679.9647
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-bounded-1irU9U"}
+# Subtest: committing an unchanged task produces a typed mechanical error
+ok 110 - committing an unchanged task produces a typed mechanical error
+  ---
+  duration_ms: 1197.6154
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-retries-bVTg3l"}
+# Subtest: long run and task identifiers use bounded worktree and branch segments
+ok 111 - long run and task identifiers use bounded worktree and branch segments
+  ---
+  duration_ms: 970.0248
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-cleanup-sgwUwE"}
+# Subtest: retries use fresh worktrees based on the current integration revision
+ok 112 - retries use fresh worktrees based on the current integration revision
+  ---
+  duration_ms: 1831.8444
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-root-race-hPKKGZ"}
+# Subtest: cleanup removes every owned task worktree and branch, prunes, and is idempotent
+ok 113 - cleanup removes every owned task worktree and branch, prunes, and is idempotent
+  ---
+  duration_ms: 2209.0767
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-empty-stale-LJ3Q2K"}
+# Subtest: cleanup preserves a file created immediately before workspace root removal
+ok 114 - cleanup preserves a file created immediately before workspace root removal
+  ---
+  duration_ms: 1425.4093
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-nonempty-stale-ypGaAB"}
+# Subtest: cleanup removes an empty task directory after its stale worktree record was pruned
+ok 115 - cleanup removes an empty task directory after its stale worktree record was pruned
+  ---
+  duration_ms: 1541.648
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-owner-PeBZv5"}
+# Subtest: cleanup refuses a nonempty invalid task directory with a stale worktree record
+ok 116 - cleanup refuses a nonempty invalid task directory with a stale worktree record
+  ---
+  duration_ms: 1310.3276
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-associated-c0yReW"}
+# Subtest: cleanup rejects a task worktree whose ownership no longer matches
+ok 117 - cleanup rejects a task worktree whose ownership no longer matches
+  ---
+  duration_ms: 1345.3458
+  type: 'test'
+  ...
+# Subtest: cleanup rejects a missing descriptor associated with another worktree path
+ok 118 - cleanup rejects a missing descriptor associated with another worktree path
+  ---
+  duration_ms: 1196.5022
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspaces-vogT5w","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-clean-ELOZmn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-bounded-1irU9U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-retries-bVTg3l","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-cleanup-sgwUwE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-root-race-hPKKGZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-empty-stale-LJ3Q2K","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-nonempty-stale-ypGaAB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-owner-PeBZv5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-workspace-associated-c0yReW","existsAtExit":false}
+1..118
+# tests 118
+# suites 0
+# pass 117
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 164465.4599

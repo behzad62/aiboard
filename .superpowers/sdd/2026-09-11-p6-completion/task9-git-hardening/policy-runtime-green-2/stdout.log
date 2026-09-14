@@ -1,0 +1,262 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-JLKtuF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-lyCljc"}
+# Subtest: Git policy installs the complete safe config/environment baseline
+ok 1 - Git policy installs the complete safe config/environment baseline
+  ---
+  duration_ms: 11.2085
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-L8ri4c"}
+# Subtest: Git policy preserves existing Runner command shapes including remotes, push and log patch output
+ok 2 - Git policy preserves existing Runner command shapes including remotes, push and log patch output
+  ---
+  duration_ms: 11.4311
+  type: 'test'
+  ...
+# Subtest: Git policy refuses argv policy replacement, unsupported commands and mutating remote configuration
+ok 3 - Git policy refuses argv policy replacement, unsupported commands and mutating remote configuration
+  ---
+  duration_ms: 3.6216
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-eIPdjB"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-S0igZ6"}
+# Subtest: Git policy refuses operations that would require an editor before Git can mutate
+ok 4 - Git policy refuses operations that would require an editor before Git can mutate
+  ---
+  duration_ms: 6.1264
+  type: 'test'
+  ...
+# Subtest: Git policy allows only narrowly enumerated caller Git environment and rejects canonical duplicates
+ok 5 - Git policy allows only narrowly enumerated caller Git environment and rejects canonical duplicates
+  ---
+  duration_ms: 4.7763
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-C6HWg5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-awShoy"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ZKbXf3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-1kSD8X"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-VKiHZr"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-331IZI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-kloY27"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-BWH4PN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-bzG8HM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-6xvUwP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-Qg32DT"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ZW1qZw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-JL16vI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-eRIgoe"}
+# Subtest: Git policy refuses repository config capable of selecting indirect programs
+ok 6 - Git policy refuses repository config capable of selecting indirect programs
+  ---
+  duration_ms: 65.4943
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-aV48wz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G1CgO0"}
+# Subtest: Git policy refuses dangerous worktree and info attributes, including nested attributes
+ok 7 - Git policy refuses dangerous worktree and info attributes, including nested attributes
+  ---
+  duration_ms: 15.2264
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-N1amvH"}
+# Subtest: Git policy accepts benign repository config and attributes
+ok 8 - Git policy accepts benign repository config and attributes
+  ---
+  duration_ms: 8.6482
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-OMYVaz"}
+# Subtest: Git policy refuses repository remote-helper transports selected by config
+ok 9 - Git policy refuses repository remote-helper transports selected by config
+  ---
+  duration_ms: 5.5797
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-JLKtuF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-lyCljc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-L8ri4c","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-eIPdjB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-S0igZ6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-C6HWg5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-awShoy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ZKbXf3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-1kSD8X","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-VKiHZr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-331IZI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-kloY27","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-BWH4PN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-bzG8HM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-6xvUwP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-Qg32DT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-ZW1qZw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-JL16vI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-eRIgoe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-aV48wz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G1CgO0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-N1amvH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-OMYVaz","existsAtExit":false}
+# Subtest: Git runtime returns exact non-UTF8 bytes through the shared bounded output artifact
+ok 10 - Git runtime returns exact non-UTF8 bytes through the shared bounded output artifact
+  ---
+  duration_ms: 4.8249
+  type: 'test'
+  ...
+# Subtest: Git runtime reconstructs text beyond the display tail without output-triggered termination
+ok 11 - Git runtime reconstructs text beyond the display tail without output-triggered termination
+  ---
+  duration_ms: 2.1846
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects exceeds-bound rather than silently presenting a partial Git result
+ok 12 - Git runtime rejects exceeds-bound rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.7355
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects lossy rather than silently presenting a partial Git result
+ok 13 - Git runtime rejects lossy rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.3605
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects missing-artifact rather than silently presenting a partial Git result
+ok 14 - Git runtime rejects missing-artifact rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.302
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects short-spill rather than silently presenting a partial Git result
+ok 15 - Git runtime rejects short-spill rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.6977
+  type: 'test'
+  ...
+# Subtest: Git runtime rejects corrupt-artifact rather than silently presenting a partial Git result
+ok 16 - Git runtime rejects corrupt-artifact rather than silently presenting a partial Git result
+  ---
+  duration_ms: 0.4871
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides pending cleanup
+ok 17 - Git allowFailure never hides pending cleanup
+  ---
+  duration_ms: 0.4149
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides failed cleanup
+ok 18 - Git allowFailure never hides failed cleanup
+  ---
+  duration_ms: 0.3776
+  type: 'test'
+  ...
+# Subtest: Git allowFailure never hides not_required cleanup
+ok 19 - Git allowFailure never hides not_required cleanup
+  ---
+  duration_ms: 0.497
+  type: 'test'
+  ...
+# Subtest: Git allowFailure preserves a verified nonzero result but normal execution throws the existing typed error
+ok 20 - Git allowFailure preserves a verified nonzero result but normal execution throws the existing typed error
+  ---
+  duration_ms: 0.5837
+  type: 'test'
+  ...
+# Subtest: Git cancelled is not accepted by allowFailure
+ok 21 - Git cancelled is not accepted by allowFailure
+  ---
+  duration_ms: 0.4665
+  type: 'test'
+  ...
+# Subtest: Git timed_out is not accepted by allowFailure
+ok 22 - Git timed_out is not accepted by allowFailure
+  ---
+  duration_ms: 0.2448
+  type: 'test'
+  ...
+# Subtest: Git cleanup_failed is not accepted by allowFailure
+ok 23 - Git cleanup_failed is not accepted by allowFailure
+  ---
+  duration_ms: 0.294
+  type: 'test'
+  ...
+# Subtest: Git launch_failed is not accepted by allowFailure
+ok 24 - Git launch_failed is not accepted by allowFailure
+  ---
+  duration_ms: 0.2445
+  type: 'test'
+  ...
+# Subtest: Git snapshots caller arguments and explicit environment before asynchronous authorization
+ok 25 - Git snapshots caller arguments and explicit environment before asynchronous authorization
+  ---
+  duration_ms: 0.3377
+  type: 'test'
+  ...
+# Subtest: Git validates request bounds before acquiring authority or executing anything
+ok 26 - Git validates request bounds before acquiring authority or executing anything
+  ---
+  duration_ms: 0.2521
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-runtime-policy-18oTFr"}
+# Subtest: Git repository policy refuses after cwd authorization but before execution and releases exact command authority
+ok 27 - Git repository policy refuses after cwd authorization but before execution and releases exact command authority
+  ---
+  duration_ms: 4.8549
+  type: 'test'
+  ...
+# Subtest: Git cannot use a foreign run context returned by its authority source
+ok 28 - Git cannot use a foreign run context returned by its authority source
+  ---
+  duration_ms: 0.2123
+  type: 'test'
+  ...
+# Subtest: Git retains an undefined execution failure and a subsequent authorization-release failure
+ok 29 - Git retains an undefined execution failure and a subsequent authorization-release failure
+  ---
+  duration_ms: 0.4896
+  type: 'test'
+  ...
+# Subtest: Git joins runtime completion before releasing its exact authorization
+ok 30 - Git joins runtime completion before releasing its exact authorization
+  ---
+  duration_ms: 1.3493
+  type: 'test'
+  ...
+# Subtest: Git live capture complete preserves exact bytes without falsifying diagnostic storage
+ok 31 - Git live capture complete preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 1.8338
+  type: 'test'
+  ...
+# Subtest: Git live capture incomplete preserves exact bytes without falsifying diagnostic storage
+ok 32 - Git live capture incomplete preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.6034
+  type: 'test'
+  ...
+# Subtest: Git live capture short preserves exact bytes without falsifying diagnostic storage
+ok 33 - Git live capture short preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 0.6314
+  type: 'test'
+  ...
+# Subtest: Git live capture over-bound preserves exact bytes without falsifying diagnostic storage
+ok 34 - Git live capture over-bound preserves exact bytes without falsifying diagnostic storage
+  ---
+  duration_ms: 1.0333
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-runtime-policy-18oTFr","existsAtExit":false}
+1..34
+# tests 34
+# suites 0
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 693.3672

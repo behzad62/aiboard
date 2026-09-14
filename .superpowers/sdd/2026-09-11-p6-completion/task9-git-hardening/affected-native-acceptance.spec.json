@@ -1,0 +1,13 @@
+{
+  "id": "affected-native-acceptance",
+  "tests": [
+    "runner-v2/test/execution-host.test.ts",
+    "runner-v2/test/native-build-initialization.test.ts",
+    "runner-v2/test/native-worker-driver.test.ts",
+    "runner-v2/test/native-architect-runtime.test.ts",
+    "runner-v2/test/native-verifier-runtime.test.ts",
+    "runner-v2/test/final-verification-execution.test.ts",
+    "runner-v2/test/final-verification-managed-authority.test.ts",
+    "runner-v2/test/native-final-verification-factory.test.ts"
+  ]
+}

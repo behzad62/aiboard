@@ -1,0 +1,21 @@
+{
+  "id": "affected-git-final2-green",
+  "tests": [
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-preflight.test.ts",
+    "runner-v2/test/git-repository.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/git-production-managers.test.ts",
+    "runner-v2/test/git-caller-audit.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-control-refusal.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/workspace-manager.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/child-environment.test.ts"
+  ]
+}
