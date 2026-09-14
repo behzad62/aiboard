@@ -1,0 +1,25 @@
+{
+  "id": "windows-helper-binding-green",
+  "startedAt": "2026-09-14T10:14:01.220Z",
+  "finishedAt": "2026-09-14T10:14:10.489Z",
+  "wrapperPid": 44816,
+  "testPid": 9176,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^Windows portable fixture supervisor argv excludes ambient credential sentinels$",
+    "runner-v2/test/windows-process-backend.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

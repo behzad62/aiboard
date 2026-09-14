@@ -839,7 +839,9 @@ function handleControl() {
     const signalOrder = windowsLeafFirstSignalOrder(members);
     const failure = completeControl(request, () => {
       const configuredTaskkill = config.windowsTaskkill;
-      const command = typeof configuredTaskkill?.command === "string" ? configuredTaskkill.command : "taskkill.exe";
+      const command = typeof configuredTaskkill?.command === "string"
+        ? configuredTaskkill.command
+        : injectedWindowsHelper("taskkill.exe");
       const prefix = Array.isArray(configuredTaskkill?.arguments) ? configuredTaskkill.arguments.map(String) : [];
       const deadlineMs = configuredDeadline(configuredTaskkill);
       for (const { pid, birth } of signalOrder) {
@@ -903,7 +905,9 @@ function requestWindowsTreeRefresh() {
   windowsTreeRefreshCount += 1;
   windowsTreeRefreshInFlight = true;
   const configuredInspector = config.windowsTreeInspector;
-  const inspectorCommand = typeof configuredInspector?.command === "string" ? configuredInspector.command : "powershell.exe";
+  const inspectorCommand = typeof configuredInspector?.command === "string"
+    ? configuredInspector.command
+    : injectedWindowsHelper("WindowsPowerShell", "v1.0", "powershell.exe");
   const inspectorArguments = Array.isArray(configuredInspector?.arguments)
     ? configuredInspector.arguments.map(String)
     : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TREE_SCRIPT];
@@ -946,7 +950,9 @@ function requestWindowsTreeRefresh() {
 
 function refreshWindowsTree() {
   const configuredInspector = config.windowsControlInspector ?? config.windowsTreeInspector;
-  const inspectorCommand = typeof configuredInspector?.command === "string" ? configuredInspector.command : "powershell.exe";
+  const inspectorCommand = typeof configuredInspector?.command === "string"
+    ? configuredInspector.command
+    : injectedWindowsHelper("WindowsPowerShell", "v1.0", "powershell.exe");
   const inspectorArguments = Array.isArray(configuredInspector?.arguments)
     ? configuredInspector.arguments.map(String)
     : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TREE_SCRIPT];
@@ -962,6 +968,20 @@ function configuredDeadline(configuredOperation) {
   return Number.isSafeInteger(configuredOperation?.deadlineMs) && configuredOperation.deadlineMs > 0
     ? configuredOperation.deadlineMs
     : windowsTreeInspectionDeadlineMs;
+}
+
+function injectedWindowsHelper(...segments) {
+  const environment = config.environment && typeof config.environment === "object" ? config.environment : {};
+  const value = (name) => {
+    const matches = Object.entries(environment)
+      .filter(([key, candidate]) => key.toLowerCase() === name.toLowerCase() && typeof candidate === "string")
+      .map(([, candidate]) => candidate);
+    return new Set(matches).size === 1 ? matches[0] : undefined;
+  };
+  const systemRoot = value("SystemRoot") ?? value("windir");
+  const command = systemRoot ? join(systemRoot, "System32", ...segments) : "";
+  if (!command || !existsSync(command)) throw new Error("Portable Windows helper identity is unavailable from the injected environment.");
+  return command;
 }
 
 function acceptWindowsTreeResult(status, error, stdout, inspectorPid) {
@@ -1088,7 +1108,9 @@ function inspectWindowsBirthWithRetry(pid) {
 function inspectWindowsBirth(pid, deadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS) {
   const configuredInspector = config.windowsBirthInspector;
   const script = `$ErrorActionPreference='Stop';try{$p=Get-Process -Id ${pid} -ErrorAction Stop;$start=$p.StartTime;if($null-eq$start){throw 'PROCESS_BIRTH_UNAVAILABLE'};'PRESENT:'+$start.ToUniversalTime().ToString('o')}catch{$current=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null-eq$current){'ABSENT'}else{throw}}`;
-  const command = typeof configuredInspector?.command === "string" ? configuredInspector.command : "powershell.exe";
+  const command = typeof configuredInspector?.command === "string"
+    ? configuredInspector.command
+    : injectedWindowsHelper("WindowsPowerShell", "v1.0", "powershell.exe");
   const args = Array.isArray(configuredInspector?.arguments)
     ? [...configuredInspector.arguments.map(String), String(pid)]
     : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script];

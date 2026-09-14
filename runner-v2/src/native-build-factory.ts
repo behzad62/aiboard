@@ -126,6 +126,7 @@ import {
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
 import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
+import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
   rebuildSchedulerProjection,
   type SchedulerEvent,
@@ -529,6 +530,7 @@ export class NativeBuildFactory {
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       portAuthority: finalVerificationPorts,
+      ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
     });
     initializationStage = "scheduler_store";
     const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
@@ -674,7 +676,9 @@ export class NativeBuildFactory {
     });
     const windowsFacts = process.platform === "win32"
       ? await (this.windowsProcessFactsPromise ??= probeProcessHostSemantics({
-          ...createWindowsProcessSemanticProbeSource(),
+          ...createWindowsProcessSemanticProbeSource({
+            ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+          }),
           activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
         }))
       : undefined;
@@ -688,7 +692,11 @@ export class NativeBuildFactory {
             stableAdapterId: "runner-windows-job-adapter-v1",
             backendId: "runner-windows-job-v1",
             codeIdentity: "runner-v2/windows-job-process-backend@1",
-            backend: new WindowsJobObjectProcessBackend(windowsJobHost, windowsFacts!.windowsBatchArgv),
+            backend: new WindowsJobObjectProcessBackend(
+              windowsJobHost,
+              windowsFacts!.windowsBatchArgv,
+              windowsFacts!.jobContainment,
+            ),
           }] : []),
           ...(windowsBackendKinds.has("portable") ? [{
             stableAdapterId: "runner-windows-portable-adapter-v1",
@@ -741,9 +749,7 @@ export class NativeBuildFactory {
       executionGrants,
       isolation: executionIsolation,
       permissionProfile: spec.permissionProfile,
-      ambientEnvironment: Object.freeze(Object.fromEntries(
-        Object.entries(process.env).filter(([name]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)),
-      )),
+      ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
       environments: childEnvironments,
     });
     constructionResources.add("subprocess_runtime", async () => {
@@ -980,6 +986,7 @@ export class NativeBuildFactory {
           taskId: input.taskId,
           attempt: input.attempt,
           generationId: input.generationId,
+          checkCategory: input.category,
           currentIntegrationRevision: () => integrationManager.revision,
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
@@ -1404,6 +1411,7 @@ export class NativeBuildFactory {
           stateDirectory: this.options.stateDirectory,
           runId: spec.runId,
           portAuthority: ports,
+          ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
         });
         const acceptedProfiles = new Set<string>();
         const acceptedCleanupReceipts = new Set<string>();
@@ -2647,6 +2655,20 @@ export function configuredModelUsageRuntime(
       config.capabilities.includes("*") ||
       config.capabilities.includes("code"),
   };
+}
+
+export function snapshotNativeBuildAmbientEnvironment(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): Readonly<Record<string, string>> {
+  const filtered = Object.create(null) as Record<string, string>;
+  for (const [name, value] of Object.entries(source)) {
+    const canonical = name.toUpperCase();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || value === undefined ||
+        isSensitiveKey(name) || /(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|API[_-]?KEY)/i.test(name) ||
+        canonical.startsWith("RUNNER_") || canonical.startsWith("AIBOARD_RUNNER_")) continue;
+    filtered[name] = value;
+  }
+  return Object.freeze(filtered);
 }
 
 export function createProviderModel(

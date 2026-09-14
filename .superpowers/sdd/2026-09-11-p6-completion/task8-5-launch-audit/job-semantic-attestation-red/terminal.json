@@ -1,0 +1,25 @@
+{
+  "id": "job-semantic-attestation-red",
+  "startedAt": "2026-09-14T11:04:27.540Z",
+  "finishedAt": "2026-09-14T11:04:29.594Z",
+  "wrapperPid": 46316,
+  "testPid": 35008,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^omitted Windows semantic facts fail closed and service presence alone cannot select Job containment$",
+    "runner-v2/test/windows-process-backend.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

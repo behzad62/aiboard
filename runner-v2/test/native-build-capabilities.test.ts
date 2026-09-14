@@ -32,7 +32,7 @@ import { FinalVerificationDiagnosticsArchive } from "./support/git-fixture.js";
 import { FinalVerificationProfileAuthority } from "./support/git-fixture.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
 import { VerificationWorkspaceManager } from "./support/git-fixture.js";
-import { classifyNativeBuildRecoveryError, NativeBuildRuntimeInitializationError, preflightRecoveredRunnerCapabilities, preflightRunnerCapabilities } from "../src/native-build-factory.js";
+import { classifyNativeBuildRecoveryError, NativeBuildRuntimeInitializationError, preflightRecoveredRunnerCapabilities, preflightRunnerCapabilities, snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { NativeBuildFactory } from "./support/git-fixture.js";
 import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import { createLiveMcpStatusRegistry } from "../src/mcp-tools.js";
@@ -73,6 +73,7 @@ test("production composition settles its owned MCP and run binding while retaini
     projectRoot: fixture.project,
     stateDirectory: fixture.state,
     artifacts,
+    ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
   });
   const bindings = new Map<string, ExecutionHostRunBinding>();
   const managers = new Map<string, McpManager>();
@@ -93,6 +94,8 @@ test("production composition settles its owned MCP and run binding while retaini
   const internalExecutionContext = createRunnerInternalExecutionContext({
     projectDirectory: fixture.project,
     stateDirectory: fixture.state,
+    processKernel: baseHost.internalProcesses,
+    ambientEnvironment: baseHost.filteredEnvironmentSource(),
   });
   let passed = false;
   try {

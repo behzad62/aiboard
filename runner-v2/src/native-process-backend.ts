@@ -2,7 +2,7 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -175,6 +175,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     writeFileSync(join(directory, "stderr.log"), "", { mode: 0o600 });
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...request.fence }), { mode: 0o600 });
     const supervisor = join(dirname(fileURLToPath(import.meta.url)), "portable-process-supervisor.mjs");
+    const windowsHelpers = this.options.platform === "windows"
+      ? windowsPortableSupervisorHelpers(request.environment)
+      : {};
     const encoded = Buffer.from(JSON.stringify({
       nonce,
       directory,
@@ -187,6 +190,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
       replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
       fence: { ...request.fence },
+      ...windowsHelpers,
     })).toString("base64url");
     if (Date.now() >= startupDeadline) {
       rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
@@ -1085,6 +1089,32 @@ function writeJsonAtomic(path: string, value: unknown): void {
 function sameProcessBirth(left: string, right: string): boolean {
   return normalizeProcessBirth(left) === normalizeProcessBirth(right);
 }
+function windowsPortableSupervisorHelpers(
+  environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, Readonly<{ command: string }>>> {
+  const value = (name: string): string | undefined => {
+    const matches = Object.entries(environment)
+      .filter(([key]) => key.toLowerCase() === name.toLowerCase())
+      .map(([, candidate]) => candidate);
+    return new Set(matches).size === 1 ? matches[0] : undefined;
+  };
+  const systemRoot = value("SystemRoot") ?? value("windir");
+  if (!systemRoot || !isAbsolute(systemRoot)) {
+    throw new Error("Portable Windows process launch requires an injected absolute SystemRoot.");
+  }
+  const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const taskkill = join(systemRoot, "System32", "taskkill.exe");
+  if (!existsSync(powershell) || !existsSync(taskkill)) {
+    throw new Error("Portable Windows process launch requires exact injected Windows helper identities.");
+  }
+  return Object.freeze({
+    windowsTreeInspector: Object.freeze({ command: powershell }),
+    windowsControlInspector: Object.freeze({ command: powershell }),
+    windowsBirthInspector: Object.freeze({ command: powershell }),
+    windowsTaskkill: Object.freeze({ command: taskkill }),
+  });
+}
+
 function launchResult(identity: Identity, startedAt: string) {
   return {
     opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),

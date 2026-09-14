@@ -14,6 +14,7 @@ import {
   classifyNativeBuildRecoveryError,
   NativeBuildFactory,
   preflightRecoveredRunnerCapabilities,
+  snapshotNativeBuildAmbientEnvironment,
 } from "./native-build-factory.js";
 import {
   NativeBuildManager,
@@ -91,10 +92,12 @@ async function main(): Promise<void> {
     const artifactDirectory = join(options.stateDirectory, "artifacts");
     await mkdir(artifactDirectory, { recursive: true });
     const artifacts = new ArtifactStore(artifactDirectory);
+    const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
     const executionHost = createExecutionHost({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
       artifacts,
+      ambientEnvironment,
     });
     resources.executionHost = executionHost;
     const internalExecutionContext = createRunnerInternalExecutionContext({

@@ -1,0 +1,377 @@
+{
+  "acceptedAt": "2026-09-14T11:28:06.4091434Z",
+  "baseHead": "f48da929f0c4f94d2cd70c092812be39fcd7da37",
+  "branch": "codex/runner-v2-robust-build",
+  "providerInventory": {
+    "transportUnion": [
+      "account-runner",
+      "openai-compatible",
+      "anthropic",
+      "google"
+    ],
+    "modelFactories": [
+      "AccountRunnerModel",
+      "OpenAICompatibleModel",
+      "AnthropicModel",
+      "GoogleModel"
+    ],
+    "configEntryPoint": "runner-v2/src/provider-config-store.ts",
+    "factoryEntryPoint": "runner-v2/src/native-build-factory.ts",
+    "localChildTransport": false
+  },
+  "acceptedFiles": [
+    {
+      "path": "runner-v2/src/cli.ts",
+      "sha256": "4498a21aa2e2e318e6cbb2ed23bc7b335ac832239dfb42effdcbfe6cb3ee4028"
+    },
+    {
+      "path": "runner-v2/src/execution-host.ts",
+      "sha256": "fa639cd62e7fc3637d7ec7427dcb2e367051d6cf5334118ce23ff3eadda24e67"
+    },
+    {
+      "path": "runner-v2/src/final-verification-profile.ts",
+      "sha256": "b7c0f64fd249ec06c312702bb24267f10ce321527d3c1339c44644ea5d0dc05f"
+    },
+    {
+      "path": "runner-v2/src/final-verification-runtime.ts",
+      "sha256": "06954d6e93c42488993e9e71b5bc0cb65fdbbe569c820a2087f759d3163352dd"
+    },
+    {
+      "path": "runner-v2/src/native-build-factory.ts",
+      "sha256": "4ecd74392ae1244e3755dfcb63a5b309007174a71acb9c5f25c16138d264ddd4"
+    },
+    {
+      "path": "runner-v2/src/native-process-backend.ts",
+      "sha256": "d45f09b2a356b0ba40df9552c7469c30d3db658885074934fab8920bc60b1658"
+    },
+    {
+      "path": "runner-v2/src/portable-process-child.mjs",
+      "sha256": "82a8aaf211706bd83d2ec6e272adc2a59c79e20aa3ebf57b5396ec64045c071d"
+    },
+    {
+      "path": "runner-v2/src/portable-process-supervisor.mjs",
+      "sha256": "1b49367fcdd6ba84a8ef83512e7c02ae06bc2ef8f76e6ef2d97316ac2110190f"
+    },
+    {
+      "path": "runner-v2/src/runner-internal-execution-context.ts",
+      "sha256": "e4ffef0d2a0994471b579306b242862d26d7574959e163888f67a26f6f6a2901"
+    },
+    {
+      "path": "runner-v2/src/windows-process-backend.ts",
+      "sha256": "e5e43584d749684f490a3cf8dc3eb2d3541711961df93798739452c987688e97"
+    },
+    {
+      "path": "runner-v2/src/windows-process-semantic-probes.ts",
+      "sha256": "1cad8eb09788c0094b1cf909b5766a732bfb312a26dfb1e083204c73c5e1f57b"
+    },
+    {
+      "path": "runner-v2/test/execution-host.test.ts",
+      "sha256": "7d94e1ea144548fb461a2a77b83be74a1cf88fdcb5c5e591145e96143ab11d3e"
+    },
+    {
+      "path": "runner-v2/test/final-verification-managed-authority.test.ts",
+      "sha256": "cdb551fc4db000641d1b5420713e8ca8da4b040a3c6e3515b32adb163f0e3b10"
+    },
+    {
+      "path": "runner-v2/test/native-build-capabilities.test.ts",
+      "sha256": "cac73dfb22c8e18affabfcc625c6e70775ea85545a56e2ad39ae523120de76b7"
+    },
+    {
+      "path": "runner-v2/test/native-final-verification-factory.test.ts",
+      "sha256": "4b7cf08337c8c0d28eee1699afb7bd9d03d5cb7482bb3db4528ce3af076453fa"
+    },
+    {
+      "path": "runner-v2/test/process-host-semantic-probes.test.ts",
+      "sha256": "e534da11f29720bd28151271b4724190419dd85ffa279ce3fe9acaa4d009447d"
+    },
+    {
+      "path": "runner-v2/test/runner-internal-execution-context.test.ts",
+      "sha256": "2e208d40ba5e129796b91c39bd25037b303803cbc7768873b9fca3825e05beee"
+    },
+    {
+      "path": "runner-v2/test/support/windows-fixture-job.ts",
+      "sha256": "22ce4cc9a495bd4f38b58ae016c53d07d95f2284c34f77d6dd1f6aaefd005952"
+    },
+    {
+      "path": "runner-v2/test/windows-process-backend.test.ts",
+      "sha256": "f3086d446c73cffc2625f3b1808b46dc82bf9022882bd26ec1ee943c7ed08b9e"
+    },
+    {
+      "path": "runner-v2/test/task8-raw-launch-closure.test.ts",
+      "sha256": "e939d9bfeebc080e39f53958e55ea9f3a494835ea0f34d7d343e0f064cf5428e"
+    }
+  ],
+  "acceptedRuns": [
+    {
+      "id": "raw-launch-final-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "runner-internal-focused-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 8,
+      "retainedRoots": []
+    },
+    {
+      "id": "process-host-semantic-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 34,
+      "retainedRoots": []
+    },
+    {
+      "id": "windows-process-backend-final",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 65,
+      "retainedRoots": []
+    },
+    {
+      "id": "native-final-verification-green5",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 6,
+      "retainedRoots": []
+    },
+    {
+      "id": "final-managed-call-scope-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": []
+    },
+    {
+      "id": "job-semantic-attestation-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": []
+    },
+    {
+      "id": "windows-helper-binding-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": []
+    },
+    {
+      "id": "focused-execution-host-final",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 3,
+      "retainedRoots": []
+    },
+    {
+      "id": "cim-unknown-green2",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": []
+    },
+    {
+      "id": "typecheck-acceptance",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "eslint-acceptance",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "diff-check-acceptance",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    }
+  ],
+  "mutationReds": [
+    {
+      "id": "mutation-aliased-execFile",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-aliased-spawn",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-ambient-env",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-dynamic-import",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-fork",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-member-kill",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-namespace-alias",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-ps1-launcher",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-shell-flag",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    },
+    {
+      "id": "mutation-taskkill",
+      "exitCode": 1,
+      "inputsUnchanged": true
+    }
+  ],
+  "restoredGuard": {
+    "id": "mutations-restored-green",
+    "startedAt": "2026-09-14T09:51:05.596Z",
+    "finishedAt": "2026-09-14T09:51:07.637Z",
+    "wrapperPid": 33400,
+    "testPid": 36340,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 434,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/task8-raw-launch-closure.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "broadDiagnostic": {
+    "run": "affected-final",
+    "passed": 274,
+    "failed": 4,
+    "note": "All four failures were stale test-boundary assumptions; repaired surfaces are current-source GREEN in runner-internal-focused-green, raw-launch-final-green, windows-process-backend-final. All other broad tests passed against the accepted product source."
+  },
+  "protected": {
+    "head": "f48da929f0c4f94d2cd70c092812be39fcd7da37",
+    "branch": "codex/runner-v2-robust-build",
+    "protected": 1875,
+    "driftCount": 0,
+    "missingCount": 0,
+    "drift": [],
+    "missing": [],
+    "index": null
+  },
+  "failedEvidenceRoots": [
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-capabilities-execution-host-mcp-order-hoTZca",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-recycled-tree-XnCMfy",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-stale-parent-edge-EMasui",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-watchdog-GSCdXn",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-adaptive-cim-93bc4i",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-control-watchdog-2hEzKQ",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-taskkill-watchdog-tDAfbz",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-taskkill-retry-IlTFyl",
+      "exists": true
+    },
+    {
+      "run": "affected-current",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-empty-cCXMnh",
+      "exists": true
+    },
+    {
+      "run": "affected-final",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-tree-9j7jqL",
+      "exists": true
+    },
+    {
+      "run": "affected-final",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-unknown-AdWfQ9",
+      "exists": true
+    },
+    {
+      "run": "cim-unknown-green",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-unknown-chnOxX",
+      "exists": true
+    },
+    {
+      "run": "final-managed-call-scope-red",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-g9hhfj",
+      "exists": true
+    },
+    {
+      "run": "native-build-composition-green",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-capabilities-execution-host-mcp-order-EXw1hU",
+      "exists": true
+    },
+    {
+      "run": "windows-helper-green2",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-stale-parent-edge-XSA1cr",
+      "exists": true
+    },
+    {
+      "run": "windows-helper-path-green",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-stale-parent-edge-CDS0Nl",
+      "exists": true
+    },
+    {
+      "run": "windows-helper-path-red",
+      "root": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-stale-parent-edge-EbC5K5",
+      "exists": true
+    }
+  ],
+  "currentIndex": []
+}

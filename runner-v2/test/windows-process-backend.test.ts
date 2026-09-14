@@ -592,11 +592,13 @@ test("omitted Windows semantic facts fail closed and service presence alone cann
     jobObjects: { service },
     semanticFacts: unavailableFacts,
   }) instanceof WindowsProcessBackend);
-  assert.ok(createWindowsProcessBackend({
+  const verifiedJob = createWindowsProcessBackend({
     jobObjects: { service },
     semanticFacts: { portableDuplex: "verified", windowsBatchArgv: "verified", exactTreeBirth: "partial", jobContainment: "verified" },
-  }) instanceof WindowsJobObjectProcessBackend);
-  assert.equal(activeProbes, 1, "selection consumes the independently settled active-probe fact");
+  });
+  assert.ok(verifiedJob instanceof WindowsJobObjectProcessBackend);
+  assert.doesNotReject(async () => await verifiedJob.probe(), "a backend selected by a verified Job fact must retain that run-scoped attestation");
+  assert.equal(activeProbes, 1, "selection consumes the independently settled active-probe fact exactly once");
 
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-unattested-batch-"));
   const shim = join(root, "argv.cmd");
@@ -1174,9 +1176,11 @@ test("Windows supervisor treats unavailable CIM inspection as unknown and ignore
     environment: fixtureEnvironment(),
     platform: "windows",
     pollIntervalMs: 20,
+    windowsTreeInspector: { command: join(root, "missing-cim-inspector.exe") },
+    windowsControlInspector: { command: join(root, "missing-cim-inspector.exe") },
   })).toString("base64url");
   const child = await spawnContainedWindowsFixture(root, process.execPath, [supervisor, encoded], {
-    env: { ...process.env, Path: root, PATH: root },
+    env: { ...fixtureEnvironment(), Path: root, PATH: root },
     stdio: "ignore",
     windowsHide: true,
   });
@@ -1185,10 +1189,11 @@ test("Windows supervisor treats unavailable CIM inspection as unknown and ignore
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const state = await waitForPortableState(directory, (value) => value.status === "outcome_unknown");
-    assert.equal(state.launchEffect, "unknown");
-    assert.equal(state.rootProcess, null);
-    assert.deepEqual(state.knownProcesses, []);
-    writeFileSync(join(directory, "control.json"), JSON.stringify({ revision: 1, action: "force_terminate" }));
+    assert.equal(state.launchEffect, "started");
+    assert.ok(state.rootProcess, "exact root birth remains durable even when later tree inventory becomes unavailable");
+    assert.deepEqual(state.knownProcesses, [state.rootProcess]);
+    const currentFence = JSON.parse(readFileSync(join(directory, "fence.json"), "utf8")) as { ownerId: string; fencingToken: number };
+    writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ...currentFence, sequence: 1, action: "force_terminate" }));
     await new Promise((resolve) => setTimeout(resolve, 100));
     const afterControl = await waitForPortableState(directory, () => true);
     assert.equal(afterControl.handledControl, 0);
@@ -1729,9 +1734,24 @@ test("Windows portable fixture supervisor argv excludes ambient credential senti
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { supervisorPid: number };
     const commandLine = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${identity.supervisorPid}';$p.CommandLine`], { encoding: "utf8", windowsHide: true }).trim();
     const encoded = /\s([A-Za-z0-9_-]+)\s*$/.exec(commandLine)?.[1]; assert.ok(encoded);
-    const config = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as { environment: Record<string, string> };
+    const config = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+      environment: Record<string, string>;
+      windowsTreeInspector?: { command?: string };
+      windowsControlInspector?: { command?: string };
+      windowsBirthInspector?: { command?: string };
+      windowsTaskkill?: { command?: string };
+    };
     assert.equal(Object.keys(config.environment).some((name) => name.toLowerCase() === key.toLowerCase()), false);
     assert.equal(Object.values(config.environment).includes(value), false);
+    const systemRoot = Object.entries(config.environment).find(([name]) => name.toLowerCase() === "systemroot")?.[1]
+      ?? Object.entries(config.environment).find(([name]) => name.toLowerCase() === "windir")?.[1];
+    assert.ok(systemRoot, "the injected Windows environment must identify its system root");
+    const expectedPowerShell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toLowerCase();
+    const expectedTaskkill = join(systemRoot, "System32", "taskkill.exe").toLowerCase();
+    assert.equal(config.windowsTreeInspector?.command?.toLowerCase(), expectedPowerShell);
+    assert.equal(config.windowsControlInspector?.command?.toLowerCase(), expectedPowerShell);
+    assert.equal(config.windowsBirthInspector?.command?.toLowerCase(), expectedPowerShell);
+    assert.equal(config.windowsTaskkill?.command?.toLowerCase(), expectedTaskkill);
   } finally {
     try { if (binding) await cleanupWindowsProcessFixture(backend, binding, fence); }
     finally { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; }

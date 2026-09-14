@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: Task 8 production tree has no raw execution or ambient environment escape outside exact hosts
+ok 1 - Task 8 production tree has no raw execution or ambient environment escape outside exact hosts
+  ---
+  duration_ms: 684.807
+  type: 'test'
+  ...
+# Subtest: Task 8 configured provider inventory has no local child-process transport
+ok 2 - Task 8 configured provider inventory has no local child-process transport
+  ---
+  duration_ms: 2.9217
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1500.2717

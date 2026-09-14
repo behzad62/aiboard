@@ -9,8 +9,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
-  createRunnerInternalExecutionContext,
+  createRunnerInternalExecutionContext as createRunnerInternalExecutionContextProduction,
 } from "../src/runner-internal-execution-context.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { runnerRunStateSegment } from "../src/run-state-identity.js";
 import type {
   RunnerInternalOwnedProcess,
@@ -18,6 +19,12 @@ import type {
 } from "../src/runner-internal-process-kernel.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const createRunnerInternalExecutionContext = (
+  input: Parameters<typeof createRunnerInternalExecutionContextProduction>[0],
+) => createRunnerInternalExecutionContextProduction({
+  ...input,
+  ambientEnvironment: input.ambientEnvironment ?? snapshotNativeBuildAmbientEnvironment(),
+});
 
 test("static MCP attestation spawns nothing and ephemeral discovery cannot call tools or leak a live channel", async () => {
   const root = await mkdtemp(join(tmpdir(), "runner-internal-context-"));

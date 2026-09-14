@@ -1,0 +1,74 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-context-QlkyA4"}
+# Subtest: static MCP attestation spawns nothing and ephemeral discovery cannot call tools or leak a live channel
+ok 1 - static MCP attestation spawns nothing and ephemeral discovery cannot call tools or leak a live channel
+  ---
+  duration_ms: 8183.8327
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-tree-jU7HFY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-run-state-B6BJxa"}
+# Subtest: MCP discovery verifies descendant cleanup before reporting cleanupVerified
+ok 2 - MCP discovery verifies descendant cleanup before reporting cleanupVerified
+  ---
+  duration_ms: 28873.3779
+  type: 'test'
+  ...
+# Subtest: MCP discovery uses the canonical collision-resistant run state segment
+ok 3 - MCP discovery uses the canonical collision-resistant run state segment
+  ---
+  duration_ms: 10.0541
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-line-bound-zfMLKB"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-principals-s76iPh"}
+# Subtest: MCP discovery enforces its response line bound while bytes arrive
+ok 4 - MCP discovery enforces its response line bound while bytes arrive
+  ---
+  duration_ms: 21957.2726
+  type: 'test'
+  ...
+# Subtest: Git preflight and MCP discovery use distinct closed internal principals
+ok 5 - Git preflight and MCP discovery use distinct closed internal principals
+  ---
+  duration_ms: 8.6485
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-discovery-retry-5ir96H"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-context-retry-pHIWul"}
+# Subtest: MCP discovery retains a transient cleanup failure for an exact executor retry
+ok 6 - MCP discovery retains a transient cleanup failure for an exact executor retry
+  ---
+  duration_ms: 124.8506
+  type: 'test'
+  ...
+# Subtest: Runner internal context retries a transient owned-kernel close failure
+ok 7 - Runner internal context retries a transient owned-kernel close failure
+  ---
+  duration_ms: 3.0926
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-shell-command-LXy71c"}
+# Subtest: static MCP attestation refuses shell-dependent commands before any pre-run effect
+ok 8 - static MCP attestation refuses shell-dependent commands before any pre-run effect
+  ---
+  duration_ms: 4.0353
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-context-QlkyA4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-tree-jU7HFY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-run-state-B6BJxa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-line-bound-zfMLKB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-principals-s76iPh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-discovery-retry-5ir96H","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-context-retry-pHIWul","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-internal-shell-command-LXy71c","existsAtExit":false}
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 60997.9079

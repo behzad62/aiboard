@@ -30,7 +30,7 @@ const WINDOWS_PROBE_ENVIRONMENT_KEYS = Object.freeze([
 
 /** Build the complete environment encoded into a semantic-probe supervisor request. */
 export function minimalWindowsSemanticProbeEnvironment(
-  inherited: Readonly<Record<string, string | undefined>> = process.env,
+  inherited: Readonly<Record<string, string | undefined>> = {},
   explicit: Readonly<Record<string, string>> = {},
 ): Record<string, string> {
   const environment: Record<string, string> = {};
@@ -44,7 +44,7 @@ export function minimalWindowsSemanticProbeEnvironment(
 }
 
 /** Live, independently callable Windows probes. Callers should cache their settled facts. */
-export function createWindowsProcessSemanticProbeSource(options: { readonly deadlineMs?: number; readonly cleanupDeadlineMs?: number } = {}): Pick<ProcessHostSemanticProbeSource,
+export function createWindowsProcessSemanticProbeSource(options: { readonly deadlineMs?: number; readonly cleanupDeadlineMs?: number; readonly ambientEnvironment?: Readonly<Record<string, string | undefined>> } = {}): Pick<ProcessHostSemanticProbeSource,
   "portableDuplex" | "windowsBatchArgv" | "exactTreeBirth"> {
   // Each portable fixture performs Windows process inventory. Serialize the
   // one-time probes so capability discovery cannot create an inventory storm.
@@ -55,10 +55,11 @@ export function createWindowsProcessSemanticProbeSource(options: { readonly dead
     return result;
   };
   const cleanupDeadlineMs = options.cleanupDeadlineMs ?? PROBE_DEADLINE_MS;
+  const ambientEnvironment = options.ambientEnvironment ?? {};
   return Object.freeze({
-    portableDuplex: async () => await serialize(async () => await probePortableDuplex(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs)),
-    windowsBatchArgv: async () => await serialize(async () => await probeWindowsBatchArgv(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs)),
-    exactTreeBirth: async () => await serialize(async () => await probeExactTreeBirth(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs)),
+    portableDuplex: async () => await serialize(async () => await probePortableDuplex(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment)),
+    windowsBatchArgv: async () => await serialize(async () => await probeWindowsBatchArgv(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment)),
+    exactTreeBirth: async () => await serialize(async () => await probeExactTreeBirth(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment)),
   });
 }
 
@@ -68,7 +69,7 @@ function remainingProbeDeadlineMs(deadline: number): number {
   return remaining;
 }
 
-async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number): Promise<boolean> {
+async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
   return await withPortableProbe("duplex", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
@@ -76,6 +77,7 @@ async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number
       workspace,
       process.execPath,
       ["-e", "process.stdin.on('data',b=>process.stdout.write(Buffer.concat([Buffer.from('probe:'),b])));process.stdin.on('end',()=>process.exit(0))"],
+      ambientEnvironment,
     )));
     const binding = own(bindingFor(launch));
     remainingProbeDeadlineMs(deadline);
@@ -107,7 +109,7 @@ async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number
   });
 }
 
-async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: number): Promise<boolean> {
+async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
   return await withPortableProbe("batch", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
@@ -116,7 +118,7 @@ async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: numb
     writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n", { mode: 0o600 });
     writeFileSync(shim, "@echo off\r\n\"%NODE_EXE%\" \"%PROBE_SCRIPT%\" %*\r\n", { mode: 0o600 });
     const expected = ["space value", "literal-value"];
-    const launch = parseProcessLaunchResult(await backend.launch(request(workspace, shim, expected, {
+    const launch = parseProcessLaunchResult(await backend.launch(request(workspace, shim, expected, ambientEnvironment, {
       NODE_EXE: process.execPath,
       PROBE_SCRIPT: script,
     })));
@@ -140,13 +142,13 @@ async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: numb
   });
 }
 
-async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number): Promise<"partial" | false> {
+async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>): Promise<"partial" | false> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
   return await withPortableProbe<"partial" | false>("tree", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
     const child = "setTimeout(()=>process.exit(0),4000)";
     const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),4000)`;
-    const launch = parseProcessLaunchResult(await backend.launch(request(workspace, process.execPath, ["-e", parent])));
+    const launch = parseProcessLaunchResult(await backend.launch(request(workspace, process.execPath, ["-e", parent], ambientEnvironment)));
     const binding = own(bindingFor(launch));
     remainingProbeDeadlineMs(deadline);
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
@@ -644,7 +646,13 @@ async function waitForPortableTerminal(
   }
 }
 
-function request(workspace: string, executable: string, args: readonly string[], extraEnvironment: Readonly<Record<string, string>> = {}): ProcessLaunchRequest {
+function request(
+  workspace: string,
+  executable: string,
+  args: readonly string[],
+  ambientEnvironment: Readonly<Record<string, string | undefined>>,
+  extraEnvironment: Readonly<Record<string, string>> = {},
+): ProcessLaunchRequest {
   const invocationId = `windows-semantic-${randomUUID()}`;
   return {
     intent: {
@@ -657,7 +665,7 @@ function request(workspace: string, executable: string, args: readonly string[],
       requestedCapabilities: ["tree_termination", "verified_emptiness"],
     },
     grant: { grantId: randomUUID(), runId: "windows-semantic-probe", invocationId, issuedAt: new Date().toISOString(), access: [] },
-    environment: minimalWindowsSemanticProbeEnvironment(process.env, extraEnvironment),
+    environment: minimalWindowsSemanticProbeEnvironment(ambientEnvironment, extraEnvironment),
     outputOwnerId: "windows-semantic-probe",
     fence: FENCE,
   };

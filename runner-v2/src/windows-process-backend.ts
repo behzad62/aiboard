@@ -67,7 +67,11 @@ export class WindowsProcessBackend extends NativeOwnedProcessBackend {
 
 export function createWindowsProcessBackend(options: WindowsProcessBackendOptions = {}): ProcessBackend {
   return options.jobObjects && options.jobObjects !== "unavailable" && options.semanticFacts?.jobContainment === "verified"
-    ? new WindowsJobObjectProcessBackend(options.jobObjects.service, options.semanticFacts?.windowsBatchArgv)
+    ? new WindowsJobObjectProcessBackend(
+        options.jobObjects.service,
+        options.semanticFacts?.windowsBatchArgv,
+        options.semanticFacts.jobContainment,
+      )
     : new WindowsProcessBackend(options);
 }
 
@@ -80,9 +84,10 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   constructor(
     private readonly service: WindowsJobProcessService,
     private readonly windowsBatchArgv: ProcessHostSemanticFact = "unavailable",
+    private readonly jobContainment: ProcessHostSemanticFact = "unavailable",
   ) {}
   async probe(): Promise<unknown> {
-    if (!(await this.service.probeActiveJobCreateClose()))
+    if (this.jobContainment !== "verified" && !(await this.service.probeActiveJobCreateClose()))
       throw new Error("Authenticated Windows Job Object enhancement is unavailable.");
     return {
       attestationVersion: 1,

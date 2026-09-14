@@ -212,7 +212,7 @@ function resolveWindowsArgvLaunch(command, args, cwd, environment) {
   for (const argument of args) {
     if (/["%!^&|<>()\r\n]/.test(argument)) throw new Error("Unsafe .cmd/.bat argument rejected before launch.");
   }
-  const systemRoot = environment.SystemRoot ?? environment.SYSTEMROOT ?? process.env.SystemRoot;
+  const systemRoot = environment.SystemRoot ?? environment.SYSTEMROOT;
   const powershell = systemRoot ? join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "";
   if (!powershell || !existsSync(powershell)) throw new Error("Windows PowerShell is required for argv-only batch launch.");
   const payload = Buffer.from(JSON.stringify({ command: resolved, args })).toString("base64");

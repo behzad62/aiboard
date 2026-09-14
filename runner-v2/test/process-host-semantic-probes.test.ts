@@ -14,6 +14,7 @@ import {
   type ProcessHostSemanticProbeSource,
 } from "../src/process-host-semantic-probes.js";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
   createWindowsProcessSemanticProbeSource,
   minimalWindowsSemanticProbeEnvironment,
@@ -197,7 +198,7 @@ test("the healthy active Job probe still verifies real create-and-close semantic
 test("live Windows construction consumes semantic facts and keeps portable fallback after active Job failure", () => {
   const factory = readFileSync(new URL("../src/native-build-factory.ts", import.meta.url), "utf8");
   assert.match(factory, /probeProcessHostSemantics\(/);
-  assert.match(factory, /activeJobCreateClose:\s*async\s*\(\)\s*=>\s*await managedProcesses\.probeActiveJobCreateClose\(\)/);
+  assert.match(factory, /activeJobCreateClose:\s*async\s*\(\)\s*=>\s*await windowsJobHost\.probeActiveJobCreateClose\(\)/);
   assert.match(factory, /selectWindowsProcessBackendKinds\(windowsFacts\)/);
   assert.match(factory, /windowsBackendKinds\.has\(["']job["']\)/);
   assert.match(factory, /windowsBackendKinds\.has\(["']portable["']\)/);
@@ -238,7 +239,7 @@ test("Windows semantic probes exclude unrelated ambient credentials from the enc
 
 test("live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows semantic fixtures require Windows."); return; }
-  const active = createWindowsProcessSemanticProbeSource();
+  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
   const portableDuplex = await active.portableDuplex();
   const windowsBatchArgv = await active.windowsBatchArgv();
   const exactTreeBirth = await active.exactTreeBirth();
@@ -274,10 +275,11 @@ test("a timed-out live duplex probe tears down its channel, process, and owned r
   if (process.platform !== "win32") { t.skip("Windows semantic timeout fixture requires Windows."); return; }
   const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
   const startedAt = Date.now();
-  const bounded = createWindowsProcessSemanticProbeSource({ deadlineMs: 50, cleanupDeadlineMs: 15_000 });
+  const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+  const bounded = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 50, cleanupDeadlineMs: 15_000 });
   await assert.rejects(bounded.portableDuplex(), /timed out/i);
   assert.ok(Date.now() - startedAt < 1_000, "the positive operation deadline must bound prewarming and startup");
-  const active = createWindowsProcessSemanticProbeSource({ deadlineMs: 0 });
+  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 0 });
   await assert.rejects(active.portableDuplex(), /timed out/i);
   await new Promise((resolve) => setTimeout(resolve, 100));
   const after = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
@@ -826,13 +828,14 @@ test("extracted Windows Job host is concrete and the transitive backend path is 
   const backend = readFileSync(new URL("../src/windows-process-backend.ts", import.meta.url), "utf8");
   const host = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
   const managed = readFileSync(new URL("../src/managed-process.ts", import.meta.url), "utf8");
+  const executionHost = readFileSync(new URL("../src/execution-host.ts", import.meta.url), "utf8");
 
   assert.match(host, /class AuthenticatedWindowsJobProcessHost/);
   assert.match(host, /spawn\(/);
   assert.match(host, /private readonly records/);
   assert.doesNotMatch(host, /from\s+["'][^"']*managed-process(?:\.js)?["']|agent-contracts|AgentActor|ToolExecutionContext|role:\s*["']worker["']/);
-  assert.doesNotMatch(managed, /implements WindowsJobProcessHost|internalOwnershipContext|launchOwnedMechanics|signalOwnedMechanics|reconcileOwnedMechanics|releaseOwnedMechanics|readOwnedOutputMechanics/);
-  assert.match(managed, /createWindowsJobProcessHost\(/);
+  assert.doesNotMatch(managed, /implements WindowsJobProcessHost|internalOwnershipContext|launchOwnedMechanics|signalOwnedMechanics|reconcileOwnedMechanics|releaseOwnedMechanics|readOwnedOutputMechanics|createWindowsJobProcessHost\(/);
+  assert.match(executionHost, /createWindowsJobProcessHost\(/);
   assert.match(backend, /WindowsJobProcessHost/);
 });
 

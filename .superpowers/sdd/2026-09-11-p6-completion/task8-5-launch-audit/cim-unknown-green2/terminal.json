@@ -1,0 +1,25 @@
+{
+  "id": "cim-unknown-green2",
+  "startedAt": "2026-09-14T11:21:46.730Z",
+  "finishedAt": "2026-09-14T11:21:50.344Z",
+  "wrapperPid": 47484,
+  "testPid": 6864,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^Windows supervisor treats unavailable CIM inspection as unknown and ignores destructive control$",
+    "runner-v2/test/windows-process-backend.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

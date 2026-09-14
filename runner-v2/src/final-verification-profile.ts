@@ -58,6 +58,7 @@ export class FinalVerificationProfileAuthority {
     stateDirectory: string;
     runId: string;
     portAuthority?: FinalVerificationPortAuthority;
+    ambientEnvironment?: Readonly<Record<string, string | undefined>>;
   }) {
     this.stateDirectory = resolve(options.stateDirectory);
     if (!options.runId.trim()) throw new Error("Final verification profile authority requires a runId.");
@@ -72,6 +73,7 @@ export class FinalVerificationProfileAuthority {
     try {
       const inspected = await inspectFinalVerificationExecutionProfile({
         ...input,
+        ambientEnvironment: this.options.ambientEnvironment ?? {},
         ...(this.options.portAuthority ? {
           reservePort: async () => {
             const reservation = await this.options.portAuthority!.reserveDetailed(
@@ -194,6 +196,7 @@ export async function inspectFinalVerificationExecutionProfile(options: {
   targetRevision: string;
   execute?: GitRunner;
   reservePort?: () => Promise<FinalVerificationPortLease>;
+  ambientEnvironment?: Readonly<Record<string, string | undefined>>;
 }): Promise<FinalVerificationExecutionProfile> {
   const repositoryRoot = resolve(options.repositoryRoot);
   const execute = options.execute ?? unavailableGitRunner;
@@ -227,7 +230,7 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     ...recordOfStrings(manifest?.devDependencies),
     ...recordOfStrings(manifest?.optionalDependencies),
   };
-  const packageExecution = packageExecutionProfile(repositoryRoot, manifest, dependencies);
+  const packageExecution = packageExecutionProfile(repositoryRoot, manifest, dependencies, options.ambientEnvironment ?? {});
   const packageManager = packageExecution.invocation;
   const detectedSignals: FinalVerificationDetectedSignal[] = [];
   const commands: FinalVerificationExecutionProfile["commands"] = {};
@@ -347,8 +350,13 @@ export function assertFinalVerificationExecutionProfile(
   }
 }
 
-function npmInvocation(): { executable: string; args: string[] } {
-  const npmCli = process.env.npm_execpath?.trim();
+function environmentValue(environment: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
+  const matches = Object.entries(environment).filter(([key, value]) => key.toLowerCase() === name.toLowerCase() && typeof value === "string").map(([, value]) => value!);
+  return new Set(matches).size === 1 ? matches[0] : undefined;
+}
+
+function npmInvocation(environment: Readonly<Record<string, string | undefined>>): { executable: string; args: string[] } {
+  const npmCli = environmentValue(environment, "npm_execpath")?.trim();
   if (npmCli && /(?:npm|npx)-cli\.js$/i.test(npmCli)) {
     if (!existsSync(resolve(npmCli))) throw new Error("Declared npm package manager is unavailable to Runner V2.");
     return { executable: process.execPath, args: [resolve(npmCli)] };
@@ -361,12 +369,15 @@ function npmInvocation(): { executable: string; args: string[] } {
   };
 }
 
-function packageManagerInvocation(manager: FinalVerificationPackageManager): {
+function packageManagerInvocation(
+  manager: FinalVerificationPackageManager,
+  environment: Readonly<Record<string, string | undefined>>,
+): {
   executable: string;
   args: string[];
 } {
-  if (manager === "npm") return npmInvocation();
-  const activeCli = process.env.npm_execpath?.trim();
+  if (manager === "npm") return npmInvocation(environment);
+  const activeCli = environmentValue(environment, "npm_execpath")?.trim();
   if (activeCli) {
     const activeName = basename(activeCli).toLowerCase();
     if (activeName === manager || activeName === `${manager}.js` || activeName === `${manager}.cjs`) {
@@ -387,6 +398,7 @@ function packageExecutionProfile(
   repositoryRoot: string,
   manifest: Record<string, unknown> | undefined,
   dependencies: Record<string, string>,
+  environment: Readonly<Record<string, string | undefined>>,
 ): {
   invocation: { executable: string; args: string[] };
   lockfile?: string;
@@ -409,7 +421,7 @@ function packageExecutionProfile(
     throw new Error("packageManager and lockfile disagree; final verification refuses to guess.");
   }
   const manager = declared?.name ?? lockedManager ?? "npm";
-  const invocation = packageManagerInvocation(manager);
+  const invocation = packageManagerInvocation(manager, environment);
   if (Object.keys(dependencies).length === 0 && present.length === 0) return { invocation };
   const lockfile = preferredLockfile(present, manager);
   if (!lockfile) {

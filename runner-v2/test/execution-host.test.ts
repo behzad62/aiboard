@@ -9,6 +9,7 @@ import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { ExecutionGrantError } from "../src/execution-grants.js";
 import { outputFor } from "../src/one-shot-command-executor.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -301,16 +302,16 @@ test("one ExecutionHost creates isolated per-run grants stores runtimes and clea
 
 test("ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings", async () => {
   const fixture = await hostFixture();
-  const original = process.env.B3_HOST_TEST_VALUE;
+  const ambientEnvironment = { B3_HOST_TEST_VALUE: "before" };
   try {
-    process.env.B3_HOST_TEST_VALUE = "before";
     const host = createExecutionHost({
       projectRoot: fixture.project,
       stateDirectory: fixture.state,
       artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       platform: "posix",
+      ambientEnvironment,
     });
-    process.env.B3_HOST_TEST_VALUE = "after";
+    ambientEnvironment.B3_HOST_TEST_VALUE = "after";
     assert.equal(host.filteredEnvironmentSource().B3_HOST_TEST_VALUE, "before");
     const binding = await host.bindRun(runBinding("run-one", "c"));
     await assert.rejects(host.bindRun(runBinding("run-one", "c")), /already has a live execution binding/);
@@ -319,8 +320,6 @@ test("ExecutionHost captures one filtered ambient source and rejects duplicate l
     assert.notEqual(rebound.snapshot().bindingId, binding.snapshot().bindingId);
     await host.close();
   } finally {
-    if (original === undefined) delete process.env.B3_HOST_TEST_VALUE;
-    else process.env.B3_HOST_TEST_VALUE = original;
     await fixture.close();
   }
 });
@@ -501,6 +500,7 @@ test("two real concurrent run bindings cannot cross grants outputs or cleanup ef
     projectRoot: fixture.project,
     stateDirectory: fixture.state,
     artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
+    ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
   });
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {

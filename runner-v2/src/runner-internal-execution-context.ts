@@ -154,7 +154,7 @@ export function createRunnerInternalExecutionContext(
   const projectDirectory = absoluteRoot(options.projectDirectory, "projectDirectory");
   const stateDirectory = absoluteRoot(options.stateDirectory, "stateDirectory");
   const environment = filteredInternalEnvironment(
-    options.ambientEnvironment ?? process.env,
+    options.ambientEnvironment ?? {},
   );
   const contextId = `runner-internal-${randomUUID()}`;
   const processKernel = options.processKernel ?? createRunnerInternalProcessKernel({

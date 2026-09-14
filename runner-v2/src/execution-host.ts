@@ -171,7 +171,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   }
   const platform = options.platform ?? (process.platform === "win32" ? "windows" : "posix");
   const ambientEnvironment = snapshotFilteredEnvironment(
-    options.ambientEnvironment ?? process.env,
+    options.ambientEnvironment ?? {},
   );
   const hostId = `execution-host-${randomUUID()}`;
   const managedProcesses = options.managedProcesses ?? new ManagedProcessService({
@@ -204,7 +204,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   const resolveWindowsFacts = async (): Promise<ProcessHostSemanticFacts> => {
     if (options.processHostFacts) return options.processHostFacts;
     return await (windowsFactsPromise ??= probeProcessHostSemantics({
-      ...createWindowsProcessSemanticProbeSource(),
+      ...createWindowsProcessSemanticProbeSource({ ambientEnvironment }),
       activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
     }));
   };
@@ -291,8 +291,10 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
             ambientEnvironment, artifacts: new ArtifactStore(join(root, "artifacts")), managedProcesses: queryProcesses, windowsJobHost, platform,
             resolveWindowsFacts: async () => {
               if (options.processHostFacts) return options.processHostFacts;
-              return await (windowsFactsPromise ??= probeProcessHostSemantics({ ...createWindowsProcessSemanticProbeSource(),
-                activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose() }));
+              return await (windowsFactsPromise ??= probeProcessHostSemantics({
+                ...createWindowsProcessSemanticProbeSource({ ambientEnvironment }),
+                activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
+              }));
             }, onClosed: () => undefined });
           if (closed) throw new Error("ExecutionHost closed before historical Git inspection.");
           result = await inspect(binding.git.lifecycle("inspection"));
@@ -682,6 +684,7 @@ async function createWindowsBackends(input: CreateRunBindingInput, runRoot: stri
       backend: new WindowsJobObjectProcessBackend(
         input.windowsJobHost,
         facts.windowsBatchArgv,
+        facts.jobContainment,
       ),
     }] : []),
     ...(kinds.has("portable") ? [{

@@ -1,0 +1,25 @@
+{
+  "id": "focused-execution-host-final",
+  "startedAt": "2026-09-14T10:22:04.238Z",
+  "finishedAt": "2026-09-14T10:22:26.345Z",
+  "wrapperPid": 33508,
+  "testPid": 40944,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^(ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings|two real concurrent run bindings cannot cross grants outputs or cleanup effects)$",
+    "runner-v2/test/execution-host.test.ts"
+  ],
+  "rootCount": 3,
+  "retainedRoots": []
+}

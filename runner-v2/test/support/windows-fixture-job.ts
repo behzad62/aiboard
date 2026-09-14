@@ -3,6 +3,7 @@ import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { snapshotNativeBuildAmbientEnvironment } from "../../src/native-build-factory.js";
 import { minimalWindowsSemanticProbeEnvironment } from "../../src/windows-process-semantic-probes.js";
 
 export interface WindowsFixtureJob {
@@ -96,8 +97,10 @@ export function observeWindowsFixtureJob(child: ChildProcessWithoutNullStreams, 
 export async function spawnContainedWindowsFixture(root: string, command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean; stdio?: unknown } = {}): Promise<WindowsFixtureJob> {
   if (process.platform !== "win32") throw new Error("The Windows fault-fixture containment helper is Windows-only.");
   const helper = fileURLToPath(new URL("../../src/managed-process-job-host.ps1", import.meta.url));
+  const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+  const fixtureEnvironment = minimalWindowsSemanticProbeEnvironment(ambientEnvironment);
   const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper], {
-    stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: minimalWindowsSemanticProbeEnvironment(),
+    stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: fixtureEnvironment,
   });
   const opening = observeWindowsFixtureJob(child, { startupTimeoutMs: 15_000, closeTimeoutMs: 15_000,
     record: (event) => appendFileSync(join(root, "fixture-job-events.jsonl"), JSON.stringify(event) + "\n"),
@@ -107,7 +110,7 @@ export async function spawnContainedWindowsFixture(root: string, command: string
   const launchedArgs = args[0] === productionSupervisor
     ? [fileURLToPath(new URL("./windows-fixture-supervisor.mjs", import.meta.url)), root, ...args]
     : args;
-  child.stdin.write(JSON.stringify({ command, args: launchedArgs, cwd: options.cwd ?? process.cwd(), env: normalizeFixtureWindowsEnvironment(options.env ?? minimalWindowsSemanticProbeEnvironment()),
+  child.stdin.write(JSON.stringify({ command, args: launchedArgs, cwd: options.cwd ?? process.cwd(), env: normalizeFixtureWindowsEnvironment(options.env ?? fixtureEnvironment),
     stdoutPath: join(root, "fixture-job-stdout.log"), stderrPath: join(root, "fixture-job-stderr.log") }) + "\n");
   return await opening;
 }

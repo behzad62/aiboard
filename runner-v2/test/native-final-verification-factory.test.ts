@@ -7,10 +7,14 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { createArchitectTools } from "../src/architect-tools.js";
+import { ArtifactStore } from "../src/artifact-store.js";
+import { createExecutionHost } from "../src/execution-host.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { FinalVerificationProfileAuthority } from "./support/git-fixture.js";
+import type { FinalVerificationExecutionProfile } from "../src/final-verification-profile.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
 import { NativeBuildFactory } from "./support/git-fixture.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";
@@ -62,10 +66,18 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
     capabilities: ["code"],
     priority: 1,
   };
+  const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+  const executionHost = createExecutionHost({
+    projectRoot: project,
+    stateDirectory: state,
+    artifacts: new ArtifactStore(join(state, "artifacts")),
+    ambientEnvironment,
+  });
   const factory = new NativeBuildFactory({
     projectRoot: project,
     stateDirectory: state,
     providerConfigs: { load: () => [config], save: () => undefined, close: () => undefined },
+    executionHost,
     baselineFor: () => baseline.revision,
   });
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
@@ -89,21 +101,26 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
     }));
     const runRoot = join(state, "builds", safeSegment(runId));
     const ports = new FinalVerificationPortAuthority(state);
-    const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId, portAuthority: ports });
+    const authority = new FinalVerificationProfileAuthority({
+      stateDirectory: state,
+      runId,
+      portAuthority: ports,
+      ambientEnvironment: executionHost.filteredEnvironmentSource(),
+    });
     scheduler = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
       validateExecutionProfile: (input) => authority.validate(input.profile, input.targetRevision),
     });
     const integration = baseline.revision;
-    const integrationPath = join(state, "integration", safeName(runId));
     seedPlanningState(scheduler, runId, integration);
+    const runtimeProfileFor = (handle.runtime as unknown as {
+      finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
+    }).finalVerificationProfileFor;
+    assert.ok(runtimeProfileFor, "production runtime must retain its owned final-verification profile callback");
     const tools = new ToolRegistry();
     for (const tool of createArchitectTools({
       store: scheduler,
       finalVerificationPlanAvailable: true,
-      finalVerificationProfileFor: async (targetRevision) => await authority.inspectAndPersist({
-        repositoryRoot: integrationPath,
-        targetRevision,
-      }),
+      finalVerificationProfileFor: runtimeProfileFor,
     })) tools.register(tool);
     const planned = await tools.invoke({
       type: "tool_call",
@@ -144,6 +161,7 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
     scheduler?.close();
     await handle?.close();
     await factory.close();
+    await executionHost.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -155,9 +173,5 @@ function seedPlanningState(store: SqliteSchedulerStore, runId: string, revision:
 
 function safeSegment(value: string): string {
   const readable = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "run";
-  return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
-}
-function safeName(value: string): string {
-  const readable = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "item";
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
 }

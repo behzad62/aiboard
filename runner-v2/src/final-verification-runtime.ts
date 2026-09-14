@@ -152,6 +152,7 @@ export interface FinalVerificationRuntimeOptions {
   actor?: AgentActor;
   attempt?: number;
   generationId?: string;
+  checkCategory?: FinalVerificationCategory;
   clock?: () => string;
   integrationRevision?: FinalVerificationRevisionSource;
   currentIntegrationRevision?: FinalVerificationRevisionSource;
@@ -371,6 +372,7 @@ export class FinalVerificationRuntime {
           permissionProfile: options.managedProcessAuthority.permissionProfile,
           runId: this.runId,
           taskId: this.taskId,
+          callScope: `${options.generationId ?? "generation"}:${options.attempt ?? 1}:${options.checkCategory ?? "check"}`,
           actor: this.actor,
         })
         : undefined);
@@ -1893,8 +1895,10 @@ export function createFinalVerificationManagedProcessAdapter(options: Readonly<{
   permissionProfile: PermissionProfile;
   runId: string;
   taskId: string;
+  callScope: string;
   actor: AgentActor;
 }>): FinalVerificationManagedProcess {
+  if (!options.callScope.trim()) throw new Error("Final verification managed call scope is required.");
   const sessionId = `final-verification:${options.taskId}`;
   const workspaces = new Map<string, string>();
   let sequence = 0;
@@ -1903,7 +1907,7 @@ export function createFinalVerificationManagedProcessAdapter(options: Readonly<{
     workspacePath: string;
     access: "read" | "write";
   }>, perform: (context: ToolExecutionContext) => Promise<T>): Promise<T> => {
-    const callId = `final-verification-managed:${options.taskId}:${++sequence}:${input.toolName}`;
+    const callId = `final-verification-managed:${options.taskId}:${options.callScope}:${++sequence}:${input.toolName}`;
     const grant = await options.executionGrants.issue({
       runId: options.runId,
       sessionId,
