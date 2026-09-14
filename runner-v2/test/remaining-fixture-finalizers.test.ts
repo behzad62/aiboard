@@ -6,13 +6,16 @@ import ts from "typescript";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 const fixtures = [
-  ["lsp-client.test.ts", "LSP client bounds a stalled Windows Job-host bootstrap without an unhandled rejection"],
   ["lsp-client.test.ts", "LSP client retries termination after a failed close while the server remains live"],
   ["lsp-client.test.ts", "LSP client shutdown owns and terminates language-server descendants"],
-  ["managed-process.test.ts", "supervisor startup timeout aborts and reaps a late supervisor deterministically"],
-  ["managed-process.test.ts", "controlled stop terminates a descendant after its launcher exits"],
   ["runner-internal-execution-context.test.ts", "MCP discovery verifies descendant cleanup before reporting cleanupVerified"],
 ] as const;
+
+test("Task 8.4 managed shared fixtures retain centralized certified cleanup", () => {
+  const source = readFileSync(new URL("./managed-shared-native.test.ts", import.meta.url), "utf8");
+  assert.match(source, /finalizeCertifiedFixture/);
+  assert.doesNotMatch(source, /process\.kill\([^,]+,\s*["'`]SIG(?:TERM|KILL|INT)/);
+});
 
 function executeActualFinalizer(file: string, name: string, scope: Record<string, unknown>) {
   const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");

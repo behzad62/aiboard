@@ -1,10 +1,11 @@
 import type { OutputStream } from "./bounded-output-spool.js";
-import type { BoundedOutputSpoolResult } from "./bounded-output-spool.js";
+import type { BoundedOutputObservation, BoundedOutputSpoolResult } from "./bounded-output-spool.js";
 import type { BoundedProtocolQueue } from "./bounded-protocol-queue.js";
 import type { StreamingOutputMetadata } from "./streaming-output-controller.js";
 
 export interface EvidenceSpoolSink {
   write(stream: OutputStream, bytes: Uint8Array): Promise<void>;
+  observe?(): Promise<BoundedOutputObservation>;
   finalize?(): Promise<BoundedOutputSpoolResult | unknown>;
   cleanup?(): Promise<void>;
 }
@@ -29,6 +30,10 @@ export function createProtocolEvidenceTee(options: { readonly queue: BoundedProt
       }
       try { await options.spool.write(stream, input); return Object.freeze({ evidenceLossy: false as const }); }
       catch { evidenceLossy = true; return Object.freeze({ evidenceLossy: true as const, reason: "evidence_write_failed" as const }); }
+    },
+    async observe(): Promise<BoundedOutputObservation> {
+      if (!options.spool.observe) throw new Error("Bounded evidence observation is unavailable.");
+      return await options.spool.observe();
     },
     async finalize() {
       if (!options.spool.finalize) { evidenceLossy = true; return Object.freeze({ evidenceLossy, result: undefined }); }

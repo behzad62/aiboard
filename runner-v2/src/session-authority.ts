@@ -119,6 +119,7 @@ export type SessionOperation =
   | "close_input"
   | "request"
   | "language_request"
+  | "observe"
   | "stop"
   | "graceful_shutdown"
   | "subscribe"
@@ -149,6 +150,10 @@ export interface LaunchOperationAuthorizationRequest {
 export interface SessionOperationRequest extends LaunchOperationAuthorizationRequest {
   readonly grant: OpaqueExecutionGrant;
   readonly binding: ExecutionGrantBinding;
+}
+
+export interface SessionObservationBatchRequest extends Omit<SessionOperationRequest, "sessionId" | "operation"> {
+  readonly sessionIds: readonly string[];
 }
 
 export interface OperationAuthorizationAssertion {
@@ -227,6 +232,7 @@ export interface SessionAuthority {
   }>;
   authorizeLaunchOperation(input: LaunchOperationAuthorizationRequest): SessionOperationAuthorization;
   authorizeOperation(input: SessionOperationRequest): SessionOperationAuthorization;
+  authorizeObservationBatch(input: SessionObservationBatchRequest): readonly SessionOperationAuthorization[];
   assertOperationAuthorization(
     authorization: SessionOperationAuthorization,
     expected: OperationAuthorizationAssertion,
@@ -474,10 +480,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
     },
     authorizeLaunchOperation(input: LaunchOperationAuthorizationRequest): SessionOperationAuthorization {
       const record = options.sessions.store.readBySession(input.sessionId);
-      if (!record || record.state !== "active") {
-        throw new SessionAuthorityError("session_unavailable", "Streaming session is not active.");
-      }
-      assertCurrentSessionLease(record, clock);
+      assertSessionOperationAvailable(record, input.operation, clock);
       const claims = retainedClaims.get(input.sessionId);
       if (!claims) {
         throw new SessionAuthorityError("session_unavailable", "Launching call claims are unavailable.");
@@ -497,10 +500,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
     },
     authorizeOperation(input: SessionOperationRequest): SessionOperationAuthorization {
       const record = options.sessions.store.readBySession(input.sessionId);
-      if (!record || record.state !== "active") {
-        throw new SessionAuthorityError("session_unavailable", "Streaming session is not active.");
-      }
-      assertCurrentSessionLease(record, clock);
+      assertSessionOperationAvailable(record, input.operation, clock);
       const callKey = executionGrantCallKey(input.binding);
       if (grantIdsByCall.has(callKey)) {
         throw new SessionAuthorityError(
@@ -521,6 +521,25 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       assertOperationAccessWithinClaims(input, claims);
       const authorization = issueAuthorization(authorizations, record, input, claims);
       return authorization;
+    },
+    authorizeObservationBatch(input: SessionObservationBatchRequest): readonly SessionOperationAuthorization[] {
+      if (!Array.isArray(input.sessionIds) || input.sessionIds.length < 1 || input.sessionIds.length > 128 ||
+          Object.keys(input.sessionIds).length !== input.sessionIds.length ||
+          input.sessionIds.some(id => typeof id !== "string" || !id.trim()) || new Set(input.sessionIds).size !== input.sessionIds.length)
+        throw new SessionAuthorityError("operation_mismatch", "Observation batch identities are invalid, duplicated or exceed their bound.");
+      const records = input.sessionIds.map(sessionId => {
+        const record = options.sessions.store.readBySession(sessionId);
+        assertSessionOperationAvailable(record, "observe", clock); return record;
+      });
+      const claims = consumeLaunchGrant(input.grant, input.binding);
+      assertCurrentClaims(claims);
+      const requests = records.map(record => {
+        if (claims.runId !== record.runId || claims.sessionId !== record.agentSessionId || claims.actor.role !== record.actor.role || claims.actor.id !== record.actor.id)
+          throw new SessionAuthorityError("binding_mismatch", "Observation batch does not match one exact session owner.");
+        const request = { ...input, sessionId: record.sessionId, operation: "observe" as const };
+        assertOperationAccessWithinEnvelope(request, record.envelope); assertOperationAccessWithinClaims(request, claims); return request;
+      });
+      return Object.freeze(records.map((record, index) => issueAuthorization(authorizations, record, requests[index]!, claims)));
     },
     assertOperationAuthorization(
       authorization: SessionOperationAuthorization,
@@ -544,10 +563,7 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
         throw new SessionAuthorityError("operation_mismatch", "Session operation authorization has a different access check.");
       }
       const record = options.sessions.store.readBySession(details.sessionId);
-      if (!record || record.state !== "active") {
-        throw new SessionAuthorityError("session_unavailable", "Streaming session is no longer active.");
-      }
-      assertCurrentSessionLease(record, clock);
+      assertSessionOperationAvailable(record, details.operation, clock);
       if (record.ownerId !== details.ownerId || record.fencingToken !== details.fencingToken) {
         throw new SessionAuthorityError("authorization_stale", "Session operation authorization has a stale owner fence.");
       }
@@ -968,7 +984,7 @@ function assertOperationRequestShape(request: LaunchOperationAuthorizationReques
 }
 
 function isSessionOperation(value: unknown): value is SessionOperation {
-  return value === "write" || value === "close_input" || value === "request" || value === "language_request" || value === "stop" ||
+  return value === "write" || value === "close_input" || value === "request" || value === "language_request" || value === "observe" || value === "stop" ||
     value === "graceful_shutdown" || value === "subscribe" || value === "parse_delivery" ||
     value === "input_control" || value === "protocol_response" || value === "family_delivery";
 }
@@ -1039,4 +1055,13 @@ function canonicalJson(value: unknown): string {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, nested]) => JSON.stringify(key) + ":" + canonicalJson(nested));
   return "{" + entries.join(",") + "}";
+}
+
+function assertSessionOperationAvailable(record: Readonly<StreamingSessionRecord> | undefined, operation: SessionOperation, clock: () => Date): asserts record is Readonly<StreamingSessionRecord> {
+  if (!record || (operation === "observe"
+    ? ["pending_transfer", "transfer_ambiguous"].includes(record.state)
+    : record.state !== "active")) {
+    throw new SessionAuthorityError("session_unavailable", "Streaming session is not active for this operation.");
+  }
+  if (record.state !== "released") assertCurrentSessionLease(record, clock);
 }

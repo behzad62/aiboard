@@ -20,6 +20,8 @@ import {
   type ExecutionHostStreamingOpenRequest,
 } from "./execution-host-streaming.js";
 import { ManagedProcessService } from "./managed-process.js";
+import { createExecutionHostManagedRuntime } from "./execution-host-managed-transport.js";
+import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "./windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -77,6 +79,7 @@ export interface ExecutionHostOptions {
   readonly platform?: ExecutionHostPlatform;
   readonly ambientEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly managedProcesses?: ManagedProcessService;
+  readonly windowsJobHost?: WindowsJobProcessHost;
   readonly processHostFacts?: ProcessHostSemanticFacts;
   readonly streamingStoreOptions?: SqliteStreamingSessionStoreOptions;
   readonly streamingOutput?: Pick<
@@ -178,6 +181,10 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       : process.platform === "win32" ? "linux" : process.platform,
   });
   const ownsManagedProcesses = options.managedProcesses === undefined;
+  const windowsJobHost = options.windowsJobHost ?? createWindowsJobProcessHost({
+    stateDirectory: join(stateDirectory, "managed-processes-job-host"),
+    platform: platform === "windows" ? "win32" : "linux",
+  });
   const internalProcesses = createRunnerInternalProcessKernel({
     stateDirectory: join(stateDirectory, "internal-processes"),
     platform: platform === "windows"
@@ -198,7 +205,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
     if (options.processHostFacts) return options.processHostFacts;
     return await (windowsFactsPromise ??= probeProcessHostSemantics({
       ...createWindowsProcessSemanticProbeSource(),
-      activeJobCreateClose: async () => await managedProcesses.probeActiveJobCreateClose(),
+      activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
     }));
   };
 
@@ -227,6 +234,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           ambientEnvironment,
           artifacts: options.artifacts,
           managedProcesses,
+          windowsJobHost,
           platform,
           streamingStoreOptions: options.streamingStoreOptions,
           streamingOutput: options.streamingOutput,
@@ -263,12 +271,14 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         const root = await mkdtemp(join(tmpdir(), "aiboard-git-inspection-"));
         const queryProcesses = new ManagedProcessService({ stateDirectory: join(root, "managed"),
           platform: platform === "windows" ? "win32" : process.platform === "win32" ? "linux" : process.platform });
+        const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(root, "managed-job-host"),
+          platform: platform === "windows" ? "win32" : "linux" });
         let binding: ExecutionHostRunBinding | undefined;
         let released = false;
         const cleanup = async () => {
           if (released) return;
           await binding?.close();
-          queryProcesses.close();
+          await queryProcesses.close();
           released = true;
           inspectionOwners.delete(cleanup);
         };
@@ -278,11 +288,11 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           binding = await createRunBinding({ hostId, runId, projectRoot, stateDirectory,
             runtimeRoot: join(root, "runtime"), permissionProfile: input.permissionProfile,
             capabilityContractDigest: digest, capabilitiesConfig: input.capabilitiesConfig,
-            ambientEnvironment, artifacts: new ArtifactStore(join(root, "artifacts")), managedProcesses: queryProcesses, platform,
+            ambientEnvironment, artifacts: new ArtifactStore(join(root, "artifacts")), managedProcesses: queryProcesses, windowsJobHost, platform,
             resolveWindowsFacts: async () => {
               if (options.processHostFacts) return options.processHostFacts;
               return await (windowsFactsPromise ??= probeProcessHostSemantics({ ...createWindowsProcessSemanticProbeSource(),
-                activeJobCreateClose: async () => await queryProcesses.probeActiveJobCreateClose() }));
+                activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose() }));
             }, onClosed: () => undefined });
           if (closed) throw new Error("ExecutionHost closed before historical Git inspection.");
           result = await inspect(binding.git.lifecycle("inspection"));
@@ -331,7 +341,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         try { await internalProcesses.close(); } catch (error) { failures.push(error); }
         if (ownsManagedProcesses && !managedProcessesClosed) {
           try {
-            managedProcesses.close();
+            await managedProcesses.close();
             managedProcessesClosed = true;
           } catch (error) { failures.push(error); }
         }
@@ -363,6 +373,7 @@ interface CreateRunBindingInput {
   readonly ambientEnvironment: Readonly<Record<string, string>>;
   readonly artifacts: ArtifactStore;
   readonly managedProcesses: ManagedProcessService;
+  readonly windowsJobHost: WindowsJobProcessHost;
   readonly platform: ExecutionHostPlatform;
   readonly streamingStoreOptions?: SqliteStreamingSessionStoreOptions;
   readonly streamingOutput?: Pick<
@@ -456,6 +467,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     let cleanupDutiesSettled = false;
     let streamingStoreClosed = false;
     let subprocessStoreClosed = false;
+    const managedRuntimeRegistration: { detach?: () => void } = {};
 
     const git = createRunGitExecutionContext({
       runId: input.runId,
@@ -534,6 +546,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
             }
           };
           if (!cleanupDutiesSettled) {
+            try { await input.managedProcesses.stopRun(input.runId); } catch (error) { failures.push(error); }
             try { await executionGrants.revokeAll("cleanup"); } catch (error) { failures.push(error); }
             try {
               consumeStreamingRecovery(await streamingRuntime.reconcileStartup({ maxRecords: 1_024, timeoutMs: 30_000 }));
@@ -592,6 +605,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
           if (failures.length > 0) {
             throw new AggregateError(failures, `ExecutionHost run ${input.runId} cleanup failed.`);
           }
+          managedRuntimeRegistration.detach?.();
           input.onClosed();
           closeComplete = true;
         })();
@@ -603,6 +617,9 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
         }
       },
     });
+    managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(createExecutionHostManagedRuntime({
+      run: binding, permissionProfile: input.permissionProfile, environment: input.ambientEnvironment,
+    }));
     return binding;
   } catch (error) {
     const cleanupFailures: unknown[] = [];
@@ -663,7 +680,7 @@ async function createWindowsBackends(input: CreateRunBindingInput, runRoot: stri
       backendId: "runner-windows-job-v1",
       codeIdentity: "runner-v2/windows-job-process-backend@1",
       backend: new WindowsJobObjectProcessBackend(
-        input.managedProcesses,
+        input.windowsJobHost,
         facts.windowsBatchArgv,
       ),
     }] : []),
@@ -701,6 +718,7 @@ function createStreamingOutputOptions(input: {
       });
       return {
         write: async (stream, bytes) => { await spool.write(stream, bytes); },
+        observe: async () => await spool.observe(),
         finalize: async () => await spool.finalize(),
         cleanup: async () => await spool.cleanup(),
       };

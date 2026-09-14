@@ -9,7 +9,7 @@ import { createChildEnvironmentFactory } from "../../src/child-environment.js";
 import type { PermissionProfile } from "../../src/contracts.js";
 import { createExecutionGrantAuthority } from "../../src/execution-grants.js";
 import { createExecutionIsolationRegistry, createExecutionIsolationSelector } from "../../src/execution-isolation-provider.js";
-import { ManagedProcessService } from "../../src/managed-process.js";
+import { createWindowsJobProcessHost } from "../../src/windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -60,9 +60,10 @@ export function createProductionOneShotCommandFixture(
     credentialResolver: { consume: () => { throw new Error("Unexpected credential grant."); } },
   });
   const managed = process.platform === "win32"
-    ? new ManagedProcessService({
-      stateDirectory: join(root, "managed"),
+    ? createWindowsJobProcessHost({
+      stateDirectory: join(root, "managed-job-host"),
       startDeadlineMs: options.managedProcessStartDeadlineMs ?? 15_000,
+      stopDeadlineMs: options.managedProcessCleanupDeadlineMs ?? options.managedProcessStartDeadlineMs ?? 15_000,
     })
     : undefined;
   const nativeBackend = options.backend ?? (process.platform === "win32"
@@ -142,7 +143,6 @@ export function createProductionOneShotCommandFixture(
       await executionGrants.revokeAll("cleanup");
       await kernel.runtime.reconcileStartup();
       kernel.readOnlyStore.close();
-      managed?.close();
       await assertNoLiveManagedFixtureSupervisor(
         root,
         options.managedProcessCleanupDeadlineMs ?? options.managedProcessStartDeadlineMs ?? 15_000,

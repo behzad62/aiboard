@@ -1,4 +1,5 @@
 import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
+import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
 import type { LspTransportFactory } from "./lsp-transport.js";
 import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
 import { requireGitRunner } from "./git-command.js";
@@ -650,8 +651,8 @@ export class NativeBuildFactory {
     initializationStage = "managed_process_service";
     const managedProcesses = executionHostBinding?.managedProcesses ?? this.liveManagedProcesses();
     if (!executionHostBinding && !hadManagedProcesses) {
-      constructionResources.add("managed_process_service", () => {
-        managedProcesses.close();
+      constructionResources.add("managed_process_service", async () => {
+        await managedProcesses.close();
         if (this.managedProcesses === managedProcesses) this.managedProcesses = undefined;
       });
     }
@@ -663,6 +664,7 @@ export class NativeBuildFactory {
       executionGrants = executionHostBinding.executionGrants;
       commandExecution = executionHostBinding.commandExecution;
     } else {
+    const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(this.options.stateDirectory, "managed-processes-job-host") });
     const childEnvironments = createChildEnvironmentFactory({
       credentialResolver: {
         consume: () => {
@@ -673,7 +675,7 @@ export class NativeBuildFactory {
     const windowsFacts = process.platform === "win32"
       ? await (this.windowsProcessFactsPromise ??= probeProcessHostSemantics({
           ...createWindowsProcessSemanticProbeSource(),
-          activeJobCreateClose: async () => await managedProcesses.probeActiveJobCreateClose(),
+          activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
         }))
       : undefined;
     const windowsPortableBackend = process.platform === "win32" && windowsFacts
@@ -686,7 +688,7 @@ export class NativeBuildFactory {
             stableAdapterId: "runner-windows-job-adapter-v1",
             backendId: "runner-windows-job-v1",
             codeIdentity: "runner-v2/windows-job-process-backend@1",
-            backend: new WindowsJobObjectProcessBackend(managedProcesses, windowsFacts!.windowsBatchArgv),
+            backend: new WindowsJobObjectProcessBackend(windowsJobHost, windowsFacts!.windowsBatchArgv),
           }] : []),
           ...(windowsBackendKinds.has("portable") ? [{
             stableAdapterId: "runner-windows-portable-adapter-v1",
@@ -980,6 +982,7 @@ export class NativeBuildFactory {
           generationId: input.generationId,
           currentIntegrationRevision: () => integrationManager.revision,
           managedProcessService: this.liveManagedProcesses(),
+          managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
           validatePortLease: async (lease) => await finalVerificationPorts.validate(
             lease,
@@ -1151,7 +1154,7 @@ export class NativeBuildFactory {
             this.liveMemoryStore().events(spec.projectId)
           ).values()],
           skills: await skillCatalog.discover(),
-          processes: this.liveManagedProcesses().listRun(spec.runId).slice(-100).map(
+          processes: (await this.liveManagedProcesses().listRun(spec.runId)).slice(-100).map(
             (process) => ({
               ...process,
               stdout: process.stdout.slice(-8 * 1024),
@@ -1745,7 +1748,7 @@ export class NativeBuildFactory {
       }
       if (this.managedProcesses) {
         try {
-          this.managedProcesses.close();
+          await this.managedProcesses.close();
           this.managedProcesses = undefined;
         } catch (error) {
           failures.push(error);

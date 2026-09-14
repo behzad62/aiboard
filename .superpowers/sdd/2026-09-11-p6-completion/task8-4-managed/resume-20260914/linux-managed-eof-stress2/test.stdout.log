@@ -1,0 +1,471 @@
+LINUX_RUNTIME {"node":"v24.20.0","platform":"linux","arch":"x64","pid":14,"startedAt":"2026-09-14T09:00:08.984Z"}
+FSYNC_ROOT {"dir":"/home/node/task84-fsync-cfPekc","at":"2026-09-14T09:00:08.989Z"}
+FSYNC_PROBE {"parent":"/home/node","samples":[7.946371999999997,3.550865999999999,3.3558570000000003,3.1724479999999957,3.105445000000003,3.205449999999999,3.551465999999998,4.112192,3.815279000000004,3.329656,3.5257649999999927,3.2103500000000054,3.3144549999999953,3.196050000000014,3.1281470000000127,3.1842490000000083],"removed":true}
+FSYNC_ROOT {"dir":"/tmp/task84-fsync-nIeIog","at":"2026-09-14T09:00:09.053Z"}
+FSYNC_PROBE {"parent":"/tmp","samples":[0.0031000000000034333,0.0011000000000080945,0.0010000000000047748,0.0019010000000037053,0.0009000000000014552,0.0009000000000014552,0.0011999999999972033,0.0010000000000047748,0.0009009999999989304,0.0009000000000014552,0.0009000000000014552,0.0009000000000014552,0.0007999999999981355,0.0009000000000014552,0.0009000000000014552,0.0009000000000014552],"removed":true}
+LINUX_COMMAND 0 ["node","--import","./runner-v2/test/support/cli-root-observer.mjs","--test","--test-concurrency=1","--test-reporter=tap","--test-timeout=120000","runner-v2/test/managed-shared-native.test.js"]
+LINUX_CONTROLLER_IDENTITY {"pid":14,"startedAt":"2026-09-14T09:00:09.053Z","stat":"14 (MainThread) R 6 6 1 0 -1 4194560 4420 0 0 0 2 1 0 0 20 0 7 0 4988737 1109041152 14137 18446744073709551615 110543066734592 110543115388710 140733143020800 0 0 0 0 16781312 17922 0 0 0 17 1 0 0 0 0 0 110543173423256 110543174909008 110543876173824 140733143023359 140733143023397 140733143023397 140733143023588 0\n"}
+TAP version 13
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-nLhkdm"}
+# Subtest: managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+ok 1 - managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+  ---
+  duration_ms: 2369.670731
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-nLhkdm
+# verified native managed root removed: /tmp/p684-managed-native-nLhkdm
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-IplacH"}
+# Subtest: managed natural exit retains the exact exit code and final output after shared cleanup
+ok 2 - managed natural exit retains the exact exit code and final output after shared cleanup
+  ---
+  duration_ms: 561.869455
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-IplacH
+# verified native managed root removed: /tmp/p684-managed-native-IplacH
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-Ddhfak"}
+# Subtest: managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+ok 3 - managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+  ---
+  duration_ms: 10.44669
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-Ddhfak
+# verified native managed root removed: /tmp/p684-managed-native-Ddhfak
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-nLhkdm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-IplacH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-Ddhfak","existsAtExit":false}
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3114.430242
+LINUX_COMMAND_PASSED 0
+LINUX_COMMAND 1 ["node","--import","./runner-v2/test/support/cli-root-observer.mjs","--test","--test-concurrency=1","--test-reporter=tap","--test-timeout=120000","runner-v2/test/managed-shared-native.test.js"]
+LINUX_CONTROLLER_IDENTITY {"pid":14,"startedAt":"2026-09-14T09:00:12.208Z","stat":"14 (MainThread) R 6 6 1 0 -1 4194560 4593 217268 0 0 2 1 257 171 20 0 7 0 4988737 1109106688 14201 18446744073709551615 110543066734592 110543115388710 140733143020800 0 0 0 0 16781312 17922 0 0 0 17 4 0 0 0 0 0 110543173423256 110543174909008 110543876173824 140733143023359 140733143023397 140733143023397 140733143023588 0\n"}
+TAP version 13
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-kPMbfA"}
+# Subtest: managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+ok 1 - managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+  ---
+  duration_ms: 2240.775508
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-kPMbfA
+# verified native managed root removed: /tmp/p684-managed-native-kPMbfA
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-bJAmkH"}
+# Subtest: managed natural exit retains the exact exit code and final output after shared cleanup
+ok 2 - managed natural exit retains the exact exit code and final output after shared cleanup
+  ---
+  duration_ms: 481.868602
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-bJAmkH
+# verified native managed root removed: /tmp/p684-managed-native-bJAmkH
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-LGBnMi"}
+# Subtest: managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+ok 3 - managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+  ---
+  duration_ms: 9.754058
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-LGBnMi
+# verified native managed root removed: /tmp/p684-managed-native-LGBnMi
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-kPMbfA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-bJAmkH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-LGBnMi","existsAtExit":false}
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2876.765039
+LINUX_COMMAND_PASSED 1
+LINUX_COMMAND 2 ["node","--import","./runner-v2/test/support/cli-root-observer.mjs","--test","--test-concurrency=1","--test-reporter=tap","--test-timeout=120000","runner-v2/test/managed-shared-native.test.js"]
+LINUX_CONTROLLER_IDENTITY {"pid":14,"startedAt":"2026-09-14T09:00:15.125Z","stat":"14 (MainThread) R 6 6 1 0 -1 4194560 4680 432008 0 0 2 1 509 320 20 0 7 0 4988737 1109041152 14201 18446744073709551615 110543066734592 110543115388710 140733143020800 0 0 0 0 16781312 17922 0 0 0 17 4 0 0 0 0 0 110543173423256 110543174909008 110543876173824 140733143023359 140733143023397 140733143023397 140733143023588 0\n"}
+TAP version 13
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-iEBLIA"}
+# Subtest: managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+ok 1 - managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+  ---
+  duration_ms: 2086.875188
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-iEBLIA
+# verified native managed root removed: /tmp/p684-managed-native-iEBLIA
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-CKKjkC"}
+# Subtest: managed natural exit retains the exact exit code and final output after shared cleanup
+ok 2 - managed natural exit retains the exact exit code and final output after shared cleanup
+  ---
+  duration_ms: 488.41631
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-CKKjkC
+# verified native managed root removed: /tmp/p684-managed-native-CKKjkC
+# C5 CLI root: {"event":"created","path":"/tmp/p684-managed-native-JoLhMb"}
+# Subtest: managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+ok 3 - managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+  ---
+  duration_ms: 10.087373
+  type: 'test'
+  ...
+# exact native managed root acquired: /tmp/p684-managed-native-JoLhMb
+# verified native managed root removed: /tmp/p684-managed-native-JoLhMb
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-iEBLIA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-CKKjkC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p684-managed-native-JoLhMb","existsAtExit":false}
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2785.221446
+LINUX_COMMAND_PASSED 2
+LINUX_COMMAND 3 ["node","--import","./runner-v2/test/support/cli-root-observer.mjs","--test","--test-concurrency=1","--test-reporter=tap","--test-timeout=120000","runner-v2/test/posix-process-backend.test.js"]
+LINUX_CONTROLLER_IDENTITY {"pid":14,"startedAt":"2026-09-14T09:00:17.949Z","stat":"14 (MainThread) R 6 6 1 0 -1 4194560 4770 639896 0 0 2 1 741 475 20 0 7 0 4988737 1109041152 14201 18446744073709551615 110543066734592 110543115388710 140733143020800 0 0 0 0 16781312 17922 0 0 0 17 3 0 0 0 0 0 110543173423256 110543174909008 110543876173824 140733143023359 140733143023397 140733143023397 140733143023588 0\n"}
+TAP version 13
+# Subtest: POSIX backend attests session ownership without claiming host-crash cleanup
+ok 1 - POSIX backend attests session ownership without claiming host-crash cleanup
+  ---
+  duration_ms: 1.584474
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-descendant-gcmCPo"}
+# Subtest: generic POSIX birth discovery keeps its one-second absolute envelope
+ok 2 - generic POSIX birth discovery keeps its one-second absolute envelope
+  ---
+  duration_ms: 1001.559813
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-force-DejkOo"}
+# Subtest: POSIX native session fixture owns descendants after launcher exit
+ok 3 - POSIX native session fixture owns descendants after launcher exit
+  ---
+  duration_ms: 999.682726
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-terminal-witness-hgbjJG"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-v2-state-mismatch-PKmLkG"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-pre-retirement-crash-dHIooG"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-post-retirement-crash-EeBDEH"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-v2-rollback-EEJJlH"}
+# Subtest: C4 POSIX force queues the exact workload group and retains the supervisor witness
+ok 4 - C4 POSIX force queues the exact workload group and retains the supervisor witness
+  ---
+  duration_ms: 262.910389
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 terminal observation preserves a live supervisor until authority release
+ok 5 - C4 POSIX v2 terminal observation preserves a live supervisor until authority release
+  ---
+  duration_ms: 17.53862
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 rejects durable state whose workload identity differs from opaque authority
+ok 6 - C4 POSIX v2 rejects durable state whose workload identity differs from opaque authority
+  ---
+  duration_ms: 4.674719
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 blocks a supervisor crash before durable retirement despite an empty numeric group
+ok 7 - C4 POSIX v2 blocks a supervisor crash before durable retirement despite an empty numeric group
+  ---
+  duration_ms: 5.282247
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 accepts post-retirement supervisor crash without adopting a reused numeric group
+ok 8 - C4 POSIX v2 accepts post-retirement supervisor crash without adopting a reused numeric group
+  ---
+  duration_ms: 24.129128
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-anchor-lock-holder-FPofgN"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-f1-channel-lIjhMh"}
+# Subtest: C4 POSIX v2 launch rollback queues workload control without signalling the supervisor group
+ok 9 - C4 POSIX v2 launch rollback queues workload control without signalling the supervisor group
+  ---
+  duration_ms: 106.786791
+  type: 'test'
+  ...
+# Subtest: C4 POSIX parses a detached anchor's birth and group from synthetic proc state
+ok 10 - C4 POSIX parses a detached anchor's birth and group from synthetic proc state
+  ---
+  duration_ms: 0.940544
+  type: 'test'
+  ...
+# Subtest: C4 POSIX reattests the exact anchor birth and detached group before control
+ok 11 - C4 POSIX reattests the exact anchor birth and detached group before control
+  ---
+  duration_ms: 0.829539
+  type: 'test'
+  ...
+# Subtest: C4 POSIX rejects malformed nonempty ps identity and membership rows
+ok 12 - C4 POSIX rejects malformed nonempty ps identity and membership rows
+  ---
+  duration_ms: 0.358516
+  type: 'test'
+  ...
+# Subtest: C4 POSIX barrier records bind prepared, go, and anchor release to captured current authority
+ok 13 - C4 POSIX barrier records bind prepared, go, and anchor release to captured current authority
+  ---
+  duration_ms: 0.535925
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child consumes an anchor release only under captured current authority before go and after target exit
+ok 14 - C4 POSIX child consumes an anchor release only under captured current authority before go and after target exit
+  ---
+  duration_ms: 86.947564
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation
+ok 15 - C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation
+  ---
+  duration_ms: 30.626732
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child does not spawn an executable after a mismatched go publication
+ok 16 - C4 POSIX child does not spawn an executable after a mismatched go publication
+  ---
+  duration_ms: 20.943878
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child retains its exact prepared breadcrumb through a pre-go crash boundary
+ok 17 - C4 POSIX child retains its exact prepared breadcrumb through a pre-go crash boundary
+  ---
+  duration_ms: 18.340157
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor does not publish go when the fenced publication is interrupted
+ok 18 - C4 POSIX supervisor does not publish go when the fenced publication is interrupted
+  ---
+  duration_ms: 79.499016
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor preserves its witness and reports outcome_unknown after anchor loss
+ok 19 - C4 POSIX supervisor preserves its witness and reports outcome_unknown after anchor loss
+  ---
+  duration_ms: 35.760071
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor reattests inside the fenced effect before a group signal
+ok 20 - C4 POSIX supervisor reattests inside the fenced effect before a group signal
+  ---
+  duration_ms: 38.102181
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed
+ok 21 - C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed
+  ---
+  duration_ms: 11.118819
+  type: 'test'
+  ...
+# Subtest: C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe
+ok 22 - C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe
+  ---
+  duration_ms: 16.064551
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-f1-closed-unread-IgGmAm"}
+# Subtest: C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail
+ok 23 - C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail
+  ---
+  duration_ms: 155.217454
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-finalizer-PNbdNd"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-release-failure-EhOGOd"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-retained-authority-MIGdOd"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-channel-failure-pkhpOd"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-success-BloNPd"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-live-unsafe-root-GLHiad"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-c4-unsafe-authority-IdGmad"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-contract-jdcebd"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-identity-NCnkHe"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-dead-signal-HefObg"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-terminal-contract-loFEfg"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-launch-rollback-OFibLh"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-dead-supervisor-EMcCMh"}
+# C5 CLI root: {"event":"created","path":"/tmp/aiboard-posix-cleanup-fence-AGchMh"}
+# Subtest: C4 POSIX producer drains a closed unread tail after backpressure before terminal proof
+ok 24 - C4 POSIX producer drains a closed unread tail after backpressure before terminal proof
+  ---
+  duration_ms: 341.301352
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor retires forced workload causally and waits for output ACK plus pipe closure
+ok 25 - C4 POSIX supervisor retires forced workload causally and waits for output ACK plus pipe closure
+  ---
+  duration_ms: 56.713051
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor releases an exact lone anchor only after executable exit and retains ACK lifetime
+ok 26 - C4 POSIX supervisor releases an exact lone anchor only after executable exit and retains ACK lifetime
+  ---
+  duration_ms: 74.047661
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor refuses anchor release when membership changes inside its fence
+ok 27 - C4 POSIX supervisor refuses anchor release when membership changes inside its fence
+  ---
+  duration_ms: 27.213172
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor replaces an unconsumed anchor release marker after a higher-fence takeover
+ok 28 - C4 POSIX supervisor replaces an unconsumed anchor release marker after a higher-fence takeover
+  ---
+  duration_ms: 21.874722
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor retains authority when an anchor exits before reporting exact release consumption
+ok 29 - C4 POSIX supervisor retains authority when an anchor exits before reporting exact release consumption
+  ---
+  duration_ms: 48.011144
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor rejects mismatched released records and non-clean anchor exits
+ok 30 - C4 POSIX supervisor rejects mismatched released records and non-clean anchor exits
+  ---
+  duration_ms: 143.920126
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor retains uncertain authority when a forced anchor exits with descendants remaining
+ok 31 - C4 POSIX supervisor retains uncertain authority when a forced anchor exits with descendants remaining
+  ---
+  duration_ms: 20.208644
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor keeps its anchor through graceful control before one exact force signal
+ok 32 - C4 POSIX supervisor keeps its anchor through graceful control before one exact force signal
+  ---
+  duration_ms: 51.602212
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer fails closed and retains its exact authority on force failure
+ok 33 - C4 POSIX fixture finalizer fails closed and retains its exact authority on force failure
+  ---
+  duration_ms: 0.65383
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer retains its exact authority on release failure
+ok 34 - C4 POSIX fixture finalizer retains its exact authority on release failure
+  ---
+  duration_ms: 0.369918
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer rejects a release that leaves owned authority behind
+ok 35 - C4 POSIX fixture finalizer rejects a release that leaves owned authority behind
+  ---
+  duration_ms: 0.371017
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer retains its exact authority when channel settlement or detachment fails
+ok 36 - C4 POSIX fixture finalizer retains its exact authority when channel settlement or detachment fails
+  ---
+  duration_ms: 0.462722
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer deletes only its exact root after confirmed release
+ok 37 - C4 POSIX fixture finalizer deletes only its exact root after confirmed release
+  ---
+  duration_ms: 1.271359
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer refuses an authority target outside its exact namespace
+ok 38 - C4 POSIX fixture finalizer refuses an authority target outside its exact namespace
+  ---
+  duration_ms: 0.762036
+  type: 'test'
+  ...
+# Subtest: POSIX v1 contracts remain observable but block active destructive control
+ok 39 - POSIX v1 contracts remain observable but block active destructive control
+  ---
+  duration_ms: 23.31399
+  type: 'test'
+  ...
+# Subtest: POSIX validates birth identity before any group signal
+ok 40 - POSIX validates birth identity before any group signal
+  ---
+  duration_ms: 3.201049
+  type: 'test'
+  ...
+# Subtest: POSIX v1 refuses active control after its supervisor exits with members remaining
+ok 41 - POSIX v1 refuses active control after its supervisor exits with members remaining
+  ---
+  duration_ms: 3.727275
+  type: 'test'
+  ...
+# Subtest: POSIX terminal proof permits fenced empty verification and release without Windows tree records
+ok 42 - POSIX terminal proof permits fenced empty verification and release without Windows tree records
+  ---
+  duration_ms: 23.587402
+  type: 'test'
+  ...
+# Subtest: POSIX v1 launch rollback retains active authority rather than killing its witness group
+ok 43 - POSIX v1 launch rollback retains active authority rather than killing its witness group
+  ---
+  duration_ms: 0.634329
+  type: 'test'
+  ...
+# Subtest: POSIX v1 launch rollback retains authority after supervisor exit rather than resignal numerically
+ok 44 - POSIX v1 launch rollback retains authority after supervisor exit rather than resignal numerically
+  ---
+  duration_ms: 0.437221
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 launch rollback rechecks the durable fence before queuing workload control
+ok 45 - C4 POSIX v2 launch rollback rechecks the durable fence before queuing workload control
+  ---
+  duration_ms: 3.300254
+  type: 'test'
+  ...
+# Subtest: portable POSIX control maps only an explicit workload group to fixed signals
+ok 46 - portable POSIX control maps only an explicit workload group to fixed signals
+  ---
+  duration_ms: 0.336216
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-descendant-gcmCPo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-force-DejkOo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-terminal-witness-hgbjJG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-v2-state-mismatch-PKmLkG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-pre-retirement-crash-dHIooG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-post-retirement-crash-EeBDEH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-v2-rollback-EEJJlH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-anchor-lock-holder-FPofgN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-f1-channel-lIjhMh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-f1-closed-unread-IgGmAm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-finalizer-PNbdNd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-release-failure-EhOGOd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-retained-authority-MIGdOd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-channel-failure-pkhpOd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-success-BloNPd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-live-unsafe-root-GLHiad","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-c4-unsafe-authority-IdGmad","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-contract-jdcebd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-identity-NCnkHe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-dead-signal-HefObg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-terminal-contract-loFEfg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-launch-rollback-OFibLh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-dead-supervisor-EMcCMh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/aiboard-posix-cleanup-fence-AGchMh","existsAtExit":false}
+1..46
+# tests 46
+# suites 0
+# pass 46
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4078.011319
+LINUX_COMMAND_PASSED 3

@@ -54,6 +54,14 @@ export interface BoundedOutputSpoolResult {
   readonly streams: readonly BoundedOutputStreamResult[];
 }
 
+/** Bounded evidence observation. It does not claim artifact finalization or seal
+ * the writer; an authorized caller must independently recheck its authority. */
+export interface BoundedOutputObservation {
+  readonly streams: readonly Readonly<Pick<BoundedOutputStreamResult,
+    "stream" | "tail" | "tailBytesBase64" | "tailByteLength" | "tailDisplayTruncated" |
+    "totalBytes" | "truncated" | "lossyBytes" | "lossyOutput" | "lossReasons">>[];
+}
+
 export interface OutputSpillFile {
   readonly identity: string;
   write(bytes: Uint8Array): Promise<number>;
@@ -175,6 +183,20 @@ export class BoundedOutputSpool {
     const work = this.operation.then(async () => await this.writeNow(stream, bytes));
     this.operation = work.catch(() => undefined);
     return work;
+  }
+
+  observe(): Promise<BoundedOutputObservation> {
+    // Join exactly the writes admitted before this observation. Do not close
+    // admission, enqueue an input effect, or finalize the retained spill.
+    return this.operation.then(() => Object.freeze({ streams: Object.freeze(
+      (["stdout", "stderr"] as const).map(stream => {
+        const value = this.snapshot(this.states.get(stream)!);
+        return Object.freeze({ stream: value.stream, tail: value.tail, tailBytesBase64: value.tailBytesBase64,
+          tailByteLength: value.tailByteLength, tailDisplayTruncated: value.tailDisplayTruncated,
+          totalBytes: value.totalBytes, truncated: value.truncated, lossyBytes: value.lossyBytes,
+          lossyOutput: value.lossyOutput, lossReasons: value.lossReasons });
+      }),
+    ) }));
   }
 
   finalize(): Promise<BoundedOutputSpoolResult> {

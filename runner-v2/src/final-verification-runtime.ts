@@ -5,6 +5,8 @@ import type {
   BrowserNetworkEvent,
 } from "./browser-tools.js";
 import type { ManagedProcessService, ManagedProcessSnapshot } from "./managed-process.js";
+import type { PermissionProfile } from "./contracts.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import {
   planFinalVerification,
   type FinalVerificationCategory,
@@ -155,6 +157,7 @@ export interface FinalVerificationRuntimeOptions {
   currentIntegrationRevision?: FinalVerificationRevisionSource;
   managedProcess?: FinalVerificationManagedProcess;
   managedProcessService?: ManagedProcessService;
+  managedProcessAuthority?: Readonly<{ executionGrants: ExecutionGrantAuthority; permissionProfile: PermissionProfile }>;
   browserSession?: FinalVerificationBrowserSession;
   browserBackend?: FinalVerificationBrowserBackend;
   maximumDomBytes?: number;
@@ -358,13 +361,18 @@ export class FinalVerificationRuntime {
     this.generationId = options.generationId;
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.integrationRevision = options.integrationRevision ?? options.currentIntegrationRevision;
-    this.managedProcess = options.managedProcess ?? (options.managedProcessService
-      ? new ManagedProcessServiceAdapter(
-          options.managedProcessService,
-          this.runId,
-          this.taskId,
-          this.actor,
-        )
+    if (options.managedProcessService && !options.managedProcessAuthority && !options.managedProcess) {
+      throw new Error("Final verification managed processes require explicit run-owned execution grant authority.");
+    }
+    this.managedProcess = options.managedProcess ?? (options.managedProcessService && options.managedProcessAuthority
+      ? createFinalVerificationManagedProcessAdapter({
+          service: options.managedProcessService,
+          executionGrants: options.managedProcessAuthority.executionGrants,
+          permissionProfile: options.managedProcessAuthority.permissionProfile,
+          runId: this.runId,
+          taskId: this.taskId,
+          actor: this.actor,
+        })
         : undefined);
     this.browserSession = options.browserSession ?? (options.browserBackend
       ? new BrowserBackendSessionAdapter(
@@ -1879,41 +1887,72 @@ function stableExecutionErrorCode(error: unknown): string | undefined {
   ]).has(code) ? code : undefined;
 }
 
-class ManagedProcessServiceAdapter implements FinalVerificationManagedProcess {
-  private readonly sessionId: string;
-
-  constructor(
-    private readonly service: ManagedProcessService,
-    private readonly runId: string,
-    taskId: string,
-    private readonly actor: AgentActor,
-  ) {
-    this.sessionId = `final-verification:${taskId}`;
-  }
-
-  async start(input: FinalVerificationManagedProcessInput): Promise<ManagedProcessSnapshot> {
-    return await this.service.start(
-      { command: input.executable, args: [...input.args], cwd: "." },
-      this.context(),
-      input.cwd,
-    );
-  }
-
-  async poll(processId: string): Promise<ManagedProcessSnapshot> {
-    return this.service.poll(processId, this.context());
-  }
-
-  async stop(processId: string): Promise<ManagedProcessSnapshot> {
-    return await this.service.signal(processId, "SIGTERM", this.context());
-  }
-
-  private context(): ToolExecutionContext {
-    return {
-      runId: this.runId,
-      sessionId: this.sessionId,
-      actor: { ...this.actor },
-    };
-  }
+export function createFinalVerificationManagedProcessAdapter(options: Readonly<{
+  service: ManagedProcessService;
+  executionGrants: ExecutionGrantAuthority;
+  permissionProfile: PermissionProfile;
+  runId: string;
+  taskId: string;
+  actor: AgentActor;
+}>): FinalVerificationManagedProcess {
+  const sessionId = `final-verification:${options.taskId}`;
+  const workspaces = new Map<string, string>();
+  let sequence = 0;
+  const invoke = async <T>(input: Readonly<{
+    toolName: "process.start" | "process.poll" | "process.signal";
+    workspacePath: string;
+    access: "read" | "write";
+  }>, perform: (context: ToolExecutionContext) => Promise<T>): Promise<T> => {
+    const callId = `final-verification-managed:${options.taskId}:${++sequence}:${input.toolName}`;
+    const grant = await options.executionGrants.issue({
+      runId: options.runId,
+      sessionId,
+      actor: options.actor,
+      toolName: input.toolName,
+      callId,
+      permissionProfile: options.permissionProfile,
+      workspacePath: input.workspacePath,
+      access: [{ path: input.workspacePath, mode: input.access }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    try {
+      return await perform({
+        runId: options.runId,
+        sessionId,
+        actor: { ...options.actor },
+        callId,
+        toolName: input.toolName,
+        workspacePath: input.workspacePath,
+        executionGrant: grant,
+      });
+    } finally {
+      await options.executionGrants.revoke(grant, "completed");
+    }
+  };
+  return Object.freeze({
+    async start(input: FinalVerificationManagedProcessInput): Promise<ManagedProcessSnapshot> {
+      const snapshot = await invoke({ toolName: "process.start", workspacePath: input.cwd, access: "write" }, context =>
+        options.service.start({ command: input.executable, args: [...input.args], cwd: "." }, context, input.cwd));
+      workspaces.set(snapshot.processId, input.cwd);
+      return snapshot;
+    },
+    async poll(processId: string): Promise<ManagedProcessSnapshot> {
+      const workspacePath = workspaces.get(processId);
+      if (!workspacePath) throw new Error("Final verification cannot observe a managed process it did not start.");
+      return await invoke({ toolName: "process.poll", workspacePath, access: "read" }, context =>
+        options.service.poll(processId, context));
+    },
+    async stop(processId: string): Promise<ManagedProcessSnapshot> {
+      const workspacePath = workspaces.get(processId);
+      if (!workspacePath) throw new Error("Final verification cannot stop a managed process it did not start.");
+      const snapshot = await invoke({ toolName: "process.signal", workspacePath, access: "write" }, context =>
+        options.service.signal(processId, "SIGTERM", context));
+      if (snapshot.status === "stopped") workspaces.delete(processId);
+      return snapshot;
+    },
+  });
 }
 
 class BrowserBackendSessionAdapter implements FinalVerificationBrowserSession {

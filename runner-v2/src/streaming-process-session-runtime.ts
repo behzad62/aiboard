@@ -1,3 +1,5 @@
+import { readFinalizedEvidenceReference } from "./evidence-continuation.js";
+import type { BoundedOutputObservation, BoundedOutputSpoolResult } from "./bounded-output-spool.js";
 import { assertSessionEnvelopeSubset } from "./session-authority.js";
 import { createStreamingRequestOperation } from "./streaming-request-operation.js";
 import { createHash } from "node:crypto";
@@ -78,7 +80,8 @@ export interface StreamingRuntimeOptions {
   };
   readonly waitUntilDeadline?: (deadlineAt: number) => Promise<void>;
 }
-export interface StreamingOpenRequest { readonly failedLaunchCleanupTimeoutMs?: number; readonly sessionId: string; readonly launchId: string; readonly grant: OpaqueExecutionGrant; readonly binding: ExecutionGrantBinding; readonly envelope: StreamingSessionEnvelope; readonly protocolStreams?: readonly StreamingOutputStream[]; readonly signal?: AbortSignal }
+export interface StreamingTerminalObservation { readonly state: "exited" | "outcome_unknown"; readonly exitCode: number | null; readonly signal: NodeJS.Signals | null }
+export interface StreamingOpenRequest { readonly onTerminal?: (observation: StreamingTerminalObservation) => void; readonly failedLaunchCleanupTimeoutMs?: number; readonly sessionId: string; readonly launchId: string; readonly grant: OpaqueExecutionGrant; readonly binding: ExecutionGrantBinding; readonly envelope: StreamingSessionEnvelope; readonly protocolStreams?: readonly StreamingOutputStream[]; readonly signal?: AbortSignal }
 
 export interface StreamingHandshakeControl {
   write(payload: Uint8Array, timeoutMs: number): Promise<void>;
@@ -89,7 +92,7 @@ export interface StreamingHandshakeControl {
 type OutputController = ReturnType<typeof createStreamingOutputController>;
 type FinalizedEvidence = Awaited<ReturnType<ReturnType<typeof createProtocolEvidenceTee>["finalize"]>>;
 interface AttachmentEvidence { readonly tee: ReturnType<typeof createProtocolEvidenceTee>; finalizing?: Promise<FinalizedEvidence>; finalizedEvidence?: FinalizedEvidence; cleanup?: Promise<void> }
-interface PrivateAttachment { gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
+interface PrivateAttachment { terminalMonitor?: Promise<void>; onTerminal?: (observation: StreamingTerminalObservation) => void; terminal?: StreamingTerminalObservation; terminalDelivered?: boolean; gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
 interface AdoptedCleanupContext { ownerId: string; fencingToken: number; live?: PrivateAttachment; cleanup?: PrivateAttachment; detachChannel?: FakeStreamingChannel; detachSettlement?: Promise<BackpressuredOutputSettlement>; detachOutputFailed?: boolean; control?: AdoptedBackendControl; evidenceContinuable: boolean; retainedCount: number }
 interface AdoptedCleanupRun {
   readonly ownerId: string;
@@ -569,6 +572,14 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     attachment.writeTail = operation.catch(() => undefined);
     await operation;
   };
+  const publishTerminalObservation = (sessionId: string, attachment: PrivateAttachment) => {
+    if (!attachment.onTerminal || !attachment.terminal || attachment.terminalDelivered) return;
+    const record = options.kernel.store.readBySession(sessionId);
+    if (!record || record.cleanupOwner !== "session_authority" || record.ownerId !== attachment.outputOwnerId || record.fencingToken !== attachment.outputFencingToken) return;
+    attachment.terminalDelivered = true;
+    try { attachment.onTerminal(attachment.terminal); }
+    catch (error) { attachment.failure = error; }
+  };
   const startAttachment = (
     sessionId: string,
     attachment: PrivateAttachment,
@@ -603,10 +614,28 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       }
       finally { attachment.intakeCount -= 1; }
     });
-    attachment.unobserve = settleOnTerminal ? channel.observeTerminal?.(() => {
+    const onTerminal = (value: unknown) => {
+      attachment.terminal = terminalObservation(value);
       const session = options.kernel.store.readBySession(sessionId);
-      if (session?.state === "active") void settleAdoptedAttachment(sessionId, attachment, "backend_unavailable").catch((error) => { attachment.failure = error; });
-    }) ?? (() => undefined) : () => undefined;
+      if (session?.state === "active") {
+        publishTerminalObservation(sessionId, attachment);
+        void settleAdoptedAttachment(sessionId, attachment, "backend_unavailable").catch((error) => { attachment.failure = error; });
+      }
+    };
+    attachment.unobserve = settleOnTerminal ? channel.observeTerminal?.(onTerminal) ?? (() => undefined) : () => undefined;
+    if (settleOnTerminal && attachment.onTerminal && !channel.observeTerminal) {
+      const interactive = channel as Partial<InteractiveProcessChannel>;
+      if (interactive.waitForTerminal) {
+        let observing = true;
+        // Concrete v2 channels expose a joined terminal wait. A family callback
+        // observes that exact capability; it never polls a numeric process ID.
+        attachment.terminalMonitor = Promise.resolve().then(() => interactive.waitForTerminal!()).then(
+          value => { if (observing) onTerminal(value); },
+          () => { if (observing) onTerminal({ state: "outcome_unknown" }); },
+        );
+        attachment.unobserve = () => { observing = false; };
+      }
+    }
   };
   const finalizeAttachmentEvidence = async (sessionId: string, attachment: PrivateAttachment) => {
     const shared = attachment.evidence;
@@ -667,7 +696,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     attachment.output.cancel("Streaming session attachment closed.");
     try { await finalizeAttachmentEvidence(sessionId, attachment); }
     catch (error) { errors.push(error); }
-    if (!attachment.detached) try { await attachment.channel.detach(); attachment.detached = true; } catch (error) { errors.push(error); }
+    if (!attachment.detached) try { await attachment.channel.detach(); await attachment.terminalMonitor; attachment.detached = true; } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, "Streaming attachment cleanup failed.");
     attachment.closed = true;
     return attachment.finalizedEvidence!;
@@ -694,7 +723,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         attachment.cleanupRelinquished = true;
       }
       if (!attachment.detached) {
-        try { await attachment.channel.detach(); attachment.detached = true; }
+        try { await attachment.channel.detach(); await attachment.terminalMonitor; attachment.detached = true; }
         catch (error) { errors.push(error); }
       }
       if (errors.length) throw new AggregateError(errors, "Streaming attachment cleanup takeover failed.");
@@ -1041,6 +1070,12 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         } catch { return "outcome_unknown" as const; }
       }
       if (resource !== "workload_quiescence") return "outcome_unknown" as const;
+      // The predecessor may be waiting for acknowledged final output before
+      // its exact backend can prove empty. Reconnect evidence-only intake under
+      // the current fence; this issues neither an application RPC nor a stop.
+      try { await prepareAdoptedCleanupOutput(record!, context); }
+      catch { return "outcome_unknown" as const; }
+      exactCleanupOwner(sessionId, record!.ownerId, record!.fencingToken);
       context.control = adoptedBackendControl(record!);
       return await options.host.observeQuiescence({
         launchId: context.control.launch.launchId,
@@ -1249,7 +1284,80 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     return await runAdoptedCleanup(sessionId, deadlineAt, disposition, attachment);
   };
 
+  const stopAuthorizedSession = async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => {
+    const expected = { ...assertion, operation: "stop" as const };
+    options.sessions.assertOperationAuthorization(authorization, expected);
+    const current = options.kernel.store.readBySession(expected.sessionId)!;
+    // Accept durable stop intent synchronously before any wait. A later revoked
+    // caller cannot revoke cleanup already owned by the exact session.
+    writer.apply({ type: "begin_stopping", sessionId: current.sessionId, ownerId: current.ownerId, fencingToken: current.fencingToken, expectedRevision: current.revision, at: clock().toISOString() });
+    const attachment = attachments.get(current.sessionId);
+    if (attachment) await settleAdoptedAttachment(current.sessionId, attachment, "backend_unavailable");
+    else await runAdoptedCleanup(current.sessionId, clock().getTime() + 30000, "backend_unavailable");
+    return Object.freeze({ record: options.kernel.store.readBySession(current.sessionId), evidence: finalizedEvidence.get(current.sessionId) });
+  };
+  const finalizedForObservation = async (sessionId: string, assertCurrent: () => void) => {
+    const cached = finalizedEvidence.get(sessionId); if (cached) return cached;
+    assertCurrent();
+    const record = options.kernel.store.readBySession(sessionId);
+    const fact = record && currentCleanup(record)?.progress?.resources.find(resource => resource.resource === "evidence");
+    if (record?.state !== "released" || fact?.status !== "verified" || fact.evidence?.kind !== "bounded_output_manifest" || !options.output.artifacts)
+      throw runnerSessionError("cleanup_blocked", "Authenticated terminal evidence reference is unavailable.");
+    const reference = fact.evidence;
+    const result = await readFinalizedEvidenceReference(options.output.artifacts, reference);
+    assertCurrent();
+    const current = options.kernel.store.readBySession(sessionId);
+    const finalFact = current && currentCleanup(current)?.progress?.resources.find(resource => resource.resource === "evidence");
+    if (current?.state !== "released" || finalFact?.status !== "verified" || finalFact.evidence?.digest !== reference.digest)
+      throw runnerSessionError("cleanup_blocked", "Terminal evidence ownership changed during observation.");
+    const finalized = Object.freeze({ result, evidenceLossy: reference.lossy }); finalizedEvidence.set(sessionId, finalized);
+    return finalized;
+  };
+  const readOutputObservation = async (sessionId: string, assertCurrent: () => void) => {
+    assertCurrent();
+    const initial = options.kernel.store.readBySession(sessionId);
+    if (!initial) throw runnerSessionError("cleanup_blocked", "Managed evidence session is unavailable.");
+    const attachment = attachments.get(sessionId);
+    let result: BoundedOutputObservation;
+    if (initial.state === "released") {
+      const final = await finalizedForObservation(sessionId, assertCurrent);
+      if (!final || !("result" in final) || !final.result) throw runnerSessionError("cleanup_blocked", "Final bounded evidence observation is unavailable.");
+      result = final.result as BoundedOutputSpoolResult;
+    } else {
+      if (!attachment || attachment.outputOwnerId !== initial.ownerId || attachment.outputFencingToken !== initial.fencingToken)
+        throw runnerSessionError("cleanup_blocked", "Exact evidence observation owner is unavailable.");
+      result = await attachment.evidence.tee.observe();
+    }
+    assertCurrent();
+    const record = options.kernel.store.readBySession(sessionId)!;
+    if (record.state === "released" && initial.state !== "released") {
+      const final = await finalizedForObservation(sessionId, assertCurrent);
+      if (!final || !("result" in final) || !final.result) throw runnerSessionError("cleanup_blocked", "Final bounded evidence observation is unavailable.");
+      result = final.result as BoundedOutputSpoolResult;
+    }
+    return Object.freeze({ record, output: Object.freeze({ streams: Object.freeze(result.streams.map(value => Object.freeze({
+      stream: value.stream, tail: value.tail, tailBytesBase64: value.tailBytesBase64, tailByteLength: value.tailByteLength,
+      tailDisplayTruncated: value.tailDisplayTruncated, totalBytes: value.totalBytes, truncated: value.truncated,
+      lossyBytes: value.lossyBytes, lossyOutput: value.lossyOutput, lossReasons: value.lossReasons,
+    }))) }) });
+  };
   return Object.freeze({
+    stopAuthorizedSession,
+    async observeOwnedOutput(input: { sessionId: string; owner: Pick<ExecutionGrantBinding, "runId" | "sessionId" | "actor"> }) {
+      // Host-only control-plane observation; this is never a substitute for
+      // model-facing observeOutput and cannot issue an execution effect.
+      return await readOutputObservation(input.sessionId, () => {
+        const record = options.kernel.store.readBySession(input.sessionId);
+        if (!record || record.runId !== input.owner.runId || record.agentSessionId !== input.owner.sessionId ||
+            record.actor.role !== input.owner.actor.role || record.actor.id !== input.owner.actor.id ||
+            ["pending_transfer", "transfer_ambiguous"].includes(record.state))
+          throw runnerSessionError("cleanup_blocked", "Exact managed observation owner identity is unavailable.");
+      });
+    },
+    async observeOutput(input: { authorization: SessionOperationAuthorization; assertion: OperationAuthorizationAssertion }) {
+      if (input.assertion.operation !== "observe") throw runnerSessionError("cleanup_blocked", "Only read-only authority may observe bounded evidence.");
+      return await readOutputObservation(input.assertion.sessionId, () => options.sessions.assertOperationAuthorization(input.authorization, input.assertion));
+    },
     async open(request: StreamingOpenRequest) {
       const failedCleanupMs = request.failedLaunchCleanupTimeoutMs ?? 1000;
       if (!Number.isSafeInteger(failedCleanupMs) || failedCleanupMs < 1 || failedCleanupMs > 30000)
@@ -1335,6 +1443,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           request.protocolStreams ?? options.output.protocolStreams,
         );
         const cleanupCapability = hostCleanupChannels.get(request.launchId); if (cleanupCapability) { cleanupCapability.attachment = attachment; cleanupCapability.cleanup = async () => await closeAttachment(request.sessionId, attachment!); }
+        attachment.onTerminal = request.onTerminal;
         startAttachment(request.sessionId, attachment);
         options.sessions.validateStagedLaunch(staged, request);
         const handshakeDigest = await effect("handshake", () => options.handshake.verify(channel!, Object.freeze({
@@ -1346,6 +1455,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         host = writer.transitionLaunch({ type: "verify_handshake", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, handshakeDigest, at: clock().toISOString() });
         const adopted = options.sessions.finalizeLaunch({ staged, launchId: request.launchId, sessionId: request.sessionId, ownerId, fencingToken: 1, expectedRevision: host.revision, lease, backendBinding, handshakeDigest, envelope: request.envelope });
         attachments.set(request.sessionId, attachment); revoker.dispose();
+        publishTerminalObservation(request.sessionId, attachment);
         const executionState = { active: false };
         const scopedRequest = (operation: "request" | "language_request") => createStreamingRequestOperation({
             operation, executionState,
@@ -1386,7 +1496,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             try { return await attachment!.output.deliverNext(authorization, assertion, deliver); }
             catch (error) { if (error instanceof Error) { const reminted = remintRunnerSessionError(error.cause); if (reminted) throw reminted; } throw remintRunnerSessionError(error) ?? error; }
           },
-          stop: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => { options.sessions.assertOperationAuthorization(authorization, { ...assertion, sessionId: request.sessionId, operation: "stop" }); await settleAdoptedAttachment(request.sessionId, attachment!, "backend_unavailable"); return Object.freeze({ record: options.kernel.store.readBySession(request.sessionId), evidence: finalizedEvidence.get(request.sessionId) }); },
+          stop: (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => stopAuthorizedSession(authorization, { ...assertion, sessionId: request.sessionId }),
         });
       } catch (error) {
         if (request.signal?.aborted && effectPending) {
@@ -1699,3 +1809,15 @@ function classifyCleanupFailure(resource: HostCleanupResourceFact["resource"], e
 }
 function leaseCleanupIdentity(lease: StreamingSessionLease): string { return `lease:${createHash("sha256").update(JSON.stringify(lease)).digest("hex")}`; }
 function channelCleanupIdentity(sessionId: string, binding: StreamingSessionBackendBinding): string { return `channel:${createHash("sha256").update(JSON.stringify({ sessionId, binding })).digest("hex")}`; }
+
+function terminalObservation(value: unknown): StreamingTerminalObservation {
+  const field = (name: string): unknown => {
+    if (!value || typeof value !== "object") return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  };
+  const state = field("state"), code = field("exitCode"), signal = field("signal");
+  const exitCode = Number.isSafeInteger(code) ? code as number : null;
+  const parsedSignal = typeof signal === "string" && /^SIG[A-Z0-9]{1,16}$/.test(signal) ? signal as NodeJS.Signals : null;
+  return Object.freeze({ state: state === "exited" ? "exited" : "outcome_unknown", exitCode, signal: parsedSignal });
+}

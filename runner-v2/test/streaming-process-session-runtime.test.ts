@@ -3819,3 +3819,129 @@ test("LSP graceful callback failure after a real effect cannot masquerade as a r
     assert.notEqual(f.kernel.store.readBySession("stream-1")!.state, "released");
   } finally { await emission; f.kernel.store.close(); }
 }));
+
+
+test("managed shared evidence observation never consumes protocol output and rechecks the original read authority", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  const opened = await f.runtime.open({ ...f.request, protocolStreams: [] });
+  try {
+    const bytes = Buffer.from("managed"); const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+    await f.emit({ metadata, bytes, acknowledge: async () => undefined }); assert.equal(f.deliveries, 0);
+    const operation = { sessionId: opened.sessionId, operation: "observe" as const, binding: f.request.binding, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const authorization = opened.authorizeFirstOperation(operation);
+    const runtime = f.runtime as unknown as { observeOutput(input: { authorization: typeof authorization; assertion: typeof operation }): Promise<{ output: { streams: readonly { tail: string }[] } }> };
+    assert.equal(typeof runtime.observeOutput, "function", "observation must use the shared evidence owner, not private process log files");
+    assert.match((await runtime.observeOutput({ authorization, assertion: operation })).output.streams[0]!.tail, /managed$/);
+    await f.grants.revoke(f.request.grant, "completed");
+    await assert.rejects(runtime.observeOutput({ authorization, assertion: operation }), /current|revok|authority/i);
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: opened.sessionId, timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+test("managed shared observation refuses delivery when its original grant is revoked during the evidence wait", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  let release!: () => void, entered!: () => void; const held = new Promise<void>(r => { release = r; }), started = new Promise<void>(r => { entered = r; });
+  f.setEvidenceSpool(() => { const spool = evidence.createSpool(); return { write: spool.write.bind(spool), finalize: spool.finalize.bind(spool), cleanup: spool.cleanup.bind(spool),
+    observe: async () => { entered(); await held; return await spool.observe(); } }; });
+  const opened = await f.runtime.open({ ...f.request, protocolStreams: [] });
+  try {
+    const operation = { sessionId: opened.sessionId, operation: "observe" as const, binding: f.request.binding, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+    const authorization = opened.authorizeFirstOperation(operation);
+    const runtime = f.runtime as unknown as { observeOutput(input: { authorization: typeof authorization; assertion: typeof operation }): Promise<unknown> };
+    assert.equal(typeof runtime.observeOutput, "function");
+    const reading = runtime.observeOutput({ authorization, assertion: operation }); void reading.catch(() => undefined);
+    await started; await f.grants.revoke(f.request.grant, "completed"); release();
+    await assert.rejects(reading, /current|revok|authority/i); assert.equal(f.kernel.store.readBySession(opened.sessionId)!.state, "active", "cancelled reads must not stop the child");
+  } finally { release(); await f.runtime.cleanupOwnedSession({ sessionId: opened.sessionId, timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+test("managed shared terminal observation recorded before adoption is delivered only after exact ownership transfer", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  let notify: ((result: unknown) => void) | undefined; const seen: unknown[] = [];
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, observeTerminal: sink => { notify = sink; return () => undefined; }, settleBackpressuredOutput: async () => ({ status: "settled" as const }), detach: async () => undefined }));
+  f.setHandshake(async () => { notify!({ state: "exited", exitCode: 7 }); return "b".repeat(64); });
+  const request = { ...f.request, protocolStreams: [], onTerminal: (value: unknown) => { assert.equal(f.kernel.store.readBySession("stream-1")!.cleanupOwner, "session_authority"); seen.push(value); } };
+  try { await f.runtime.open(request); assert.deepEqual(seen, [{ state: "exited", exitCode: 7, signal: null }]); }
+  finally { await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+test("managed shared stop commits durable stopping before waiting and survives caller grant revocation", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  let release!: () => void; const held = new Promise<void>(r => { release = r; });
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { await held; return "cleaned"; }, undefined, { evidence });
+  const opened = await f.runtime.open({ ...f.request, protocolStreams: [] });
+  const binding = { ...f.request.binding, callId: "exact-stop", toolName: "process.signal" };
+  const grant = await f.grants.issue({ ...binding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: true, networkApproved: false });
+  const operation = { sessionId: opened.sessionId, operation: "stop" as const, binding, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  let stopping: Promise<unknown> | undefined;
+  try {
+    const authorization = opened.authorizeOperation({ ...operation, grant });
+    stopping = opened.stop(authorization, operation); void stopping.catch(() => undefined);
+    assert.ok(f.kernel.store.readBySession(opened.sessionId)!.history.some(entry => entry.state === "stopping"), "stop acceptance must be durable before any asynchronous cleanup wait");
+    await f.grants.revoke(grant, "cancelled"); release(); await stopping;
+    assert.equal(f.kernel.store.readBySession(opened.sessionId)!.state, "released");
+  } finally { release(); await stopping?.catch(() => undefined); await f.runtime.cleanupOwnedSession({ sessionId: opened.sessionId, timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+test("managed shared trusted observation binds the exact owner and reads finalized output without a model grant", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  const opened = await f.runtime.open({ ...f.request, protocolStreams: [] });
+  const runtime = f.runtime as unknown as { observeOwnedOutput(input: { sessionId: string; owner: typeof f.request.binding }): Promise<{ output: { streams: readonly { tail: string }[] } }> };
+  try {
+    assert.equal(typeof runtime.observeOwnedOutput, "function");
+    const bytes = Buffer.from("managed"); const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+    await f.emit({ metadata, bytes, acknowledge: async () => undefined });
+    await assert.rejects(runtime.observeOwnedOutput({ sessionId: opened.sessionId, owner: { ...f.request.binding, runId: "foreign" } }), /owner|identity/i);
+    await f.grants.revoke(f.request.grant, "completed");
+    const view = await runtime.observeOwnedOutput({ sessionId: opened.sessionId, owner: f.request.binding });
+    assert.match(view.output.streams[0]!.tail, /managed$/); assert.equal(f.deliveries, 0);
+    await f.runtime.cleanupOwnedSession({ sessionId: opened.sessionId, timeoutMs: 1000 });
+    const final = await runtime.observeOwnedOutput({ sessionId: opened.sessionId, owner: f.request.binding });
+    assert.match(final.output.streams[0]!.tail, /managed$/);
+  } finally { await f.runtime.cleanupOwnedSession({ sessionId: opened.sessionId, timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+test("managed shared runtime observes the concrete waitForTerminal channel without a private observer API", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  let finish!: (value: unknown) => void; const ending = new Promise<unknown>(resolve => { finish = resolve; });
+  let observed!: (value: unknown) => void; const observation = new Promise<unknown>(resolve => { observed = resolve; });
+  f.setChannelAcquire(async () => ({ subscribeBackpressuredOutput: () => () => undefined, waitForTerminal: () => ending,
+    settleBackpressuredOutput: async () => ({ status: "settled" as const }), detach: async () => { finish({ state: "exited", exitCode: 7 }); } }));
+  await f.runtime.open({ ...f.request, protocolStreams: [], onTerminal: value => observed(value) });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    finish({ state: "exited", exitCode: 7 });
+    assert.deepEqual(await Promise.race([observation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Concrete channel terminal result was not observed")), 200); })]), { state: "exited", exitCode: 7, signal: null });
+  } finally { if (timer) clearTimeout(timer); finish({ state: "exited", exitCode: 7 }); await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 }); f.kernel.store.close(); }
+}));
+
+test("managed recovery reconnects exact evidence intake before observing a retained quiescence attempt without reissuing stop", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "outcome_unknown", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  await f.runtime.open({ ...f.request, protocolStreams: [] });
+  seedAdoptedCleanup(f, 0, true); // persisted predecessor attempt; observation must join it, never rerun its stop
+  const originalStopEffects = f.calls.filter(call => call === "reconcile").length, initialReattachments = f.reattachCalls;
+  f.runtimeOptions.host.observeQuiescence = async () => f.reattachCalls > initialReattachments ? "verified" : "blocked";
+  const recovery = f.createRecoveryRuntime();
+  try {
+    await recovery.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 });
+    assert.equal(f.kernel.store.readBySession("stream-1")!.state, "released");
+    assert.ok(f.reattachCalls > initialReattachments, "a terminal output-dependent backend cannot prove emptiness without its exact evidence reader");
+    assert.equal(f.calls.filter(call => call === "reconcile").length, originalStopEffects, "an unknown stop effect must not be repeated");
+  } finally { f.kernel.store.close(); }
+}));
+
+test("managed fresh host reads authenticated finalized evidence after the live checkpoint has been retired", async t => withSyntheticFixtureEvidence(t, async evidence => {
+  const f = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence });
+  await f.runtime.open({ ...f.request, protocolStreams: [] });
+  const bytes = Buffer.from("final-output"), metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+  await f.emit({ metadata, bytes, acknowledge: async () => undefined });
+  await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 1000 });
+  assert.equal(f.kernel.store.readOutputCheckpoint("stream-1"), undefined);
+  const launches = f.launchCalls, reattachments = f.reattachCalls;
+  const recovery = f.createRecoveryRuntime();
+  try {
+    await assert.rejects(recovery.observeOwnedOutput({ sessionId: "stream-1", owner: { ...f.request.binding, runId: "foreign" } }), /owner|identity/i);
+    const observed = await recovery.observeOwnedOutput({ sessionId: "stream-1", owner: f.request.binding });
+    assert.equal(observed.record.state, "released"); assert.match(observed.output.streams[0]!.tail, /final-output$/);
+    assert.equal(f.launchCalls, launches); assert.equal(f.reattachCalls, reattachments, "terminal evidence reads do not reacquire native resources");
+    assert.equal(f.deliveries, 0);
+  } finally { f.kernel.store.close(); }
+}));

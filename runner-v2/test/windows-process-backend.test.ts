@@ -91,7 +91,6 @@ import {
   WindowsProcessBackend,
   type WindowsJobProcessService,
 } from "../src/windows-process-backend.js";
-import { ManagedProcessService } from "../src/managed-process.js";
 import { createWindowsJobProcessHost, WindowsJobHostError } from "../src/windows-job-process-host.js";
 import { NativeProcessLaunchBlockedError, type NativeProcessOperations } from "../src/native-process-backend.js";
 import { probeProcessHostSemantics } from "../src/process-host-semantic-probes.js";
@@ -1796,7 +1795,7 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-backend-job-"));
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
-  const service = new ManagedProcessService({ stateDirectory: join(root, "state") });
+  const service = createWindowsJobProcessHost({ stateDirectory: `${join(root, "state")}-job-host` });
   const backend = createWindowsProcessBackend({ jobObjects: { service }, semanticFacts: verifiedWindowsSemanticFacts });
   const attestation = await backend.probe() as { capabilities: Record<string, string> };
   assert.equal(attestation.capabilities.crash_cleanup, "enforced");
@@ -1843,7 +1842,7 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
   } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
   finally {
     await finalizeCertifiedFixture({ fixtureName: "Windows owned backend", root, hasPrimaryFailure, primaryFailure,
-      cleanup: async () => { if (!cleanupReleased) { await drainAndCleanupWindowsFixture(backend, binding, takeoverFence); cleanupReleased = true; } service.close(); },
+      cleanup: async () => { if (!cleanupReleased) { await drainAndCleanupWindowsFixture(backend, binding, takeoverFence); cleanupReleased = true; } },
       certify: async () => { assert.equal(cleanupReleased, true, "exact backend release must be certified"); },
       removeRoot: () => { rmSync(root, { recursive: true, maxRetries: 30, retryDelay: 50 }); t.diagnostic(`certified backend fixture removed: ${root}`); },
     });
@@ -1858,7 +1857,7 @@ test("Windows Job v2 channel performs a real duplex roundtrip with detach and re
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-channel-"));
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
-  const service = new ManagedProcessService({ stateDirectory: join(root, "state") });
+  const service = createWindowsJobProcessHost({ stateDirectory: `${join(root, "state")}-job-host` });
   const backend = createWindowsProcessBackend({ jobObjects: { service }, semanticFacts: verifiedWindowsSemanticFacts }) as WindowsJobObjectProcessBackend;
   const duplexRequest = request(["-e", "process.stdin.pipe(process.stdout)"]);
   const launch = parseProcessLaunchResult(await backend.launch({
@@ -1895,9 +1894,7 @@ test("Windows Job v2 channel performs a real duplex roundtrip with detach and re
     await recovered.channel.waitForTerminal();
     assert.deepEqual(Buffer.concat(received), Buffer.concat([firstPayload, payload]));
   } finally {
-    await backend.signal(binding, "force_terminate", { ownerId: "job-test-cleanup", fencingToken: fence.fencingToken + 2 }).catch(() => undefined);
-    await service.stopRun("run").catch(() => undefined);
-    service.close();
+    await drainAndCleanupWindowsFixture(backend, binding, { ownerId: "job-test-cleanup", fencingToken: fence.fencingToken + 2 });
     try { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); } catch {}
   }
 });
@@ -2239,7 +2236,7 @@ test("Windows Job observation uses absolute durable offsets beyond the configure
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   const maxPollBytes = 64 * 1024;
-  const service = new ManagedProcessService({ stateDirectory: join(root, "state"), maxPollBytes });
+  const service = createWindowsJobProcessHost({ stateDirectory: `${join(root, "state")}-job-host`, maxPollBytes });
   const backend = createWindowsProcessBackend({ jobObjects: { service }, semanticFacts: verifiedWindowsSemanticFacts });
   const oversized = "x".repeat(300_000);
   const outputRequest = request(["-e", "process.stdout.write('x'.repeat(300000))"]);
@@ -2261,8 +2258,7 @@ test("Windows Job observation uses absolute durable offsets beyond the configure
     assert.equal(Buffer.concat(chunks).toString(), oversized);
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, true);
   } finally {
-    await service.stopRun("run").catch(() => undefined);
-    service.close();
+    await drainAndCleanupWindowsFixture(backend, binding, fence);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });

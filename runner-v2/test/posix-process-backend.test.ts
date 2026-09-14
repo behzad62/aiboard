@@ -1173,6 +1173,62 @@ test("C4 POSIX supervisor reattests inside the fenced effect before a group sign
   assert.equal(published.at(-1)?.status, "outcome_unknown");
 });
 
+test("C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const callbacks = new Map<string, () => void>();
+  const stream = (name: "stdout" | "stderr") => ({
+    once(event: string, callback: () => void) { callbacks.set(`${name}:${event}`, callback); return this; },
+  });
+  const context = vm.createContext({
+    posixStdoutClosed: false,
+    posixStderrClosed: false,
+    stdout: stream("stdout"),
+    stderr: stream("stderr"),
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "installPosixOutputLifecycle")}`, context);
+  vm.runInContext('installPosixOutputLifecycle("stdout", stdout); installPosixOutputLifecycle("stderr", stderr);', context);
+  assert.equal(vm.runInContext("posixStdoutClosed", context), false);
+  assert.equal(vm.runInContext("posixStderrClosed", context), false);
+  assert.equal(typeof callbacks.get("stdout:end"), "function", "EOF must independently certify that no more stdout bytes can arrive");
+  assert.equal(typeof callbacks.get("stderr:end"), "function", "EOF must independently certify that no more stderr bytes can arrive");
+  callbacks.get("stdout:end")!();
+  assert.equal(vm.runInContext("posixStdoutClosed", context), true);
+  assert.equal(vm.runInContext("posixStderrClosed", context), false);
+  callbacks.get("stderr:end")!();
+  assert.equal(vm.runInContext("posixStderrClosed", context), true);
+  assert.doesNotThrow(() => callbacks.get("stdout:close")!(), "later close is idempotent after EOF");
+});
+test("C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let zeroLengthReads = 0;
+  let end: (() => void) | undefined;
+  const stdout = {
+    readableLength: 0,
+    once(event: string, callback: () => void) { if (event === "end") end = callback; return this; },
+    read(size?: number) { if (size === 0) { zeroLengthReads += 1; end?.(); } return null; },
+  };
+  const context = vm.createContext({
+    Buffer,
+    Map,
+    appendFileSync: () => assert.fail("zero-length EOF probe must not append bytes"),
+    channelOutputDirectory: "unused",
+    createHash,
+    outputOffsets: { stdout: 0, stderr: 0 },
+    outputSequences: { stdout: 0, stderr: 0 },
+    posixStdoutClosed: false,
+    posixStderrClosed: false,
+    replayCapacityBytes: 256 * 1024,
+    replayCapacityChunks: 16,
+    retained: new Map(),
+    retainedBytes: 0,
+    stdout,
+    writeAtomic: () => assert.fail("zero-length EOF probe must not publish output frames"),
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "installPosixOutputLifecycle")}\n${extractNamedFunction(supervisorSource, "drainOutput")}`, context);
+  vm.runInContext('installPosixOutputLifecycle("stdout", stdout); drainOutput("stdout", stdout, "unused")', context);
+  assert.equal(zeroLengthReads, 1, "the readable-mode pump must explicitly advance a pending EOF when no bytes are buffered");
+  assert.equal(vm.runInContext("posixStdoutClosed", context), true, "that EOF must retire the exact stdout pipe obligation");
+});
 test("C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-f1-channel-"));
   const nonce = "f1-closed-pipes";

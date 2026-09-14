@@ -1,0 +1,20 @@
+{
+  "id": "diff-check-final4",
+  "startedAt": "2026-09-14T09:06:14.628Z",
+  "finishedAt": "2026-09-14T09:06:16.028Z",
+  "wrapperPid": 37264,
+  "testPid": 43328,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 433,
+  "command": [
+    "C:\\Program Files\\Git\\cmd\\git.exe",
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

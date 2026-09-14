@@ -13,7 +13,9 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { IntegrationManager } from "./support/git-fixture.js";
-import { ManagedProcessService } from "../src/managed-process.js";
+import { createExecutionHost } from "../src/execution-host.js";
+import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
+import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { type FinalVerificationPlan, type FinalVerificationRuntimeSmokeInput } from "../src/final-verification-runtime.js";
 import { FinalVerificationRuntime } from "./support/git-fixture.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -25,11 +27,8 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
   const port = await freePort();
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
-  const managed = new ManagedProcessService({
-    stateDirectory: join(fixture.state, "managed-processes"),
-    startDeadlineMs: 5_000,
-    stopDeadlineMs: 5_000,
-  });
+  const managedOwner = await createManagedExecution(fixture);
+  const managed = managedOwner.service;
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
     execution: createTestOneShotCommandExecutor(t),
@@ -39,6 +38,7 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
     runId: fixture.runId,
     integrationRevision: () => fixture.integration.revision,
     managedProcessService: managed,
+    managedProcessAuthority: managedOwner.authority,
   });
   try {
     const endpoint = `http://127.0.0.1:${port}/health`;
@@ -75,11 +75,10 @@ test("runtime smoke waits for health, records endpoint/output facts, and release
     assert.equal(fact.cwd, run.workspacePath);
     assert.equal(fact.cleanupSucceeded, true);
     assert.match((await artifacts.get(fact.stdoutArtifactHash)).toString(), /server ready/);
-    assert.equal(managed.listRun(fixture.runId)[0]?.status, "stopped");
+    assert.equal((await managed.listRun(fixture.runId))[0]?.status, "stopped");
     await assertPortReusable(port);
   } finally {
-    await managed.stopRun(fixture.runId).catch(() => undefined);
-    managed.close();
+    await managedOwner.close();
     evidence.close();
     await workspace.cleanup().catch(() => undefined);
     await closeFixture(fixture);
@@ -90,11 +89,8 @@ test("runtime smoke timeout is non-green and cleans up the owned process", async
   const fixture = await createFixture("smoke timeout");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
-  const managed = new ManagedProcessService({
-    stateDirectory: join(fixture.state, "managed-processes"),
-    startDeadlineMs: 5_000,
-    stopDeadlineMs: 5_000,
-  });
+  const managedOwner = await createManagedExecution(fixture);
+  const managed = managedOwner.service;
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
     execution: createTestOneShotCommandExecutor(t),
@@ -104,6 +100,7 @@ test("runtime smoke timeout is non-green and cleans up the owned process", async
     runId: fixture.runId,
     integrationRevision: () => fixture.integration.revision,
     managedProcessService: managed,
+    managedProcessAuthority: managedOwner.authority,
   });
   try {
     const smoke = smokeInput(0, {
@@ -120,10 +117,9 @@ test("runtime smoke timeout is non-green and cleans up the owned process", async
     assert.equal(check.green, false);
     assert.equal(fact.timedOut, true);
     assert.equal(fact.cancelled, false);
-    assert.equal(managed.listRun(fixture.runId)[0]?.status, "stopped");
+    assert.equal((await managed.listRun(fixture.runId))[0]?.status, "stopped");
   } finally {
-    await managed.stopRun(fixture.runId).catch(() => undefined);
-    managed.close();
+    await managedOwner.close();
     evidence.close();
     await workspace.cleanup().catch(() => undefined);
     await closeFixture(fixture);
@@ -134,11 +130,8 @@ test("runtime smoke marks an unhealthy process exit non-green and still stops it
   const fixture = await createFixture("smoke unhealthy exit");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
-  const managed = new ManagedProcessService({
-    stateDirectory: join(fixture.state, "managed-processes"),
-    startDeadlineMs: 5_000,
-    stopDeadlineMs: 5_000,
-  });
+  const managedOwner = await createManagedExecution(fixture);
+  const managed = managedOwner.service;
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
     execution: createTestOneShotCommandExecutor(t),
@@ -148,6 +141,7 @@ test("runtime smoke marks an unhealthy process exit non-green and still stops it
     runId: fixture.runId,
     integrationRevision: () => fixture.integration.revision,
     managedProcessService: managed,
+    managedProcessAuthority: managedOwner.authority,
   });
   try {
     const smoke = smokeInput(0, {
@@ -160,16 +154,16 @@ test("runtime smoke marks an unhealthy process exit non-green and still stops it
       runtimeSmoke: smoke,
     });
     const check = runtimeCheck(run);
-    const fact = check.facts[0] as typeof check.facts[number] & { exitCode: number | null; timedOut: boolean };
+    const fact = check.facts[0] as typeof check.facts[number] & { exitCode: number | null; timedOut: boolean; cleanupSucceeded: boolean };
     assert.equal(run.green, false);
     assert.equal(check.green, false);
     assert.equal(fact.exitCode, 7);
     assert.equal(fact.timedOut, false);
     assert.match(check.issues.join(" "), /unhealthy|exit|readiness/i);
-    assert.equal(managed.listRun(fixture.runId)[0]?.status, "stopped");
+    assert.equal(fact.cleanupSucceeded, true, JSON.stringify(check.issues));
+    assert.equal((await managed.listRun(fixture.runId))[0]?.status, "stopped");
   } finally {
-    await managed.stopRun(fixture.runId).catch(() => undefined);
-    managed.close();
+    await managedOwner.close();
     evidence.close();
     await workspace.cleanup().catch(() => undefined);
     await closeFixture(fixture);
@@ -181,11 +175,8 @@ test("runtime smoke cancellation stops the process tree and releases the port", 
   const port = await freePort();
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
   const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
-  const managed = new ManagedProcessService({
-    stateDirectory: join(fixture.state, "managed-processes"),
-    startDeadlineMs: 5_000,
-    stopDeadlineMs: 5_000,
-  });
+  const managedOwner = await createManagedExecution(fixture);
+  const managed = managedOwner.service;
   const workspace = workspaceFor(fixture);
   const runtime = new FinalVerificationRuntime({
     execution: createTestOneShotCommandExecutor(t),
@@ -195,6 +186,7 @@ test("runtime smoke cancellation stops the process tree and releases the port", 
     runId: fixture.runId,
     integrationRevision: () => fixture.integration.revision,
     managedProcessService: managed,
+    managedProcessAuthority: managedOwner.authority,
   });
   try {
     const controller = new AbortController();
@@ -208,7 +200,7 @@ test("runtime smoke cancellation stops the process tree and releases the port", 
       signal: controller.signal,
       runtimeSmoke: smoke,
     });
-    await waitFor(() => managed.listRun(fixture.runId).length === 1, 5_000);
+    await waitFor(async () => (await managed.listRun(fixture.runId)).length === 1, 5_000);
     controller.abort();
     const run = await promise;
     const check = runtimeCheck(run);
@@ -217,11 +209,10 @@ test("runtime smoke cancellation stops the process tree and releases the port", 
     assert.equal(check.green, false);
     assert.equal(fact.cancelled, true);
     assert.equal(fact.timedOut, false);
-    assert.equal(managed.listRun(fixture.runId)[0]?.status, "stopped");
+    assert.equal((await managed.listRun(fixture.runId))[0]?.status, "stopped");
     await assertPortReusable(port);
   } finally {
-    await managed.stopRun(fixture.runId).catch(() => undefined);
-    managed.close();
+    await managedOwner.close();
     evidence.close();
     await workspace.cleanup().catch(() => undefined);
     await closeFixture(fixture);
@@ -351,6 +342,25 @@ async function createFixture(name: string): Promise<Fixture> {
   return { root, project, state, runId, integration };
 }
 
+async function createManagedExecution(fixture: Fixture) {
+  const host = createExecutionHost({
+    projectRoot: fixture.project,
+    stateDirectory: join(fixture.state, "managed-execution-host"),
+    artifacts: new ArtifactStore(join(fixture.root, "managed-artifacts")),
+  });
+  const run = await host.bindRun({
+    runId: fixture.runId,
+    permissionProfile: "full",
+    capabilityContract: { digest: "f".repeat(64) } as RunnerCapabilityContract,
+    capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
+  });
+  return {
+    service: run.managedProcesses,
+    authority: { executionGrants: run.executionGrants, permissionProfile: "full" as const },
+    async close() { await run.close(); await host.close(); },
+  };
+}
+
 function workspaceFor(fixture: Fixture): VerificationWorkspaceManager {
   return new VerificationWorkspaceManager({
     repositoryRoot: fixture.project,
@@ -365,9 +375,9 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   rmSync(fixture.root, { recursive: true, force: true });
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error(`Condition was not met within ${timeoutMs} ms.`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }

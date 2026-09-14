@@ -65,7 +65,7 @@ test("portable supervisor observes input stream errors without fabricating termi
   assert.ok(start >= 0 && end > start);
   const child = Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new EventEmitter(), stderr: new EventEmitter() });
   let failures = 0, anchorExits = 0;
-  runInNewContext(source.slice(start, end), { child, config: { platform: "posix" }, installOutput: () => undefined,
+  runInNewContext(source.slice(start, end), { child, config: { platform: "posix" }, installOutput: () => undefined, installPosixOutputLifecycle: () => undefined,
     stdoutPath: "stdout", stderrPath: "stderr", markPosixPipeClosed: () => undefined,
     fail: () => { failures++; }, handlePosixAnchorExit: () => { anchorExits++; } });
   assert.doesNotThrow(() => child.stdin.emit("error", new Error("EPIPE")));

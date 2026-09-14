@@ -159,8 +159,8 @@ if (config.platform === "windows") {
 installOutput("stdout", child.stdout, stdoutPath);
 installOutput("stderr", child.stderr, stderrPath);
 if (config.platform === "posix") {
-  child.stdout.once("close", () => markPosixPipeClosed("stdout"));
-  child.stderr.once("close", () => markPosixPipeClosed("stderr"));
+  installPosixOutputLifecycle("stdout", child.stdout);
+  installPosixOutputLifecycle("stderr", child.stderr);
 }
 // A pipe error belongs to its retained input callback, not process ownership.
 child.stdin.on("error", () => {});
@@ -236,6 +236,14 @@ function tick() {
   }
 }
 
+function installPosixOutputLifecycle(stream, readable) {
+  // `end` is the exact readable-side EOF proof: all bytes before EOF were
+  // consumed and no writer can append more to this pipe. Some runtimes delay
+  // the later resource `close` notification, so either event may retire the
+  // same idempotent pipe obligation.
+  readable.once("end", () => markPosixPipeClosed(stream));
+  readable.once("close", () => markPosixPipeClosed(stream));
+}
 function markPosixPipeClosed(stream) {
   if (stream === "stdout") {
     posixStdoutClosed = true;
@@ -330,7 +338,13 @@ function drainOutput(stream, readable, evidencePath) {
     // persistent process may produce only short frames, so consume the exact
     // bytes currently buffered while preserving the configured upper bound.
     const available = Math.min(maximum, readable.readableLength);
-    if (available < 1) break;
+    if (available < 1) {
+      // In readable mode Node can defer the EOF/end transition until a read is
+      // attempted after the final buffered byte. A zero-byte read advances that
+      // state without consuming data or widening the bounded frame size.
+      readable.read(0);
+      break;
+    }
     const bytes = readable.read(available);
     if (!bytes) break;
     appendFileSync(evidencePath, bytes);

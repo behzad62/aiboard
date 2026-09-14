@@ -118,16 +118,28 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
   async waitForTerminal(): Promise<unknown> {
     this.assertAttached(); this.startPolling();
     for (;;) {
+      this.assertAttached();
       await this.poll();
+      this.assertAttached();
       const state = await this.authority.reattest();
+      this.assertAttached();
       if (state === "exited") {
         for (;;) {
+          this.assertAttached();
           const before = this.offsets.stdout + this.offsets.stderr;
           await this.poll();
           if (this.offsets.stdout + this.offsets.stderr === before) {
             if (this.outputFailure) throw this.outputFailure;
             if (await this.authority.reattest() !== "exited") throw new Error("Windows Job terminal identity changed during output settlement.");
-            return { state: "exited" };
+            this.assertAttached();
+            const terminal = await this.authority.control(() => this.authority.service.reconcileOwned(
+              this.authority.processId, this.authority.owner, this.authority.fence));
+            this.assertAttached();
+            if (terminal.processId !== this.authority.processId || terminal.status !== "stopped" || !terminal.ownershipReleased ||
+                await this.authority.reattest() !== "exited") throw new Error("Windows Job terminal result is not currently authenticated.");
+            this.assertAttached();
+            return { state: "exited", ...(terminal.exitCode === null ? {} : { exitCode: terminal.exitCode }),
+              ...(terminal.signal ? { signal: terminal.signal } : {}) };
           }
         }
       }

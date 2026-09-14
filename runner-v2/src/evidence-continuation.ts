@@ -248,3 +248,26 @@ export function createEvidenceContinuation(options: {
     cleanup: async () => { await tail; await options.spool.cleanup?.(); },
   };
 }
+
+/** Reconstruct a retired checkpoint only from its authenticated final-manifest
+ * reference. Reading terminal evidence acquires no channel or process owner. */
+export async function readFinalizedEvidenceReference(artifacts: ArtifactStore, reference: Readonly<{ digest: string; lossy: boolean }>): Promise<BoundedOutputSpoolResult> {
+  if (!isHash(reference.digest) || typeof reference.lossy !== "boolean") return fail();
+  const manifest = object(JSON.parse((await verifiedArtifactBytes(artifacts, reference.digest, PAGE_MAX_BYTES)).toString()),
+    ["version", "evidenceId", "previousHash", "resultHash", "legacyHead", "summary"]);
+  const resultSummary = object(manifest.summary, ["loss", "positions", "retainedBytes", "pages"]);
+  if (manifest.version !== 1 || !isHash(manifest.resultHash) || (manifest.previousHash !== null && !isHash(manifest.previousHash)) ||
+      (manifest.legacyHead !== null && !isHash(manifest.legacyHead))) return fail();
+  const batches: string[][] = [], seen = new Set<string>(); let next = manifest.legacyHead as string | null;
+  while (next !== null) {
+    if (batches.length >= 384 || seen.has(next)) return fail(); seen.add(next);
+    const page = object(JSON.parse((await verifiedArtifactBytes(artifacts, next, PAGE_MAX_BYTES)).toString()), ["version", "evidenceId", "previousHash", "artifactHashes"]);
+    if (page.version !== 1 || page.evidenceId !== manifest.evidenceId || (page.previousHash !== null && !isHash(page.previousHash)) ||
+        !Array.isArray(page.artifactHashes) || page.artifactHashes.length < 1 || page.artifactHashes.length > 32 || page.artifactHashes.some(value => !isHash(value))) return fail();
+    batches.push(page.artifactHashes as string[]); next = page.previousHash as string | null;
+  }
+  const state = parseEvidenceContinuation({ version: 1, evidenceId: manifest.evidenceId, head: manifest.previousHash,
+    ...resultSummary, legacyHashes: batches.reverse().flat(), finalized: { manifestHash: reference.digest,
+      resultHash: manifest.resultHash, legacyHead: manifest.legacyHead, lossy: reference.lossy } });
+  return await verifyFinalizedEvidence(artifacts, state);
+}
