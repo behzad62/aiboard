@@ -1,0 +1,11 @@
+{
+  "fault": "routine-state-guard",
+  "mutatedLine": "if (!isExceptionalProcessState(target.scope.state) && target.scope.state !== \"running\") throw new ProcessRecoveryError(\"routine_recovery_forbidden\");",
+  "beforeHash": "95fa42db36bdf9b52b79f2e58eb07aaa18faf99847e78152f5549d2a6620ce3e",
+  "restoredHash": "95fa42db36bdf9b52b79f2e58eb07aaa18faf99847e78152f5549d2a6620ce3e",
+  "redExit": 1,
+  "greenExit": 0,
+  "restoredExactly": true,
+  "redExpected": true,
+  "greenExpected": true
+}

@@ -1,0 +1,24 @@
+{
+  "id": "control-plane-red",
+  "startedAt": "2026-09-15T12:45:22.943Z",
+  "finishedAt": "2026-09-15T12:45:30.469Z",
+  "wrapperPid": 17204,
+  "testPid": 29260,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 446,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery-control.test.ts"
+  ],
+  "rootCount": 2,
+  "retainedRoots": []
+}

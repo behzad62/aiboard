@@ -1,0 +1,25 @@
+{
+  "id": "factory-disclosure-red",
+  "startedAt": "2026-09-15T14:22:14.558Z",
+  "finishedAt": "2026-09-15T14:22:38.720Z",
+  "wrapperPid": 69036,
+  "testPid": 62600,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 447,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=NativeBuildFactory executes",
+    "runner-v2/test/native-final-verification-factory.test.ts"
+  ],
+  "rootCount": 4,
+  "retainedRoots": []
+}

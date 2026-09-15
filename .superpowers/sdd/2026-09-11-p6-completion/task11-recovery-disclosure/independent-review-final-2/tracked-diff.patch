@@ -1,0 +1,2088 @@
+﻿diff --git a/.superpowers/sdd/2026-09-11-p6-completion/plan.md b/.superpowers/sdd/2026-09-11-p6-completion/plan.md
+index b6cdc63d..e9634fd1 100644
+--- a/.superpowers/sdd/2026-09-11-p6-completion/plan.md
++++ b/.superpowers/sdd/2026-09-11-p6-completion/plan.md
+@@ -14,7 +14,7 @@ Canonical sources: docs/superpowers/plans/2026-08-26-runner-v2-robust-build-impr
+ | 8.5 launch audit | Negative local-provider inventory; exact symbol-level raw-launch allowlist; 10 causal bypass REDs; injected ambient closure; Task8 exit | VERIFIED: provider inventory negative; raw guard 2/2; RunnerInternal 8/8; semantic probes 27/27; Windows backend 90/90; protected/resource audit clean; Task 9 eligible |
+ | 9 Git hardening | Central safe environment/config/indirect execution policy; hostile hook/filter/helper/etc fixtures remain inert; typed refusal and exact grant/cleanup | VERIFIED: post-causal hostile 16/16; affected Git 114/114; bootstrap 3/3; focused IntegrationManager 10/10; affected native 56/56; TSC/ESLint/diff-check green; 6 final-source causal REDs restored exact; protected 2,350 clean; accepted resources 16 runs/321 roots/0 retained; Task 10 eligible |
+ | 10 filesystem fence | Sole revalidated mutation seam, expected revision, create-only/move/delete identity and alias/hardlink checks; documented non-CAS external race | VERIFIED: 311/311 Windows affected checks; TSC/ESLint/diff-check green; 2 causal guards RED/restored exact; 486 accepted roots/0 retained; 4519 protected files and 1708 unrelated entries unchanged; Task 11 eligible, unstarted |
+-| 11 recovery/disclosure | Narrow exceptional proposals with identity/authority/expiry validation and durable redacted audit; routine lifecycle model-free; truthful API/client projection | PENDING |
++| 11 recovery/disclosure | Narrow exceptional proposals with identity/authority/expiry validation and durable redacted audit; routine lifecycle model-free; truthful API/client projection | IN_PROGRESS: task11-recovery-disclosure/plan.md; protected baseline captured |
+ | 12 package/platform/P6 gate | Reverse cleanup, reproducible archives, package smoke, maintained Node22/24 and Windows/Linux/macOS CI, full suite, resource accounting and final requirement audit | PENDING |
+ 
+ Verification: test-first causal RED, minimal implementation, material fault RED/restored GREEN; exact failed checks then affected graph. Full configured suite reserved for stable whole-P6 acceptance. Source hashes bind evidence; do not rerun unchanged checks just for ceremony. CI definition is not actual CI success. External CI results/publication permissions are checked when the final platform gate is reached; do not preemptively stop useful local work.
+diff --git a/components/RunnerV2ObservabilityPanel.tsx b/components/RunnerV2ObservabilityPanel.tsx
+index 60523ccc..23784ad9 100644
+--- a/components/RunnerV2ObservabilityPanel.tsx
++++ b/components/RunnerV2ObservabilityPanel.tsx
+@@ -54,6 +54,72 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
+   };
+ }
+ 
++export function runnerExecutionSafetyDiagnostics(snapshot: NativeBuildObservability): Array<{
++  key: string;
++  title: string;
++  detail: string;
++}> {
++  const safety = snapshot.executionSafety;
++  if (!safety) {
++    return [{
++      key: "execution-safety:not-reported",
++      title: "Execution safety not reported",
++      detail: "This Runner response predates execution-safety disclosure, so confinement cannot be inferred.",
++    }];
++  }
++  if (safety.availability === "unavailable") {
++    return [{
++      key: "execution-safety:unavailable",
++      title: "Execution safety unavailable",
++      detail: "This historical view cannot prove the original live grant, isolation lease, process identity, and cleanup state.",
++    }];
++  }
++  const items: Array<{ key: string; title: string; detail: string }> = [];
++  const isolationTitle = safety.fullBypass
++    ? "Full permission bypass active"
++    : safety.isolation.status === "write_confinement_exact_grant"
++      ? "Write confinement enforced"
++      : safety.isolation.status === "blocked"
++        ? "Execution isolation blocked"
++        : "Execution confinement unverified";
++  const isolationDetail = safety.fullBypass
++    ? "Full mode is explicitly unconfined; provider isolation is not being claimed as a security boundary."
++    : `${safety.isolation.status} ┬À ${safety.isolation.securityBoundary} ┬À ${safety.isolation.activeLeaseCount} active isolation lease${safety.isolation.activeLeaseCount === 1 ? "" : "s"}${
++        safety.isolation.blockers.length ? ` ┬À blockers: ${safety.isolation.blockers.join("; ")}` : ""
++      }`;
++  items.push({ key: "execution-safety:isolation", title: isolationTitle, detail: isolationDetail });
++  items.push({
++    key: "execution-safety:grants",
++    title: "Execution grants",
++    detail: `${safety.grants.active} active ┬À ${safety.grants.consumed} consumed`,
++  });
++  for (const process of safety.processes) {
++    const backend = process.backend
++      ? `${process.backend.backendId}${process.backend.providerId ? ` via ${process.backend.providerId}` : ""}`
++      : "backend unavailable";
++    const capabilities = Object.entries(process.capabilities)
++      .map(([name, state]) => `${name}=${state}`)
++      .join(", ");
++    const output = process.output.status === "unavailable"
++      ? "output unavailable"
++      : `${process.output.status} output ┬À ${process.output.totalBytes} bytes ┬À ${process.output.lossyBytes} lossy bytes`;
++    items.push({
++      key: `execution-safety:process:${process.invocationId}`,
++      title: `${process.kind} ${process.logicalProcessId}`,
++      detail: `${process.lifecycleState} ┬À ${backend} ┬À ${capabilities} ┬À cleanup ${process.cleanup.state} ┬À ${output}`,
++    });
++  }
++  for (const recovery of safety.recovery) {
++    const state = recovery.state === "user_decision_required" ? "user decision required" : recovery.state.replaceAll("_", " ");
++    items.push({
++      key: `execution-safety:recovery:${recovery.proposalId}`,
++      title: `Exceptional recovery: ${recovery.requestedAction}`,
++      detail: `${state}${recovery.cleanupState ? ` ┬À cleanup ${recovery.cleanupState}` : ""}`,
++    });
++  }
++  return items;
++}
++
+ type SearchableObservability = Pick<
+   NativeBuildObservability,
+   | "agents"
+@@ -591,6 +657,70 @@ export function runnerUserFacingObservability(
+     : evidenceVerification;
+ 
+   const problems: UserFacingProblem[] = [];
++  const executionSafety = snapshot.executionSafety;
++  if (executionSafety?.availability === "live") {
++    if (executionSafety.fullBypass) {
++      problems.push({
++        key: "execution-safety:full-bypass",
++        title: "Full permission bypass is active",
++        detail: "This run explicitly permits unconfined execution in Full mode. Runner does not describe this state as confined.",
++      });
++    } else if (executionSafety.isolation.status === "blocked" || executionSafety.isolation.status === "unverified") {
++      problems.push({
++        key: "execution-safety:isolation",
++        title: executionSafety.isolation.status === "blocked" ? "Execution isolation is blocked" : "Execution confinement is unverified",
++        detail: executionSafety.isolation.status === "blocked"
++          ? "The configured provider could not establish the requested execution boundary."
++          : "No enforced write-confinement record is available, so Runner cannot claim this execution was confined.",
++      });
++    }
++    const exceptionalStates = new Set(["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"]);
++    for (const process of executionSafety.processes) {
++      const unavailableRequired = process.requiredCapabilities.filter((capability) =>
++        process.capabilities[capability as keyof typeof process.capabilities] !== "enforced"
++      );
++      if (unavailableRequired.length > 0) {
++        problems.push({
++          key: `execution-safety:capabilities:${process.invocationId}`,
++          title: "Required execution capability is not enforced",
++          detail: `${process.logicalProcessId}: ${unavailableRequired.join(", ")} is partial, unavailable, or unverified.`,
++        });
++      }
++      if (process.output.status === "lossy" || process.output.status === "truncated") {
++        problems.push({
++          key: `execution-safety:output:${process.invocationId}`,
++          title: "Process output is incomplete",
++          detail: process.output.status === "lossy"
++            ? `${process.logicalProcessId} lost ${process.output.lossyBytes} byte${process.output.lossyBytes === 1 ? "" : "s"} of output; captured output must not be treated as complete.`
++            : `${process.logicalProcessId} output was truncated; captured output must not be treated as complete.`,
++        });
++      }
++      if (process.cleanup.state === "failed" || (exceptionalStates.has(process.lifecycleState) && process.cleanup.state === "pending")) {
++        problems.push({
++          key: `execution-safety:cleanup:${process.invocationId}`,
++          title: process.cleanup.state === "failed" ? "Process cleanup failed" : "Process cleanup is unresolved",
++          detail: process.cleanup.detail ?? "Runner has not proven this process tree empty, so cleanup is not complete.",
++        });
++      }
++    }
++    for (const recovery of executionSafety.recovery) {
++      const authorizedDestructive = recovery.state === "authorized" && recovery.requestedAction !== "inspect";
++      if (!authorizedDestructive && !["user_decision_required", "executing", "outcome_unknown"].includes(recovery.state)) continue;
++      problems.push({
++        key: `execution-safety:recovery:${recovery.proposalId}`,
++        title: recovery.state === "user_decision_required"
++          ? "Exceptional recovery needs your decision"
++          : authorizedDestructive
++            ? "Authorized exceptional recovery is pending"
++            : "Exceptional recovery is unresolved",
++        detail: recovery.state === "user_decision_required"
++          ? "Runner requires an exact user decision before executing this destructive recovery proposal."
++          : authorizedDestructive
++            ? "The exact destructive proposal is authorized but has not completed; the Build remains blocked until execution reaches a proven outcome."
++            : "Runner will not replay or broaden this recovery action until its outcome is known.",
++      });
++    }
++  }
+   let verificationSeal: {
+     generationId: string;
+     targetRevision: string;
+@@ -1204,6 +1334,12 @@ export function RunnerV2ObservabilityPanel({
+             })),
+           ]}
+         />
++        <ObservationList
++          icon={<ShieldCheck className="h-3.5 w-3.5" />}
++          title="Execution safety"
++          empty="Execution safety disclosure is unavailable."
++          items={runnerExecutionSafetyDiagnostics(snapshot).filter(matches)}
++        />
+         <ObservationList
+           icon={<Server className="h-3.5 w-3.5" />}
+           title="Provider health"
+diff --git a/lib/client/runner-v2.ts b/lib/client/runner-v2.ts
+index fa32d50d..4c439409 100644
+--- a/lib/client/runner-v2.ts
++++ b/lib/client/runner-v2.ts
+@@ -752,6 +752,77 @@ export type NativeBuildEvidenceFact =
+   | NativeBrowserScreenshotEvidenceFact
+   | NativeBrowserEventsEvidenceFact;
+ 
++export type NativeExecutionSafetyCapabilityName =
++  | "tree_termination"
++  | "crash_cleanup"
++  | "verified_emptiness"
++  | "write_confinement";
++export type NativeExecutionSafetyCapabilityState = "enforced" | "partial" | "unavailable" | "unverified";
++export interface NativeProcessRecoveryScope {
++  kind: "subprocess" | "streaming";
++  runId: string;
++  invocationId: string;
++  logicalProcessId: string;
++  taskId?: string;
++  sessionId?: string;
++  revision: number;
++  ownerId: string;
++  fencingToken: number;
++  rootPid?: number;
++  state: string;
++  backendIdentity: string;
++  birthFingerprint: string;
++}
++export interface NativeProcessRecoveryRecord {
++  version: 1;
++  proposalId: string;
++  callId: string;
++  scope: NativeProcessRecoveryScope;
++  requestedAction: "inspect" | "terminate" | "remove_owned_artifact";
++  targetScope: string[];
++  requestedCapabilities: NativeExecutionSafetyCapabilityName[];
++  expiresAt: string;
++  proposalFingerprint: string;
++  commandFingerprint: string;
++  argumentsFingerprint: string;
++  rationaleFingerprint: string;
++  createdAt: string;
++  updatedAt: string;
++  state: "proposed" | "user_decision_required" | "authorized" | "executing" | "executed" | "rejected" | "failed" | "outcome_unknown";
++  reason: "submitted" | "validated" | "destructive_requires_user" | "user_approved" | "user_denied" | "scope_changed" | "expired" | "execution_started" | "inspection_completed" | "cleanup_verified" | "effect_failed" | "effect_outcome_unknown" | "resolved_by_verified_cleanup" | "model_failed";
++  attemptId?: string;
++  observation?: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
++  cleanupState?: "not_required" | "pending" | "verified_empty" | "failed";
++}
++export type NativeBuildExecutionSafetyObservability =
++  | {
++      availability: "live";
++      fullBypass: boolean;
++      isolation: {
++        status: "unconfined_explicit_full" | "write_confinement_exact_grant" | "blocked" | "unverified";
++        securityBoundary: "provider_specific_not_universal_security_boundary";
++        activeLeaseCount: number;
++        blockers: string[];
++      };
++      grants: { active: number; consumed: number };
++      processes: Array<{
++        kind: "subprocess" | "streaming";
++        invocationId: string;
++        logicalProcessId: string;
++        lifecycleState: string;
++        owned: boolean;
++        pendingEffects: boolean;
++        backend?: { backendId: string; implementationDigest: string; providerId?: string };
++        capabilities: Record<NativeExecutionSafetyCapabilityName, NativeExecutionSafetyCapabilityState>;
++        requiredCapabilities: string[];
++        leaseExpiresAt?: string;
++        cleanup: { state: "not_required" | "pending" | "verified_empty" | "failed"; detail?: string; verifiedAt?: string };
++        output: { status: "complete" | "truncated" | "lossy"; totalBytes: number; truncated: boolean; lossyBytes: number } | { status: "unavailable" };
++      }>;
++      recovery: Array<Pick<NativeProcessRecoveryRecord, "proposalId" | "requestedAction" | "state" | "reason" | "updatedAt" | "observation" | "cleanupState">>;
++    }
++  | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };
++
+ export interface NativeBuildObservability {
+   runId: string;
+   budget: NativeBuildUsageProjection;
+@@ -832,6 +903,7 @@ export interface NativeBuildObservability {
+     integrationRevision: string;
+     commits: Array<{ revision: string; parents: string[]; subject: string }>;
+   };
++  executionSafety?: NativeBuildExecutionSafetyObservability;
+   finalVerification?: NativeFinalVerificationObservability;
+   independentVerifier?: NativeIndependentVerifierObservability;
+ }
+@@ -1249,6 +1321,70 @@ export async function getNativeBuildObservability(
+   );
+ }
+ 
++export async function getNativeProcessRecovery(
++  connection: NativeRunnerConnection,
++  runId: string,
++  fetchImpl: typeof fetch = fetch,
++  signal?: AbortSignal
++): Promise<NativeProcessRecoveryRecord[]> {
++  const result = await request<{ records: NativeProcessRecoveryRecord[] }>(
++    connection,
++    `/v2/runs/${encodeURIComponent(runId)}/build/recovery`,
++    { signal },
++    fetchImpl,
++  );
++  return result.records;
++}
++
++export async function generateNativeProcessRecovery(
++  connection: NativeRunnerConnection,
++  runId: string,
++  invocationId: string,
++  proposalId: string,
++  fetchImpl: typeof fetch = fetch,
++  signal?: AbortSignal,
++): Promise<NativeProcessRecoveryRecord> {
++  return await request(
++    connection,
++    `/v2/runs/${encodeURIComponent(runId)}/build/recovery/generate`,
++    { method: "POST", body: JSON.stringify({ invocationId, proposalId }), signal },
++    fetchImpl,
++  );
++}
++
++export async function decideNativeProcessRecovery(
++  connection: NativeRunnerConnection,
++  runId: string,
++  proposalId: string,
++  fingerprint: string,
++  decision: "approve" | "reject",
++  fetchImpl: typeof fetch = fetch,
++  signal?: AbortSignal,
++): Promise<NativeProcessRecoveryRecord> {
++  return await request(
++    connection,
++    `/v2/runs/${encodeURIComponent(runId)}/build/recovery/${encodeURIComponent(proposalId)}/decision`,
++    { method: "POST", body: JSON.stringify({ fingerprint, decision }), signal },
++    fetchImpl,
++  );
++}
++
++export async function executeNativeProcessRecovery(
++  connection: NativeRunnerConnection,
++  runId: string,
++  proposalId: string,
++  fingerprint: string,
++  fetchImpl: typeof fetch = fetch,
++  signal?: AbortSignal,
++): Promise<NativeProcessRecoveryRecord> {
++  return await request(
++    connection,
++    `/v2/runs/${encodeURIComponent(runId)}/build/recovery/${encodeURIComponent(proposalId)}/execute`,
++    { method: "POST", body: JSON.stringify({ fingerprint }), signal },
++    fetchImpl,
++  );
++}
++
+ export async function getNativeBuildAudit(
+   connection: NativeRunnerConnection,
+   runId: string,
+diff --git a/runner-v2/src/build-observability.ts b/runner-v2/src/build-observability.ts
+index 92233e2f..5137f1e0 100644
+--- a/runner-v2/src/build-observability.ts
++++ b/runner-v2/src/build-observability.ts
+@@ -18,6 +18,7 @@ import type { ProjectMemoryEntry } from "./project-memory.js";
+ import type { RunnerExtensionManifest } from "./runner-extension.js";
+ import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
+ import type { ExecutionEnforcementState } from "./execution-isolation-provider.js";
++import type { RecoveryAuditRecord, RecoveryTarget } from "./process-recovery.js";
+ import type { SkillMetadata } from "./skill-catalog.js";
+ import type {
+   FinalVerificationGenerationProjection,
+@@ -161,6 +162,119 @@ export interface BuildCapabilitiesObservation {
+   executionEnforcement?: ExecutionEnforcementState;
+ }
+ 
++export interface ExecutionSafetyObservability {
++  fullBypass: boolean;
++  isolation: {
++    status: "unconfined_explicit_full" | "write_confinement_exact_grant" | "blocked" | "unverified";
++    securityBoundary: ExecutionEnforcementState["boundary"];
++    activeLeaseCount: number;
++    blockers: string[];
++  };
++  grants: { active: number; consumed: number };
++  processes: Array<{
++    kind: "subprocess" | "streaming";
++    invocationId: string;
++    logicalProcessId: string;
++    lifecycleState: string;
++    owned: boolean;
++    pendingEffects: boolean;
++    backend?: { backendId: string; implementationDigest: string; providerId?: string };
++    capabilities: RecoveryTarget["capabilities"];
++    requiredCapabilities: string[];
++    leaseExpiresAt?: string;
++    cleanup: RecoveryTarget["cleanup"];
++    output: { status: "complete" | "truncated" | "lossy"; totalBytes: number; truncated: boolean; lossyBytes: number } | { status: "unavailable" };
++  }>;
++  recovery: Array<Pick<RecoveryAuditRecord, "proposalId" | "requestedAction" | "state" | "reason" | "updatedAt" | "observation" | "cleanupState">>;
++}
++
++export function projectExecutionSafetyObservability(input: {
++  permissionProfile: "guarded" | "project" | "full";
++  isolation: ExecutionEnforcementState;
++  activeIsolationLeaseCount: number;
++  grantStates: readonly ("issued" | "consumed")[];
++  processes: readonly RecoveryTarget[];
++  recovery: Readonly<Record<string, RecoveryAuditRecord>>;
++}): ExecutionSafetyObservability {
++  const fullBypass = input.permissionProfile === "full" && input.isolation.records.some(
++    (record) => record.status === "unconfined_explicit_full",
++  );
++  const blockedRecords = input.isolation.records.filter(
++    (record) => record.status === "blocked" || record.status === "selection_blocked",
++  );
++  const summaryBlockers = (input.isolation.recoverySummaries ?? []).flatMap(
++    (summary) => summary.blockers,
++  );
++  const blockers = [...new Set([
++    ...blockedRecords.flatMap((record) => record.blocker ? [record.blocker] : []),
++    ...summaryBlockers,
++  ].map((blocker) => redactSensitiveValue(blocker, { maximumTextLength: 2_048 }))
++    .filter((blocker): blocker is string => typeof blocker === "string" && blocker.length > 0))];
++  const hasBlockingIsolation = blockedRecords.length > 0 ||
++    (input.isolation.recoverySummaries ?? []).some((summary) => summary.blockerCount > 0);
++  const confinementRecord = [...input.isolation.records].reverse().find(
++    (record) => record.enforcement === "write_confinement_exact_grant",
++  );
++  const isolationStatus: ExecutionSafetyObservability["isolation"]["status"] = hasBlockingIsolation
++    ? "blocked"
++    : fullBypass
++      ? "unconfined_explicit_full"
++      : confinementRecord
++        ? "write_confinement_exact_grant"
++        : "unverified";
++  const grants = { active: 0, consumed: 0 };
++  for (const state of input.grantStates) {
++    if (state === "issued") grants.active += 1;
++    else grants.consumed += 1;
++  }
++  return {
++    fullBypass,
++    isolation: {
++      status: isolationStatus,
++      securityBoundary: input.isolation.boundary,
++      activeLeaseCount: Math.max(0, input.activeIsolationLeaseCount),
++      blockers,
++    },
++    grants,
++    processes: input.processes.map((process) => ({
++      kind: process.scope.kind,
++      invocationId: process.scope.invocationId,
++      logicalProcessId: process.scope.logicalProcessId,
++      lifecycleState: process.scope.state,
++      owned: process.owned,
++      pendingEffects: process.pendingEffects,
++      ...(process.backend ? { backend: { ...process.backend } } : {}),
++      capabilities: { ...process.capabilities },
++      requiredCapabilities: [...(process.requiredCapabilities ?? [])],
++      ...(process.leaseExpiresAt ? { leaseExpiresAt: process.leaseExpiresAt } : {}),
++      cleanup: structuredClone(process.cleanup),
++      output: process.output
++        ? {
++            status: process.output.lossyBytes > 0 ? "lossy" as const : process.output.truncated ? "truncated" as const : "complete" as const,
++            totalBytes: process.output.totalBytes,
++            truncated: process.output.truncated,
++            lossyBytes: process.output.lossyBytes,
++          }
++        : { status: "unavailable" as const },
++    })),
++    recovery: Object.values(input.recovery)
++      .sort((left, right) => left.proposalId.localeCompare(right.proposalId))
++      .map((record) => ({
++        proposalId: record.proposalId,
++        requestedAction: record.requestedAction,
++        state: record.state,
++        reason: record.reason,
++        updatedAt: record.updatedAt,
++        ...(record.observation ? { observation: record.observation } : {}),
++        ...(record.cleanupState ? { cleanupState: record.cleanupState } : {}),
++      })),
++  };
++}
++
++export type BuildExecutionSafetyObservability =
++  | ({ availability: "live" } & ExecutionSafetyObservability)
++  | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };
++
+ export type BuildTranscriptPage = AgentTranscriptPage;
+ 
+ export interface BuildObservabilitySnapshot {
+@@ -181,6 +295,7 @@ export interface BuildObservabilitySnapshot {
+     commits: IntegrationCommit[];
+   };
+   capabilities?: BuildCapabilitiesObservation;
++  executionSafety?: BuildExecutionSafetyObservability;
+   finalVerification?: FinalVerificationObservability;
+   independentVerifier?: IndependentVerifierObservability;
+   /** Terminal-reader provenance so absent legacy stores are never shown as live empty state. */
+diff --git a/runner-v2/src/cli.ts b/runner-v2/src/cli.ts
+index a4720fd8..a1fbee7f 100644
+--- a/runner-v2/src/cli.ts
++++ b/runner-v2/src/cli.ts
+@@ -206,6 +206,7 @@ async function main(): Promise<void> {
+       supervisor,
+       builds,
+       buildProvisioner: builds,
++      processRecovery: builds,
+       providerConfigs,
+       allowedOrigins: options.allowOrigins,
+       runnerInfo: {
+diff --git a/runner-v2/src/control-server.ts b/runner-v2/src/control-server.ts
+index 2c0a5c34..57c2c448 100644
+--- a/runner-v2/src/control-server.ts
++++ b/runner-v2/src/control-server.ts
+@@ -31,6 +31,7 @@ import type {
+ import type { RunSupervisor } from "./run-supervisor.js";
+ import type { McpManager } from "./mcp-tools.js";
+ import type { SqlitePermissionStore } from "./permission-store.js";
++import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
+ 
+ const MAX_BODY_BYTES = 1024 * 1024;
+ const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
+@@ -53,6 +54,7 @@ export interface ControlServerOptions {
+   runnerInfo?: { projectPath: string; nodeVersion: string };
+   mcp?: Pick<McpManager, "status">;
+   permissions?: SqlitePermissionStore;
++  processRecovery?: ProcessRecoveryControlPlane;
+   allowedOrigins?: string[];
+ }
+ 
+@@ -129,6 +131,20 @@ interface ArchitectQuestionAnswerBody {
+   idempotencyKey: string;
+ }
+ 
++interface RecoveryGenerateBody {
++  invocationId: string;
++  proposalId: string;
++}
++
++interface RecoveryDecisionBody {
++  fingerprint: string;
++  decision: "approve" | "reject";
++}
++
++interface RecoveryExecuteBody {
++  fingerprint: string;
++}
++
+ interface PermissionDecisionBody {
+   decision: "approved" | "denied";
+   idempotencyKey: string;
+@@ -156,6 +172,7 @@ export class ControlServer {
+   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
+   private readonly mcp?: ControlServerOptions["mcp"];
+   private readonly permissions?: SqlitePermissionStore;
++  private readonly processRecovery?: ProcessRecoveryControlPlane;
+   private readonly allowedOrigins: ReadonlySet<string>;
+   private readonly streams = new Set<ServerResponse>();
+   private readonly commandTails = new Map<string, Promise<void>>();
+@@ -177,6 +194,7 @@ export class ControlServer {
+     this.runnerInfo = options.runnerInfo;
+     this.mcp = options.mcp;
+     this.permissions = options.permissions;
++    this.processRecovery = options.processRecovery;
+     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
+   }
+ 
+@@ -422,6 +440,33 @@ export class ControlServer {
+         sendJson(response, 200, this.supervisor.getRun(runId));
+         return;
+       }
++      if (segments.length === 5 && segments[3] === "build" && segments[4] === "recovery" && request.method === "GET") {
++        const records = Object.values(this.requireProcessRecovery().processRecoveryRecords(runId))
++          .sort((left, right) => left.proposalId.localeCompare(right.proposalId));
++        sendJson(response, 200, { records });
++        return;
++      }
++      if (segments.length === 6 && segments[3] === "build" && segments[4] === "recovery" && segments[5] === "generate" && request.method === "POST") {
++        const body = await readJson<RecoveryGenerateBody>(request);
++        assertExactBodyKeys(body, ["invocationId", "proposalId"]);
++        if (!isNonEmptyString(body.invocationId) || !isNonEmptyString(body.proposalId)) invalidBody();
++        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().generateProcessRecovery(runId, body.invocationId, body.proposalId));
++        sendJson(response, 200, result); return;
++      }
++      if (segments.length === 7 && segments[3] === "build" && segments[4] === "recovery" && segments[6] === "decision" && request.method === "POST") {
++        const body = await readJson<RecoveryDecisionBody>(request);
++        assertExactBodyKeys(body, ["fingerprint", "decision"]);
++        if (!/^[a-f0-9]{64}$/.test(body.fingerprint) || !["approve", "reject"].includes(body.decision)) invalidBody();
++        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().decideProcessRecovery(runId, segments[5], body.fingerprint, body.decision));
++        sendJson(response, 200, result); return;
++      }
++      if (segments.length === 7 && segments[3] === "build" && segments[4] === "recovery" && segments[6] === "execute" && request.method === "POST") {
++        const body = await readJson<RecoveryExecuteBody>(request);
++        assertExactBodyKeys(body, ["fingerprint"]);
++        if (!/^[a-f0-9]{64}$/.test(body.fingerprint)) invalidBody();
++        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().executeProcessRecovery(runId, segments[5], body.fingerprint));
++        sendJson(response, 200, result); return;
++      }
+       if (
+         segments.length === 4 &&
+         segments[3] === "build" &&
+@@ -715,6 +760,11 @@ export class ControlServer {
+     throw new HttpError(404, "not_found", "Route not found.");
+   }
+ 
++  private requireProcessRecovery(): ProcessRecoveryControlPlane {
++    if (!this.processRecovery) throw new HttpError(503, "process_recovery_unavailable", "Exceptional process recovery is unavailable.");
++    return this.processRecovery;
++  }
++
+   private requireProviderConfigs(): ProviderConfigStore {
+     if (!this.providerConfigs) {
+       throw new HttpError(503, "provider_config_unavailable", "Provider configuration is unavailable.");
+@@ -1166,6 +1216,12 @@ function readAfterSequence(url: URL): number {
+ 
+ function toHttpError(error: unknown): HttpError {
+   if (error instanceof HttpError) return error;
++  if (error instanceof ProcessRecoveryError) {
++    if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);
++    if (error.code === "recovery_not_found") return new HttpError(404, error.code, error.message);
++    if (error.code === "recovery_model_failed") return new HttpError(502, error.code, error.message);
++    return new HttpError(409, error.code, error.message);
++  }
+   if (error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable") {
+     // Only the trusted typed failure is projected, never exception details or
+     // an arbitrary object's code. The requested profile is not downgraded.
+diff --git a/runner-v2/src/durable-process-store.ts b/runner-v2/src/durable-process-store.ts
+index 6faa3f00..01d7a8e4 100644
+--- a/runner-v2/src/durable-process-store.ts
++++ b/runner-v2/src/durable-process-store.ts
+@@ -1,3 +1,4 @@
++import { createHash } from "node:crypto";
+ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+ import { mkdirSync } from "node:fs";
+ import { dirname, resolve } from "node:path";
+@@ -8,6 +9,7 @@ import {
+   assertDurableExecutionSafetyValue,
+   parseExecutionSafetyCapabilities,
+   parseProcessOutputDisposition,
++  type ExecutionSafetyCapabilities,
+   type ExecutionSafetyCapabilityName,
+   type ProcessCleanupStatus,
+   type ProcessEscalationAction,
+@@ -47,6 +49,8 @@ export interface DurableBackendBinding {
+   readonly implementationDigest: string;
+   readonly attestationVersion: number;
+   readonly attestationDigest: string;
++  /** Exact semantic states reported by the selected backend attestation. */
++  readonly capabilities?: ExecutionSafetyCapabilities;
+   readonly opaqueIdentity: string;
+   readonly birthFingerprint: {
+     readonly observedAt: string;
+@@ -130,7 +134,9 @@ export type DurableProcessMutationKind =
+   | "record_empty_verification"
+   | "begin_effect"
+   | "settle_effect"
+-  | "complete_effect";
++  | "complete_effect"
++  | "record_exceptional_observation"
++  | "resume_exceptional_exit";
+ export interface DurableProcessMutation {
+   readonly kind: DurableProcessMutationKind;
+   readonly revision: number;
+@@ -372,6 +378,37 @@ export type DurableProcessCommand =
+       readonly invocationId: string;
+       readonly expectedRevision: number;
+       readonly at: string;
++    }
++  /**
++   * Exceptional-recovery observation. Legal only from an exceptional terminal
++   * state, only while the caller holds the lease fence, and only once the
++   * caller has re-proved the live backend identity (`identityProof`) against
++   * the recorded binding. It never changes lifecycle state and never certifies
++   * cleanup.
++   */
++  | {
++      readonly type: "record_exceptional_observation";
++      readonly invocationId: string;
++      readonly expectedRevision: number;
++      readonly at: string;
++      readonly effectId: string;
++      readonly identityProof: string;
++      readonly outcome: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
++    }
++  /**
++   * Exceptional-recovery cleanup proof. Legal only from an exceptional terminal
++   * state after a proven-empty backend verification under the same identity
++   * proof. It records `verified_empty` cleanup without inventing an exit
++   * observation, an output disposition or a synthetic terminal result.
++   */
++  | {
++      readonly type: "resume_exceptional_exit";
++      readonly invocationId: string;
++      readonly expectedRevision: number;
++      readonly at: string;
++      readonly effectId: string;
++      readonly identityProof: string;
++      readonly observation: DurableChildObservation;
+     };
+ 
+ type OwnedDurableProcessCommand = DurableProcessCommand & {
+@@ -717,16 +754,82 @@ const EFFECT_FAMILIES = new Set<DurableProcessEffectFamily>([
+   "backend_release",
+ ]);
+ const EFFECT_CONSUMERS: Readonly<
+-  Record<DurableProcessEffectFamily, DurableProcessMutationKind>
++  Record<DurableProcessEffectFamily, readonly DurableProcessMutationKind[]>
+ > = Object.freeze({
+-  output_reopen: "record_output_reopen",
+-  backend_reconcile: "record_reconciliation",
+-  backend_observe: "record_exit",
+-  backend_signal: "finish_escalation",
+-  output_finalize: "begin_verify",
+-  backend_verify_empty: "record_empty_verification",
+-  backend_release: "complete",
++  output_reopen: Object.freeze(["record_output_reopen"] as const),
++  backend_reconcile: Object.freeze([
++    "record_reconciliation",
++    "record_exceptional_observation",
++    "resume_exceptional_exit",
++  ] as const),
++  backend_observe: Object.freeze(["record_exit"] as const),
++  backend_signal: Object.freeze([
++    "finish_escalation",
++    "record_exceptional_observation",
++  ] as const),
++  output_finalize: Object.freeze(["begin_verify"] as const),
++  backend_verify_empty: Object.freeze([
++    "record_empty_verification",
++  ] as const),
++  backend_release: Object.freeze(["complete"] as const),
+ });
++
++/** Terminal classifications that ordinary lifecycle commands may never leave. */
++const EXCEPTIONAL_STATES: ReadonlySet<DurableSubprocessState> = new Set([
++  "orphaned",
++  "identity_mismatch",
++  "backend_unavailable",
++  "outcome_unknown",
++]);
++
++/** Exceptional states that were completely frozen before Task 11. */
++const FROZEN_EXCEPTIONAL_STATES: ReadonlySet<DurableSubprocessState> = new Set([
++  "orphaned",
++  "identity_mismatch",
++  "outcome_unknown",
++]);
++
++/**
++ * The closed set of commands an exceptional-recovery caller may apply. Every
++ * other lifecycle command stays illegal from these states, so no routine path
++ * gains new authority. `backend_unavailable` keeps its pre-existing ordinary
++ * transitions in addition to these.
++ */
++const EXCEPTIONAL_RECOVERY_COMMANDS: ReadonlySet<DurableProcessMutationKind> =
++  new Set([
++    "begin_effect",
++    "settle_effect",
++    "complete_effect",
++    "renew_lease",
++    "takeover_lease",
++    "adopt_backend",
++    "record_exceptional_observation",
++    "resume_exceptional_exit",
++  ]);
++
++/**
++ * History reasons an exceptional state may repeat with. Reasons are derived
++ * from the mutation log (never stored independently), so this cannot be forged
++ * by a hand-written record.
++ */
++const EXCEPTIONAL_SELF_HISTORY_REASONS: ReadonlySet<string> = new Set([
++  "effect_backend_reconcile_started",
++  "effect_backend_reconcile_completed",
++  "effect_backend_reconcile_settled",
++  "effect_backend_signal_started",
++  "effect_backend_signal_completed",
++  "effect_backend_signal_settled",
++  "effect_backend_verify_empty_started",
++  "effect_backend_verify_empty_completed",
++  "effect_backend_verify_empty_settled",
++  "lease_renewed",
++  "lease_takeover",
++  "exceptional_recovery_observed_running",
++  "exceptional_recovery_observed_exited",
++  "exceptional_recovery_observed_identity_mismatch",
++  "exceptional_recovery_observed_outcome_unknown",
++  "backend_restart_adopted",
++]);
+ const LEGAL_HISTORY: Readonly<
+   Record<DurableSubprocessState, readonly DurableSubprocessState[]>
+ > = {
+@@ -1059,6 +1162,8 @@ function parseMutation(value: unknown): DurableProcessMutation {
+       "begin_effect",
+       "settle_effect",
+       "complete_effect",
++      "record_exceptional_observation",
++      "resume_exceptional_exit",
+     ]),
+     "mutation kind",
+   );
+@@ -1118,6 +1223,12 @@ function parseMutation(value: unknown): DurableProcessMutation {
+     },
+     settle_effect: { required: ["effectId", "leaseExpiresAt"] },
+     complete_effect: { required: ["effectId", "leaseExpiresAt"] },
++    record_exceptional_observation: {
++      required: ["effectId", "identityProof", "outcome"],
++    },
++    resume_exceptional_exit: {
++      required: ["effectId", "identityProof", "observation"],
++    },
+   };
+   const shape = keysByKind[kind];
+   assertExactKeys(
+@@ -1376,7 +1487,7 @@ function reduceMutation(
+       );
+     }
+     case "adopt_backend": {
+-      requireState(current, [
++      requireState(current, ["orphaned", "identity_mismatch", "outcome_unknown",
+         "running",
+         "stopping",
+         "exited",
+@@ -1392,6 +1503,7 @@ function reduceMutation(
+           binding.birthFingerprint.discriminator
+       )
+         throw new Error("Backend adoption cannot change process identity.");
++      if (binding.implementationDigest !== current.backendBinding?.implementationDigest) throw new Error("Backend adoption cannot change implementation.");
+       return historyOnly(
+         { ...base, backendBinding: binding },
+         mutation.at,
+@@ -1672,9 +1784,51 @@ function reduceMutation(
+         mutation.at,
+         "backend_empty_verified",
+       );
++    case "record_exceptional_observation": {
++      requireExceptionalState(current);
++      identityProof(data.identityProof, current);
++      const observed = requiredEnum(
++        data.outcome,
++        new Set<"running" | "exited" | "identity_mismatch" | "outcome_unknown">([
++          "running",
++          "exited",
++          "identity_mismatch",
++          "outcome_unknown",
++        ]),
++        "exceptional recovery outcome",
++      );
++      // Observation only: the lifecycle classification and cleanup proof are
++      // deliberately left untouched.
++      return historyOnly(base, mutation.at, `exceptional_recovery_observed_${observed}`);
++    }
++    case "resume_exceptional_exit": {
++      requireExceptionalState(current);
++      identityProof(data.identityProof, current);
++      const { result: _result, output: _output, emptyVerification: _verification, ...recoverable } = base;
++      return moveDerived({ ...recoverable, observation: parseObservation(data.observation), cleanup: { state: "pending" } },
++        "exited", mutation.at, "exceptional_recovery_exited");
++    }
+   }
+ }
+ 
++function requireExceptionalState(record: DurableSubprocessRecord): void {
++  if (!EXCEPTIONAL_STATES.has(record.state))
++    throw new Error(
++      `Exceptional recovery is not legal from ${record.state}.`,
++    );
++}
++
++function identityProof(value: unknown, record: DurableSubprocessRecord): string {
++  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
++    throw new Error("Exceptional recovery identity proof is invalid.");
++  if (!record.backendBinding || value !== durableRecoveryIdentity(record.backendBinding)) throw new Error("Recovery identity proof does not match this backend binding.");
++  return value;
++}
++
++export function durableRecoveryIdentity(binding: DurableBackendBinding): string {
++  return createHash("sha256").update(JSON.stringify(binding)).digest("hex");
++}
++
+ function assertEffectMutationAllowed(
+   record: DurableSubprocessRecord,
+   kind: DurableProcessMutationKind,
+@@ -1718,7 +1872,7 @@ function consumeEffectForMutation(
+       record.pendingEffects.some(
+         (effect) =>
+           effect.phase === "completed" &&
+-          EFFECT_CONSUMERS[effect.family] === mutation.kind,
++          EFFECT_CONSUMERS[effect.family].includes(mutation.kind),
+       )
+     )
+       throw new Error("Completed process effect requires its exact effect ID.");
+@@ -1731,7 +1885,7 @@ function consumeEffectForMutation(
+   )
+     return record;
+   const effect = requiredPendingEffect(record, rawEffectId, "completed");
+-  if (EFFECT_CONSUMERS[effect.family] !== mutation.kind)
++  if (!EFFECT_CONSUMERS[effect.family].includes(mutation.kind))
+     throw new Error("Completed process effect has the wrong semantic consumer family.");
+   return {
+     ...record,
+@@ -1845,6 +1999,14 @@ function commandData(
+       };
+     case "record_empty_verification":
+       return { effectId: command.effectId, verification: command.verification };
++    case "record_exceptional_observation":
++      return {
++        effectId: command.effectId,
++        identityProof: command.identityProof,
++        outcome: command.outcome,
++      };
++    case "resume_exceptional_exit":
++      return { effectId: command.effectId, identityProof: command.identityProof, observation: command.observation };
+   }
+ }
+ 
+@@ -1879,6 +2041,17 @@ function applyCommand(
+   ) {
+     throw new Error("Process lease owner or fencing token is stale.");
+   }
++  // `orphaned`, `identity_mismatch` and `outcome_unknown` are frozen terminal
++  // classifications: before exceptional recovery existed, no command at all was
++  // legal from them. Only the closed recovery command set is added here, so no
++  // routine lifecycle path gains authority it did not already have.
++  if (
++    FROZEN_EXCEPTIONAL_STATES.has(current.state) &&
++    !EXCEPTIONAL_RECOVERY_COMMANDS.has(command.type)
++  )
++    throw new Error(
++      `Illegal process transition from ${current.state}.`,
++    );
+   assertEffectMutationAllowed(current, command.type);
+   const mutation = parseMutation({
+     kind: command.type,
+@@ -2162,6 +2335,7 @@ function parseBinding(value: unknown): DurableBackendBinding {
+       "implementationDigest",
+       "attestationVersion",
+       "attestationDigest",
++      "capabilities",
+       "opaqueIdentity",
+       "birthFingerprint",
+       "rootPid",
+@@ -2192,6 +2366,7 @@ function parseBinding(value: unknown): DurableBackendBinding {
+       1,
+     ),
+     attestationDigest: digest(o.attestationDigest, "attestationDigest"),
++    ...(o.capabilities === undefined ? {} : { capabilities: parseExecutionSafetyCapabilities(o.capabilities) }),
+     opaqueIdentity: text(o.opaqueIdentity, "opaqueIdentity"),
+     birthFingerprint: {
+       observedAt: text(birth.observedAt, "observedAt"),
+@@ -2563,11 +2738,23 @@ function validateHistory(
+ ): void {
+   for (let index = 1; index < history.length; index += 1) {
+     const prior = history[index - 1]!.state;
+-    const next = history[index]!.state;
+-    if (!LEGAL_HISTORY[prior].includes(next))
+-      throw new Error(
+-        `Durable process history contains illegal transition ${prior} -> ${next}.`,
+-      );
++    const entry = history[index]!;
++    const next = entry.state;
++    if (LEGAL_HISTORY[prior].includes(next)) continue;
++    if (EXCEPTIONAL_STATES.has(prior) && next === "exited" && entry.reason === "exceptional_recovery_exited") continue;
++    // The only additional legal edges are exceptional-recovery self-entries,
++    // whose reasons are derived from the closed exceptional mutation kinds and
++    // from the lease/journal mutations those kinds require.
++    if (
++      prior === next &&
++      EXCEPTIONAL_STATES.has(prior) &&
++      entry.reason !== undefined &&
++      EXCEPTIONAL_SELF_HISTORY_REASONS.has(entry.reason)
++    )
++      continue;
++    throw new Error(
++      `Durable process history contains illegal transition ${prior} -> ${next}.`,
++    );
+   }
+ }
+ function requiredRecord(
+diff --git a/runner-v2/src/execution-grants.ts b/runner-v2/src/execution-grants.ts
+index 4091242f..c0b3533c 100644
+--- a/runner-v2/src/execution-grants.ts
++++ b/runner-v2/src/execution-grants.ts
+@@ -637,3 +637,29 @@ function deepFreeze<T>(value: T): T {
+   }
+   return value;
+ }
++
++const PROCESS_RECOVERY_RESERVATIONS = new WeakSet<GrantRecord>();
++/** Reserve exactly one identity-bound recovery operation from the existing run issuer.
++ * Recovery grants carry no filesystem, network or credential access. Native process
++ * ownership and backend identity are separately re-proved by the shared kernel.
++ */
++export function reserveExecutionGrantForProcessRecovery(
++  authority: ExecutionGrantAuthority, grant: OpaqueExecutionGrant, binding: ExecutionGrantBinding,
++  destructive: boolean,
++): Readonly<{ assertCurrent(): void; expiresAt: string }> {
++  const issuer = AUTHORITIES.get(authority);
++  if (!issuer) throw grantError("grant_forged");
++  const record = trustedRecord(grant, issuer.identity)!;
++  const assertCurrent = () => {
++    assertCurrentGrantRecord(record);
++    if (record.state !== "issued") throw grantError("grant_consumed");
++  };
++  assertCurrent();
++  if (!sameBinding(record.claims, binding) || binding.toolName !== "process.recovery" ||
++      binding.actor.role !== "runner_internal" || binding.actor.id !== "process-recovery") throw grantError("grant_mismatch");
++  if (record.claims.access.length || record.claims.credentialNames.length || record.claims.networkApproved ||
++      record.claims.externalApproved || (destructive && !record.claims.destructiveApproved)) throw grantError("grant_escalation");
++  if (PROCESS_RECOVERY_RESERVATIONS.has(record)) throw grantError("grant_consumed");
++  PROCESS_RECOVERY_RESERVATIONS.add(record);
++  return Object.freeze({ assertCurrent, expiresAt: record.claims.expiresAt });
++}
+diff --git a/runner-v2/src/execution-host-streaming.ts b/runner-v2/src/execution-host-streaming.ts
+index b3ece99b..bbccd3e6 100644
+--- a/runner-v2/src/execution-host-streaming.ts
++++ b/runner-v2/src/execution-host-streaming.ts
+@@ -181,6 +181,7 @@ export function createExecutionHostStreamingGraph(
+           implementationDigest: selected.implementationDigest,
+           attestationVersion: selected.attestation.attestationVersion,
+           attestationDigest: selected.attestationDigest,
++          capabilities: selected.attestation.capabilities,
+           ...launch,
+         });
+       },
+diff --git a/runner-v2/src/execution-host.ts b/runner-v2/src/execution-host.ts
+index 400cc779..e7a34b6d 100644
+--- a/runner-v2/src/execution-host.ts
++++ b/runner-v2/src/execution-host.ts
+@@ -57,6 +57,12 @@ import {
+   type StreamingSessionRecord,
+ } from "./streaming-session-store.js";
+ import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
++import {
++  combineProcessRecoveryRuntimes,
++  createStreamingProcessRecoveryRuntime,
++  createSubprocessProcessRecoveryRuntime,
++  type ProcessRecoveryRuntime,
++} from "./process-recovery.js";
+ import { isSensitiveKey } from "./sensitive-redaction.js";
+ import {
+   createConfiguredOciIsolationSelector,
+@@ -123,6 +129,7 @@ export interface ExecutionHostRunBinding {
+   readonly git: RunGitExecutionContext;
+   readonly commandExecution: OneShotCommandExecutor;
+   readonly executionGrants: ExecutionGrantAuthority;
++  readonly processRecoveryRuntime: ProcessRecoveryRuntime;
+   readonly sessionAuthority: SessionAuthority;
+   readonly streamingRuntime: ReturnType<typeof createExecutionHostStreamingGraph>["runtime"];
+   readonly streamingState: Readonly<{
+@@ -435,6 +442,14 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
+       ambientEnvironment: input.ambientEnvironment,
+       environments: childEnvironments,
+     });
++    const subprocessRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
++      runtime: subprocessKernel.runtime,
++      canRecoverExceptional: subprocessKernel.canRecoverExceptional,
++      store: subprocessKernel.readOnlyStore,
++      executionGrants,
++      permissionProfile: input.permissionProfile,
++      workspacePath: input.projectRoot,
++    });
+     const streamingStatePath = join(runRoot, "streaming-sessions.sqlite");
+     const streamingKernel = openSqliteStreamingSessionStore(
+       streamingStatePath,
+@@ -463,6 +478,17 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
+       }),
+     });
+     const streamingRuntime = streamingGraph.runtime;
++    const streamingRecoveryRuntime = createStreamingProcessRecoveryRuntime({
++      runtime: streamingRuntime,
++      store: streamingKernel.store,
++      executionGrants,
++      permissionProfile: input.permissionProfile,
++      workspacePath: input.projectRoot,
++    });
++    const processRecoveryRuntime = combineProcessRecoveryRuntimes(
++      subprocessRecoveryRuntime,
++      streamingRecoveryRuntime,
++    );
+     let closed = false;
+     let closeComplete = false;
+     let closePromise: Promise<void> | undefined;
+@@ -488,6 +514,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
+       git,
+       commandExecution,
+       executionGrants,
++      processRecoveryRuntime,
+       sessionAuthority,
+       streamingRuntime,
+       streamingState: Object.freeze({
+diff --git a/runner-v2/src/native-build-factory.ts b/runner-v2/src/native-build-factory.ts
+index 5447f4ad..747b712f 100644
+--- a/runner-v2/src/native-build-factory.ts
++++ b/runner-v2/src/native-build-factory.ts
+@@ -38,6 +38,7 @@ import type {
+ } from "./build-observability.js";
+ import {
+   loadFinalVerificationDiagnostics,
++  projectExecutionSafetyObservability,
+   projectFinalVerificationObservability,
+   projectIndependentVerifierObservability,
+ } from "./build-observability.js";
+@@ -176,6 +177,12 @@ import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type Proce
+ import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
+ import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
+ import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
++import {
++  ProcessRecoveryController,
++  createAgentProcessRecoveryGenerator,
++  createSubprocessProcessRecoveryRuntime,
++  type ProcessRecoveryRuntime,
++} from "./process-recovery.js";
+ import {
+   createBoundedProcessOutputFactory,
+   createRuntimeBackedOneShotCommandExecutor,
+@@ -662,9 +669,11 @@ export class NativeBuildFactory {
+     initializationStage = "subprocess_runtime";
+     let executionGrants: ExecutionGrantAuthority;
+     let commandExecution: OneShotCommandExecutor;
++    let processRecoveryRuntime: ProcessRecoveryRuntime;
+     if (executionHostBinding) {
+       executionGrants = executionHostBinding.executionGrants;
+       commandExecution = executionHostBinding.commandExecution;
++      processRecoveryRuntime = executionHostBinding.processRecoveryRuntime;
+     } else {
+     const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(this.options.stateDirectory, "managed-processes-job-host") });
+     const childEnvironments = createChildEnvironmentFactory({
+@@ -752,6 +761,14 @@ export class NativeBuildFactory {
+       ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
+       environments: childEnvironments,
+     });
++    processRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
++      runtime: subprocessKernel.runtime,
++      canRecoverExceptional: subprocessKernel.canRecoverExceptional,
++      store: subprocessKernel.readOnlyStore,
++      executionGrants,
++      permissionProfile: spec.permissionProfile,
++      workspacePath: this.options.projectRoot,
++    });
+     constructionResources.add("subprocess_runtime", async () => {
+       await executionGrants.revokeAll("cleanup");
+       await subprocessKernel.runtime.reconcileStartup();
+@@ -781,6 +798,14 @@ export class NativeBuildFactory {
+         providerModelFactory(config, this.artifacts),
+       ])
+     );
++    const recoveryModel = models.get(spec.architectRuntimeId);
++    if (!recoveryModel) throw new Error("Exceptional recovery requires the configured Architect runtime.");
++    const processRecovery = new ProcessRecoveryController({
++      runId: spec.runId,
++      store: schedulerStore,
++      runtime: processRecoveryRuntime,
++      generate: createAgentProcessRecoveryGenerator({ model: recoveryModel }),
++    });
+     initializationStage = "runtime_drivers";
+     const workerDriver = new NativeWorkerDriver({
+       git: gitContext,
+@@ -1095,6 +1120,7 @@ export class NativeBuildFactory {
+     let closing: Promise<void> | undefined;
+     return {
+       runtime,
++      processRecovery,
+       finalVerificationCleanup,
+       retireInvalidatedFinalVerification: async (generation, currentGeneration) =>
+         await retireInvalidatedFinalVerificationGeneration({
+@@ -1127,6 +1153,16 @@ export class NativeBuildFactory {
+         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
+         const schedulerEvents = schedulerStore.readRun(spec.runId);
+         const schedulerProjection = rebuildSchedulerProjection(schedulerEvents);
++        const executionEnforcement = await executionIsolation.enforcementState();
++        const executionSafety = projectExecutionSafetyObservability({
++          permissionProfile: spec.permissionProfile,
++          isolation: executionEnforcement,
++          activeIsolationLeaseCount: executionIsolation.activeLeases().length,
++          grantStates: executionGrants.activeSnapshots().flatMap((grant) =>
++            grant.state === "revoked" ? [] : [grant.state]),
++          processes: processRecoveryRuntime.list?.() ?? [],
++          recovery: processRecovery.records(),
++        });
+         const finalGeneration = schedulerProjection.finalVerification?.current;
+         const diagnostics = finalGeneration
+           ? await loadFinalVerificationDiagnostics({
+@@ -1179,8 +1215,9 @@ export class NativeBuildFactory {
+             extensions: runCapabilities.registry.manifests(),
+             languageProviders: runCapabilities.language.providerMetadata(),
+             languageRoutes: runCapabilities.language.auditRecords(),
+-            executionEnforcement: await executionIsolation.enforcementState(),
++            executionEnforcement,
+           },
++          executionSafety: { availability: "live", ...executionSafety },
+           finalVerification: projectFinalVerificationObservability(
+             schedulerProjection,
+             diagnostics,
+@@ -1635,6 +1672,10 @@ export class NativeBuildFactory {
+                   },
+                 }
+               : {}),
++            executionSafety: {
++              availability: "unavailable",
++              reason: "historical_execution_safety_unavailable",
++            },
+             historical: {
+               terminalState,
+               provenance: {
+diff --git a/runner-v2/src/native-build-manager.ts b/runner-v2/src/native-build-manager.ts
+index 2965f91a..80026d66 100644
+--- a/runner-v2/src/native-build-manager.ts
++++ b/runner-v2/src/native-build-manager.ts
+@@ -23,6 +23,7 @@ import type {
+   ProjectHandoffResult,
+ } from "./integration-manager.js";
+ import type { FinalVerificationCleanupController } from "./final-verification-cleanup.js";
++import type { ProcessRecoveryCoordinator, RecoveryAuditRecord } from "./process-recovery.js";
+ 
+ export interface NativeBuildRuntimeHandle {
+   runtime: BuildRuntime;
+@@ -34,6 +35,8 @@ export interface NativeBuildRuntimeHandle {
+   files(): Promise<IntegrationFileSnapshot>;
+   compact(): void | Promise<void>;
+   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
++  /** Exceptional process recovery exists only on live handles, never historical readers. */
++  processRecovery?: ProcessRecoveryCoordinator;
+   /** Constructed cleanup primitive; lifecycle wiring is owned by the P2.6 manager packet. */
+   finalVerificationCleanup?: FinalVerificationCleanupController;
+   retireInvalidatedFinalVerification?(
+@@ -256,6 +259,23 @@ export class NativeBuildManager implements BuildControlPlane {
+     return this.require(runId).runtime.events(afterSequence);
+   }
+ 
++  processRecoveryRecords(runId: string): Readonly<Record<string, RecoveryAuditRecord>> {
++    const handle = this.require(runId);
++    return handle.processRecovery?.records() ?? handle.runtime.projection().processRecovery ?? {};
++  }
++
++  async generateProcessRecovery(runId: string, invocationId: string, proposalId: string): Promise<RecoveryAuditRecord> {
++    return await this.withRuntimeActivity(() => this.requireRecovery(runId).generate(invocationId, proposalId));
++  }
++
++  async decideProcessRecovery(runId: string, proposalId: string, fingerprint: string, decision: "approve" | "reject"): Promise<RecoveryAuditRecord> {
++    return await this.withRuntimeActivity(() => this.requireRecovery(runId).decide(proposalId, fingerprint, decision));
++  }
++
++  async executeProcessRecovery(runId: string, proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord> {
++    return await this.withRuntimeActivity(() => this.requireRecovery(runId).execute(proposalId, fingerprint));
++  }
++
+   async step(runId: string): Promise<BuildStepResult> {
+     const handle = this.requireMutable(runId);
+     return await this.executeWithFinalization(
+@@ -904,6 +924,12 @@ export class NativeBuildManager implements BuildControlPlane {
+     return handle;
+   }
+ 
++  private requireRecovery(runId: string): ProcessRecoveryCoordinator {
++    const handle = this.requireMutable(runId);
++    if (!handle.processRecovery) throw new Error(`Exceptional recovery unavailable for build ${runId}.`);
++    return handle.processRecovery;
++  }
++
+   private requireMutable(runId: string): NativeBuildRuntimeHandle {
+     const handle = this.require(runId);
+     if (handle.historical) throw historicalReadOnlyError(runId);
+diff --git a/runner-v2/src/scheduler-store.ts b/runner-v2/src/scheduler-store.ts
+index 51161288..4093a1cf 100644
+--- a/runner-v2/src/scheduler-store.ts
++++ b/runner-v2/src/scheduler-store.ts
+@@ -1,3 +1,4 @@
++import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
+ import { createHash } from "node:crypto";
+ 
+ import {
+@@ -86,6 +87,7 @@ export interface SchedulerActor {
+ }
+ 
+ export type SchedulerEventType =
++  | "process.recovery_updated"
+   | "run.initialized"
+   | "run.policy_configured"
+   | "plan.created"
+@@ -409,6 +411,7 @@ export interface VerifierSelectionProjection {
+ }
+ 
+ export interface SchedulerProjection {
++  processRecovery?: Record<string, RecoveryAuditRecord>;
+   runId: string;
+   /** Optional for event-log compatibility with runs created before P3.1. */
+   initialObjective?: string;
+@@ -476,7 +479,7 @@ export function assertPendingUserGuidanceAllowsEvent(
+   const hasPendingUserGuidance = Object.values(current.userGuidance).some(
+     (guidance) => guidance.status === "submitted"
+   );
+-  if (!hasPendingUserGuidance) return;
++  if (!hasPendingUserGuidance || event.type === "process.recovery_updated") return;
+ 
+   const taskStatus = event.type === "task.transitioned"
+     ? event.payload.status
+@@ -536,7 +539,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
+   current: SchedulerProjection,
+   event: Pick<SchedulerEvent, "type" | "actor" | "payload">
+ ): void {
+-  if (!current.blockingArchitectQuestionId) return;
++  if (!current.blockingArchitectQuestionId || event.type === "process.recovery_updated") return;
+   const allowed =
+     event.type === "architect.question_answered" ||
+     event.type === "architect.question_resume_consumed" ||
+@@ -1552,6 +1555,22 @@ export function reduceSchedulerEvent(
+     lastSequence: event.sequence,
+   };
+   switch (event.type) {
++    case "process.recovery_updated": {
++      if (["completed", "failed", "stopped"].includes(current.status)) {
++        throw new Error("A terminal Build cannot accept exceptional recovery updates.");
++      }
++      if (Object.keys(event.payload).length !== 1 || !Object.hasOwn(event.payload, "record")) throw new Error("Recovery event payload is not closed.");
++      const record = parseRecoveryAuditRecord(event.payload.record);
++      if (record.scope.runId !== event.runId) throw new Error("Recovery event belongs to a different run.");
++      const prior = Object.hasOwn(current.processRecovery ?? {}, record.proposalId) ? current.processRecovery?.[record.proposalId] : undefined;
++      validateRecoveryTransition(prior, record, event.actor, event.occurredAt);
++      next.processRecovery = { ...current.processRecovery, [record.proposalId]: record };
++      if (recoveryBlocksRun(next.processRecovery)) {
++        next.status = "paused";
++        next.pauseReason = { reason: "Exceptional process recovery requires an exact decision or cleanup proof." };
++      }
++      break;
++    }
+     case "run.initialized":
+       throw new Error("A scheduler run cannot be initialized twice.");
+     case "run.policy_configured": {
+@@ -2461,10 +2480,12 @@ export function reduceSchedulerEvent(
+       }
+       break;
+     case "run.resumed":
++      if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents resume.");
+       next.status = "running";
+       delete next.pauseReason;
+       break;
+     case "run.completed":
++      if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents completion.");
+       if (event.actor.role !== "architect") {
+         throw new Error("Only the Architect may complete a scheduler run.");
+       }
+diff --git a/runner-v2/src/streaming-process-session-runtime.ts b/runner-v2/src/streaming-process-session-runtime.ts
+index 2a217954..a51a3093 100644
+--- a/runner-v2/src/streaming-process-session-runtime.ts
++++ b/runner-v2/src/streaming-process-session-runtime.ts
+@@ -1028,7 +1028,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     resource: AdoptedCleanupResourceKind,
+     context: AdoptedCleanupContext,
+     run: AdoptedCleanupRun,
++    assertAuthority: () => void,
+   ): Promise<void> => {
++    assertAuthority();
+     const deadlineAt = run.deadlineAt;
+     let record = options.kernel.store.readBySession(sessionId);
+     if (!record) throw runnerSessionError("cleanup_blocked", "Adopted cleanup record is unavailable.");
+@@ -1188,7 +1190,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     run: AdoptedCleanupRun,
+     disposition: "backend_unavailable" | "outcome_unknown",
+     live?: PrivateAttachment,
++    assertAuthority: () => void = () => {},
+   ): Promise<void> => {
++    assertAuthority();
+     const protocolSettlement = (live ?? attachments.get(sessionId))?.gracefulProtocolSettlement;
+     if (protocolSettlement) await bounded(protocolSettlement, Math.max(1, run.deadlineAt - clock().getTime()));
+     const closingInput = (live ?? attachments.get(sessionId))?.gracefulInputClose;
+@@ -1242,9 +1246,11 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     if (!cleanup?.progress) throw runnerSessionError("cleanup_blocked", "Adopted cleanup progress is unavailable.");
+     const context = contextFor(record, live);
+     for (const resource of cleanup.progress.resources.map((fact) => fact.resource)) {
++      assertAuthority();
+       exactCleanupOwner(sessionId, ownerId, fencingToken);
+-      await settleAdoptedResource(sessionId, resource, context, run);
++      await settleAdoptedResource(sessionId, resource, context, run, assertAuthority);
+     }
++    assertAuthority();
+     const ready = exactCleanupOwner(sessionId, ownerId, fencingToken);
+     const completed = options.sessions.completeAdoptedCleanup({
+       sessionId, ownerId, fencingToken, expectedRevision: ready.revision, effectId: cleanup.effectId,
+@@ -1262,7 +1268,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     disposition: "backend_unavailable" | "outcome_unknown",
+     live?: PrivateAttachment,
+     signal?: AbortSignal,
++    assertAuthority: () => void = () => {},
+   ) => {
++    assertAuthority();
+     const record = options.kernel.store.readBySession(sessionId);
+     if (!record) return Promise.reject(runnerSessionError("cleanup_blocked", "Adopted cleanup record is unavailable."));
+     const existing = adoptedCleanupRuns.get(sessionId);
+@@ -1270,7 +1278,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+         clock().getTime() < existing.deadlineAt) return awaitAdoptedCleanup(sessionId, existing, deadlineAt, signal);
+     renewOwnedSessionLease(sessionId, deadlineAt);
+     const run: AdoptedCleanupRun = { ownerId: record.ownerId, fencingToken: record.fencingToken, deadlineAt, promise: Promise.resolve() };
+-    run.promise = performAdoptedCleanup(sessionId, run, disposition, live)
++    run.promise = performAdoptedCleanup(sessionId, run, disposition, live, assertAuthority)
+       .finally(() => { if (adoptedCleanupRuns.get(sessionId) === run) adoptedCleanupRuns.delete(sessionId); });
+     adoptedCleanupRuns.set(sessionId, run);
+     return awaitAdoptedCleanup(sessionId, run, deadlineAt, signal);
+@@ -1342,6 +1350,13 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     }))) }) });
+   };
+   return Object.freeze({
++    canRecoverExceptional(sessionId: string): boolean {
++      const record = options.kernel.store.readBySession(sessionId);
++      return !!record && ["backend_unavailable", "outcome_unknown"].includes(record.state) &&
++        record.cleanupOwner === "session_authority" &&
++        !record.effects.some((effect) => effect.status === "pending" ||
++          effect.progress?.resources.some((resource) => resource.status === "in_flight"));
++    },
+     stopAuthorizedSession,
+     async observeOwnedOutput(input: { sessionId: string; owner: Pick<ExecutionGrantBinding, "runId" | "sessionId" | "actor"> }) {
+       // Host-only control-plane observation; this is never a substitute for
+@@ -1546,7 +1561,10 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+       readonly sessionId: string;
+       readonly timeoutMs: number;
+       readonly signal?: AbortSignal;
++      /** Exceptional recovery only: original grant/deadline assertion at each resource boundary. */
++      readonly assertAuthority?: () => void;
+     }) {
++      input.assertAuthority?.();
+       if (!input.sessionId || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
+         throw runnerSessionError("cleanup_blocked", "Streaming cleanup request is invalid.");
+       }
+@@ -1624,7 +1642,8 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+           }
+         }
+       }
+-      await runAdoptedCleanup(input.sessionId, deadlineAt, "backend_unavailable", attachment, input.signal);
++      await runAdoptedCleanup(input.sessionId, deadlineAt, "backend_unavailable", attachment, input.signal,
++        input.assertAuthority ?? (() => {}));
+       const settled = options.kernel.store.readBySession(input.sessionId);
+       if (settled?.state !== "released") {
+         throw runnerSessionError("cleanup_blocked", "Owned streaming cleanup did not reach verified release.");
+diff --git a/runner-v2/src/streaming-session-store.ts b/runner-v2/src/streaming-session-store.ts
+index b7ab7d66..81ce3457 100644
+--- a/runner-v2/src/streaming-session-store.ts
++++ b/runner-v2/src/streaming-session-store.ts
+@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
+ import { dirname } from "node:path";
+ import { DatabaseSync } from "node:sqlite";
+ import { parseEvidenceContinuation, type EvidenceContinuation } from "./evidence-continuation.js";
++import { parseExecutionSafetyCapabilities, type ExecutionSafetyCapabilities } from "./execution-safety-contracts.js";
+ 
+ export type StreamingSessionStoreErrorCode =
+   | "invalid_record"
+@@ -78,6 +79,8 @@ export interface StreamingSessionBackendBinding {
+   readonly implementationDigest: string;
+   readonly attestationVersion: number;
+   readonly attestationDigest: string;
++  /** Exact semantic states reported by the selected backend attestation. */
++  readonly capabilities?: ExecutionSafetyCapabilities;
+   readonly opaqueIdentity: string;
+   readonly birthFingerprint: Readonly<{
+     observedAt: string;
+@@ -866,7 +869,7 @@ function parseLease(value: unknown): void {
+ function parseBackendBinding(value: unknown): void {
+   const allowed = new Set([
+     "registryId", "backendId", "implementationGeneration", "implementationDigest", "attestationVersion",
+-    "attestationDigest", "opaqueIdentity", "birthFingerprint", "rootPid", "startedAt",
++    "attestationDigest", "capabilities", "opaqueIdentity", "birthFingerprint", "rootPid", "startedAt",
+   ]);
+   assertExactKeys(value, allowed, "streaming session backend binding");
+   const binding = value as Record<string, unknown>;
+@@ -890,6 +893,7 @@ function parseBackendBinding(value: unknown): void {
+   if (!Number.isSafeInteger(binding.attestationVersion) || (binding.attestationVersion as number) < 1) {
+     throw new StreamingSessionStoreError("invalid_record", "Streaming session backend attestation version is invalid.");
+   }
++  if (binding.capabilities !== undefined) parseExecutionSafetyCapabilities(binding.capabilities);
+   if (binding.rootPid !== undefined &&
+       (!Number.isSafeInteger(binding.rootPid) || (binding.rootPid as number) < 1)) {
+     throw new StreamingSessionStoreError("invalid_record", "Streaming session backend root pid is invalid.");
+diff --git a/runner-v2/src/subprocess-runtime.ts b/runner-v2/src/subprocess-runtime.ts
+index 93777fe9..29aebf69 100644
+--- a/runner-v2/src/subprocess-runtime.ts
++++ b/runner-v2/src/subprocess-runtime.ts
+@@ -1,3 +1,4 @@
++import { reserveExecutionGrantForProcessRecovery, type ExecutionGrantAuthority, type OpaqueExecutionGrant, type ExecutionGrantBinding } from "./execution-grants.js";
+ import { createHmac, randomUUID } from "node:crypto";
+ import { types as nodeTypes } from "node:util";
+ import type {
+@@ -18,6 +19,7 @@ import {
+   createInMemoryDurableProcessKernel,
+   openSqliteDurableProcessKernel,
+   semanticRequestFingerprint,
++  durableRecoveryIdentity,
+   type DurableBackendBinding,
+   type DurableEnvironmentAudit,
+   type DurableProcessCommand,
+@@ -109,6 +111,7 @@ export interface SubprocessRuntimeKernel {
+   readonly runtime: SubprocessRuntime;
+   readonly grantsController: ExecutionGrantController;
+   readonly readOnlyStore: DurableProcessStore;
++  canRecoverExceptional(invocationId: string): boolean;
+ }
+ class GrantVault {
+   private readonly values = new Map<string, ConsumedExecutionGrant>();
+@@ -159,6 +162,75 @@ export interface ReconciliationOutcome {
+   readonly state: string;
+ }
+ 
++/**
++ * Exact identity proof a caller must present before the shared runtime performs
++ * any exceptional-recovery effect. Every field is compared against the durable
++ * record; a PID alone never authorises anything and is not part of the proof.
++ */
++export interface ExceptionalRecoveryRequest {
++  readonly invocationId: string;
++  readonly runId: string;
++  readonly logicalProcessId: string;
++  readonly taskId?: string;
++  readonly sessionId?: string;
++  /** The exact durable revision the caller validated against. */
++  readonly expectedRevision: number;
++  readonly ownerId: string;
++  readonly fencingToken: number;
++  /** sha256 over the recorded opaque backend identity and implementation. */
++  readonly backendIdentityFingerprint: string;
++  /** sha256 over the recorded process birth observation. */
++  readonly birthFingerprint: string;
++  readonly action: "inspect" | "terminate";
++  readonly expiresAt: string;
++  readonly authorization: Readonly<{ authority: ExecutionGrantAuthority; grant: OpaqueExecutionGrant; binding: ExecutionGrantBinding }>;
++  /** Termination always requires an exact local-user approval, even under Full. */
++  readonly userApproved: boolean;
++  /** Optional last-mile grant check; a revoked/expired grant refuses the effect. */
++  readonly assertGrant?: () => void;
++}
++
++export interface ExceptionalRecoveryObservation {
++  readonly invocationId: string;
++  readonly state: string;
++  readonly observation: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
++  readonly cleanup: ProcessCleanupStatus;
++  readonly identityProof: string;
++  readonly revision: number;
++}
++
++/** Stable identity fingerprints over a durable binding. Never PID-derived. */
++export function durableBackendIdentityFingerprint(
++  binding: DurableBackendBinding,
++): string {
++  return durableRecoveryIdentity(binding);
++}
++
++export function durableBirthFingerprint(binding: DurableBackendBinding): string {
++  return createHmac("sha256", RECOVERY_FINGERPRINT_KEY)
++    .update(
++      [
++        binding.birthFingerprint.observedAt,
++        binding.birthFingerprint.discriminator,
++        binding.startedAt,
++        binding.rootPid === undefined ? "" : String(binding.rootPid),
++      ].join("\0"),
++    )
++    .digest("hex");
++}
++
++/** Domain-separation constant; these fingerprints are identity, not secrets. */
++const RECOVERY_FINGERPRINT_KEY = new TextEncoder().encode(
++  "runner-v2/exceptional-recovery-identity-v1",
++);
++
++const EXCEPTIONAL_RECOVERY_STATES = new Set([
++  "orphaned",
++  "identity_mismatch",
++  "backend_unavailable",
++  "outcome_unknown",
++]);
++
+ type SnapshotInvocation = SubprocessInvocation;
+ interface StopTrigger {
+   readonly reason: "cancelled" | "timed_out";
+@@ -167,6 +239,15 @@ export interface SubprocessRuntime {
+   invoke(value: SubprocessInvocation): Promise<GenericProcessResult>;
+   cancel(invocationId: string): Promise<boolean>;
+   reconcileStartup(): Promise<ReconciliationOutcome[]>;
++  /**
++   * Kernel-owned exceptional path. Routine lifecycle never calls it; it exists
++   * only because `orphaned`/`identity_mismatch`/`outcome_unknown` are otherwise
++   * frozen. It re-proves live backend identity before any effect and uses the
++   * same attested backend, journal, fence and lease machinery as ordinary work.
++   */
++  recoverExceptional(
++    request: ExceptionalRecoveryRequest,
++  ): Promise<ExceptionalRecoveryObservation>;
+ }
+ interface InternalRuntimeOptions {
+   readonly registry: ProcessBackendRegistry;
+@@ -415,6 +496,98 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+     return outcomes;
+   }
+ 
++  canRecoverExceptional(invocationId: string): boolean {
++    const record = this.options.store.readByInvocation(invocationId);
++    return !!record && EXCEPTIONAL_RECOVERY_STATES.has(record.state) && record.pendingEffects.length === 0 &&
++      (record.ownerId === this.ownerId || Date.parse(record.leaseExpiresAt) <= this.options.clock.now().getTime());
++  }
++
++  async recoverExceptional(value: ExceptionalRecoveryRequest): Promise<ExceptionalRecoveryObservation> {
++    const raw = strictRecord(value, "exceptional recovery");
++    assertKeys(raw, new Set(["invocationId", "runId", "logicalProcessId", "taskId", "sessionId", "expectedRevision", "ownerId", "fencingToken", "backendIdentityFingerprint", "birthFingerprint", "action", "userApproved", "assertGrant", "authorization", "expiresAt"]), "exceptional recovery");
++    const auth = strictRecord(raw.authorization, "recovery authorization");
++    assertKeys(auth, new Set(["authority", "grant", "binding"]), "recovery authorization");
++    const request = Object.freeze({ ...raw, authorization: Object.freeze({ ...auth }) }) as unknown as ExceptionalRecoveryRequest;
++    if (request.action !== "inspect" && request.action !== "terminate") throw new SubprocessRuntimeError("identity_mismatch", "Unsupported recovery action.");
++    const bindingRequest = Object.freeze({ ...request.authorization.binding, actor: Object.freeze({ ...request.authorization.binding.actor }) });
++    if (bindingRequest.runId !== request.runId || bindingRequest.sessionId !== (request.sessionId ?? "process-recovery") || bindingRequest.callId !== exceptionalRecoveryCallId(request))
++      throw new SubprocessRuntimeError("identity_mismatch", "Recovery grant is bound to a different invocation owner.");
++    const reservation = reserveExecutionGrantForProcessRecovery(request.authorization.authority, request.authorization.grant, bindingRequest, request.action === "terminate");
++    const expires = Date.parse(request.expiresAt);
++    const check = () => {
++      reservation.assertCurrent();
++      if (!Number.isFinite(expires) || expires <= this.options.clock.now().getTime()) throw new SubprocessRuntimeError("outcome_unknown", "Recovery deadline expired.");
++      request.assertGrant?.(); // Optional additional controller liveness check; never the native grant authority.
++    };
++    check();
++    let record = this.options.store.readByInvocation(request.invocationId);
++    if (!record || !EXCEPTIONAL_RECOVERY_STATES.has(record.state)) throw new SubprocessRuntimeError("identity_mismatch", "Routine or missing process cannot accept exceptional recovery.");
++    if (record.runId !== request.runId || record.logicalProcessId !== request.logicalProcessId || record.taskId !== request.taskId || record.sessionId !== request.sessionId ||
++        record.revision !== request.expectedRevision || record.ownerId !== request.ownerId || record.fencingToken !== request.fencingToken)
++      throw new SubprocessRuntimeError("identity_mismatch", "Exceptional recovery scope changed.");
++    if (record.pendingEffects.length) throw new SubprocessRuntimeError("outcome_unknown", "A previous native effect is unresolved.");
++    let binding = requiredBinding(record);
++    if (durableBackendIdentityFingerprint(binding) !== request.backendIdentityFingerprint || durableBirthFingerprint(binding) !== request.birthFingerprint)
++      throw new SubprocessRuntimeError("identity_mismatch", "Backend or birth identity changed.");
++    const owned = this.takeRecoveryOwnership(record);
++    if (!owned) throw new SubprocessRuntimeError("outcome_unknown", "The native ownership lease is held elsewhere.");
++    record = owned;
++    let selected: SelectedProcessBackend;
++    try { selected = await this.fencedEffect(record.invocationId, fence => { check(); return reattestProcessBackend(this.options.registry, binding, fence); }); }
++    catch { check(); selected = await this.fencedEffect(record.invocationId, fence => { check(); return adoptProcessBackendAfterRestart(this.options.registry, binding, fence); }); }
++    check();
++    if (request.action === "terminate" && (selected.attestation.capabilities.tree_termination !== "enforced" || selected.attestation.capabilities.verified_emptiness !== "enforced"))
++      throw new SubprocessRuntimeError("backend_unavailable", "Required recovery capabilities are not enforced.");
++    if (selected.registryId !== binding.registryId || selected.implementationGeneration !== binding.implementationGeneration || selected.attestationDigest !== binding.attestationDigest) {
++      const current = this.current(record.invocationId);
++      record = this.mutate({ type: "adopt_backend", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(),
++        binding: { ...binding, registryId: selected.registryId, implementationGeneration: selected.implementationGeneration,
++          implementationDigest: selected.implementationDigest, attestationVersion: selected.attestation.attestationVersion,
++          attestationDigest: selected.attestationDigest, capabilities: selected.attestation.capabilities } });
++      binding = requiredBinding(record);
++    }
++    const identityProof = durableBackendIdentityFingerprint(binding);
++    const observe = async () => {
++      const effect = await this.journaledEffect(record.invocationId, "backend_reconcile", async fence => {
++        check(); return parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
++      });
++      const current = this.current(record.invocationId), result = effect.result;
++      if (request.action === "terminate" && result.state === "exited") {
++        check();
++        this.mutate({ type: "resume_exceptional_exit", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: effect.effectId, identityProof,
++          observation: { observedAt: this.now(), ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }), ...(result.signal === undefined ? {} : { signal: result.signal }) } });
++      } else this.mutate({ type: "record_exceptional_observation", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: effect.effectId, identityProof, outcome: result.state });
++      check(); return result.state;
++    };
++    let observed = await observe();
++    if (request.action === "inspect") return this.exceptionalResult(record.invocationId, observed, identityProof);
++    for (const action of ["terminate", "force_terminate"] as const) {
++      if (observed !== "running") break;
++      const effect = await this.journaledEffect(record.invocationId, "backend_signal", async fence => { check(); return parseProcessSignalResult(await selected.backend.signal(binding, action, fence)); });
++      const current = this.current(record.invocationId);
++      this.mutate({ type: "record_exceptional_observation", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: effect.effectId, identityProof, outcome: effect.result.state });
++      check(); observed = await observe();
++      if (observed === "running") { await this.options.clock.sleep(this.options.escalationGraceMs?.[0] ?? 100); check(); }
++    }
++    if (observed !== "exited") return this.exceptionalResult(record.invocationId, observed, identityProof);
++    // Resume ordinary, proven-exit cleanup. Do not synthesize output, exit codes,
++    // resource release, or a successful task result from an inspection.
++    const reopened = await this.journaledEffect(record.invocationId, "output_reopen", fence => {
++      check(); return this.options.outputs.reopen(record.outputOwnerId, fence);
++    });
++    if (reopened.result.ownerId !== record.outputOwnerId) throw new SubprocessRuntimeError("outcome_unknown", "Recovered output ownership differs.");
++    let current = this.current(record.invocationId);
++    this.mutate({ type: "record_output_reopen", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: reopened.effectId });
++    current = this.current(record.invocationId); check();
++    await this.finish(current, reopened.result, selected, check);
++    return this.exceptionalResult(record.invocationId, "exited", identityProof);
++  }
++
++  private exceptionalResult(invocationId: string, observation: "running" | "exited" | "identity_mismatch" | "outcome_unknown", identityProof: string): ExceptionalRecoveryObservation {
++    const record = this.current(invocationId);
++    return Object.freeze({ invocationId, state: record.state, observation, cleanup: structuredClone(record.cleanup), identityProof, revision: record.revision });
++  }
++
+   private async runClaimed(
+     request: SnapshotInvocation,
+     record: DurableSubprocessRecord,
+@@ -601,6 +774,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+       implementationDigest: selected.implementationDigest,
+       attestationVersion: selected.attestation.attestationVersion,
+       attestationDigest: selected.attestationDigest,
++      capabilities: selected.attestation.capabilities,
+       ...launch,
+     };
+     record = this.current(record.invocationId);
+@@ -702,6 +876,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+       implementationDigest: selected.implementationDigest,
+       attestationVersion: selected.attestation.attestationVersion,
+       attestationDigest: selected.attestationDigest,
++      capabilities: selected.attestation.capabilities,
+       ...blocked.launch,
+     };
+     record = this.current(record.invocationId);
+@@ -756,7 +931,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+     record: DurableSubprocessRecord,
+     output: ProcessOutputSession,
+     selected?: SelectedProcessBackend,
++    assertAuthority: () => void = () => {},
+   ): Promise<GenericProcessResult> {
++    assertAuthority();
+     if (record.state === "exited") {
+       let disposition: ProcessOutputDisposition[];
+       let finalizeEffectId: string;
+@@ -764,7 +941,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+         const finalized = await this.journaledEffect(
+           record.invocationId,
+           "output_finalize",
+-          (fence) => output.finalize(fence),
++          (fence) => { assertAuthority(); return output.finalize(fence); },
+         );
+         disposition = outputDisposition(finalized.result);
+         finalizeEffectId = finalized.effectId;
+@@ -844,7 +1021,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+         const verified = await this.journaledEffect(
+           record.invocationId,
+           "backend_verify_empty",
+-          (fence) => backend.backend.verifyEmpty(binding, fence),
++          (fence) => { assertAuthority(); return backend.backend.verifyEmpty(binding, fence); },
+         );
+         verification = parseProcessEmptyVerification(verified.result);
+         record = this.current(record.invocationId);
+@@ -886,6 +1063,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+       );
+       return resultFromFailure(failed);
+     }
++    assertAuthority();
+     let releaseEffectId: string;
+     try {
+       const fresh = await this.fencedEffect(record.invocationId, (fence) =>
+@@ -894,7 +1072,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
+       const released = await this.journaledEffect(
+         record.invocationId,
+         "backend_release",
+-        (fence) => fresh.backend.release(binding, fence),
++        (fence) => { assertAuthority(); return fresh.backend.release(binding, fence); },
+       );
+       parseProcessReleaseResult(released.result);
+       releaseEffectId = released.effectId;
+@@ -1922,6 +2100,12 @@ export function createSubprocessRuntimeKernel(
+       writable: false,
+       configurable: false,
+     },
++    recoverExceptional: {
++      value: core.recoverExceptional.bind(core),
++      enumerable: true,
++      writable: false,
++      configurable: false,
++    },
+   });
+   const runtime = Object.freeze(runtimeObject) as unknown as SubprocessRuntime;
+   const grantsController = Object.freeze({
+@@ -1932,6 +2116,7 @@ export function createSubprocessRuntimeKernel(
+     runtime,
+     grantsController,
+     readOnlyStore: storeKernel.store,
++    canRecoverExceptional: core.canRecoverExceptional.bind(core),
+   });
+ }
+ 
+@@ -2313,3 +2498,11 @@ function deepFreeze<T>(value: T): T {
+   }
+   return value;
+ }
++
++/** Native recovery grants bind the whole captured target, action and deadline. */
++export function exceptionalRecoveryCallId(request: Omit<ExceptionalRecoveryRequest, "authorization" | "assertGrant" | "userApproved">): string {
++  const fields = [request.invocationId, request.runId, request.logicalProcessId, request.taskId ?? null, request.sessionId ?? null,
++    request.expectedRevision, request.ownerId, request.fencingToken, request.backendIdentityFingerprint, request.birthFingerprint,
++    request.action, request.expiresAt];
++  return "recovery:" + createHmac("sha256", RECOVERY_FINGERPRINT_KEY).update(JSON.stringify(fields)).digest("hex");
++}
+diff --git a/runner-v2/test/native-final-verification-factory.test.ts b/runner-v2/test/native-final-verification-factory.test.ts
+index 29dcd98e..49849317 100644
+--- a/runner-v2/test/native-final-verification-factory.test.ts
++++ b/runner-v2/test/native-final-verification-factory.test.ts
+@@ -99,6 +99,12 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
+       createdAt: "2026-08-26T00:00:00.000Z",
+       idempotencyKey: "native-factory-verification",
+     }));
++    assert.ok(handle.processRecovery, "live Native Build handle must expose bounded exceptional recovery");
++    const initialObservability = await handle.observability();
++    assert.equal(initialObservability.executionSafety?.availability, "live");
++    if (initialObservability.executionSafety?.availability === "live") {
++      assert.equal(initialObservability.executionSafety.isolation.securityBoundary, "provider_specific_not_universal_security_boundary");
++    }
+     const runRoot = join(state, "builds", safeSegment(runId));
+     const ports = new FinalVerificationPortAuthority(state);
+     const authority = new FinalVerificationProfileAuthority({
+diff --git a/runner-v2/test/one-shot-command-executor.test.ts b/runner-v2/test/one-shot-command-executor.test.ts
+index 7d65d137..1aa65177 100644
+--- a/runner-v2/test/one-shot-command-executor.test.ts
++++ b/runner-v2/test/one-shot-command-executor.test.ts
+@@ -78,6 +78,7 @@ test("shared executor selects isolation before launch and releases after verifie
+     },
+     cancel: async () => false,
+     reconcileStartup: async () => [],
++      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
+   };
+   const executor = createRuntimeBackedOneShotCommandExecutor({
+     runtime,
+@@ -148,6 +149,7 @@ test("a pre-consumption runtime failure revokes its runtime grant exactly once b
+     runtime: {
+       invoke: async () => { order.push("runtime"); throw new Error("rejected before grant consumption"); },
+       cancel: async () => false, reconcileStartup: async () => [],
++      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
+     },
+     runtimeGrants: {
+       issue: () => order.push("issue"),
+@@ -183,6 +185,7 @@ test("strict capability failure happens before runtime launch", async () => {
+       invoke: async () => { launches += 1; throw new Error("must not launch"); },
+       cancel: async () => false,
+       reconcileStartup: async () => [],
++      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
+     },
+     runtimeGrants: { issue: () => undefined, revoke: () => true },
+     executionGrants: authority,
+@@ -222,6 +225,7 @@ test("runtime outcome uncertainty still releases strict isolation and a release
+       invoke: async () => { throw Object.assign(new Error("runtime outcome unknown"), { code: "outcome_unknown" }); },
+       cancel: async () => false,
+       reconcileStartup: async () => [],
++      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
+     },
+     runtimeGrants: { issue: () => undefined, revoke: () => { runtimeRevokes += 1; return true; } },
+     executionGrants: authority,
+diff --git a/runner-v2/test/one-shot-output-capture.test.ts b/runner-v2/test/one-shot-output-capture.test.ts
+index c6af215f..378bf29b 100644
+--- a/runner-v2/test/one-shot-output-capture.test.ts
++++ b/runner-v2/test/one-shot-output-capture.test.ts
+@@ -40,6 +40,7 @@ for (const mode of ["complete", "overflow", "incomplete-observation", "disabled"
+             output: [{ stream: "stdout", tail: "loss marker is not protocol", totalBytes: expected.length + (mode === "incomplete-observation" ? 1 : 0), truncated: true, spillBytes: 0, lossyBytes: expected.length },
+               { stream: "stderr", tail: "err", totalBytes: 3, truncated: false, spillBytes: 0, lossyBytes: 3 }] };
+         }, cancel: async () => false, reconcileStartup: async () => [],
++      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
+       },
+     });
+     let passed = false;
+diff --git a/runner-v2/test/streaming-process-session-runtime.test.ts b/runner-v2/test/streaming-process-session-runtime.test.ts
+index b9f9b4aa..24c4ce66 100644
+--- a/runner-v2/test/streaming-process-session-runtime.test.ts
++++ b/runner-v2/test/streaming-process-session-runtime.test.ts
+@@ -3945,3 +3945,27 @@ test("managed fresh host reads authenticated finalized evidence after the live c
+     assert.equal(f.deliveries, 0);
+   } finally { f.kernel.store.close(); }
+ }));
++
++
++test("Task11 exceptional authority is rechecked between streaming cleanup resources", async () => {
++  const f = await makeFixture(2, "cleaned");
++  await f.runtime.open(f.request);
++  let checks = 0;
++  const error = await f.runtime.cleanupOwnedSession({
++    sessionId: "stream-1",
++    timeoutMs: 2_000,
++    assertAuthority: () => {
++      checks += 1;
++      if (checks === 6) throw new Error("recovery grant revoked");
++    },
++  }).then(() => undefined, (value: unknown) => value);
++  assert.ok(error instanceof Error);
++  assert.match(error.message, /recovery grant revoked/);
++  assert.ok(checks >= 6);
++  assert.equal(f.calls.includes("reconcile"), true, "one exact cleanup resource executed before revocation");
++  assert.notEqual(f.kernel.store.readBySession("stream-1")?.state, "released",
++    "revocation blocks later cleanup resources and terminal release");
++  await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 2_000 });
++  assert.equal(f.kernel.store.readBySession("stream-1")?.state, "released");
++  await f.grants.revokeAll("cleanup");
++});
+diff --git a/runner-v2/test/subprocess-runtime.test.ts b/runner-v2/test/subprocess-runtime.test.ts
+index 0203ecf1..84b9e45b 100644
+--- a/runner-v2/test/subprocess-runtime.test.ts
++++ b/runner-v2/test/subprocess-runtime.test.ts
+@@ -604,6 +604,8 @@ test("runtime is a closure facade exposing only intended invocation methods", ()
+     "cancel",
+     "invoke",
+     "reconcileStartup",
++    // Task 11 kernel-owned exceptional path; routine lifecycle never calls it.
++    "recoverExceptional",
+   ]);
+   assert.equal(Object.getOwnPropertySymbols(runtime).length, 0);
+   assert.equal(Object.getPrototypeOf(runtime), null);
+@@ -3257,3 +3259,16 @@ test("subprocess live output observation uses the actual backend bytes without p
+   assert.equal(Object.hasOwn(f.store.readByInvocation("invoke-1")!, "onOutput"), false);
+   f.store.close();
+ });
++
++// Task11.SPEC.durable-backend-capabilities
++test("subprocess runtime durably records the selected backend semantic capabilities", async () => {
++  const f = fixture("task11-capabilities");
++  await f.runtime.invoke({
++    intent: intent("task11-capabilities"),
++    grantId: "grant-task11-capabilities",
++    ambientEnvironment: {},
++  });
++  const record = f.store.readByInvocation("task11-capabilities");
++  assert.ok(record?.backendBinding);
++  assert.deepEqual(record.backendBinding.capabilities, capabilities);
++});
+diff --git a/scripts/test-runner-v2-client.mts b/scripts/test-runner-v2-client.mts
+index 4af1aef2..24bc2326 100644
+--- a/scripts/test-runner-v2-client.mts
++++ b/scripts/test-runner-v2-client.mts
+@@ -8,6 +8,10 @@ import {
+   getNativeBuildTranscript,
+   getNativeBuildUsage,
+   getNativeBuildObservability,
++  getNativeProcessRecovery,
++  generateNativeProcessRecovery,
++  decideNativeProcessRecovery,
++  executeNativeProcessRecovery,
+   projectNativeAcceptanceContract,
+   resolveNativeBuildRunId,
+   getNativeRunnerHealth,
+@@ -137,6 +141,26 @@ assert.equal(steeringProjection.userGuidance["guidance-1"].status, "submitted");
+ assert.equal(steeringProjection.architectQuestions["question-1"].resumeStatus, "pending");
+ const calls: Array<{ url: string; init: RequestInit }> = [];
+ const requestController = new AbortController();
++const recoveryRecord = {
++  version: 1,
++  proposalId: "proposal-1",
++  callId: "recovery:proposal-1",
++  scope: { kind: "subprocess", runId: "run_1", invocationId: "invocation-1", logicalProcessId: "logical-1",
++    revision: 4, ownerId: "owner", fencingToken: 2, state: "outcome_unknown",
++    backendIdentity: "a".repeat(64), birthFingerprint: "b".repeat(64) },
++  requestedAction: "terminate",
++  targetScope: ["logical-1"],
++  requestedCapabilities: ["tree_termination", "verified_emptiness"],
++  expiresAt: "2026-09-15T18:30:00.000Z",
++  proposalFingerprint: "c".repeat(64),
++  commandFingerprint: "d".repeat(64),
++  argumentsFingerprint: "e".repeat(64),
++  rationaleFingerprint: "f".repeat(64),
++  createdAt: "2026-09-15T18:00:00.000Z",
++  updatedAt: "2026-09-15T18:00:01.000Z",
++  state: "user_decision_required",
++  reason: "destructive_requires_user",
++} as const;
+ const fetchImpl: typeof fetch = async (input, init = {}) => {
+   calls.push({ url: String(input), init });
+   if (String(input).endsWith("/v2/health")) {
+@@ -178,8 +202,28 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
+       providers: [],
+       events: [],
+       git: { integrationBranch: "aiboard/run/integration", integrationRevision: "abc123", commits: [] },
++      executionSafety: {
++        availability: "live",
++        fullBypass: true,
++        isolation: { status: "unconfined_explicit_full", securityBoundary: "provider_specific_not_universal_security_boundary", activeLeaseCount: 0, blockers: [] },
++        grants: { active: 1, consumed: 0 },
++        processes: [],
++        recovery: [recoveryRecord],
++      },
+     });
+   }
++  if (String(input).endsWith("/build/recovery")) {
++    return Response.json({ records: [recoveryRecord] });
++  }
++  if (String(input).endsWith("/build/recovery/generate")) {
++    return Response.json(recoveryRecord);
++  }
++  if (String(input).endsWith("/build/recovery/proposal-1/decision")) {
++    return Response.json({ ...recoveryRecord, state: "authorized", reason: "user_approved" });
++  }
++  if (String(input).endsWith("/build/recovery/proposal-1/execute")) {
++    return Response.json({ ...recoveryRecord, state: "executed", reason: "cleanup_verified", cleanupState: "verified_empty" });
++  }
+   if (String(input).endsWith("/build/audit")) {
+     return Response.json({
+       protocolVersion: 2,
+@@ -324,6 +368,11 @@ const observed = await getNativeBuildObservability(
+ assert.equal(observed.agents.length, 1);
+ assert.equal(observed.toolCallCount, 1);
+ assert.equal(observed.tools[0].toolName, "fs.read");
++assert.equal(observed.executionSafety?.availability, "live");
++if (observed.executionSafety?.availability === "live") {
++  assert.equal(observed.executionSafety.fullBypass, true);
++  assert.equal(observed.executionSafety.recovery[0]?.state, "user_decision_required");
++}
+ const audit = await getNativeBuildAudit(
+   connection,
+   "run_1",
+@@ -335,6 +384,20 @@ assert.equal(audit.runEvents.length, 1);
+ assert.equal(audit.acceptanceContract.tasks.task_a.acceptanceCriteria[0].text, "The behavior works.");
+ assert.equal(audit.acceptanceContract.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
+ assert.equal(audit.acceptanceContract.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
++const recoveryRecords = await getNativeProcessRecovery(connection, "run_1", fetchImpl, requestController.signal);
++assert.equal(recoveryRecords[0]?.proposalId, "proposal-1");
++const generatedRecovery = await generateNativeProcessRecovery(
++  connection, "run_1", "invocation-1", "proposal-1", fetchImpl, requestController.signal,
++);
++assert.equal(generatedRecovery.state, "user_decision_required");
++const approvedRecovery = await decideNativeProcessRecovery(
++  connection, "run_1", "proposal-1", recoveryRecord.proposalFingerprint, "approve", fetchImpl, requestController.signal,
++);
++assert.equal(approvedRecovery.state, "authorized");
++const executedRecovery = await executeNativeProcessRecovery(
++  connection, "run_1", "proposal-1", recoveryRecord.proposalFingerprint, fetchImpl, requestController.signal,
++);
++assert.equal(executedRecovery.cleanupState, "verified_empty");
+ const guidanceCall = calls.find((call) => call.url.endsWith("/v2/runs/run_1/build/user-guidance"));
+ assert.ok(guidanceCall);
+ assert.equal(guidanceCall.init.method, "POST");
+diff --git a/scripts/test-runner-v2-observability.mts b/scripts/test-runner-v2-observability.mts
+index 4c81f77f..5819c4ce 100644
+--- a/scripts/test-runner-v2-observability.mts
++++ b/scripts/test-runner-v2-observability.mts
+@@ -9,6 +9,7 @@ import {
+   runnerAcceptanceContractSummary,
+   runnerBuildControlSummary,
+   runnerEvidenceDiagnosticDetail,
++  runnerExecutionSafetyDiagnostics,
+   runnerNextCooldownExpiry,
+   runnerObservabilitySummary,
+   runnerUserFacingObservability,
+@@ -376,6 +377,65 @@ const problemKeys = (
+   projected: Parameters<typeof runnerUserFacingObservability>[1],
+   now?: number
+ ) => runnerUserFacingObservability(snapshot, projected, now).problems.map((problem) => problem.key);
++const executionSafetySnapshot = {
++  ...observability,
++  executionSafety: {
++    availability: "live",
++    fullBypass: true,
++    isolation: {
++      status: "unconfined_explicit_full",
++      securityBoundary: "provider_specific_not_universal_security_boundary",
++      activeLeaseCount: 0,
++      blockers: [],
++    },
++    grants: { active: 1, consumed: 0 },
++    processes: [{
++      kind: "subprocess", invocationId: "invocation-1", logicalProcessId: "logical-1",
++      lifecycleState: "outcome_unknown", owned: true, pendingEffects: false,
++      backend: { backendId: "runner-windows-job-v1", implementationDigest: "a".repeat(64) },
++      capabilities: {
++        tree_termination: "enforced", crash_cleanup: "enforced",
++        verified_emptiness: "enforced", write_confinement: "unverified",
++      },
++      requiredCapabilities: ["tree_termination"],
++      leaseExpiresAt: "2026-09-15T18:30:00.000Z",
++      cleanup: { state: "pending" },
++      output: { status: "lossy", totalBytes: 100, truncated: true, lossyBytes: 5 },
++    }],
++    recovery: [{
++      proposalId: "proposal-1", requestedAction: "terminate", state: "user_decision_required",
++      reason: "destructive_requires_user", updatedAt: "2026-09-15T18:00:00.000Z", cleanupState: "pending",
++    }],
++  },
++} as unknown as NativeBuildObservability;
++const safetyDiagnostics = runnerExecutionSafetyDiagnostics(executionSafetySnapshot);
++assert.ok(safetyDiagnostics.some((item) => item.title === "Full permission bypass active"));
++assert.ok(safetyDiagnostics.some((item) => item.detail.includes("runner-windows-job-v1")));
++assert.ok(safetyDiagnostics.some((item) => item.detail.includes("lossy")));
++assert.ok(safetyDiagnostics.some((item) => item.detail.includes("user decision")));
++assert.deepEqual(problemKeys(executionSafetySnapshot, projectionWithoutHandoff), [
++  "execution-safety:full-bypass",
++  "execution-safety:output:invocation-1",
++  "execution-safety:cleanup:invocation-1",
++  "execution-safety:recovery:proposal-1",
++]);
++const unverifiedSafety = {
++  ...executionSafetySnapshot,
++  executionSafety: {
++    ...executionSafetySnapshot.executionSafety,
++    fullBypass: false,
++    isolation: { ...executionSafetySnapshot.executionSafety.isolation, status: "unverified" },
++    processes: [],
++    recovery: [],
++  },
++} as NativeBuildObservability;
++assert.deepEqual(problemKeys(unverifiedSafety, projectionWithoutHandoff), ["execution-safety:isolation"]);
++const unavailableSafety = {
++  ...observability,
++  executionSafety: { availability: "unavailable", reason: "historical_execution_safety_unavailable" },
++} as NativeBuildObservability;
++assert.equal(runnerExecutionSafetyDiagnostics(unavailableSafety)[0]?.title, "Execution safety unavailable");
++assert.deepEqual(problemKeys(unavailableSafety, projectionWithoutHandoff), []);
+ 
+ assert.deepEqual(problemKeys(observability, {
+   ...projectionWithoutHandoff,
+@@ -871,3 +931,20 @@ assert.equal(filtered.tools.length, 1);
+ assert.equal(filtered.events.length, 0);
+ 
+ console.log("PASS Runner V2 observability panel");
++
++const authorizedDestructiveRecovery = {
++  ...executionSafetySnapshot,
++  executionSafety: {
++    ...executionSafetySnapshot.executionSafety,
++    fullBypass: false,
++    isolation: { ...executionSafetySnapshot.executionSafety.isolation, status: "write_confinement_exact_grant" },
++    processes: [],
++    recovery: [{
++      ...executionSafetySnapshot.executionSafety.recovery[0],
++      state: "authorized", reason: "user_approved",
++    }],
++  },
++} as NativeBuildObservability;
++assert.deepEqual(problemKeys(authorizedDestructiveRecovery, projectionWithoutHandoff), [
++  "execution-safety:recovery:proposal-1",
++]);

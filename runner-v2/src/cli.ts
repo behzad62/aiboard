@@ -206,6 +206,7 @@ async function main(): Promise<void> {
       supervisor,
       builds,
       buildProvisioner: builds,
+      processRecovery: builds,
       providerConfigs,
       allowedOrigins: options.allowOrigins,
       runnerInfo: {

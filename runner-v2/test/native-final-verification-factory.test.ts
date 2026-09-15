@@ -99,6 +99,12 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
       createdAt: "2026-08-26T00:00:00.000Z",
       idempotencyKey: "native-factory-verification",
     }));
+    assert.ok(handle.processRecovery, "live Native Build handle must expose bounded exceptional recovery");
+    const initialObservability = await handle.observability();
+    assert.equal(initialObservability.executionSafety?.availability, "live");
+    if (initialObservability.executionSafety?.availability === "live") {
+      assert.equal(initialObservability.executionSafety.isolation.securityBoundary, "provider_specific_not_universal_security_boundary");
+    }
     const runRoot = join(state, "builds", safeSegment(runId));
     const ports = new FinalVerificationPortAuthority(state);
     const authority = new FinalVerificationProfileAuthority({

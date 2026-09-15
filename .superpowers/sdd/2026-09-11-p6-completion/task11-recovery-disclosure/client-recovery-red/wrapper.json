@@ -1,0 +1,33 @@
+{
+  "pid": 23172,
+  "identity": {
+    "Id": 23172,
+    "StartTimeUtc": "2026-09-15T14:31:23.5446601Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T14:31:23.587Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\client-recovery-red.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-client.mts"
+  ],
+  "spec": {
+    "id": "client-recovery-red",
+    "args": [
+      "--import",
+      "tsx",
+      "scripts/test-runner-v2-client.mts"
+    ],
+    "inputPaths": [
+      "lib/client/runner-v2.ts",
+      "scripts/test-runner-v2-client.mts"
+    ]
+  }
+}

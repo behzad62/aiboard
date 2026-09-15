@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: ordinary process lifecycle has no model invocation dependency
+ok 1 - ordinary process lifecycle has no model invocation dependency
+  ---
+  duration_ms: 2.367
+  type: 'test'
+  ...
+# Subtest: only exceptional recovery composition can construct the proposal model generator
+ok 2 - only exceptional recovery composition can construct the proposal model generator
+  ---
+  duration_ms: 19.7122
+  type: 'test'
+  ...
+# Subtest: ordinary execution host never dispatches exceptional recovery implicitly
+ok 3 - ordinary execution host never dispatches exceptional recovery implicitly
+  ---
+  duration_ms: 0.6376
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 287.1915

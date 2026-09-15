@@ -40,6 +40,7 @@ for (const mode of ["complete", "overflow", "incomplete-observation", "disabled"
             output: [{ stream: "stdout", tail: "loss marker is not protocol", totalBytes: expected.length + (mode === "incomplete-observation" ? 1 : 0), truncated: true, spillBytes: 0, lossyBytes: expected.length },
               { stream: "stderr", tail: "err", totalBytes: 3, truncated: false, spillBytes: 0, lossyBytes: 3 }] };
         }, cancel: async () => false, reconcileStartup: async () => [],
+      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
       },
     });
     let passed = false;

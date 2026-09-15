@@ -1,0 +1,50 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-yypxjo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-15bmMT"}
+# Subtest: exceptional kernel requires an actual original-authority grant, not an approval boolean
+ok 1 - exceptional kernel requires an actual original-authority grant, not an approval boolean
+  ---
+  duration_ms: 46.0391
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-NCgdmX"}
+# Subtest: exceptional kernel snapshots inspect action before yielding
+ok 2 - exceptional kernel snapshots inspect action before yielding
+  ---
+  duration_ms: 62.53
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-9XQbhn"}
+# Subtest: exceptional kernel revocation while reattesting blocks later native effects
+ok 3 - exceptional kernel revocation while reattesting blocks later native effects
+  ---
+  duration_ms: 43.6251
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-UlS9Dn"}
+# Subtest: exceptional kernel cleanup uses the ordinary output-finalize and backend-release path
+ok 4 - exceptional kernel cleanup uses the ordinary output-finalize and backend-release path
+  ---
+  duration_ms: 160.3273
+  type: 'test'
+  ...
+# Subtest: exceptional kernel false emptiness is non-green and has no unconsumed verification effect
+ok 5 - exceptional kernel false emptiness is non-green and has no unconsumed verification effect
+  ---
+  duration_ms: 133.3137
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-yypxjo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-15bmMT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-NCgdmX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-9XQbhn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-UlS9Dn","existsAtExit":false}
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 779.7136

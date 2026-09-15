@@ -604,6 +604,8 @@ test("runtime is a closure facade exposing only intended invocation methods", ()
     "cancel",
     "invoke",
     "reconcileStartup",
+    // Task 11 kernel-owned exceptional path; routine lifecycle never calls it.
+    "recoverExceptional",
   ]);
   assert.equal(Object.getOwnPropertySymbols(runtime).length, 0);
   assert.equal(Object.getPrototypeOf(runtime), null);
@@ -3256,4 +3258,17 @@ test("subprocess live output observation uses the actual backend bytes without p
   assert.equal(Buffer.concat(observed).toString(), "child");
   assert.equal(Object.hasOwn(f.store.readByInvocation("invoke-1")!, "onOutput"), false);
   f.store.close();
+});
+
+// Task11.SPEC.durable-backend-capabilities
+test("subprocess runtime durably records the selected backend semantic capabilities", async () => {
+  const f = fixture("task11-capabilities");
+  await f.runtime.invoke({
+    intent: intent("task11-capabilities"),
+    grantId: "grant-task11-capabilities",
+    ambientEnvironment: {},
+  });
+  const record = f.store.readByInvocation("task11-capabilities");
+  assert.ok(record?.backendBinding);
+  assert.deepEqual(record.backendBinding.capabilities, capabilities);
 });

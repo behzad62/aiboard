@@ -1,0 +1,32 @@
+{
+  "pid": 68632,
+  "identity": {
+    "Id": 68632,
+    "StartTimeUtc": "2026-09-15T12:45:55.6906971Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T12:45:55.728Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task11-recovery-disclosure/control-plane-red-2.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery-control.test.ts"
+  ],
+  "spec": {
+    "id": "control-plane-red-2",
+    "tests": [
+      "runner-v2/test/process-recovery-control.test.ts"
+    ]
+  }
+}

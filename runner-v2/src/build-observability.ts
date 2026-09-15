@@ -18,6 +18,7 @@ import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { RunnerExtensionManifest } from "./runner-extension.js";
 import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
 import type { ExecutionEnforcementState } from "./execution-isolation-provider.js";
+import type { RecoveryAuditRecord, RecoveryTarget } from "./process-recovery.js";
 import type { SkillMetadata } from "./skill-catalog.js";
 import type {
   FinalVerificationGenerationProjection,
@@ -161,6 +162,121 @@ export interface BuildCapabilitiesObservation {
   executionEnforcement?: ExecutionEnforcementState;
 }
 
+export interface ExecutionSafetyObservability {
+  fullBypass: boolean;
+  isolation: {
+    status: "unconfined_explicit_full" | "write_confinement_exact_grant" | "blocked" | "unverified";
+    securityBoundary: ExecutionEnforcementState["boundary"];
+    activeLeaseCount: number;
+    blockers: string[];
+  };
+  grants: { active: number; consumed: number };
+  processes: Array<{
+    kind: "subprocess" | "streaming";
+    invocationId: string;
+    logicalProcessId: string;
+    lifecycleState: string;
+    owned: boolean;
+    pendingEffects: boolean;
+    backend?: { backendId: string; implementationDigest: string; providerId?: string };
+    capabilities: RecoveryTarget["capabilities"];
+    requiredCapabilities: string[];
+    leaseExpiresAt?: string;
+    cleanup: RecoveryTarget["cleanup"];
+    output: { status: "complete" | "truncated" | "lossy"; totalBytes: number; truncated: boolean; lossyBytes: number } | { status: "unavailable" };
+  }>;
+  recovery: Array<Pick<RecoveryAuditRecord, "proposalId" | "requestedAction" | "state" | "reason" | "updatedAt" | "observation" | "cleanupState">>;
+}
+
+export function projectExecutionSafetyObservability(input: {
+  permissionProfile: "guarded" | "project" | "full";
+  isolation: ExecutionEnforcementState;
+  activeIsolationLeaseCount: number;
+  grantStates: readonly ("issued" | "consumed")[];
+  processes: readonly RecoveryTarget[];
+  recovery: Readonly<Record<string, RecoveryAuditRecord>>;
+}): ExecutionSafetyObservability {
+  const fullBypass = input.permissionProfile === "full" && input.isolation.records.some(
+    (record) => record.status === "unconfined_explicit_full",
+  );
+  const blockedRecords = input.isolation.records.filter(
+    (record) => record.status === "blocked" || record.status === "selection_blocked",
+  );
+  const summaryBlockers = (input.isolation.recoverySummaries ?? []).flatMap(
+    (summary) => summary.blockers,
+  );
+  const blockers = [...new Set([
+    ...blockedRecords.flatMap((record) => record.blocker ? [record.blocker] : []),
+    ...summaryBlockers,
+  ].map((blocker) => redactSensitiveValue(blocker, { maximumTextLength: 2_048 }))
+    .filter((blocker): blocker is string => typeof blocker === "string" && blocker.length > 0))];
+  const hasBlockingIsolation = blockedRecords.length > 0 ||
+    (input.isolation.recoverySummaries ?? []).some((summary) => summary.blockerCount > 0);
+  const confinementRecord = input.activeIsolationLeaseCount > 0
+    ? [...input.isolation.records].reverse().find(
+        (record) => record.status === "active" && record.enforcement === "write_confinement_exact_grant",
+      )
+    : undefined;
+  const isolationStatus: ExecutionSafetyObservability["isolation"]["status"] = hasBlockingIsolation
+    ? "blocked"
+    : fullBypass
+      ? "unconfined_explicit_full"
+      : confinementRecord
+        ? "write_confinement_exact_grant"
+        : "unverified";
+  const grants = { active: 0, consumed: 0 };
+  for (const state of input.grantStates) {
+    if (state === "issued") grants.active += 1;
+    else grants.consumed += 1;
+  }
+  return {
+    fullBypass,
+    isolation: {
+      status: isolationStatus,
+      securityBoundary: input.isolation.boundary,
+      activeLeaseCount: Math.max(0, input.activeIsolationLeaseCount),
+      blockers,
+    },
+    grants,
+    processes: input.processes.map((process) => ({
+      kind: process.scope.kind,
+      invocationId: process.scope.invocationId,
+      logicalProcessId: process.scope.logicalProcessId,
+      lifecycleState: process.scope.state,
+      owned: process.owned,
+      pendingEffects: process.pendingEffects,
+      ...(process.backend ? { backend: { ...process.backend } } : {}),
+      capabilities: { ...process.capabilities },
+      requiredCapabilities: [...(process.requiredCapabilities ?? [])],
+      ...(process.leaseExpiresAt ? { leaseExpiresAt: process.leaseExpiresAt } : {}),
+      cleanup: structuredClone(process.cleanup),
+      output: process.output
+        ? {
+            status: process.output.lossyBytes > 0 ? "lossy" as const : process.output.truncated ? "truncated" as const : "complete" as const,
+            totalBytes: process.output.totalBytes,
+            truncated: process.output.truncated,
+            lossyBytes: process.output.lossyBytes,
+          }
+        : { status: "unavailable" as const },
+    })),
+    recovery: Object.values(input.recovery)
+      .sort((left, right) => left.proposalId.localeCompare(right.proposalId))
+      .map((record) => ({
+        proposalId: record.proposalId,
+        requestedAction: record.requestedAction,
+        state: record.state,
+        reason: record.reason,
+        updatedAt: record.updatedAt,
+        ...(record.observation ? { observation: record.observation } : {}),
+        ...(record.cleanupState ? { cleanupState: record.cleanupState } : {}),
+      })),
+  };
+}
+
+export type BuildExecutionSafetyObservability =
+  | ({ availability: "live" } & ExecutionSafetyObservability)
+  | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };
+
 export type BuildTranscriptPage = AgentTranscriptPage;
 
 export interface BuildObservabilitySnapshot {
@@ -181,6 +297,7 @@ export interface BuildObservabilitySnapshot {
     commits: IntegrationCommit[];
   };
   capabilities?: BuildCapabilitiesObservation;
+  executionSafety?: BuildExecutionSafetyObservability;
   finalVerification?: FinalVerificationObservability;
   independentVerifier?: IndependentVerifierObservability;
   /** Terminal-reader provenance so absent legacy stores are never shown as live empty state. */

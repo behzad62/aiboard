@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: process recovery: model generator cannot author scope, target, call identity or expiry
+ok 1 - process recovery: model generator cannot author scope, target, call identity or expiry
+  ---
+  duration_ms: 2.5184
+  type: 'test'
+  ...
+# Subtest: process recovery: model generator rejects extra command/scope authority
+ok 2 - process recovery: model generator rejects extra command/scope authority
+  ---
+  duration_ms: 0.3853
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 327.2038

@@ -1,0 +1,25 @@
+{
+  "id": "cli-recovery-green",
+  "startedAt": "2026-09-15T13:10:51.665Z",
+  "finishedAt": "2026-09-15T13:10:53.030Z",
+  "wrapperPid": 38080,
+  "testPid": 65052,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 446,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=CLI connects",
+    "runner-v2/test/process-recovery-control.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

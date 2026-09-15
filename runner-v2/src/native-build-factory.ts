@@ -38,6 +38,7 @@ import type {
 } from "./build-observability.js";
 import {
   loadFinalVerificationDiagnostics,
+  projectExecutionSafetyObservability,
   projectFinalVerificationObservability,
   projectIndependentVerifierObservability,
 } from "./build-observability.js";
@@ -176,6 +177,12 @@ import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type Proce
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
 import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
 import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
+import {
+  ProcessRecoveryController,
+  createAgentProcessRecoveryGenerator,
+  createSubprocessProcessRecoveryRuntime,
+  type ProcessRecoveryRuntime,
+} from "./process-recovery.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -662,9 +669,11 @@ export class NativeBuildFactory {
     initializationStage = "subprocess_runtime";
     let executionGrants: ExecutionGrantAuthority;
     let commandExecution: OneShotCommandExecutor;
+    let processRecoveryRuntime: ProcessRecoveryRuntime;
     if (executionHostBinding) {
       executionGrants = executionHostBinding.executionGrants;
       commandExecution = executionHostBinding.commandExecution;
+      processRecoveryRuntime = executionHostBinding.processRecoveryRuntime;
     } else {
     const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(this.options.stateDirectory, "managed-processes-job-host") });
     const childEnvironments = createChildEnvironmentFactory({
@@ -752,6 +761,14 @@ export class NativeBuildFactory {
       ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
       environments: childEnvironments,
     });
+    processRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
+      runtime: subprocessKernel.runtime,
+      canRecoverExceptional: subprocessKernel.canRecoverExceptional,
+      store: subprocessKernel.readOnlyStore,
+      executionGrants,
+      permissionProfile: spec.permissionProfile,
+      workspacePath: this.options.projectRoot,
+    });
     constructionResources.add("subprocess_runtime", async () => {
       await executionGrants.revokeAll("cleanup");
       await subprocessKernel.runtime.reconcileStartup();
@@ -781,6 +798,14 @@ export class NativeBuildFactory {
         providerModelFactory(config, this.artifacts),
       ])
     );
+    const recoveryModel = models.get(spec.architectRuntimeId);
+    if (!recoveryModel) throw new Error("Exceptional recovery requires the configured Architect runtime.");
+    const processRecovery = new ProcessRecoveryController({
+      runId: spec.runId,
+      store: schedulerStore,
+      runtime: processRecoveryRuntime,
+      generate: createAgentProcessRecoveryGenerator({ model: recoveryModel }),
+    });
     initializationStage = "runtime_drivers";
     const workerDriver = new NativeWorkerDriver({
       git: gitContext,
@@ -1095,6 +1120,7 @@ export class NativeBuildFactory {
     let closing: Promise<void> | undefined;
     return {
       runtime,
+      processRecovery,
       finalVerificationCleanup,
       retireInvalidatedFinalVerification: async (generation, currentGeneration) =>
         await retireInvalidatedFinalVerificationGeneration({
@@ -1127,6 +1153,16 @@ export class NativeBuildFactory {
         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
         const schedulerEvents = schedulerStore.readRun(spec.runId);
         const schedulerProjection = rebuildSchedulerProjection(schedulerEvents);
+        const executionEnforcement = await executionIsolation.enforcementState();
+        const executionSafety = projectExecutionSafetyObservability({
+          permissionProfile: spec.permissionProfile,
+          isolation: executionEnforcement,
+          activeIsolationLeaseCount: executionIsolation.activeLeases().length,
+          grantStates: executionGrants.activeSnapshots().flatMap((grant) =>
+            grant.state === "revoked" ? [] : [grant.state]),
+          processes: processRecoveryRuntime.list?.() ?? [],
+          recovery: processRecovery.records(),
+        });
         const finalGeneration = schedulerProjection.finalVerification?.current;
         const diagnostics = finalGeneration
           ? await loadFinalVerificationDiagnostics({
@@ -1179,8 +1215,9 @@ export class NativeBuildFactory {
             extensions: runCapabilities.registry.manifests(),
             languageProviders: runCapabilities.language.providerMetadata(),
             languageRoutes: runCapabilities.language.auditRecords(),
-            executionEnforcement: await executionIsolation.enforcementState(),
+            executionEnforcement,
           },
+          executionSafety: { availability: "live", ...executionSafety },
           finalVerification: projectFinalVerificationObservability(
             schedulerProjection,
             diagnostics,
@@ -1635,6 +1672,10 @@ export class NativeBuildFactory {
                   },
                 }
               : {}),
+            executionSafety: {
+              availability: "unavailable",
+              reason: "historical_execution_safety_unavailable",
+            },
             historical: {
               terminalState,
               provenance: {

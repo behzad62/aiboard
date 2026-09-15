@@ -1028,7 +1028,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     resource: AdoptedCleanupResourceKind,
     context: AdoptedCleanupContext,
     run: AdoptedCleanupRun,
+    assertAuthority: () => void,
   ): Promise<void> => {
+    assertAuthority();
     const deadlineAt = run.deadlineAt;
     let record = options.kernel.store.readBySession(sessionId);
     if (!record) throw runnerSessionError("cleanup_blocked", "Adopted cleanup record is unavailable.");
@@ -1188,7 +1190,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     run: AdoptedCleanupRun,
     disposition: "backend_unavailable" | "outcome_unknown",
     live?: PrivateAttachment,
+    assertAuthority: () => void = () => {},
   ): Promise<void> => {
+    assertAuthority();
     const protocolSettlement = (live ?? attachments.get(sessionId))?.gracefulProtocolSettlement;
     if (protocolSettlement) await bounded(protocolSettlement, Math.max(1, run.deadlineAt - clock().getTime()));
     const closingInput = (live ?? attachments.get(sessionId))?.gracefulInputClose;
@@ -1242,9 +1246,11 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     if (!cleanup?.progress) throw runnerSessionError("cleanup_blocked", "Adopted cleanup progress is unavailable.");
     const context = contextFor(record, live);
     for (const resource of cleanup.progress.resources.map((fact) => fact.resource)) {
+      assertAuthority();
       exactCleanupOwner(sessionId, ownerId, fencingToken);
-      await settleAdoptedResource(sessionId, resource, context, run);
+      await settleAdoptedResource(sessionId, resource, context, run, assertAuthority);
     }
+    assertAuthority();
     const ready = exactCleanupOwner(sessionId, ownerId, fencingToken);
     const completed = options.sessions.completeAdoptedCleanup({
       sessionId, ownerId, fencingToken, expectedRevision: ready.revision, effectId: cleanup.effectId,
@@ -1262,7 +1268,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     disposition: "backend_unavailable" | "outcome_unknown",
     live?: PrivateAttachment,
     signal?: AbortSignal,
+    assertAuthority: () => void = () => {},
   ) => {
+    assertAuthority();
     const record = options.kernel.store.readBySession(sessionId);
     if (!record) return Promise.reject(runnerSessionError("cleanup_blocked", "Adopted cleanup record is unavailable."));
     const existing = adoptedCleanupRuns.get(sessionId);
@@ -1270,7 +1278,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         clock().getTime() < existing.deadlineAt) return awaitAdoptedCleanup(sessionId, existing, deadlineAt, signal);
     renewOwnedSessionLease(sessionId, deadlineAt);
     const run: AdoptedCleanupRun = { ownerId: record.ownerId, fencingToken: record.fencingToken, deadlineAt, promise: Promise.resolve() };
-    run.promise = performAdoptedCleanup(sessionId, run, disposition, live)
+    run.promise = performAdoptedCleanup(sessionId, run, disposition, live, assertAuthority)
       .finally(() => { if (adoptedCleanupRuns.get(sessionId) === run) adoptedCleanupRuns.delete(sessionId); });
     adoptedCleanupRuns.set(sessionId, run);
     return awaitAdoptedCleanup(sessionId, run, deadlineAt, signal);
@@ -1342,6 +1350,13 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     }))) }) });
   };
   return Object.freeze({
+    canRecoverExceptional(sessionId: string): boolean {
+      const record = options.kernel.store.readBySession(sessionId);
+      return !!record && ["backend_unavailable", "outcome_unknown"].includes(record.state) &&
+        record.cleanupOwner === "session_authority" &&
+        !record.effects.some((effect) => effect.status === "pending" ||
+          effect.progress?.resources.some((resource) => resource.status === "in_flight"));
+    },
     stopAuthorizedSession,
     async observeOwnedOutput(input: { sessionId: string; owner: Pick<ExecutionGrantBinding, "runId" | "sessionId" | "actor"> }) {
       // Host-only control-plane observation; this is never a substitute for
@@ -1546,7 +1561,10 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       readonly sessionId: string;
       readonly timeoutMs: number;
       readonly signal?: AbortSignal;
+      /** Exceptional recovery only: original grant/deadline assertion at each resource boundary. */
+      readonly assertAuthority?: () => void;
     }) {
+      input.assertAuthority?.();
       if (!input.sessionId || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) {
         throw runnerSessionError("cleanup_blocked", "Streaming cleanup request is invalid.");
       }
@@ -1624,7 +1642,8 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           }
         }
       }
-      await runAdoptedCleanup(input.sessionId, deadlineAt, "backend_unavailable", attachment, input.signal);
+      await runAdoptedCleanup(input.sessionId, deadlineAt, "backend_unavailable", attachment, input.signal,
+        input.assertAuthority ?? (() => {}));
       const settled = options.kernel.store.readBySession(input.sessionId);
       if (settled?.state !== "released") {
         throw runnerSessionError("cleanup_blocked", "Owned streaming cleanup did not reach verified release.");

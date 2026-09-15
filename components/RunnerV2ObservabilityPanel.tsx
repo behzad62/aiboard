@@ -54,6 +54,72 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
   };
 }
 
+export function runnerExecutionSafetyDiagnostics(snapshot: NativeBuildObservability): Array<{
+  key: string;
+  title: string;
+  detail: string;
+}> {
+  const safety = snapshot.executionSafety;
+  if (!safety) {
+    return [{
+      key: "execution-safety:not-reported",
+      title: "Execution safety not reported",
+      detail: "This Runner response predates execution-safety disclosure, so confinement cannot be inferred.",
+    }];
+  }
+  if (safety.availability === "unavailable") {
+    return [{
+      key: "execution-safety:unavailable",
+      title: "Execution safety unavailable",
+      detail: "This historical view cannot prove the original live grant, isolation lease, process identity, and cleanup state.",
+    }];
+  }
+  const items: Array<{ key: string; title: string; detail: string }> = [];
+  const isolationTitle = safety.fullBypass
+    ? "Full permission bypass active"
+    : safety.isolation.status === "write_confinement_exact_grant"
+      ? "Write confinement enforced"
+      : safety.isolation.status === "blocked"
+        ? "Execution isolation blocked"
+        : "Execution confinement unverified";
+  const isolationDetail = safety.fullBypass
+    ? "Full mode is explicitly unconfined; provider isolation is not being claimed as a security boundary."
+    : `${safety.isolation.status} · ${safety.isolation.securityBoundary} · ${safety.isolation.activeLeaseCount} active isolation lease${safety.isolation.activeLeaseCount === 1 ? "" : "s"}${
+        safety.isolation.blockers.length ? ` · blockers: ${safety.isolation.blockers.join("; ")}` : ""
+      }`;
+  items.push({ key: "execution-safety:isolation", title: isolationTitle, detail: isolationDetail });
+  items.push({
+    key: "execution-safety:grants",
+    title: "Execution grants",
+    detail: `${safety.grants.active} active · ${safety.grants.consumed} consumed`,
+  });
+  for (const process of safety.processes) {
+    const backend = process.backend
+      ? `${process.backend.backendId}${process.backend.providerId ? ` via ${process.backend.providerId}` : ""}`
+      : "backend unavailable";
+    const capabilities = Object.entries(process.capabilities)
+      .map(([name, state]) => `${name}=${state}`)
+      .join(", ");
+    const output = process.output.status === "unavailable"
+      ? "output unavailable"
+      : `${process.output.status} output · ${process.output.totalBytes} bytes · ${process.output.lossyBytes} lossy bytes`;
+    items.push({
+      key: `execution-safety:process:${process.invocationId}`,
+      title: `${process.kind} ${process.logicalProcessId}`,
+      detail: `${process.lifecycleState} · ${backend} · ${capabilities} · cleanup ${process.cleanup.state} · ${output}`,
+    });
+  }
+  for (const recovery of safety.recovery) {
+    const state = recovery.state === "user_decision_required" ? "user decision required" : recovery.state.replaceAll("_", " ");
+    items.push({
+      key: `execution-safety:recovery:${recovery.proposalId}`,
+      title: `Exceptional recovery: ${recovery.requestedAction}`,
+      detail: `${state}${recovery.cleanupState ? ` · cleanup ${recovery.cleanupState}` : ""}`,
+    });
+  }
+  return items;
+}
+
 type SearchableObservability = Pick<
   NativeBuildObservability,
   | "agents"
@@ -591,6 +657,70 @@ export function runnerUserFacingObservability(
     : evidenceVerification;
 
   const problems: UserFacingProblem[] = [];
+  const executionSafety = snapshot.executionSafety;
+  if (executionSafety?.availability === "live") {
+    if (executionSafety.fullBypass) {
+      problems.push({
+        key: "execution-safety:full-bypass",
+        title: "Full permission bypass is active",
+        detail: "This run explicitly permits unconfined execution in Full mode. Runner does not describe this state as confined.",
+      });
+    } else if (executionSafety.isolation.status === "blocked" || executionSafety.isolation.status === "unverified") {
+      problems.push({
+        key: "execution-safety:isolation",
+        title: executionSafety.isolation.status === "blocked" ? "Execution isolation is blocked" : "Execution confinement is unverified",
+        detail: executionSafety.isolation.status === "blocked"
+          ? "The configured provider could not establish the requested execution boundary."
+          : "No enforced write-confinement record is available, so Runner cannot claim this execution was confined.",
+      });
+    }
+    const exceptionalStates = new Set(["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"]);
+    for (const process of executionSafety.processes) {
+      const unavailableRequired = process.requiredCapabilities.filter((capability) =>
+        process.capabilities[capability as keyof typeof process.capabilities] !== "enforced"
+      );
+      if (unavailableRequired.length > 0) {
+        problems.push({
+          key: `execution-safety:capabilities:${process.invocationId}`,
+          title: "Required execution capability is not enforced",
+          detail: `${process.logicalProcessId}: ${unavailableRequired.join(", ")} is partial, unavailable, or unverified.`,
+        });
+      }
+      if (process.output.status === "lossy" || process.output.status === "truncated") {
+        problems.push({
+          key: `execution-safety:output:${process.invocationId}`,
+          title: "Process output is incomplete",
+          detail: process.output.status === "lossy"
+            ? `${process.logicalProcessId} lost ${process.output.lossyBytes} byte${process.output.lossyBytes === 1 ? "" : "s"} of output; captured output must not be treated as complete.`
+            : `${process.logicalProcessId} output was truncated; captured output must not be treated as complete.`,
+        });
+      }
+      if (process.cleanup.state === "failed" || (exceptionalStates.has(process.lifecycleState) && process.cleanup.state === "pending")) {
+        problems.push({
+          key: `execution-safety:cleanup:${process.invocationId}`,
+          title: process.cleanup.state === "failed" ? "Process cleanup failed" : "Process cleanup is unresolved",
+          detail: process.cleanup.detail ?? "Runner has not proven this process tree empty, so cleanup is not complete.",
+        });
+      }
+    }
+    for (const recovery of executionSafety.recovery) {
+      const authorizedDestructive = recovery.state === "authorized" && recovery.requestedAction !== "inspect";
+      if (!authorizedDestructive && !["user_decision_required", "executing", "outcome_unknown"].includes(recovery.state)) continue;
+      problems.push({
+        key: `execution-safety:recovery:${recovery.proposalId}`,
+        title: recovery.state === "user_decision_required"
+          ? "Exceptional recovery needs your decision"
+          : authorizedDestructive
+            ? "Authorized exceptional recovery is pending"
+            : "Exceptional recovery is unresolved",
+        detail: recovery.state === "user_decision_required"
+          ? "Runner requires an exact user decision before executing this destructive recovery proposal."
+          : authorizedDestructive
+            ? "The exact destructive proposal is authorized but has not completed; the Build remains blocked until execution reaches a proven outcome."
+            : "Runner will not replay or broaden this recovery action until its outcome is known.",
+      });
+    }
+  }
   let verificationSeal: {
     generationId: string;
     targetRevision: string;
@@ -1203,6 +1333,12 @@ export function RunnerV2ObservabilityPanel({
               detail: `${memory.status} project memory`,
             })),
           ]}
+        />
+        <ObservationList
+          icon={<ShieldCheck className="h-3.5 w-3.5" />}
+          title="Execution safety"
+          empty="Execution safety disclosure is unavailable."
+          items={runnerExecutionSafetyDiagnostics(snapshot).filter(matches)}
         />
         <ObservationList
           icon={<Server className="h-3.5 w-3.5" />}

@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseEvidenceContinuation, type EvidenceContinuation } from "./evidence-continuation.js";
+import { parseExecutionSafetyCapabilities, type ExecutionSafetyCapabilities } from "./execution-safety-contracts.js";
 
 export type StreamingSessionStoreErrorCode =
   | "invalid_record"
@@ -78,6 +79,8 @@ export interface StreamingSessionBackendBinding {
   readonly implementationDigest: string;
   readonly attestationVersion: number;
   readonly attestationDigest: string;
+  /** Exact semantic states reported by the selected backend attestation. */
+  readonly capabilities?: ExecutionSafetyCapabilities;
   readonly opaqueIdentity: string;
   readonly birthFingerprint: Readonly<{
     observedAt: string;
@@ -866,7 +869,7 @@ function parseLease(value: unknown): void {
 function parseBackendBinding(value: unknown): void {
   const allowed = new Set([
     "registryId", "backendId", "implementationGeneration", "implementationDigest", "attestationVersion",
-    "attestationDigest", "opaqueIdentity", "birthFingerprint", "rootPid", "startedAt",
+    "attestationDigest", "capabilities", "opaqueIdentity", "birthFingerprint", "rootPid", "startedAt",
   ]);
   assertExactKeys(value, allowed, "streaming session backend binding");
   const binding = value as Record<string, unknown>;
@@ -890,6 +893,7 @@ function parseBackendBinding(value: unknown): void {
   if (!Number.isSafeInteger(binding.attestationVersion) || (binding.attestationVersion as number) < 1) {
     throw new StreamingSessionStoreError("invalid_record", "Streaming session backend attestation version is invalid.");
   }
+  if (binding.capabilities !== undefined) parseExecutionSafetyCapabilities(binding.capabilities);
   if (binding.rootPid !== undefined &&
       (!Number.isSafeInteger(binding.rootPid) || (binding.rootPid as number) < 1)) {
     throw new StreamingSessionStoreError("invalid_record", "Streaming session backend root pid is invalid.");

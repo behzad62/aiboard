@@ -1,0 +1,25 @@
+{
+  "id": "model-generator-green",
+  "startedAt": "2026-09-15T12:59:26.069Z",
+  "finishedAt": "2026-09-15T12:59:26.799Z",
+  "wrapperPid": 60252,
+  "testPid": 61120,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 446,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=model generator",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

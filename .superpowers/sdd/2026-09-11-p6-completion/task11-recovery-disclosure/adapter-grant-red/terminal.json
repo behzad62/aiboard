@@ -1,0 +1,25 @@
+{
+  "id": "adapter-grant-red",
+  "startedAt": "2026-09-15T12:12:15.756Z",
+  "finishedAt": "2026-09-15T12:12:16.665Z",
+  "wrapperPid": 61356,
+  "testPid": 59892,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 445,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=subprocess adapter issues one exact native recovery grant",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

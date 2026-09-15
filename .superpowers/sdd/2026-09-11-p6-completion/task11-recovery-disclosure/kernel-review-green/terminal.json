@@ -1,0 +1,24 @@
+{
+  "id": "kernel-review-green",
+  "startedAt": "2026-09-15T09:45:51.118Z",
+  "finishedAt": "2026-09-15T09:45:52.354Z",
+  "wrapperPid": 17108,
+  "testPid": 47124,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 445,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery-kernel.test.ts"
+  ],
+  "rootCount": 5,
+  "retainedRoots": []
+}

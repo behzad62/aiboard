@@ -1,0 +1,145 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-LHRwUN"}
+# Task11 kernel RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-kernel-LHRwUN
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-72NjLI"}
+# Subtest: exceptional kernel requires an actual original-authority grant, not an approval boolean
+not ok 1 - exceptional kernel requires an actual original-authority grant, not an approval boolean
+  ---
+  duration_ms: 110.4726
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-kernel.test.ts:1:6638'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + [
+    +   'probe',
+    +   'reconcile',
+    +   'signal',
+    +   'verify'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: 'probe'
+    1: 'reconcile'
+    2: 'signal'
+    3: 'verify'
+  operator: 'deepStrictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:80:10)
+    async fixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:14:9)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Task11 kernel RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-kernel-72NjLI
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-idduHn"}
+# Subtest: exceptional kernel snapshots inspect action before yielding
+not ok 2 - exceptional kernel snapshots inspect action before yielding
+  ---
+  duration_ms: 74.9459
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-kernel.test.ts:1:6915'
+  failureType: 'testCodeFailure'
+  error: 'Nonterminal durable process cleanup must be pending.'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    assertStateInvariants (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:2272:11)
+    deriveRecord (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:1317:5)
+    applyCommand (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:2081:16)
+    SqliteDurableProcessStore.apply (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:596:20)
+    Object.apply (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:457:60)
+    RunnerSubprocessRuntime.mutate (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:1807:24)
+    RunnerSubprocessRuntime.recoverExceptional (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:648:10)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:84:3)
+    async fixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:14:9)
+    async Test.run (node:internal/test_runner/test:1332:7)
+  ...
+# Task11 kernel RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-kernel-idduHn
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-SQyQYm"}
+# Subtest: exceptional kernel revocation while reattesting blocks later native effects
+not ok 3 - exceptional kernel revocation while reattesting blocks later native effects
+  ---
+  duration_ms: 75.2626
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-kernel.test.ts:1:7173'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:90:10)
+    async fixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:14:9)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Task11 kernel RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-kernel-SQyQYm
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-ah3Vyq"}
+# Subtest: exceptional kernel cleanup uses the ordinary output-finalize and backend-release path
+not ok 4 - exceptional kernel cleanup uses the ordinary output-finalize and backend-release path
+  ---
+  duration_ms: 70.0877
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-kernel.test.ts:1:7563'
+  failureType: 'testCodeFailure'
+  error: 'Nonterminal durable process cleanup must be pending.'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    assertStateInvariants (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:2272:11)
+    deriveRecord (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:1317:5)
+    applyCommand (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:2081:16)
+    SqliteDurableProcessStore.apply (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:596:20)
+    Object.apply (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:457:60)
+    RunnerSubprocessRuntime.mutate (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:1807:24)
+    RunnerSubprocessRuntime.recoverExceptional (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:648:10)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:93:18)
+    async fixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:14:9)
+    async Test.run (node:internal/test_runner/test:1332:7)
+  ...
+# Task11 kernel RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-kernel-ah3Vyq
+# Subtest: exceptional kernel false emptiness is non-green and has no unconsumed verification effect
+not ok 5 - exceptional kernel false emptiness is non-green and has no unconsumed verification effect
+  ---
+  duration_ms: 70.9084
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-kernel.test.ts:1:8096'
+  failureType: 'testCodeFailure'
+  error: 'Completed process effect has the wrong semantic consumer family.'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    consumeEffectForMutation (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:1897:11)
+    reduceMutation (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:1327:20)
+    deriveRecord (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:1316:14)
+    applyCommand (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:2081:16)
+    SqliteDurableProcessStore.apply (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:596:20)
+    Object.apply (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\durable-process-store.ts:457:60)
+    RunnerSubprocessRuntime.mutate (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:1807:24)
+    RunnerSubprocessRuntime.recoverExceptional (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:632:12)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:101:18)
+    async fixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-kernel.test.ts:14:9)
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-LHRwUN","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-72NjLI","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-idduHn","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-SQyQYm","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-ah3Vyq","existsAtExit":true}
+1..5
+# tests 5
+# suites 0
+# pass 0
+# fail 5
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 719.5633

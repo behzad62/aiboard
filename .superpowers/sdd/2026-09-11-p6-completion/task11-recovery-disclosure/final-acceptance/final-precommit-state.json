@@ -1,0 +1,22 @@
+﻿{
+    "capturedAt":  "2026-09-15T19:39:09.5393180Z",
+    "task11CodePathCount":  31,
+    "task11UnstagedClean":  true,
+    "liveOwnedProcesses":  [
+                               {
+                                   "ProcessId":  65484,
+                                   "ParentProcessId":  44980,
+                                   "Name":  "node.exe",
+                                   "CommandLine":  "\"C:\\Program Files\\nodejs\\node.exe\" D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\src\\managed-process-supervisor.mjs process_4afcfb96-e8c8-421b-acf4-94d0bc87d808 \"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard native final verification factory w15I0n\\runner state\\managed-processes-job-host\\process_4afcfb96-e8c8-421b-acf4-94d0bc87d808\\supervisor.jsonl\""
+                               }
+                           ],
+    "processAuditClean":  false,
+    "remoteTrackingRefsUnchanged":  true,
+    "currentRemoteRefs":  [
+                              "refs/remotes/origin/HEAD 697fc1050cd298d474ca08262f50ce2c0f4d74cb",
+                              "refs/remotes/origin/main 697fc1050cd298d474ca08262f50ce2c0f4d74cb"
+                          ],
+    "head":  "284743e980514ecebc1d3143d427f4f3abf86225",
+    "stagedCount":  597,
+    "statusCount":  2305
+}

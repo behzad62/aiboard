@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -8,6 +9,7 @@ import {
   assertDurableExecutionSafetyValue,
   parseExecutionSafetyCapabilities,
   parseProcessOutputDisposition,
+  type ExecutionSafetyCapabilities,
   type ExecutionSafetyCapabilityName,
   type ProcessCleanupStatus,
   type ProcessEscalationAction,
@@ -47,6 +49,8 @@ export interface DurableBackendBinding {
   readonly implementationDigest: string;
   readonly attestationVersion: number;
   readonly attestationDigest: string;
+  /** Exact semantic states reported by the selected backend attestation. */
+  readonly capabilities?: ExecutionSafetyCapabilities;
   readonly opaqueIdentity: string;
   readonly birthFingerprint: {
     readonly observedAt: string;
@@ -130,7 +134,9 @@ export type DurableProcessMutationKind =
   | "record_empty_verification"
   | "begin_effect"
   | "settle_effect"
-  | "complete_effect";
+  | "complete_effect"
+  | "record_exceptional_observation"
+  | "resume_exceptional_exit";
 export interface DurableProcessMutation {
   readonly kind: DurableProcessMutationKind;
   readonly revision: number;
@@ -372,6 +378,37 @@ export type DurableProcessCommand =
       readonly invocationId: string;
       readonly expectedRevision: number;
       readonly at: string;
+    }
+  /**
+   * Exceptional-recovery observation. Legal only from an exceptional terminal
+   * state, only while the caller holds the lease fence, and only once the
+   * caller has re-proved the live backend identity (`identityProof`) against
+   * the recorded binding. It never changes lifecycle state and never certifies
+   * cleanup.
+   */
+  | {
+      readonly type: "record_exceptional_observation";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+      readonly identityProof: string;
+      readonly outcome: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
+    }
+  /**
+   * Exceptional-recovery cleanup proof. Legal only from an exceptional terminal
+   * state after a proven-empty backend verification under the same identity
+   * proof. It records `verified_empty` cleanup without inventing an exit
+   * observation, an output disposition or a synthetic terminal result.
+   */
+  | {
+      readonly type: "resume_exceptional_exit";
+      readonly invocationId: string;
+      readonly expectedRevision: number;
+      readonly at: string;
+      readonly effectId: string;
+      readonly identityProof: string;
+      readonly observation: DurableChildObservation;
     };
 
 type OwnedDurableProcessCommand = DurableProcessCommand & {
@@ -717,16 +754,82 @@ const EFFECT_FAMILIES = new Set<DurableProcessEffectFamily>([
   "backend_release",
 ]);
 const EFFECT_CONSUMERS: Readonly<
-  Record<DurableProcessEffectFamily, DurableProcessMutationKind>
+  Record<DurableProcessEffectFamily, readonly DurableProcessMutationKind[]>
 > = Object.freeze({
-  output_reopen: "record_output_reopen",
-  backend_reconcile: "record_reconciliation",
-  backend_observe: "record_exit",
-  backend_signal: "finish_escalation",
-  output_finalize: "begin_verify",
-  backend_verify_empty: "record_empty_verification",
-  backend_release: "complete",
+  output_reopen: Object.freeze(["record_output_reopen"] as const),
+  backend_reconcile: Object.freeze([
+    "record_reconciliation",
+    "record_exceptional_observation",
+    "resume_exceptional_exit",
+  ] as const),
+  backend_observe: Object.freeze(["record_exit"] as const),
+  backend_signal: Object.freeze([
+    "finish_escalation",
+    "record_exceptional_observation",
+  ] as const),
+  output_finalize: Object.freeze(["begin_verify"] as const),
+  backend_verify_empty: Object.freeze([
+    "record_empty_verification",
+  ] as const),
+  backend_release: Object.freeze(["complete"] as const),
 });
+
+/** Terminal classifications that ordinary lifecycle commands may never leave. */
+const EXCEPTIONAL_STATES: ReadonlySet<DurableSubprocessState> = new Set([
+  "orphaned",
+  "identity_mismatch",
+  "backend_unavailable",
+  "outcome_unknown",
+]);
+
+/** Exceptional states that were completely frozen before Task 11. */
+const FROZEN_EXCEPTIONAL_STATES: ReadonlySet<DurableSubprocessState> = new Set([
+  "orphaned",
+  "identity_mismatch",
+  "outcome_unknown",
+]);
+
+/**
+ * The closed set of commands an exceptional-recovery caller may apply. Every
+ * other lifecycle command stays illegal from these states, so no routine path
+ * gains new authority. `backend_unavailable` keeps its pre-existing ordinary
+ * transitions in addition to these.
+ */
+const EXCEPTIONAL_RECOVERY_COMMANDS: ReadonlySet<DurableProcessMutationKind> =
+  new Set([
+    "begin_effect",
+    "settle_effect",
+    "complete_effect",
+    "renew_lease",
+    "takeover_lease",
+    "adopt_backend",
+    "record_exceptional_observation",
+    "resume_exceptional_exit",
+  ]);
+
+/**
+ * History reasons an exceptional state may repeat with. Reasons are derived
+ * from the mutation log (never stored independently), so this cannot be forged
+ * by a hand-written record.
+ */
+const EXCEPTIONAL_SELF_HISTORY_REASONS: ReadonlySet<string> = new Set([
+  "effect_backend_reconcile_started",
+  "effect_backend_reconcile_completed",
+  "effect_backend_reconcile_settled",
+  "effect_backend_signal_started",
+  "effect_backend_signal_completed",
+  "effect_backend_signal_settled",
+  "effect_backend_verify_empty_started",
+  "effect_backend_verify_empty_completed",
+  "effect_backend_verify_empty_settled",
+  "lease_renewed",
+  "lease_takeover",
+  "exceptional_recovery_observed_running",
+  "exceptional_recovery_observed_exited",
+  "exceptional_recovery_observed_identity_mismatch",
+  "exceptional_recovery_observed_outcome_unknown",
+  "backend_restart_adopted",
+]);
 const LEGAL_HISTORY: Readonly<
   Record<DurableSubprocessState, readonly DurableSubprocessState[]>
 > = {
@@ -1059,6 +1162,8 @@ function parseMutation(value: unknown): DurableProcessMutation {
       "begin_effect",
       "settle_effect",
       "complete_effect",
+      "record_exceptional_observation",
+      "resume_exceptional_exit",
     ]),
     "mutation kind",
   );
@@ -1118,6 +1223,12 @@ function parseMutation(value: unknown): DurableProcessMutation {
     },
     settle_effect: { required: ["effectId", "leaseExpiresAt"] },
     complete_effect: { required: ["effectId", "leaseExpiresAt"] },
+    record_exceptional_observation: {
+      required: ["effectId", "identityProof", "outcome"],
+    },
+    resume_exceptional_exit: {
+      required: ["effectId", "identityProof", "observation"],
+    },
   };
   const shape = keysByKind[kind];
   assertExactKeys(
@@ -1376,7 +1487,7 @@ function reduceMutation(
       );
     }
     case "adopt_backend": {
-      requireState(current, [
+      requireState(current, ["orphaned", "identity_mismatch", "outcome_unknown",
         "running",
         "stopping",
         "exited",
@@ -1392,6 +1503,7 @@ function reduceMutation(
           binding.birthFingerprint.discriminator
       )
         throw new Error("Backend adoption cannot change process identity.");
+      if (binding.implementationDigest !== current.backendBinding?.implementationDigest) throw new Error("Backend adoption cannot change implementation.");
       return historyOnly(
         { ...base, backendBinding: binding },
         mutation.at,
@@ -1672,7 +1784,62 @@ function reduceMutation(
         mutation.at,
         "backend_empty_verified",
       );
+    case "record_exceptional_observation": {
+      requireExceptionalState(current);
+      identityProof(data.identityProof, current);
+      const observed = requiredEnum(
+        data.outcome,
+        new Set<"running" | "exited" | "identity_mismatch" | "outcome_unknown">([
+          "running",
+          "exited",
+          "identity_mismatch",
+          "outcome_unknown",
+        ]),
+        "exceptional recovery outcome",
+      );
+      // Observation only: the lifecycle classification and cleanup proof are
+      // deliberately left untouched.
+      return historyOnly(base, mutation.at, `exceptional_recovery_observed_${observed}`);
+    }
+    case "resume_exceptional_exit": {
+      requireExceptionalState(current);
+      identityProof(data.identityProof, current);
+      const { result: _result, output: _output, emptyVerification: _verification, ...recoverable } = base;
+      return moveDerived({ ...recoverable, observation: parseObservation(data.observation), cleanup: { state: "pending" } },
+        "exited", mutation.at, "exceptional_recovery_exited");
+    }
   }
+}
+
+function requireExceptionalState(record: DurableSubprocessRecord): void {
+  if (!EXCEPTIONAL_STATES.has(record.state))
+    throw new Error(
+      `Exceptional recovery is not legal from ${record.state}.`,
+    );
+}
+
+function identityProof(value: unknown, record: DurableSubprocessRecord): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+    throw new Error("Exceptional recovery identity proof is invalid.");
+  if (!record.backendBinding || value !== durableRecoveryIdentity(record.backendBinding)) throw new Error("Recovery identity proof does not match this backend binding.");
+  return value;
+}
+
+export function durableRecoveryIdentity(binding: DurableBackendBinding): string {
+  // Registry/generation IDs are host-instance authority, not process identity.
+  // Restart adoption is allowed only when the stable implementation and fresh
+  // attestation still match, so recovery identity remains bound to those facts
+  // plus the opaque native identity and birth proof.
+  return createHash("sha256").update(JSON.stringify({
+    backendId: binding.backendId,
+    implementationDigest: binding.implementationDigest,
+    attestationVersion: binding.attestationVersion,
+    attestationDigest: binding.attestationDigest,
+    opaqueIdentity: binding.opaqueIdentity,
+    birthFingerprint: binding.birthFingerprint,
+    ...(binding.rootPid === undefined ? {} : { rootPid: binding.rootPid }),
+    startedAt: binding.startedAt,
+  })).digest("hex");
 }
 
 function assertEffectMutationAllowed(
@@ -1718,7 +1885,7 @@ function consumeEffectForMutation(
       record.pendingEffects.some(
         (effect) =>
           effect.phase === "completed" &&
-          EFFECT_CONSUMERS[effect.family] === mutation.kind,
+          EFFECT_CONSUMERS[effect.family].includes(mutation.kind),
       )
     )
       throw new Error("Completed process effect requires its exact effect ID.");
@@ -1731,7 +1898,7 @@ function consumeEffectForMutation(
   )
     return record;
   const effect = requiredPendingEffect(record, rawEffectId, "completed");
-  if (EFFECT_CONSUMERS[effect.family] !== mutation.kind)
+  if (!EFFECT_CONSUMERS[effect.family].includes(mutation.kind))
     throw new Error("Completed process effect has the wrong semantic consumer family.");
   return {
     ...record,
@@ -1845,6 +2012,14 @@ function commandData(
       };
     case "record_empty_verification":
       return { effectId: command.effectId, verification: command.verification };
+    case "record_exceptional_observation":
+      return {
+        effectId: command.effectId,
+        identityProof: command.identityProof,
+        outcome: command.outcome,
+      };
+    case "resume_exceptional_exit":
+      return { effectId: command.effectId, identityProof: command.identityProof, observation: command.observation };
   }
 }
 
@@ -1879,6 +2054,17 @@ function applyCommand(
   ) {
     throw new Error("Process lease owner or fencing token is stale.");
   }
+  // `orphaned`, `identity_mismatch` and `outcome_unknown` are frozen terminal
+  // classifications: before exceptional recovery existed, no command at all was
+  // legal from them. Only the closed recovery command set is added here, so no
+  // routine lifecycle path gains authority it did not already have.
+  if (
+    FROZEN_EXCEPTIONAL_STATES.has(current.state) &&
+    !EXCEPTIONAL_RECOVERY_COMMANDS.has(command.type)
+  )
+    throw new Error(
+      `Illegal process transition from ${current.state}.`,
+    );
   assertEffectMutationAllowed(current, command.type);
   const mutation = parseMutation({
     kind: command.type,
@@ -2162,6 +2348,7 @@ function parseBinding(value: unknown): DurableBackendBinding {
       "implementationDigest",
       "attestationVersion",
       "attestationDigest",
+      "capabilities",
       "opaqueIdentity",
       "birthFingerprint",
       "rootPid",
@@ -2192,6 +2379,7 @@ function parseBinding(value: unknown): DurableBackendBinding {
       1,
     ),
     attestationDigest: digest(o.attestationDigest, "attestationDigest"),
+    ...(o.capabilities === undefined ? {} : { capabilities: parseExecutionSafetyCapabilities(o.capabilities) }),
     opaqueIdentity: text(o.opaqueIdentity, "opaqueIdentity"),
     birthFingerprint: {
       observedAt: text(birth.observedAt, "observedAt"),
@@ -2563,11 +2751,23 @@ function validateHistory(
 ): void {
   for (let index = 1; index < history.length; index += 1) {
     const prior = history[index - 1]!.state;
-    const next = history[index]!.state;
-    if (!LEGAL_HISTORY[prior].includes(next))
-      throw new Error(
-        `Durable process history contains illegal transition ${prior} -> ${next}.`,
-      );
+    const entry = history[index]!;
+    const next = entry.state;
+    if (LEGAL_HISTORY[prior].includes(next)) continue;
+    if (EXCEPTIONAL_STATES.has(prior) && next === "exited" && entry.reason === "exceptional_recovery_exited") continue;
+    // The only additional legal edges are exceptional-recovery self-entries,
+    // whose reasons are derived from the closed exceptional mutation kinds and
+    // from the lease/journal mutations those kinds require.
+    if (
+      prior === next &&
+      EXCEPTIONAL_STATES.has(prior) &&
+      entry.reason !== undefined &&
+      EXCEPTIONAL_SELF_HISTORY_REASONS.has(entry.reason)
+    )
+      continue;
+    throw new Error(
+      `Durable process history contains illegal transition ${prior} -> ${next}.`,
+    );
   }
 }
 function requiredRecord(

@@ -1,0 +1,74 @@
+﻿{
+    "files":  [
+                  {
+                      "file":  "runner-v2/test/process-recovery.test.ts",
+                      "tests":  59
+                  },
+                  {
+                      "file":  "runner-v2/test/process-recovery-kernel.test.ts",
+                      "tests":  9
+                  },
+                  {
+                      "file":  "runner-v2/test/process-recovery-control.test.ts",
+                      "tests":  3
+                  },
+                  {
+                      "file":  "runner-v2/test/process-recovery-disclosure.test.ts",
+                      "tests":  4
+                  },
+                  {
+                      "file":  "runner-v2/test/process-recovery-model-free.test.ts",
+                      "tests":  3
+                  },
+                  {
+                      "file":  "runner-v2/test/process-recovery-streaming.test.ts",
+                      "tests":  4
+                  },
+                  {
+                      "file":  "runner-v2/test/subprocess-runtime.test.ts",
+                      "tests":  72
+                  },
+                  {
+                      "file":  "runner-v2/test/streaming-process-session-runtime.test.ts",
+                      "tests":  216
+                  },
+                  {
+                      "file":  "runner-v2/test/streaming-session-store.test.ts",
+                      "tests":  108
+                  },
+                  {
+                      "file":  "runner-v2/test/scheduler-store.test.ts",
+                      "tests":  22
+                  },
+                  {
+                      "file":  "runner-v2/test/execution-grants.test.ts",
+                      "tests":  8
+                  },
+                  {
+                      "file":  "runner-v2/test/execution-host.test.ts",
+                      "tests":  19
+                  },
+                  {
+                      "file":  "runner-v2/test/execution-host-credential-graph.test.ts",
+                      "tests":  2
+                  },
+                  {
+                      "file":  "runner-v2/test/control-server.test.ts",
+                      "tests":  13
+                  },
+                  {
+                      "file":  "runner-v2/test/one-shot-command-executor.test.ts",
+                      "tests":  4
+                  },
+                  {
+                      "file":  "runner-v2/test/one-shot-output-capture.test.ts",
+                      "tests":  5
+                  },
+                  {
+                      "file":  "runner-v2/test/native-build-manager.test.ts",
+                      "tests":  52
+                  }
+              ],
+    "totalTests":  603,
+    "fileCount":  17
+}

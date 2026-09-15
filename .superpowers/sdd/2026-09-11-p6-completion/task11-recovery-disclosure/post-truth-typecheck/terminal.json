@@ -1,0 +1,20 @@
+{
+  "id": "post-truth-typecheck",
+  "startedAt": "2026-09-15T14:56:36.508Z",
+  "finishedAt": "2026-09-15T14:56:44.252Z",
+  "wrapperPid": 65636,
+  "testPid": 68172,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 448,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

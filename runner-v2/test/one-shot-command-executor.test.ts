@@ -78,6 +78,7 @@ test("shared executor selects isolation before launch and releases after verifie
     },
     cancel: async () => false,
     reconcileStartup: async () => [],
+      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
   };
   const executor = createRuntimeBackedOneShotCommandExecutor({
     runtime,
@@ -148,6 +149,7 @@ test("a pre-consumption runtime failure revokes its runtime grant exactly once b
     runtime: {
       invoke: async () => { order.push("runtime"); throw new Error("rejected before grant consumption"); },
       cancel: async () => false, reconcileStartup: async () => [],
+      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
     },
     runtimeGrants: {
       issue: () => order.push("issue"),
@@ -183,6 +185,7 @@ test("strict capability failure happens before runtime launch", async () => {
       invoke: async () => { launches += 1; throw new Error("must not launch"); },
       cancel: async () => false,
       reconcileStartup: async () => [],
+      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
     },
     runtimeGrants: { issue: () => undefined, revoke: () => true },
     executionGrants: authority,
@@ -222,6 +225,7 @@ test("runtime outcome uncertainty still releases strict isolation and a release 
       invoke: async () => { throw Object.assign(new Error("runtime outcome unknown"), { code: "outcome_unknown" }); },
       cancel: async () => false,
       reconcileStartup: async () => [],
+      recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
     },
     runtimeGrants: { issue: () => undefined, revoke: () => { runtimeRevokes += 1; return true; } },
     executionGrants: authority,

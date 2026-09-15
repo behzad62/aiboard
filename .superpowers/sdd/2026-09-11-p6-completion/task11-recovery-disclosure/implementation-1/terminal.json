@@ -1,0 +1,10 @@
+{
+  "startedAt": "2026-09-15T09:19:12.428Z",
+  "finishedAt": "2026-09-15T09:27:39.218Z",
+  "wrapperPid": 51920,
+  "childPid": 44572,
+  "exitCode": 1,
+  "signal": null,
+  "resultSubtype": "error_max_budget_usd",
+  "isError": true
+}

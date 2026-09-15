@@ -1,0 +1,7 @@
+{
+  "id": "factory-recovery-green-2",
+  "tests": [
+    "runner-v2/test/native-final-verification-factory.test.ts"
+  ],
+  "pattern": "NativeBuildFactory executes"
+}

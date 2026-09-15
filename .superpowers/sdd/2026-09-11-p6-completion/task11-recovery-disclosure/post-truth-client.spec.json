@@ -1,0 +1,1 @@
+{"id":"post-truth-client","args":["--import","tsx","scripts/test-runner-v2-client.mts"],"inputPaths":["lib/client/runner-v2.ts","scripts/test-runner-v2-client.mts"]}

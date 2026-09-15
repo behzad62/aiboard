@@ -1,3 +1,4 @@
+import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
 
 import {
@@ -86,6 +87,7 @@ export interface SchedulerActor {
 }
 
 export type SchedulerEventType =
+  | "process.recovery_updated"
   | "run.initialized"
   | "run.policy_configured"
   | "plan.created"
@@ -409,6 +411,7 @@ export interface VerifierSelectionProjection {
 }
 
 export interface SchedulerProjection {
+  processRecovery?: Record<string, RecoveryAuditRecord>;
   runId: string;
   /** Optional for event-log compatibility with runs created before P3.1. */
   initialObjective?: string;
@@ -476,7 +479,7 @@ export function assertPendingUserGuidanceAllowsEvent(
   const hasPendingUserGuidance = Object.values(current.userGuidance).some(
     (guidance) => guidance.status === "submitted"
   );
-  if (!hasPendingUserGuidance) return;
+  if (!hasPendingUserGuidance || event.type === "process.recovery_updated") return;
 
   const taskStatus = event.type === "task.transitioned"
     ? event.payload.status
@@ -536,7 +539,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
   current: SchedulerProjection,
   event: Pick<SchedulerEvent, "type" | "actor" | "payload">
 ): void {
-  if (!current.blockingArchitectQuestionId) return;
+  if (!current.blockingArchitectQuestionId || event.type === "process.recovery_updated") return;
   const allowed =
     event.type === "architect.question_answered" ||
     event.type === "architect.question_resume_consumed" ||
@@ -1552,6 +1555,22 @@ export function reduceSchedulerEvent(
     lastSequence: event.sequence,
   };
   switch (event.type) {
+    case "process.recovery_updated": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot accept exceptional recovery updates.");
+      }
+      if (Object.keys(event.payload).length !== 1 || !Object.hasOwn(event.payload, "record")) throw new Error("Recovery event payload is not closed.");
+      const record = parseRecoveryAuditRecord(event.payload.record);
+      if (record.scope.runId !== event.runId) throw new Error("Recovery event belongs to a different run.");
+      const prior = Object.hasOwn(current.processRecovery ?? {}, record.proposalId) ? current.processRecovery?.[record.proposalId] : undefined;
+      validateRecoveryTransition(prior, record, event.actor, event.occurredAt);
+      next.processRecovery = { ...current.processRecovery, [record.proposalId]: record };
+      if (recoveryBlocksRun(next.processRecovery)) {
+        next.status = "paused";
+        next.pauseReason = { reason: "Exceptional process recovery requires an exact decision or cleanup proof." };
+      }
+      break;
+    }
     case "run.initialized":
       throw new Error("A scheduler run cannot be initialized twice.");
     case "run.policy_configured": {
@@ -2461,10 +2480,12 @@ export function reduceSchedulerEvent(
       }
       break;
     case "run.resumed":
+      if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents resume.");
       next.status = "running";
       delete next.pauseReason;
       break;
     case "run.completed":
+      if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents completion.");
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may complete a scheduler run.");
       }

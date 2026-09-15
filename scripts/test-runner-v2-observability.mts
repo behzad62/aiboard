@@ -9,6 +9,7 @@ import {
   runnerAcceptanceContractSummary,
   runnerBuildControlSummary,
   runnerEvidenceDiagnosticDetail,
+  runnerExecutionSafetyDiagnostics,
   runnerNextCooldownExpiry,
   runnerObservabilitySummary,
   runnerUserFacingObservability,
@@ -376,6 +377,65 @@ const problemKeys = (
   projected: Parameters<typeof runnerUserFacingObservability>[1],
   now?: number
 ) => runnerUserFacingObservability(snapshot, projected, now).problems.map((problem) => problem.key);
+const executionSafetySnapshot = {
+  ...observability,
+  executionSafety: {
+    availability: "live",
+    fullBypass: true,
+    isolation: {
+      status: "unconfined_explicit_full",
+      securityBoundary: "provider_specific_not_universal_security_boundary",
+      activeLeaseCount: 0,
+      blockers: [],
+    },
+    grants: { active: 1, consumed: 0 },
+    processes: [{
+      kind: "subprocess", invocationId: "invocation-1", logicalProcessId: "logical-1",
+      lifecycleState: "outcome_unknown", owned: true, pendingEffects: false,
+      backend: { backendId: "runner-windows-job-v1", implementationDigest: "a".repeat(64) },
+      capabilities: {
+        tree_termination: "enforced", crash_cleanup: "enforced",
+        verified_emptiness: "enforced", write_confinement: "unverified",
+      },
+      requiredCapabilities: ["tree_termination"],
+      leaseExpiresAt: "2026-09-15T18:30:00.000Z",
+      cleanup: { state: "pending" },
+      output: { status: "lossy", totalBytes: 100, truncated: true, lossyBytes: 5 },
+    }],
+    recovery: [{
+      proposalId: "proposal-1", requestedAction: "terminate", state: "user_decision_required",
+      reason: "destructive_requires_user", updatedAt: "2026-09-15T18:00:00.000Z", cleanupState: "pending",
+    }],
+  },
+} as unknown as NativeBuildObservability;
+const safetyDiagnostics = runnerExecutionSafetyDiagnostics(executionSafetySnapshot);
+assert.ok(safetyDiagnostics.some((item) => item.title === "Full permission bypass active"));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("runner-windows-job-v1")));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("lossy")));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("user decision")));
+assert.deepEqual(problemKeys(executionSafetySnapshot, projectionWithoutHandoff), [
+  "execution-safety:full-bypass",
+  "execution-safety:output:invocation-1",
+  "execution-safety:cleanup:invocation-1",
+  "execution-safety:recovery:proposal-1",
+]);
+const unverifiedSafety = {
+  ...executionSafetySnapshot,
+  executionSafety: {
+    ...executionSafetySnapshot.executionSafety,
+    fullBypass: false,
+    isolation: { ...executionSafetySnapshot.executionSafety.isolation, status: "unverified" },
+    processes: [],
+    recovery: [],
+  },
+} as NativeBuildObservability;
+assert.deepEqual(problemKeys(unverifiedSafety, projectionWithoutHandoff), ["execution-safety:isolation"]);
+const unavailableSafety = {
+  ...observability,
+  executionSafety: { availability: "unavailable", reason: "historical_execution_safety_unavailable" },
+} as NativeBuildObservability;
+assert.equal(runnerExecutionSafetyDiagnostics(unavailableSafety)[0]?.title, "Execution safety unavailable");
+assert.deepEqual(problemKeys(unavailableSafety, projectionWithoutHandoff), []);
 
 assert.deepEqual(problemKeys(observability, {
   ...projectionWithoutHandoff,
@@ -871,3 +931,20 @@ assert.equal(filtered.tools.length, 1);
 assert.equal(filtered.events.length, 0);
 
 console.log("PASS Runner V2 observability panel");
+
+const authorizedDestructiveRecovery = {
+  ...executionSafetySnapshot,
+  executionSafety: {
+    ...executionSafetySnapshot.executionSafety,
+    fullBypass: false,
+    isolation: { ...executionSafetySnapshot.executionSafety.isolation, status: "write_confinement_exact_grant" },
+    processes: [],
+    recovery: [{
+      ...executionSafetySnapshot.executionSafety.recovery[0],
+      state: "authorized", reason: "user_approved",
+    }],
+  },
+} as NativeBuildObservability;
+assert.deepEqual(problemKeys(authorizedDestructiveRecovery, projectionWithoutHandoff), [
+  "execution-safety:recovery:proposal-1",
+]);

@@ -23,6 +23,7 @@ import type {
   ProjectHandoffResult,
 } from "./integration-manager.js";
 import type { FinalVerificationCleanupController } from "./final-verification-cleanup.js";
+import type { ProcessRecoveryCoordinator, RecoveryAuditRecord } from "./process-recovery.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
@@ -34,6 +35,8 @@ export interface NativeBuildRuntimeHandle {
   files(): Promise<IntegrationFileSnapshot>;
   compact(): void | Promise<void>;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
+  /** Exceptional process recovery exists only on live handles, never historical readers. */
+  processRecovery?: ProcessRecoveryCoordinator;
   /** Constructed cleanup primitive; lifecycle wiring is owned by the P2.6 manager packet. */
   finalVerificationCleanup?: FinalVerificationCleanupController;
   retireInvalidatedFinalVerification?(
@@ -254,6 +257,23 @@ export class NativeBuildManager implements BuildControlPlane {
 
   events(runId: string, afterSequence = 0): SchedulerEvent[] {
     return this.require(runId).runtime.events(afterSequence);
+  }
+
+  processRecoveryRecords(runId: string): Readonly<Record<string, RecoveryAuditRecord>> {
+    const handle = this.require(runId);
+    return handle.processRecovery?.records() ?? handle.runtime.projection().processRecovery ?? {};
+  }
+
+  async generateProcessRecovery(runId: string, invocationId: string, proposalId: string): Promise<RecoveryAuditRecord> {
+    return await this.withRuntimeActivity(() => this.requireRecovery(runId).generate(invocationId, proposalId));
+  }
+
+  async decideProcessRecovery(runId: string, proposalId: string, fingerprint: string, decision: "approve" | "reject"): Promise<RecoveryAuditRecord> {
+    return await this.withRuntimeActivity(() => this.requireRecovery(runId).decide(proposalId, fingerprint, decision));
+  }
+
+  async executeProcessRecovery(runId: string, proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord> {
+    return await this.withRuntimeActivity(() => this.requireRecovery(runId).execute(proposalId, fingerprint));
   }
 
   async step(runId: string): Promise<BuildStepResult> {
@@ -902,6 +922,12 @@ export class NativeBuildManager implements BuildControlPlane {
     const handle = this.handles.get(runId);
     if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
     return handle;
+  }
+
+  private requireRecovery(runId: string): ProcessRecoveryCoordinator {
+    const handle = this.requireMutable(runId);
+    if (!handle.processRecovery) throw new Error(`Exceptional recovery unavailable for build ${runId}.`);
+    return handle.processRecovery;
   }
 
   private requireMutable(runId: string): NativeBuildRuntimeHandle {

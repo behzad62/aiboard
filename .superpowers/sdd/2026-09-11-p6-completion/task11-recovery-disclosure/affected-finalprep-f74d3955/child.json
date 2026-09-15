@@ -1,0 +1,40 @@
+{
+  "pid": 50140,
+  "identity": {
+    "Id": 50140,
+    "StartTimeUtc": "2026-09-15T15:18:09.4449126Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 50160,
+  "spawnedAt": "2026-09-15T15:18:09.780Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts",
+    "runner-v2/test/process-recovery-kernel.test.ts",
+    "runner-v2/test/process-recovery-control.test.ts",
+    "runner-v2/test/process-recovery-disclosure.test.ts",
+    "runner-v2/test/process-recovery-model-free.test.ts",
+    "runner-v2/test/durable-process-store.test.ts",
+    "runner-v2/test/subprocess-runtime.test.ts",
+    "runner-v2/test/execution-grants.test.ts",
+    "runner-v2/test/execution-host.test.ts",
+    "runner-v2/test/execution-host-credential-graph.test.ts",
+    "runner-v2/test/one-shot-command-executor.test.ts",
+    "runner-v2/test/one-shot-command-family-production-matrix.test.ts",
+    "runner-v2/test/one-shot-command-routing-static.test.ts",
+    "runner-v2/test/one-shot-output-capture.test.ts",
+    "runner-v2/test/scheduler-store.test.ts",
+    "runner-v2/test/recovery-smoke.test.ts",
+    "runner-v2/test/native-build-manager.test.ts",
+    "runner-v2/test/control-server.test.ts",
+    "runner-v2/test/streaming-expired-host-recovery.test.ts",
+    "runner-v2/test/streaming-precheckpoint-recovery.test.ts"
+  ]
+}

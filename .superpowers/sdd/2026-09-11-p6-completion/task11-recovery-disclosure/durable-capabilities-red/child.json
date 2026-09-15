@@ -1,0 +1,22 @@
+{
+  "pid": 65768,
+  "identity": {
+    "Id": 65768,
+    "StartTimeUtc": "2026-09-15T12:41:03.5248284Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 20208,
+  "spawnedAt": "2026-09-15T12:41:03.863Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=durably records the selected backend semantic capabilities",
+    "runner-v2/test/subprocess-runtime.test.ts"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "pid": 60124,
+  "identity": {
+    "Id": 60124,
+    "StartTimeUtc": "2026-09-15T09:13:55.1098652Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T09:13:55.148Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task11-recovery-disclosure/scheduler-red.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "spec": {
+    "id": "scheduler-red",
+    "tests": [
+      "runner-v2/test/process-recovery.test.ts"
+    ]
+  }
+}

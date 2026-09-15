@@ -57,6 +57,12 @@ import {
   type StreamingSessionRecord,
 } from "./streaming-session-store.js";
 import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
+import {
+  combineProcessRecoveryRuntimes,
+  createStreamingProcessRecoveryRuntime,
+  createSubprocessProcessRecoveryRuntime,
+  type ProcessRecoveryRuntime,
+} from "./process-recovery.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
   createConfiguredOciIsolationSelector,
@@ -123,6 +129,7 @@ export interface ExecutionHostRunBinding {
   readonly git: RunGitExecutionContext;
   readonly commandExecution: OneShotCommandExecutor;
   readonly executionGrants: ExecutionGrantAuthority;
+  readonly processRecoveryRuntime: ProcessRecoveryRuntime;
   readonly sessionAuthority: SessionAuthority;
   readonly streamingRuntime: ReturnType<typeof createExecutionHostStreamingGraph>["runtime"];
   readonly streamingState: Readonly<{
@@ -435,6 +442,14 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       ambientEnvironment: input.ambientEnvironment,
       environments: childEnvironments,
     });
+    const subprocessRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
+      runtime: subprocessKernel.runtime,
+      canRecoverExceptional: subprocessKernel.canRecoverExceptional,
+      store: subprocessKernel.readOnlyStore,
+      executionGrants,
+      permissionProfile: input.permissionProfile,
+      workspacePath: input.projectRoot,
+    });
     const streamingStatePath = join(runRoot, "streaming-sessions.sqlite");
     const streamingKernel = openSqliteStreamingSessionStore(
       streamingStatePath,
@@ -463,6 +478,17 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       }),
     });
     const streamingRuntime = streamingGraph.runtime;
+    const streamingRecoveryRuntime = createStreamingProcessRecoveryRuntime({
+      runtime: streamingRuntime,
+      store: streamingKernel.store,
+      executionGrants,
+      permissionProfile: input.permissionProfile,
+      workspacePath: input.projectRoot,
+    });
+    const processRecoveryRuntime = combineProcessRecoveryRuntimes(
+      subprocessRecoveryRuntime,
+      streamingRecoveryRuntime,
+    );
     let closed = false;
     let closeComplete = false;
     let closePromise: Promise<void> | undefined;
@@ -488,6 +514,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       git,
       commandExecution,
       executionGrants,
+      processRecoveryRuntime,
       sessionAuthority,
       streamingRuntime,
       streamingState: Object.freeze({

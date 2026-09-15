@@ -1,0 +1,7 @@
+{
+  "pattern": "subprocess adapter issues one exact native recovery grant",
+  "tests": [
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "id": "adapter-grant-green"
+}

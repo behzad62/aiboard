@@ -637,3 +637,29 @@ function deepFreeze<T>(value: T): T {
   }
   return value;
 }
+
+const PROCESS_RECOVERY_RESERVATIONS = new WeakSet<GrantRecord>();
+/** Reserve exactly one identity-bound recovery operation from the existing run issuer.
+ * Recovery grants carry no filesystem, network or credential access. Native process
+ * ownership and backend identity are separately re-proved by the shared kernel.
+ */
+export function reserveExecutionGrantForProcessRecovery(
+  authority: ExecutionGrantAuthority, grant: OpaqueExecutionGrant, binding: ExecutionGrantBinding,
+  destructive: boolean,
+): Readonly<{ assertCurrent(): void; expiresAt: string }> {
+  const issuer = AUTHORITIES.get(authority);
+  if (!issuer) throw grantError("grant_forged");
+  const record = trustedRecord(grant, issuer.identity)!;
+  const assertCurrent = () => {
+    assertCurrentGrantRecord(record);
+    if (record.state !== "issued") throw grantError("grant_consumed");
+  };
+  assertCurrent();
+  if (!sameBinding(record.claims, binding) || binding.toolName !== "process.recovery" ||
+      binding.actor.role !== "runner_internal" || binding.actor.id !== "process-recovery") throw grantError("grant_mismatch");
+  if (record.claims.access.length || record.claims.credentialNames.length || record.claims.networkApproved ||
+      record.claims.externalApproved || (destructive && !record.claims.destructiveApproved)) throw grantError("grant_escalation");
+  if (PROCESS_RECOVERY_RESERVATIONS.has(record)) throw grantError("grant_consumed");
+  PROCESS_RECOVERY_RESERVATIONS.add(record);
+  return Object.freeze({ assertCurrent, expiresAt: record.claims.expiresAt });
+}

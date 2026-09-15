@@ -1,3 +1,4 @@
+import { reserveExecutionGrantForProcessRecovery, type ExecutionGrantAuthority, type OpaqueExecutionGrant, type ExecutionGrantBinding } from "./execution-grants.js";
 import { createHmac, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 import type {
@@ -18,6 +19,7 @@ import {
   createInMemoryDurableProcessKernel,
   openSqliteDurableProcessKernel,
   semanticRequestFingerprint,
+  durableRecoveryIdentity,
   type DurableBackendBinding,
   type DurableEnvironmentAudit,
   type DurableProcessCommand,
@@ -109,6 +111,7 @@ export interface SubprocessRuntimeKernel {
   readonly runtime: SubprocessRuntime;
   readonly grantsController: ExecutionGrantController;
   readonly readOnlyStore: DurableProcessStore;
+  canRecoverExceptional(invocationId: string): boolean;
 }
 class GrantVault {
   private readonly values = new Map<string, ConsumedExecutionGrant>();
@@ -159,6 +162,75 @@ export interface ReconciliationOutcome {
   readonly state: string;
 }
 
+/**
+ * Exact identity proof a caller must present before the shared runtime performs
+ * any exceptional-recovery effect. Every field is compared against the durable
+ * record; a PID alone never authorises anything and is not part of the proof.
+ */
+export interface ExceptionalRecoveryRequest {
+  readonly invocationId: string;
+  readonly runId: string;
+  readonly logicalProcessId: string;
+  readonly taskId?: string;
+  readonly sessionId?: string;
+  /** The exact durable revision the caller validated against. */
+  readonly expectedRevision: number;
+  readonly ownerId: string;
+  readonly fencingToken: number;
+  /** sha256 over the recorded opaque backend identity and implementation. */
+  readonly backendIdentityFingerprint: string;
+  /** sha256 over the recorded process birth observation. */
+  readonly birthFingerprint: string;
+  readonly action: "inspect" | "terminate";
+  readonly expiresAt: string;
+  readonly authorization: Readonly<{ authority: ExecutionGrantAuthority; grant: OpaqueExecutionGrant; binding: ExecutionGrantBinding }>;
+  /** Termination always requires an exact local-user approval, even under Full. */
+  readonly userApproved: boolean;
+  /** Optional last-mile grant check; a revoked/expired grant refuses the effect. */
+  readonly assertGrant?: () => void;
+}
+
+export interface ExceptionalRecoveryObservation {
+  readonly invocationId: string;
+  readonly state: string;
+  readonly observation: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
+  readonly cleanup: ProcessCleanupStatus;
+  readonly identityProof: string;
+  readonly revision: number;
+}
+
+/** Stable identity fingerprints over a durable binding. Never PID-derived. */
+export function durableBackendIdentityFingerprint(
+  binding: DurableBackendBinding,
+): string {
+  return durableRecoveryIdentity(binding);
+}
+
+export function durableBirthFingerprint(binding: DurableBackendBinding): string {
+  return createHmac("sha256", RECOVERY_FINGERPRINT_KEY)
+    .update(
+      [
+        binding.birthFingerprint.observedAt,
+        binding.birthFingerprint.discriminator,
+        binding.startedAt,
+        binding.rootPid === undefined ? "" : String(binding.rootPid),
+      ].join("\0"),
+    )
+    .digest("hex");
+}
+
+/** Domain-separation constant; these fingerprints are identity, not secrets. */
+const RECOVERY_FINGERPRINT_KEY = new TextEncoder().encode(
+  "runner-v2/exceptional-recovery-identity-v1",
+);
+
+const EXCEPTIONAL_RECOVERY_STATES = new Set([
+  "orphaned",
+  "identity_mismatch",
+  "backend_unavailable",
+  "outcome_unknown",
+]);
+
 type SnapshotInvocation = SubprocessInvocation;
 interface StopTrigger {
   readonly reason: "cancelled" | "timed_out";
@@ -167,6 +239,15 @@ export interface SubprocessRuntime {
   invoke(value: SubprocessInvocation): Promise<GenericProcessResult>;
   cancel(invocationId: string): Promise<boolean>;
   reconcileStartup(): Promise<ReconciliationOutcome[]>;
+  /**
+   * Kernel-owned exceptional path. Routine lifecycle never calls it; it exists
+   * only because `orphaned`/`identity_mismatch`/`outcome_unknown` are otherwise
+   * frozen. It re-proves live backend identity before any effect and uses the
+   * same attested backend, journal, fence and lease machinery as ordinary work.
+   */
+  recoverExceptional(
+    request: ExceptionalRecoveryRequest,
+  ): Promise<ExceptionalRecoveryObservation>;
 }
 interface InternalRuntimeOptions {
   readonly registry: ProcessBackendRegistry;
@@ -415,6 +496,98 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     return outcomes;
   }
 
+  canRecoverExceptional(invocationId: string): boolean {
+    const record = this.options.store.readByInvocation(invocationId);
+    return !!record && EXCEPTIONAL_RECOVERY_STATES.has(record.state) && record.pendingEffects.length === 0 &&
+      (record.ownerId === this.ownerId || Date.parse(record.leaseExpiresAt) <= this.options.clock.now().getTime());
+  }
+
+  async recoverExceptional(value: ExceptionalRecoveryRequest): Promise<ExceptionalRecoveryObservation> {
+    const raw = strictRecord(value, "exceptional recovery");
+    assertKeys(raw, new Set(["invocationId", "runId", "logicalProcessId", "taskId", "sessionId", "expectedRevision", "ownerId", "fencingToken", "backendIdentityFingerprint", "birthFingerprint", "action", "userApproved", "assertGrant", "authorization", "expiresAt"]), "exceptional recovery");
+    const auth = strictRecord(raw.authorization, "recovery authorization");
+    assertKeys(auth, new Set(["authority", "grant", "binding"]), "recovery authorization");
+    const request = Object.freeze({ ...raw, authorization: Object.freeze({ ...auth }) }) as unknown as ExceptionalRecoveryRequest;
+    if (request.action !== "inspect" && request.action !== "terminate") throw new SubprocessRuntimeError("identity_mismatch", "Unsupported recovery action.");
+    const bindingRequest = Object.freeze({ ...request.authorization.binding, actor: Object.freeze({ ...request.authorization.binding.actor }) });
+    if (bindingRequest.runId !== request.runId || bindingRequest.sessionId !== (request.sessionId ?? "process-recovery") || bindingRequest.callId !== exceptionalRecoveryCallId(request))
+      throw new SubprocessRuntimeError("identity_mismatch", "Recovery grant is bound to a different invocation owner.");
+    const reservation = reserveExecutionGrantForProcessRecovery(request.authorization.authority, request.authorization.grant, bindingRequest, request.action === "terminate");
+    const expires = Date.parse(request.expiresAt);
+    const check = () => {
+      reservation.assertCurrent();
+      if (!Number.isFinite(expires) || expires <= this.options.clock.now().getTime()) throw new SubprocessRuntimeError("outcome_unknown", "Recovery deadline expired.");
+      request.assertGrant?.(); // Optional additional controller liveness check; never the native grant authority.
+    };
+    check();
+    let record = this.options.store.readByInvocation(request.invocationId);
+    if (!record || !EXCEPTIONAL_RECOVERY_STATES.has(record.state)) throw new SubprocessRuntimeError("identity_mismatch", "Routine or missing process cannot accept exceptional recovery.");
+    if (record.runId !== request.runId || record.logicalProcessId !== request.logicalProcessId || record.taskId !== request.taskId || record.sessionId !== request.sessionId ||
+        record.revision !== request.expectedRevision || record.ownerId !== request.ownerId || record.fencingToken !== request.fencingToken)
+      throw new SubprocessRuntimeError("identity_mismatch", "Exceptional recovery scope changed.");
+    if (record.pendingEffects.length) throw new SubprocessRuntimeError("outcome_unknown", "A previous native effect is unresolved.");
+    let binding = requiredBinding(record);
+    if (durableBackendIdentityFingerprint(binding) !== request.backendIdentityFingerprint || durableBirthFingerprint(binding) !== request.birthFingerprint)
+      throw new SubprocessRuntimeError("identity_mismatch", "Backend or birth identity changed.");
+    const owned = this.takeRecoveryOwnership(record);
+    if (!owned) throw new SubprocessRuntimeError("outcome_unknown", "The native ownership lease is held elsewhere.");
+    record = owned;
+    let selected: SelectedProcessBackend;
+    try { selected = await this.fencedEffect(record.invocationId, fence => { check(); return reattestProcessBackend(this.options.registry, binding, fence); }); }
+    catch { check(); selected = await this.fencedEffect(record.invocationId, fence => { check(); return adoptProcessBackendAfterRestart(this.options.registry, binding, fence); }); }
+    check();
+    if (request.action === "terminate" && (selected.attestation.capabilities.tree_termination !== "enforced" || selected.attestation.capabilities.verified_emptiness !== "enforced"))
+      throw new SubprocessRuntimeError("backend_unavailable", "Required recovery capabilities are not enforced.");
+    if (selected.registryId !== binding.registryId || selected.implementationGeneration !== binding.implementationGeneration || selected.attestationDigest !== binding.attestationDigest) {
+      const current = this.current(record.invocationId);
+      record = this.mutate({ type: "adopt_backend", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(),
+        binding: { ...binding, registryId: selected.registryId, implementationGeneration: selected.implementationGeneration,
+          implementationDigest: selected.implementationDigest, attestationVersion: selected.attestation.attestationVersion,
+          attestationDigest: selected.attestationDigest, capabilities: selected.attestation.capabilities } });
+      binding = requiredBinding(record);
+    }
+    const identityProof = durableBackendIdentityFingerprint(binding);
+    const observe = async () => {
+      const effect = await this.journaledEffect(record.invocationId, "backend_reconcile", async fence => {
+        check(); return parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
+      });
+      const current = this.current(record.invocationId), result = effect.result;
+      if (request.action === "terminate" && result.state === "exited") {
+        check();
+        this.mutate({ type: "resume_exceptional_exit", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: effect.effectId, identityProof,
+          observation: { observedAt: this.now(), ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }), ...(result.signal === undefined ? {} : { signal: result.signal }) } });
+      } else this.mutate({ type: "record_exceptional_observation", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: effect.effectId, identityProof, outcome: result.state });
+      check(); return result.state;
+    };
+    let observed = await observe();
+    if (request.action === "inspect") return this.exceptionalResult(record.invocationId, observed, identityProof);
+    for (const action of ["terminate", "force_terminate"] as const) {
+      if (observed !== "running") break;
+      const effect = await this.journaledEffect(record.invocationId, "backend_signal", async fence => { check(); return parseProcessSignalResult(await selected.backend.signal(binding, action, fence)); });
+      const current = this.current(record.invocationId);
+      this.mutate({ type: "record_exceptional_observation", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: effect.effectId, identityProof, outcome: effect.result.state });
+      check(); observed = await observe();
+      if (observed === "running") { await this.options.clock.sleep(this.options.escalationGraceMs?.[0] ?? 100); check(); }
+    }
+    if (observed !== "exited") return this.exceptionalResult(record.invocationId, observed, identityProof);
+    // Resume ordinary, proven-exit cleanup. Do not synthesize output, exit codes,
+    // resource release, or a successful task result from an inspection.
+    const reopened = await this.journaledEffect(record.invocationId, "output_reopen", fence => {
+      check(); return this.options.outputs.reopen(record.outputOwnerId, fence);
+    });
+    if (reopened.result.ownerId !== record.outputOwnerId) throw new SubprocessRuntimeError("outcome_unknown", "Recovered output ownership differs.");
+    let current = this.current(record.invocationId);
+    this.mutate({ type: "record_output_reopen", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(), effectId: reopened.effectId });
+    current = this.current(record.invocationId); check();
+    await this.finish(current, reopened.result, selected, check);
+    return this.exceptionalResult(record.invocationId, "exited", identityProof);
+  }
+
+  private exceptionalResult(invocationId: string, observation: "running" | "exited" | "identity_mismatch" | "outcome_unknown", identityProof: string): ExceptionalRecoveryObservation {
+    const record = this.current(invocationId);
+    return Object.freeze({ invocationId, state: record.state, observation, cleanup: structuredClone(record.cleanup), identityProof, revision: record.revision });
+  }
+
   private async runClaimed(
     request: SnapshotInvocation,
     record: DurableSubprocessRecord,
@@ -601,6 +774,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       implementationDigest: selected.implementationDigest,
       attestationVersion: selected.attestation.attestationVersion,
       attestationDigest: selected.attestationDigest,
+      capabilities: selected.attestation.capabilities,
       ...launch,
     };
     record = this.current(record.invocationId);
@@ -702,6 +876,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       implementationDigest: selected.implementationDigest,
       attestationVersion: selected.attestation.attestationVersion,
       attestationDigest: selected.attestationDigest,
+      capabilities: selected.attestation.capabilities,
       ...blocked.launch,
     };
     record = this.current(record.invocationId);
@@ -756,7 +931,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     record: DurableSubprocessRecord,
     output: ProcessOutputSession,
     selected?: SelectedProcessBackend,
+    assertAuthority: () => void = () => {},
   ): Promise<GenericProcessResult> {
+    assertAuthority();
     if (record.state === "exited") {
       let disposition: ProcessOutputDisposition[];
       let finalizeEffectId: string;
@@ -764,7 +941,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         const finalized = await this.journaledEffect(
           record.invocationId,
           "output_finalize",
-          (fence) => output.finalize(fence),
+          (fence) => { assertAuthority(); return output.finalize(fence); },
         );
         disposition = outputDisposition(finalized.result);
         finalizeEffectId = finalized.effectId;
@@ -844,7 +1021,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         const verified = await this.journaledEffect(
           record.invocationId,
           "backend_verify_empty",
-          (fence) => backend.backend.verifyEmpty(binding, fence),
+          (fence) => { assertAuthority(); return backend.backend.verifyEmpty(binding, fence); },
         );
         verification = parseProcessEmptyVerification(verified.result);
         record = this.current(record.invocationId);
@@ -886,6 +1063,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
       return resultFromFailure(failed);
     }
+    assertAuthority();
     let releaseEffectId: string;
     try {
       const fresh = await this.fencedEffect(record.invocationId, (fence) =>
@@ -894,7 +1072,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       const released = await this.journaledEffect(
         record.invocationId,
         "backend_release",
-        (fence) => fresh.backend.release(binding, fence),
+        (fence) => { assertAuthority(); return fresh.backend.release(binding, fence); },
       );
       parseProcessReleaseResult(released.result);
       releaseEffectId = released.effectId;
@@ -1922,6 +2100,12 @@ export function createSubprocessRuntimeKernel(
       writable: false,
       configurable: false,
     },
+    recoverExceptional: {
+      value: core.recoverExceptional.bind(core),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    },
   });
   const runtime = Object.freeze(runtimeObject) as unknown as SubprocessRuntime;
   const grantsController = Object.freeze({
@@ -1932,6 +2116,7 @@ export function createSubprocessRuntimeKernel(
     runtime,
     grantsController,
     readOnlyStore: storeKernel.store,
+    canRecoverExceptional: core.canRecoverExceptional.bind(core),
   });
 }
 
@@ -2312,4 +2497,12 @@ function deepFreeze<T>(value: T): T {
       deepFreeze(child);
   }
   return value;
+}
+
+/** Native recovery grants bind the whole captured target, action and deadline. */
+export function exceptionalRecoveryCallId(request: Omit<ExceptionalRecoveryRequest, "authorization" | "assertGrant" | "userApproved">): string {
+  const fields = [request.invocationId, request.runId, request.logicalProcessId, request.taskId ?? null, request.sessionId ?? null,
+    request.expectedRevision, request.ownerId, request.fencingToken, request.backendIdentityFingerprint, request.birthFingerprint,
+    request.action, request.expiresAt];
+  return "recovery:" + createHmac("sha256", RECOVERY_FINGERPRINT_KEY).update(JSON.stringify(fields)).digest("hex");
 }

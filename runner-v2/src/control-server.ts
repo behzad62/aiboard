@@ -31,6 +31,7 @@ import type {
 import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
+import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -53,6 +54,7 @@ export interface ControlServerOptions {
   runnerInfo?: { projectPath: string; nodeVersion: string };
   mcp?: Pick<McpManager, "status">;
   permissions?: SqlitePermissionStore;
+  processRecovery?: ProcessRecoveryControlPlane;
   allowedOrigins?: string[];
 }
 
@@ -129,6 +131,20 @@ interface ArchitectQuestionAnswerBody {
   idempotencyKey: string;
 }
 
+interface RecoveryGenerateBody {
+  invocationId: string;
+  proposalId: string;
+}
+
+interface RecoveryDecisionBody {
+  fingerprint: string;
+  decision: "approve" | "reject";
+}
+
+interface RecoveryExecuteBody {
+  fingerprint: string;
+}
+
 interface PermissionDecisionBody {
   decision: "approved" | "denied";
   idempotencyKey: string;
@@ -156,6 +172,7 @@ export class ControlServer {
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly mcp?: ControlServerOptions["mcp"];
   private readonly permissions?: SqlitePermissionStore;
+  private readonly processRecovery?: ProcessRecoveryControlPlane;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
@@ -177,6 +194,7 @@ export class ControlServer {
     this.runnerInfo = options.runnerInfo;
     this.mcp = options.mcp;
     this.permissions = options.permissions;
+    this.processRecovery = options.processRecovery;
     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
   }
 
@@ -421,6 +439,33 @@ export class ControlServer {
       if (segments.length === 3 && request.method === "GET") {
         sendJson(response, 200, this.supervisor.getRun(runId));
         return;
+      }
+      if (segments.length === 5 && segments[3] === "build" && segments[4] === "recovery" && request.method === "GET") {
+        const records = Object.values(this.requireProcessRecovery().processRecoveryRecords(runId))
+          .sort((left, right) => left.proposalId.localeCompare(right.proposalId));
+        sendJson(response, 200, { records });
+        return;
+      }
+      if (segments.length === 6 && segments[3] === "build" && segments[4] === "recovery" && segments[5] === "generate" && request.method === "POST") {
+        const body = await readJson<RecoveryGenerateBody>(request);
+        assertExactBodyKeys(body, ["invocationId", "proposalId"]);
+        if (!isNonEmptyString(body.invocationId) || !isNonEmptyString(body.proposalId)) invalidBody();
+        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().generateProcessRecovery(runId, body.invocationId, body.proposalId));
+        sendJson(response, 200, result); return;
+      }
+      if (segments.length === 7 && segments[3] === "build" && segments[4] === "recovery" && segments[6] === "decision" && request.method === "POST") {
+        const body = await readJson<RecoveryDecisionBody>(request);
+        assertExactBodyKeys(body, ["fingerprint", "decision"]);
+        if (!/^[a-f0-9]{64}$/.test(body.fingerprint) || !["approve", "reject"].includes(body.decision)) invalidBody();
+        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().decideProcessRecovery(runId, segments[5], body.fingerprint, body.decision));
+        sendJson(response, 200, result); return;
+      }
+      if (segments.length === 7 && segments[3] === "build" && segments[4] === "recovery" && segments[6] === "execute" && request.method === "POST") {
+        const body = await readJson<RecoveryExecuteBody>(request);
+        assertExactBodyKeys(body, ["fingerprint"]);
+        if (!/^[a-f0-9]{64}$/.test(body.fingerprint)) invalidBody();
+        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().executeProcessRecovery(runId, segments[5], body.fingerprint));
+        sendJson(response, 200, result); return;
       }
       if (
         segments.length === 4 &&
@@ -713,6 +758,11 @@ export class ControlServer {
       }
     }
     throw new HttpError(404, "not_found", "Route not found.");
+  }
+
+  private requireProcessRecovery(): ProcessRecoveryControlPlane {
+    if (!this.processRecovery) throw new HttpError(503, "process_recovery_unavailable", "Exceptional process recovery is unavailable.");
+    return this.processRecovery;
   }
 
   private requireProviderConfigs(): ProviderConfigStore {
@@ -1166,6 +1216,12 @@ function readAfterSequence(url: URL): number {
 
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof ProcessRecoveryError) {
+    if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);
+    if (error.code === "recovery_not_found") return new HttpError(404, error.code, error.message);
+    if (error.code === "recovery_model_failed") return new HttpError(502, error.code, error.message);
+    return new HttpError(409, error.code, error.message);
+  }
   if (error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable") {
     // Only the trusted typed failure is projected, never exception details or
     // an arbitrary object's code. The requested profile is not downgraded.

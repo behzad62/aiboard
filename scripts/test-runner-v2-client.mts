@@ -8,6 +8,10 @@ import {
   getNativeBuildTranscript,
   getNativeBuildUsage,
   getNativeBuildObservability,
+  getNativeProcessRecovery,
+  generateNativeProcessRecovery,
+  decideNativeProcessRecovery,
+  executeNativeProcessRecovery,
   projectNativeAcceptanceContract,
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
@@ -137,6 +141,26 @@ assert.equal(steeringProjection.userGuidance["guidance-1"].status, "submitted");
 assert.equal(steeringProjection.architectQuestions["question-1"].resumeStatus, "pending");
 const calls: Array<{ url: string; init: RequestInit }> = [];
 const requestController = new AbortController();
+const recoveryRecord = {
+  version: 1,
+  proposalId: "proposal-1",
+  callId: "recovery:proposal-1",
+  scope: { kind: "subprocess", runId: "run_1", invocationId: "invocation-1", logicalProcessId: "logical-1",
+    revision: 4, ownerId: "owner", fencingToken: 2, state: "outcome_unknown",
+    backendIdentity: "a".repeat(64), birthFingerprint: "b".repeat(64) },
+  requestedAction: "terminate",
+  targetScope: ["logical-1"],
+  requestedCapabilities: ["tree_termination", "verified_emptiness"],
+  expiresAt: "2026-09-15T18:30:00.000Z",
+  proposalFingerprint: "c".repeat(64),
+  commandFingerprint: "d".repeat(64),
+  argumentsFingerprint: "e".repeat(64),
+  rationaleFingerprint: "f".repeat(64),
+  createdAt: "2026-09-15T18:00:00.000Z",
+  updatedAt: "2026-09-15T18:00:01.000Z",
+  state: "user_decision_required",
+  reason: "destructive_requires_user",
+} as const;
 const fetchImpl: typeof fetch = async (input, init = {}) => {
   calls.push({ url: String(input), init });
   if (String(input).endsWith("/v2/health")) {
@@ -178,7 +202,27 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       providers: [],
       events: [],
       git: { integrationBranch: "aiboard/run/integration", integrationRevision: "abc123", commits: [] },
+      executionSafety: {
+        availability: "live",
+        fullBypass: true,
+        isolation: { status: "unconfined_explicit_full", securityBoundary: "provider_specific_not_universal_security_boundary", activeLeaseCount: 0, blockers: [] },
+        grants: { active: 1, consumed: 0 },
+        processes: [],
+        recovery: [recoveryRecord],
+      },
     });
+  }
+  if (String(input).endsWith("/build/recovery")) {
+    return Response.json({ records: [recoveryRecord] });
+  }
+  if (String(input).endsWith("/build/recovery/generate")) {
+    return Response.json(recoveryRecord);
+  }
+  if (String(input).endsWith("/build/recovery/proposal-1/decision")) {
+    return Response.json({ ...recoveryRecord, state: "authorized", reason: "user_approved" });
+  }
+  if (String(input).endsWith("/build/recovery/proposal-1/execute")) {
+    return Response.json({ ...recoveryRecord, state: "executed", reason: "cleanup_verified", cleanupState: "verified_empty" });
   }
   if (String(input).endsWith("/build/audit")) {
     return Response.json({
@@ -324,6 +368,11 @@ const observed = await getNativeBuildObservability(
 assert.equal(observed.agents.length, 1);
 assert.equal(observed.toolCallCount, 1);
 assert.equal(observed.tools[0].toolName, "fs.read");
+assert.equal(observed.executionSafety?.availability, "live");
+if (observed.executionSafety?.availability === "live") {
+  assert.equal(observed.executionSafety.fullBypass, true);
+  assert.equal(observed.executionSafety.recovery[0]?.state, "user_decision_required");
+}
 const audit = await getNativeBuildAudit(
   connection,
   "run_1",
@@ -335,6 +384,20 @@ assert.equal(audit.runEvents.length, 1);
 assert.equal(audit.acceptanceContract.tasks.task_a.acceptanceCriteria[0].text, "The behavior works.");
 assert.equal(audit.acceptanceContract.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
 assert.equal(audit.acceptanceContract.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+const recoveryRecords = await getNativeProcessRecovery(connection, "run_1", fetchImpl, requestController.signal);
+assert.equal(recoveryRecords[0]?.proposalId, "proposal-1");
+const generatedRecovery = await generateNativeProcessRecovery(
+  connection, "run_1", "invocation-1", "proposal-1", fetchImpl, requestController.signal,
+);
+assert.equal(generatedRecovery.state, "user_decision_required");
+const approvedRecovery = await decideNativeProcessRecovery(
+  connection, "run_1", "proposal-1", recoveryRecord.proposalFingerprint, "approve", fetchImpl, requestController.signal,
+);
+assert.equal(approvedRecovery.state, "authorized");
+const executedRecovery = await executeNativeProcessRecovery(
+  connection, "run_1", "proposal-1", recoveryRecord.proposalFingerprint, fetchImpl, requestController.signal,
+);
+assert.equal(executedRecovery.cleanupState, "verified_empty");
 const guidanceCall = calls.find((call) => call.url.endsWith("/v2/runs/run_1/build/user-guidance"));
 assert.ok(guidanceCall);
 assert.equal(guidanceCall.init.method, "POST");

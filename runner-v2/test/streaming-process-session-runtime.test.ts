@@ -3945,3 +3945,27 @@ test("managed fresh host reads authenticated finalized evidence after the live c
     assert.equal(f.deliveries, 0);
   } finally { f.kernel.store.close(); }
 }));
+
+
+test("Task11 exceptional authority is rechecked between streaming cleanup resources", async () => {
+  const f = await makeFixture(2, "cleaned");
+  await f.runtime.open(f.request);
+  let checks = 0;
+  const error = await f.runtime.cleanupOwnedSession({
+    sessionId: "stream-1",
+    timeoutMs: 2_000,
+    assertAuthority: () => {
+      checks += 1;
+      if (checks === 6) throw new Error("recovery grant revoked");
+    },
+  }).then(() => undefined, (value: unknown) => value);
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /recovery grant revoked/);
+  assert.ok(checks >= 6);
+  assert.equal(f.calls.includes("reconcile"), true, "one exact cleanup resource executed before revocation");
+  assert.notEqual(f.kernel.store.readBySession("stream-1")?.state, "released",
+    "revocation blocks later cleanup resources and terminal release");
+  await f.runtime.cleanupOwnedSession({ sessionId: "stream-1", timeoutMs: 2_000 });
+  assert.equal(f.kernel.store.readBySession("stream-1")?.state, "released");
+  await f.grants.revokeAll("cleanup");
+});

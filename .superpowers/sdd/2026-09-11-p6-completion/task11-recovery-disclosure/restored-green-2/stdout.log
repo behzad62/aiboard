@@ -1,0 +1,1225 @@
+TAP version 13
+# Subtest: Runner-created store kernel rejects structural authority and claims output intent durably
+ok 1 - Runner-created store kernel rejects structural authority and claims output intent durably
+  ---
+  duration_ms: 2.5703
+  type: 'test'
+  ...
+# Subtest: strict per-state parser rejects forged prepared completion and illegal state fields
+ok 2 - strict per-state parser rejects forged prepared completion and illegal state fields
+  ---
+  duration_ms: 1.0105
+  type: 'test'
+  ...
+# Subtest: closed mutation log is the sole authority for prepared and terminal row facts
+ok 3 - closed mutation log is the sole authority for prepared and terminal row facts
+  ---
+  duration_ms: 2.9314
+  type: 'test'
+  ...
+# Subtest: monotonic fencing rejects a stale owner even after it rereads the new revision
+ok 4 - monotonic fencing rejects a stale owner even after it rereads the new revision
+  ---
+  duration_ms: 1.29
+  type: 'test'
+  ...
+# Subtest: effect journal rejects takeover, stale settlement, and replay until semantic commit
+ok 5 - effect journal rejects takeover, stale settlement, and replay until semantic commit
+  ---
+  duration_ms: 4.0574
+  type: 'test'
+  ...
+# Subtest: effect journal preserves concurrent markers and consumes only the exact family effect id
+ok 6 - effect journal preserves concurrent markers and consumes only the exact family effect id
+  ---
+  duration_ms: 3.9557
+  type: 'test'
+  ...
+# Subtest: effect family consumer matrix accepts only the exact semantic mutation
+ok 7 - effect family consumer matrix accepts only the exact semantic mutation
+  ---
+  duration_ms: 40.7748
+  type: 'test'
+  ...
+# Subtest: late exact signal consumer cannot weaken an already proven exit
+ok 8 - late exact signal consumer cannot weaken an already proven exit
+  ---
+  duration_ms: 14.5685
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-effect-journal-BobXYA"}
+# Subtest: completed effect marker survives SQLite restart and tampering fails integrity
+ok 9 - completed effect marker survives SQLite restart and tampering fails integrity
+  ---
+  duration_ms: 46.8005
+  type: 'test'
+  ...
+# Subtest: blocked-exit recovery mutation is authenticated and scoped only to bound cleanup blockers
+ok 10 - blocked-exit recovery mutation is authenticated and scoped only to bound cleanup blockers
+  ---
+  duration_ms: 3.8221
+  type: 'test'
+  ...
+# Subtest: terminal parser cross-validates history revision observation stop result escalation and cleanup
+ok 11 - terminal parser cross-validates history revision observation stop result escalation and cleanup
+  ---
+  duration_ms: 6.0171
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-GmuqfY"}
+# Subtest: keyed semantic fingerprint covers environment and deadline without dictionary-guessable SHA
+ok 12 - keyed semantic fingerprint covers environment and deadline without dictionary-guessable SHA
+  ---
+  duration_ms: 0.2434
+  type: 'test'
+  ...
+# Subtest: exact prepare retries converge while divergent retries and stale CAS commands conflict
+ok 13 - exact prepare retries converge while divergent retries and stale CAS commands conflict
+  ---
+  duration_ms: 1.59
+  type: 'test'
+  ...
+# Subtest: SQLite prepare is atomic across concurrent store instances and divergent requests conflict
+ok 14 - SQLite prepare is atomic across concurrent store instances and divergent requests conflict
+  ---
+  duration_ms: 21.4955
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-gqnJZ1"}
+# Subtest: SQLite corruption fails closed on reopen instead of returning a forged cached result
+ok 15 - SQLite corruption fails closed on reopen instead of returning a forged cached result
+  ---
+  duration_ms: 27.1235
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-SdIXWU"}
+# Subtest: actual persisted row contains no command, argument, cwd, secret, native handle, or spill path
+ok 16 - actual persisted row contains no command, argument, cwd, secret, native handle, or spill path
+  ---
+  duration_ms: 18.6887
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-U2VVRz"}
+# Subtest: SQLite transactionally migrates legacy writable schema without trusting old rows
+ok 17 - SQLite transactionally migrates legacy writable schema without trusting old rows
+  ---
+  duration_ms: 28.8534
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-ro-bq8iaH"}
+# Subtest: read-only legacy inspection neither mutates schema nor globally crashes
+ok 18 - read-only legacy inspection neither mutates schema nor globally crashes
+  ---
+  duration_ms: 15.2257
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-effect-journal-BobXYA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-GmuqfY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-gqnJZ1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-SdIXWU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-U2VVRz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-ro-bq8iaH","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-LrdTXm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-preconsume-rH9oSC"}
+# Subtest: shared executor selects isolation before launch and releases after verified cleanup
+ok 19 - shared executor selects isolation before launch and releases after verified cleanup
+  ---
+  duration_ms: 12.7294
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unavailable-DpXwTS"}
+# Subtest: a pre-consumption runtime failure revokes its runtime grant exactly once before isolation release
+ok 20 - a pre-consumption runtime failure revokes its runtime grant exactly once before isolation release
+  ---
+  duration_ms: 2.7536
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unknown-NuWkym"}
+# Subtest: strict capability failure happens before runtime launch
+ok 21 - strict capability failure happens before runtime launch
+  ---
+  duration_ms: 1.4371
+  type: 'test'
+  ...
+# Subtest: runtime outcome uncertainty still releases strict isolation and a release blocker wins truthfully
+ok 22 - runtime outcome uncertainty still releases strict isolation and a release blocker wins truthfully
+  ---
+  duration_ms: 1.2406
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-LrdTXm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-preconsume-rH9oSC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unavailable-DpXwTS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unknown-NuWkym","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-j9nO0P"}
+# Subtest: bounded command capture complete never turns storage loss into partial protocol success
+ok 23 - bounded command capture complete never turns storage loss into partial protocol success
+  ---
+  duration_ms: 7.4697
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-j9nO0P
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-irTGQK"}
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-j9nO0P
+# Subtest: bounded command capture overflow never turns storage loss into partial protocol success
+ok 24 - bounded command capture overflow never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.4295
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-irTGQK
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-irTGQK
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-93Tqsd"}
+# Subtest: bounded command capture incomplete-observation never turns storage loss into partial protocol success
+ok 25 - bounded command capture incomplete-observation never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.2668
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-93Tqsd
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-93Tqsd
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-cJisaz"}
+# Subtest: bounded command capture disabled never turns storage loss into partial protocol success
+ok 26 - bounded command capture disabled never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.1192
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-cJisaz
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-cJisaz
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-U7t1Jt"}
+# Subtest: bounded command capture invalid-bound never turns storage loss into partial protocol success
+ok 27 - bounded command capture invalid-bound never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.3616
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-U7t1Jt
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-U7t1Jt
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-j9nO0P","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-irTGQK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-93Tqsd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-cJisaz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-U7t1Jt","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-HjNwfF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-xAAy9y"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-6jdtT2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dnbEED"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IOGWjc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-oNHSVH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-EcN5Kk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-t1ZwIu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-77j1ny"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-nmdaho"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-0cQSJ9"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-eo01Dw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-bkw8Dk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1bDFlu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-SIGyiY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-a1fqgf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-UcivAw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-pQ1yZl"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dlVusD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-90naaf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Y3Kdqb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-JvLVle"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IGn9BH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-7iQ2fk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-7eOPjV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IowxTR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-A0vgSR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-R2va8r"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dC8W6u"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-psojO0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IVR0HG"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-5E0rzP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-rvQ1br"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Jzr58q"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-q3wRsu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-u4SBxr"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9bV4yE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cnH9at"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-0XrY48"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-016Mh2"}
+# Subtest: process recovery: routine state prepared cannot call a model or effect
+ok 28 - process recovery: routine state prepared cannot call a model or effect
+  ---
+  duration_ms: 30.5869
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state launching cannot call a model or effect
+ok 29 - process recovery: routine state launching cannot call a model or effect
+  ---
+  duration_ms: 19.6286
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state running cannot call a model or effect
+ok 30 - process recovery: routine state running cannot call a model or effect
+  ---
+  duration_ms: 18.2711
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state stopping cannot call a model or effect
+ok 31 - process recovery: routine state stopping cannot call a model or effect
+  ---
+  duration_ms: 18.878
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state exited cannot call a model or effect
+ok 32 - process recovery: routine state exited cannot call a model or effect
+  ---
+  duration_ms: 18.3621
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state verifying_empty cannot call a model or effect
+ok 33 - process recovery: routine state verifying_empty cannot call a model or effect
+  ---
+  duration_ms: 18.5824
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state cleaned cannot call a model or effect
+ok 34 - process recovery: routine state cleaned cannot call a model or effect
+  ---
+  duration_ms: 18.8031
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state cleanup_blocked cannot call a model or effect
+ok 35 - process recovery: routine state cleanup_blocked cannot call a model or effect
+  ---
+  duration_ms: 19.1053
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional orphaned accepts only a validated proposal
+ok 36 - process recovery: exceptional orphaned accepts only a validated proposal
+  ---
+  duration_ms: 30.5648
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional identity_mismatch accepts only a validated proposal
+ok 37 - process recovery: exceptional identity_mismatch accepts only a validated proposal
+  ---
+  duration_ms: 28.8122
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional backend_unavailable accepts only a validated proposal
+ok 38 - process recovery: exceptional backend_unavailable accepts only a validated proposal
+  ---
+  duration_ms: 29.449
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional outcome_unknown accepts only a validated proposal
+ok 39 - process recovery: exceptional outcome_unknown accepts only a validated proposal
+  ---
+  duration_ms: 28.4465
+  type: 'test'
+  ...
+# Subtest: process recovery: changed runId is rejected before execution
+ok 40 - process recovery: changed runId is rejected before execution
+  ---
+  duration_ms: 18.172
+  type: 'test'
+  ...
+# Subtest: process recovery: changed taskId is rejected before execution
+ok 41 - process recovery: changed taskId is rejected before execution
+  ---
+  duration_ms: 18.5528
+  type: 'test'
+  ...
+# Subtest: process recovery: changed sessionId is rejected before execution
+ok 42 - process recovery: changed sessionId is rejected before execution
+  ---
+  duration_ms: 17.8599
+  type: 'test'
+  ...
+# Subtest: process recovery: changed invocationId is rejected before execution
+ok 43 - process recovery: changed invocationId is rejected before execution
+  ---
+  duration_ms: 18.3696
+  type: 'test'
+  ...
+# Subtest: process recovery: changed logicalProcessId is rejected before execution
+ok 44 - process recovery: changed logicalProcessId is rejected before execution
+  ---
+  duration_ms: 18.0159
+  type: 'test'
+  ...
+# Subtest: process recovery: changed ownerId is rejected before execution
+ok 45 - process recovery: changed ownerId is rejected before execution
+  ---
+  duration_ms: 18.5571
+  type: 'test'
+  ...
+# Subtest: process recovery: changed revision is rejected before execution
+ok 46 - process recovery: changed revision is rejected before execution
+  ---
+  duration_ms: 18.1506
+  type: 'test'
+  ...
+# Subtest: process recovery: changed fencingToken is rejected before execution
+ok 47 - process recovery: changed fencingToken is rejected before execution
+  ---
+  duration_ms: 18.8654
+  type: 'test'
+  ...
+# Subtest: process recovery: changed backendIdentity is rejected before execution
+ok 48 - process recovery: changed backendIdentity is rejected before execution
+  ---
+  duration_ms: 18.051
+  type: 'test'
+  ...
+# Subtest: process recovery: changed birthFingerprint is rejected before execution
+ok 49 - process recovery: changed birthFingerprint is rejected before execution
+  ---
+  duration_ms: 18.3916
+  type: 'test'
+  ...
+# Subtest: process recovery: changed rootPid is rejected before execution
+ok 50 - process recovery: changed rootPid is rejected before execution
+  ---
+  duration_ms: 17.7608
+  type: 'test'
+  ...
+# Subtest: process recovery: same PID with recycled birth invalidates an authorized action
+ok 51 - process recovery: same PID with recycled birth invalidates an authorized action
+  ---
+  duration_ms: 24.6149
+  type: 'test'
+  ...
+# Subtest: process recovery: destructive action pauses and binds exact local-user approval
+ok 52 - process recovery: destructive action pauses and binds exact local-user approval
+  ---
+  duration_ms: 31.4219
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects expired authority
+ok 53 - process recovery: rejects expired authority
+  ---
+  duration_ms: 18.6503
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects scope authority
+ok 54 - process recovery: rejects scope authority
+  ---
+  duration_ms: 18.1511
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects call authority
+ok 55 - process recovery: rejects call authority
+  ---
+  duration_ms: 17.7881
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects shell authority
+ok 56 - process recovery: rejects shell authority
+  ---
+  duration_ms: 18.24
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects capability authority
+ok 57 - process recovery: rejects capability authority
+  ---
+  duration_ms: 19.4138
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects ownership authority
+ok 58 - process recovery: rejects ownership authority
+  ---
+  duration_ms: 19.2547
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects identity authority
+ok 59 - process recovery: rejects identity authority
+  ---
+  duration_ms: 19.2771
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects pending authority
+ok 60 - process recovery: rejects pending authority
+  ---
+  duration_ms: 18.4797
+  type: 'test'
+  ...
+# Subtest: process recovery: durable replay executes at most once and stores no raw model secrets
+ok 61 - process recovery: durable replay executes at most once and stores no raw model secrets
+  ---
+  duration_ms: 30.6188
+  type: 'test'
+  ...
+# Subtest: process recovery: a terminate whose cleanup stays pending is never reported as executed
+ok 62 - process recovery: a terminate whose cleanup stays pending is never reported as executed
+  ---
+  duration_ms: 30.2103
+  type: 'test'
+  ...
+# Subtest: process recovery: a process with no durable backend identity refuses every action
+ok 63 - process recovery: a process with no durable backend identity refuses every action
+  ---
+  duration_ms: 18.1987
+  type: 'test'
+  ...
+# Subtest: process recovery: a failing generator yields a typed refusal and no durable record
+ok 64 - process recovery: a failing generator yields a typed refusal and no durable record
+  ---
+  duration_ms: 18.5404
+  type: 'test'
+  ...
+# Subtest: process recovery: a generator may not widen or retarget the validated scope
+ok 65 - process recovery: a generator may not widen or retarget the validated scope
+  ---
+  duration_ms: 19.0871
+  type: 'test'
+  ...
+# Subtest: process recovery: concurrent execution requests share one durable claim
+ok 66 - process recovery: concurrent execution requests share one durable claim
+  ---
+  duration_ms: 27.6379
+  type: 'test'
+  ...
+# Subtest: process recovery: an in-flight claim observed after restart becomes outcome_unknown and never replays
+ok 67 - process recovery: an in-flight claim observed after restart becomes outcome_unknown and never replays
+  ---
+  duration_ms: 27.4026
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-HjNwfF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-xAAy9y","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-6jdtT2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dnbEED","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IOGWjc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-oNHSVH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-EcN5Kk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-t1ZwIu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-77j1ny","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-nmdaho","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-0cQSJ9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-eo01Dw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-bkw8Dk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1bDFlu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-SIGyiY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-a1fqgf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-UcivAw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-pQ1yZl","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dlVusD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-90naaf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Y3Kdqb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-JvLVle","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IGn9BH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-7iQ2fk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-7eOPjV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IowxTR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-A0vgSR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-R2va8r","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dC8W6u","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-psojO0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IVR0HG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-5E0rzP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-rvQ1br","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Jzr58q","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-q3wRsu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-u4SBxr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9bV4yE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cnH9at","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-0XrY48","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-016Mh2","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-runner-recovery-x2tjtD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ljrcUW"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-tx0GVP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-SsQI83"}
+# Subtest: CLI recovers a paused run and preserves event continuity after restart
+ok 68 - CLI recovers a paused run and preserves event continuity after restart
+  ---
+  duration_ms: 33606.6057
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-runner-recovery-x2tjtD","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-policy-forgery-jQGMY1"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-plan-policy-vYLf0E"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-store-NyT6Mf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-pre-p1-wal-YkZ1q2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-evidence-HfT4tM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-append-evidence-store-5TInY7"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-adversarial-evidence-RXvvln"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-review-evidence-hgncVH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-acceptance-upgrade-YuO1ls"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-completed-ww2sEx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-gate-boundary-Ae2IaA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-evidence-boundary-Q8OTJh"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-assigned-worker-required-pMZgnK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-upgraded-worker-required-ZGz5LV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-worker-evidence-controls-Bnl96F"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-retry-projection-yCgxK0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-corrupt-Pj3Jyk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-runtime-L7mfXl"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-empty-handoff-Gd11yp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-KXRoZE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-invalid-YZnsQ7"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-revision-ohPqcx"}
+# Subtest: Finish and Budgeted reject forged plan-only handoff payloads
+ok 69 - Finish and Budgeted reject forged plan-only handoff payloads
+  ---
+  duration_ms: 26.8928
+  type: 'test'
+  ...
+# Subtest: durable plan-only policy requires a plan and survives handoff replay
+ok 70 - durable plan-only policy requires a plan and survives handoff replay
+  ---
+  duration_ms: 30.9628
+  type: 'test'
+  ...
+# Subtest: scheduler events recover exact task and blocking-guidance state
+ok 71 - scheduler events recover exact task and blocking-guidance state
+  ---
+  duration_ms: 25.3156
+  type: 'test'
+  ...
+# Subtest: raw pre-P1 scheduler WAL fixtures preserve ordering and one legacy gate across reopens
+ok 72 - raw pre-P1 scheduler WAL fixtures preserve ordering and one legacy gate across reopens
+  ---
+  duration_ms: 28.2379
+  type: 'test'
+  ...
+# Subtest: raw scheduler replay rejects missing evidence and reopens valid exact evidence
+ok 73 - raw scheduler replay rejects missing evidence and reopens valid exact evidence
+  ---
+  duration_ms: 55.207
+  type: 'test'
+  ...
+# Subtest: scheduler append fails closed when acceptance evidence lacks an authoritative store
+ok 74 - scheduler append fails closed when acceptance evidence lacks an authoritative store
+  ---
+  duration_ms: 22.4403
+  type: 'test'
+  ...
+# Subtest: raw scheduler replay rejects foreign owner, task, attempt, and artifact evidence
+ok 75 - raw scheduler replay rejects foreign owner, task, attempt, and artifact evidence
+  ---
+  duration_ms: 124.1284
+  type: 'test'
+  ...
+# Subtest: raw scheduler replay rejects review artifact hashes outside valid submitted evidence
+ok 76 - raw scheduler replay rejects review artifact hashes outside valid submitted evidence
+  ---
+  duration_ms: 47.2386
+  type: 'test'
+  ...
+# Subtest: legacy active runs require exactly one acceptance-contract upgrade before submission
+ok 77 - legacy active runs require exactly one acceptance-contract upgrade before submission
+  ---
+  duration_ms: 32.4279
+  type: 'test'
+  ...
+# Subtest: legacy scheduler completion has no final-verification grandfathering
+ok 78 - legacy scheduler completion has no final-verification grandfathering
+  ---
+  duration_ms: 19.376
+  type: 'test'
+  ...
+# Subtest: gated active legacy runs reject raw completion and handoff selection until upgrade
+ok 79 - gated active legacy runs reject raw completion and handoff selection until upgrade
+  ---
+  duration_ms: 33.1833
+  type: 'test'
+  ...
+# Subtest: durable submission rejects fabricated evidence IDs and hashes
+ok 80 - durable submission rejects fabricated evidence IDs and hashes
+  ---
+  duration_ms: 40.7041
+  type: 'test'
+  ...
+# Subtest: durable current criterion assignment requires an assigned worker identity
+ok 81 - durable current criterion assignment requires an assigned worker identity
+  ---
+  duration_ms: 38.0402
+  type: 'test'
+  ...
+# Subtest: durable submission rejects legacy worker absence after acceptance upgrade
+ok 82 - durable submission rejects legacy worker absence after acceptance upgrade
+  ---
+  duration_ms: 45.7541
+  type: 'test'
+  ...
+# Subtest: durable criterion submission permits only the assigned worker or an attributed descendant
+ok 83 - durable criterion submission permits only the assigned worker or an attributed descendant
+  ---
+  duration_ms: 66.9331
+  type: 'test'
+  ...
+# Subtest: retry clears the current acceptance projection while replay preserving versioned history
+ok 84 - retry clears the current acceptance projection while replay preserving versioned history
+  ---
+  duration_ms: 50.4256
+  type: 'test'
+  ...
+# Subtest: corrupt scheduler payload identifies the event
+ok 85 - corrupt scheduler payload identifies the event
+  ---
+  duration_ms: 21.4144
+  type: 'test'
+  ...
+# Subtest: runtime assignments, provider cooldown, and Architect handoff recover durably
+ok 86 - runtime assignments, provider cooldown, and Architect handoff recover durably
+  ---
+  duration_ms: 34.0186
+  type: 'test'
+  ...
+# Subtest: a durable Architect handoff always offers an explicit retry of the current runtime
+ok 87 - a durable Architect handoff always offers an explicit retry of the current runtime
+  ---
+  duration_ms: 22.0592
+  type: 'test'
+  ...
+# Subtest: Architect plan reconciliation atomically cancels stale work and rewires dependents
+ok 88 - Architect plan reconciliation atomically cancels stale work and rewires dependents
+  ---
+  duration_ms: 20.8322
+  type: 'test'
+  ...
+# Subtest: plan reconciliation rejects live dependencies on cancelled tasks
+ok 89 - plan reconciliation rejects live dependencies on cancelled tasks
+  ---
+  duration_ms: 18.2625
+  type: 'test'
+  ...
+# Subtest: projection records the most recently integrated revision
+ok 90 - projection records the most recently integrated revision
+  ---
+  duration_ms: 19.7748
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-policy-forgery-jQGMY1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-plan-policy-vYLf0E","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-store-NyT6Mf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-pre-p1-wal-YkZ1q2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-evidence-HfT4tM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-append-evidence-store-5TInY7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-adversarial-evidence-RXvvln","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-review-evidence-hgncVH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-acceptance-upgrade-YuO1ls","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-completed-ww2sEx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-gate-boundary-Ae2IaA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-evidence-boundary-Q8OTJh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-assigned-worker-required-pMZgnK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-upgraded-worker-required-ZGz5LV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-worker-evidence-controls-Bnl96F","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-retry-projection-yCgxK0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-corrupt-Pj3Jyk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-runtime-L7mfXl","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-empty-handoff-Gd11yp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-KXRoZE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-invalid-YZnsQ7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-revision-ohPqcx","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-JCtiH9"}
+# Subtest: subprocess memory preserves exact binary tail through real spool and durable result
+ok 91 - subprocess memory preserves exact binary tail through real spool and durable result
+  ---
+  duration_ms: 65.4576
+  type: 'test'
+  ...
+# acquired synthetic process/output fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-JCtiH9
+# closed synthetic store/output; removed exact fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-JCtiH9
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-x9Md3f"}
+# Subtest: subprocess sqlite preserves exact binary tail through real spool and durable result
+ok 92 - subprocess sqlite preserves exact binary tail through real spool and durable result
+  ---
+  duration_ms: 83.5629
+  type: 'test'
+  ...
+# acquired synthetic process/output fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-x9Md3f
+# closed synthetic store/output; removed exact fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-x9Md3f
+# Subtest: caller can provide only an opaque grant id and forged grant/result fields are rejected
+ok 93 - caller can provide only an opaque grant id and forged grant/result fields are rejected
+  ---
+  duration_ms: 0.6905
+  type: 'test'
+  ...
+# Subtest: runtime denies a semantic tree guarantee when the active adapter attests only partial ownership
+ok 94 - runtime denies a semantic tree guarantee when the active adapter attests only partial ownership
+  ---
+  duration_ms: 3.5287
+  type: 'test'
+  ...
+# Subtest: runtime factory rejects malicious structural authority and launch sees a deep immutable intent snapshot
+ok 95 - runtime factory rejects malicious structural authority and launch sees a deep immutable intent snapshot
+  ---
+  duration_ms: 19.613
+  type: 'test'
+  ...
+# Subtest: runtime is a closure facade exposing only intended invocation methods
+ok 96 - runtime is a closure facade exposing only intended invocation methods
+  ---
+  duration_ms: 0.6491
+  type: 'test'
+  ...
+# Subtest: every output and backend effect receives the durable owner fencing token
+ok 97 - every output and backend effect receives the durable owner fencing token
+  ---
+  duration_ms: 18.1944
+  type: 'test'
+  ...
+# Subtest: durable claim and output owner exist before first await so immediate cancel is queued
+ok 98 - durable claim and output owner exist before first await so immediate cancel is queued
+  ---
+  duration_ms: 33.1658
+  type: 'test'
+  ...
+# Subtest: crash-safe output intent precedes idempotent prepare and prepare failure is durable
+ok 99 - crash-safe output intent precedes idempotent prepare and prepare failure is durable
+  ---
+  duration_ms: 4.4482
+  type: 'test'
+  ...
+# Subtest: failed prelaunch output cleanup remains recoverable until owner cleanup succeeds
+ok 100 - failed prelaunch output cleanup remains recoverable until owner cleanup succeeds
+  ---
+  duration_ms: 11.6565
+  type: 'test'
+  ...
+# Subtest: recoverable launch cleanup blocker binds identity and persists without prelaunch cleanup or relaunch
+ok 101 - recoverable launch cleanup blocker binds identity and persists without prelaunch cleanup or relaunch
+  ---
+  duration_ms: 25.3469
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-XZNeya"}
+# Subtest: restart reattests a live launch blocker and retry never relaunches
+ok 102 - restart reattests a live launch blocker and retry never relaunches
+  ---
+  duration_ms: 200.8277
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-retry-aIQXox"}
+# Subtest: expired same-owner retry advances its durable fence before effects and heartbeats across takeover attempts
+ok 103 - expired same-owner retry advances its durable fence before effects and heartbeats across takeover attempts
+  ---
+  duration_ms: 201.7498
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-cancel-vk86wf"}
+# Subtest: expired same-owner cancellation advances its durable fence before a blocked signal and prevents takeover
+ok 104 - expired same-owner cancellation advances its durable fence before a blocked signal and prevents takeover
+  ---
+  duration_ms: 249.3784
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-fence-loss-Lfq813"}
+# Subtest: durable in-flight reconciliation blocks takeover effects after heartbeat authority loss
+ok 105 - durable in-flight reconciliation blocks takeover effects after heartbeat authority loss
+  ---
+  duration_ms: 136.802
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-signal-fence-loss-9ieEES"}
+# Subtest: durable in-flight signal blocks takeover effects after heartbeat authority loss
+ok 106 - durable in-flight signal blocks takeover effects after heartbeat authority loss
+  ---
+  duration_ms: 149.9307
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-finalize-fence-loss-OidPmf"}
+# Subtest: durable in-flight output finalization blocks takeover and duplicate release
+ok 107 - durable in-flight output finalization blocks takeover and duplicate release
+  ---
+  duration_ms: 155.1383
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-release-fence-loss-Sf2hYd"}
+# Subtest: durable in-flight backend release blocks takeover and duplicate release
+ok 108 - durable in-flight backend release blocks takeover and duplicate release
+  ---
+  duration_ms: 188.0319
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-reopen-fence-loss-IX6Tms"}
+# Subtest: durable recovery output reopen blocks takeover before any contender effect
+ok 109 - durable recovery output reopen blocks takeover before any contender effect
+  ---
+  duration_ms: 121.375
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-observe-write-fence-loss-c5neeA"}
+# Subtest: durable recovery observation covers blocked output writes and blocks takeover
+ok 110 - durable recovery observation covers blocked output writes and blocks takeover
+  ---
+  duration_ms: 94.2735
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-verify-empty-fence-loss-aShKYQ"}
+# Subtest: durable verified-empty inspection blocks takeover and duplicate cleanup effects
+ok 111 - durable verified-empty inspection blocks takeover and duplicate cleanup effects
+  ---
+  duration_ms: 172.224
+  type: 'test'
+  ...
+# Subtest: same owner consumes signal before observe without losing either journal marker
+ok 112 - same owner consumes signal before observe without losing either journal marker
+  ---
+  duration_ms: 36.8282
+  type: 'test'
+  ...
+# Subtest: same owner consumes observe before signal without stranding the exact signal marker
+ok 113 - same owner consumes observe before signal without stranding the exact signal marker
+  ---
+  duration_ms: 32.3889
+  type: 'test'
+  ...
+# Subtest: observe-first preserves proven exit for every valid late signal response
+    # Subtest: exited
+    ok 1 - exited
+      ---
+      duration_ms: 35.0191
+      type: 'test'
+      ...
+    # Subtest: running
+    ok 2 - running
+      ---
+      duration_ms: 34.6453
+      type: 'test'
+      ...
+    1..2
+ok 114 - observe-first preserves proven exit for every valid late signal response
+  ---
+  duration_ms: 70.2739
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-signal-d61Ztm"}
+# Subtest: malformed observe-first signal remains completed across SQLite restart
+ok 115 - malformed observe-first signal remains completed across SQLite restart
+  ---
+  duration_ms: 691.9434
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reopen-PpINhA"}
+# Subtest: cancel denies every live same-owner family except one active observation
+    # Subtest: output_reopen
+    ok 1 - output_reopen
+      ---
+      duration_ms: 87.2142
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reconcile-NZv2aW"}
+    # Subtest: backend_reconcile
+    ok 2 - backend_reconcile
+      ---
+      duration_ms: 83.1365
+      type: 'test'
+      ...
+    # Subtest: backend_verify_empty
+    ok 3 - backend_verify_empty
+      ---
+      duration_ms: 13.1597
+      type: 'test'
+      ...
+    1..3
+ok 116 - cancel denies every live same-owner family except one active observation
+  ---
+  duration_ms: 184.1102
+  type: 'test'
+  ...
+# Subtest: cancel table rejects active finalize verify and release effects
+    # Subtest: output_finalize
+    ok 1 - output_finalize
+      ---
+      duration_ms: 19.6205
+      type: 'test'
+      ...
+    # Subtest: backend_verify_empty
+    ok 2 - backend_verify_empty
+      ---
+      duration_ms: 19.9942
+      type: 'test'
+      ...
+    # Subtest: backend_release
+    ok 3 - backend_release
+      ---
+      duration_ms: 18.8159
+      type: 'test'
+      ...
+    1..3
+ok 117 - cancel table rejects active finalize verify and release effects
+  ---
+  duration_ms: 59.1083
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_observe-KjjlRN"}
+# Subtest: malformed successful journaled calls remain completed and cannot repeat on retry cancel or restart
+    # Subtest: backend_observe
+    ok 1 - backend_observe
+      ---
+      duration_ms: 421.2918
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-output_finalize-R1phAT"}
+    # Subtest: output_finalize
+    ok 2 - output_finalize
+      ---
+      duration_ms: 54.0613
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_verify_empty-IiqGPi"}
+    # Subtest: backend_verify_empty
+    ok 3 - backend_verify_empty
+      ---
+      duration_ms: 105.2184
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_release-9Jjioe"}
+    # Subtest: backend_release
+    ok 4 - backend_release
+      ---
+      duration_ms: 164.8883
+      type: 'test'
+      ...
+    1..4
+ok 118 - malformed successful journaled calls remain completed and cannot repeat on retry cancel or restart
+  ---
+  duration_ms: 746.1989
+  type: 'test'
+  ...
+# Subtest: raw journaled rejection remains started and blocks retry cancel and startup recovery
+ok 119 - raw journaled rejection remains started and blocks retry cancel and startup recovery
+  ---
+  duration_ms: 10.0643
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-raw-rejection-restart-c88Pv8"}
+# Subtest: raw rejection marker survives SQLite restart and blocks every contender path
+ok 120 - raw rejection marker survives SQLite restart and blocks every contender path
+  ---
+  duration_ms: 53.5743
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-transient-heartbeat-GQTp23"}
+# Subtest: transient heartbeat failure leaves a started marker after raw success and blocks contenders
+ok 121 - transient heartbeat failure leaves a started marker after raw success and blocks contenders
+  ---
+  duration_ms: 95.787
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-hRJkpd"}
+# Subtest: restart closes a launch blocker only after natural exit and verified release
+ok 122 - restart closes a launch blocker only after natural exit and verified release
+  ---
+  duration_ms: 227.0521
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-ynWGP6"}
+# Subtest: restart cancellation stops only the authenticated blocked identity and completes cleanup
+ok 123 - restart cancellation stops only the authenticated blocked identity and completes cleanup
+  ---
+  duration_ms: 182.2137
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unenforced-cancel-7tGXrH"}
+# Subtest: restart cancellation preserves blocker evidence when authenticated escalation cannot enforce exit
+ok 124 - restart cancellation preserves blocker evidence when authenticated escalation cannot enforce exit
+  ---
+  duration_ms: 175.9888
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unavailable-chZSnk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-outcome_unknown-Mbo0Ux"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-identity_mismatch-A8nIaa"}
+# Subtest: restart preserves typed launch blockers for unavailable, unknown, and mismatched backends
+ok 125 - restart preserves typed launch blockers for unavailable, unknown, and mismatched backends
+  ---
+  duration_ms: 306.6721
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-YMJQro"}
+# Subtest: stale restart owner cannot recover or cancel a leased launch blocker
+ok 126 - stale restart owner cannot recover or cancel a leased launch blocker
+  ---
+  duration_ms: 60.6302
+  type: 'test'
+  ...
+# Subtest: Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked
+ok 127 - Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked
+  ---
+  duration_ms: 3.6182
+  type: 'test'
+  ...
+# Subtest: concurrent exact invocations share one operation while divergent retries conflict
+ok 128 - concurrent exact invocations share one operation while divergent retries conflict
+  ---
+  duration_ms: 31.4746
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-sqlite-K5E0oO"}
+# Subtest: separate SQLite runtime contenders durably elect one winner before grant or output effects
+ok 129 - separate SQLite runtime contenders durably elect one winner before grant or output effects
+  ---
+  duration_ms: 103.8927
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-contention-aKNWU1"}
+# Subtest: separate OS processes contend through SQLite with one pre-effect owner
+ok 130 - separate OS processes contend through SQLite with one pre-effect owner
+  ---
+  duration_ms: 331.0782
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-init-lock-ULrUnQ"}
+# Subtest: separate OS processes retry writable SQLite initialization across a transient schema lock
+ok 131 - separate OS processes retry writable SQLite initialization across a transient schema lock
+  ---
+  duration_ms: 5503.4125
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-lease-w3Rm2x"}
+# Subtest: live owner heartbeat prevents lease stealing throughout a blocked output effect
+ok 132 - live owner heartbeat prevents lease stealing throughout a blocked output effect
+  ---
+  duration_ms: 116.2957
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-stale-fence-RnCTGI"}
+# Subtest: stale owner completing an uncertain effect is rejected after safe expiry takeover
+ok 133 - stale owner completing an uncertain effect is rejected after safe expiry takeover
+  ---
+  duration_ms: 31.4865
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-launch-orphan-O0hzhW"}
+# Subtest: expired unbound launch is atomically orphaned without takeover cleanup or relaunch
+ok 134 - expired unbound launch is atomically orphaned without takeover cleanup or relaunch
+  ---
+  duration_ms: 35.192
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-bound-recovery-iV6pCQ"}
+# Subtest: expired bound active observation blocks takeover reconciliation until its owner settles
+ok 135 - expired bound active observation blocks takeover reconciliation until its owner settles
+  ---
+  duration_ms: 82.3046
+  type: 'test'
+  ...
+# Subtest: deadline is runtime-owned and persists interrupt terminate force escalation before effects
+ok 136 - deadline is runtime-owned and persists interrupt terminate force escalation before effects
+  ---
+  duration_ms: 55.0287
+  type: 'test'
+  ...
+# Subtest: cancellation during launch queues durable stop and signals only after identity bind
+ok 137 - cancellation during launch queues durable stop and signals only after identity bind
+  ---
+  duration_ms: 31.9605
+  type: 'test'
+  ...
+# Subtest: terminal cancel is a read-only no-op and never signals a cleaned process
+ok 138 - terminal cancel is a read-only no-op and never signals a cleaned process
+  ---
+  duration_ms: 19.7776
+  type: 'test'
+  ...
+# Subtest: fresh attestation mismatch blocks cancellation authority before signal
+ok 139 - fresh attestation mismatch blocks cancellation authority before signal
+  ---
+  duration_ms: 12.2422
+  type: 'test'
+  ...
+# Subtest: restart preserves durable timeout precedence after observation loss
+ok 140 - restart preserves durable timeout precedence after observation loss
+  ---
+  duration_ms: 11.715
+  type: 'test'
+  ...
+# Subtest: backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns
+ok 141 - backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns
+  ---
+  duration_ms: 11.6486
+  type: 'test'
+  ...
+# Subtest: grant controller authority is scoped to exactly one kernel
+ok 142 - grant controller authority is scoped to exactly one kernel
+  ---
+  duration_ms: 0.5153
+  type: 'test'
+  ...
+# Subtest: durable timeout and cancellation outrank later cleanup failure
+ok 143 - durable timeout and cancellation outrank later cleanup failure
+  ---
+  duration_ms: 21.2174
+  type: 'test'
+  ...
+# Subtest: malformed backend results are classified and never become verified success
+ok 144 - malformed backend results are classified and never become verified success
+  ---
+  duration_ms: 15.7599
+  type: 'test'
+  ...
+# Subtest: output ownership is prepared before launch and finalized before verified cleanup
+ok 145 - output ownership is prepared before launch and finalized before verified cleanup
+  ---
+  duration_ms: 24.063
+  type: 'test'
+  ...
+# Subtest: restart preserves each completed malformed observation without reopening output
+ok 146 - restart preserves each completed malformed observation without reopening output
+  ---
+  duration_ms: 11.6585
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-corrupt-auHnkt"}
+# Subtest: recovery reports a corrupt first SQLite row and still reconciles the later valid row
+ok 147 - recovery reports a corrupt first SQLite row and still reconciles the later valid row
+  ---
+  duration_ms: 51.6631
+  type: 'test'
+  ...
+# Subtest: exhaustive durable-state by reconcile-outcome matrix is fail-closed
+ok 148 - exhaustive durable-state by reconcile-outcome matrix is fail-closed
+  ---
+  duration_ms: 384.5413
+  type: 'test'
+  ...
+# Subtest: subprocess live output observation uses the actual backend bytes without persisting its callback
+ok 149 - subprocess live output observation uses the actual backend bytes without persisting its callback
+  ---
+  duration_ms: 25.5662
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-JCtiH9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-x9Md3f","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-XZNeya","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-retry-aIQXox","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-cancel-vk86wf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-fence-loss-Lfq813","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-signal-fence-loss-9ieEES","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-finalize-fence-loss-OidPmf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-release-fence-loss-Sf2hYd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-reopen-fence-loss-IX6Tms","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-observe-write-fence-loss-c5neeA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-verify-empty-fence-loss-aShKYQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-signal-d61Ztm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reopen-PpINhA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reconcile-NZv2aW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_observe-KjjlRN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-output_finalize-R1phAT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_verify_empty-IiqGPi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_release-9Jjioe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-raw-rejection-restart-c88Pv8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-transient-heartbeat-GQTp23","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-hRJkpd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-ynWGP6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unenforced-cancel-7tGXrH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unavailable-chZSnk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-outcome_unknown-Mbo0Ux","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-identity_mismatch-A8nIaa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-YMJQro","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-sqlite-K5E0oO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-contention-aKNWU1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-init-lock-ULrUnQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-lease-w3Rm2x","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-stale-fence-RnCTGI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-launch-orphan-O0hzhW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-bound-recovery-iV6pCQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-corrupt-auHnkt","existsAtExit":false}
+1..149
+# tests 161
+# suites 0
+# pass 161
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 49756.6269

@@ -1,0 +1,16 @@
+{
+  "pid": 58424,
+  "identity": {
+    "Id": 58424,
+    "StartTimeUtc": "2026-09-15T14:56:35.9814595Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 4632,
+  "spawnedAt": "2026-09-15T14:56:36.298Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-observability.mts"
+  ]
+}

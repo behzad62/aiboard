@@ -1,0 +1,1 @@
+{"id":"ownership-red","pattern":"adapter never invents ownership","tests":["runner-v2/test/process-recovery.test.ts"]}

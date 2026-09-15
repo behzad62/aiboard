@@ -181,6 +181,7 @@ export function createExecutionHostStreamingGraph(
           implementationDigest: selected.implementationDigest,
           attestationVersion: selected.attestation.attestationVersion,
           attestationDigest: selected.attestationDigest,
+          capabilities: selected.attestation.capabilities,
           ...launch,
         });
       },

@@ -1,0 +1,27 @@
+{
+  "id": "kernel-binding-red",
+  "startedAt": "2026-09-15T09:47:10.705Z",
+  "finishedAt": "2026-09-15T09:47:11.465Z",
+  "wrapperPid": 49156,
+  "testPid": 31668,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 445,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=binds its grant",
+    "runner-v2/test/process-recovery-kernel.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-Oz7iuf"
+  ]
+}

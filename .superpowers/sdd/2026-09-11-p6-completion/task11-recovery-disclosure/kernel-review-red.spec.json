@@ -1,0 +1,6 @@
+{
+  "id": "kernel-review-red",
+  "tests": [
+    "runner-v2/test/process-recovery-kernel.test.ts"
+  ]
+}

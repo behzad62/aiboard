@@ -752,6 +752,77 @@ export type NativeBuildEvidenceFact =
   | NativeBrowserScreenshotEvidenceFact
   | NativeBrowserEventsEvidenceFact;
 
+export type NativeExecutionSafetyCapabilityName =
+  | "tree_termination"
+  | "crash_cleanup"
+  | "verified_emptiness"
+  | "write_confinement";
+export type NativeExecutionSafetyCapabilityState = "enforced" | "partial" | "unavailable" | "unverified";
+export interface NativeProcessRecoveryScope {
+  kind: "subprocess" | "streaming";
+  runId: string;
+  invocationId: string;
+  logicalProcessId: string;
+  taskId?: string;
+  sessionId?: string;
+  revision: number;
+  ownerId: string;
+  fencingToken: number;
+  rootPid?: number;
+  state: string;
+  backendIdentity: string;
+  birthFingerprint: string;
+}
+export interface NativeProcessRecoveryRecord {
+  version: 1;
+  proposalId: string;
+  callId: string;
+  scope: NativeProcessRecoveryScope;
+  requestedAction: "inspect" | "terminate" | "remove_owned_artifact";
+  targetScope: string[];
+  requestedCapabilities: NativeExecutionSafetyCapabilityName[];
+  expiresAt: string;
+  proposalFingerprint: string;
+  commandFingerprint: string;
+  argumentsFingerprint: string;
+  rationaleFingerprint: string;
+  createdAt: string;
+  updatedAt: string;
+  state: "proposed" | "user_decision_required" | "authorized" | "executing" | "executed" | "rejected" | "failed" | "outcome_unknown";
+  reason: "submitted" | "validated" | "destructive_requires_user" | "user_approved" | "user_denied" | "scope_changed" | "expired" | "execution_started" | "inspection_completed" | "cleanup_verified" | "effect_failed" | "effect_outcome_unknown" | "resolved_by_verified_cleanup" | "model_failed";
+  attemptId?: string;
+  observation?: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
+  cleanupState?: "not_required" | "pending" | "verified_empty" | "failed";
+}
+export type NativeBuildExecutionSafetyObservability =
+  | {
+      availability: "live";
+      fullBypass: boolean;
+      isolation: {
+        status: "unconfined_explicit_full" | "write_confinement_exact_grant" | "blocked" | "unverified";
+        securityBoundary: "provider_specific_not_universal_security_boundary";
+        activeLeaseCount: number;
+        blockers: string[];
+      };
+      grants: { active: number; consumed: number };
+      processes: Array<{
+        kind: "subprocess" | "streaming";
+        invocationId: string;
+        logicalProcessId: string;
+        lifecycleState: string;
+        owned: boolean;
+        pendingEffects: boolean;
+        backend?: { backendId: string; implementationDigest: string; providerId?: string };
+        capabilities: Record<NativeExecutionSafetyCapabilityName, NativeExecutionSafetyCapabilityState>;
+        requiredCapabilities: string[];
+        leaseExpiresAt?: string;
+        cleanup: { state: "not_required" | "pending" | "verified_empty" | "failed"; detail?: string; verifiedAt?: string };
+        output: { status: "complete" | "truncated" | "lossy"; totalBytes: number; truncated: boolean; lossyBytes: number } | { status: "unavailable" };
+      }>;
+      recovery: Array<Pick<NativeProcessRecoveryRecord, "proposalId" | "requestedAction" | "state" | "reason" | "updatedAt" | "observation" | "cleanupState">>;
+    }
+  | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };
+
 export interface NativeBuildObservability {
   runId: string;
   budget: NativeBuildUsageProjection;
@@ -832,6 +903,7 @@ export interface NativeBuildObservability {
     integrationRevision: string;
     commits: Array<{ revision: string; parents: string[]; subject: string }>;
   };
+  executionSafety?: NativeBuildExecutionSafetyObservability;
   finalVerification?: NativeFinalVerificationObservability;
   independentVerifier?: NativeIndependentVerifierObservability;
 }
@@ -1246,6 +1318,70 @@ export async function getNativeBuildObservability(
     `/v2/runs/${encodeURIComponent(runId)}/build/observability`,
     { signal },
     fetchImpl
+  );
+}
+
+export async function getNativeProcessRecovery(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
+): Promise<NativeProcessRecoveryRecord[]> {
+  const result = await request<{ records: NativeProcessRecoveryRecord[] }>(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/recovery`,
+    { signal },
+    fetchImpl,
+  );
+  return result.records;
+}
+
+export async function generateNativeProcessRecovery(
+  connection: NativeRunnerConnection,
+  runId: string,
+  invocationId: string,
+  proposalId: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeProcessRecoveryRecord> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/recovery/generate`,
+    { method: "POST", body: JSON.stringify({ invocationId, proposalId }), signal },
+    fetchImpl,
+  );
+}
+
+export async function decideNativeProcessRecovery(
+  connection: NativeRunnerConnection,
+  runId: string,
+  proposalId: string,
+  fingerprint: string,
+  decision: "approve" | "reject",
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeProcessRecoveryRecord> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/recovery/${encodeURIComponent(proposalId)}/decision`,
+    { method: "POST", body: JSON.stringify({ fingerprint, decision }), signal },
+    fetchImpl,
+  );
+}
+
+export async function executeNativeProcessRecovery(
+  connection: NativeRunnerConnection,
+  runId: string,
+  proposalId: string,
+  fingerprint: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeProcessRecoveryRecord> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/recovery/${encodeURIComponent(proposalId)}/execute`,
+    { method: "POST", body: JSON.stringify({ fingerprint }), signal },
+    fetchImpl,
   );
 }
 

@@ -1,0 +1,34 @@
+{
+  "pid": 52172,
+  "identity": {
+    "Id": 52172,
+    "StartTimeUtc": "2026-09-15T12:07:31.0953520Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T12:07:31.156Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\resume-core-kernel-1.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts",
+    "runner-v2/test/process-recovery-kernel.test.ts"
+  ],
+  "spec": {
+    "id": "resume-core-kernel-1",
+    "tests": [
+      "runner-v2/test/process-recovery.test.ts",
+      "runner-v2/test/process-recovery-kernel.test.ts"
+    ]
+  }
+}

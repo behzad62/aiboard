@@ -1,0 +1,57 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-manager-rFY0NS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-control-2b5w3E"}
+# Subtest: native Build manager exposes recovery only through the live handle
+not ok 1 - native Build manager exposes recovery only through the live handle
+  ---
+  duration_ms: 20.6026
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-control.test.ts:1:1101'
+  failureType: 'testCodeFailure'
+  error: 'finish runs require empty budgetLimits.'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    assertBuildRunPolicyLimits (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\build-spec.ts:144:13)
+    validateBuildSpec (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\build-spec.ts:160:3)
+    SqliteBuildSpecStore.save (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\sqlite-build-spec-store.ts:38:5)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\native-build-manager.ts:223:40)
+    NativeBuildManager.serialized (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\native-build-manager.ts:932:20)
+    async NativeBuildManager.create (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\native-build-manager.ts:219:12)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-control.test.ts:38:5)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: control server recovery routes are authenticated, closed and serialize exact decisions
+not ok 2 - control server recovery routes are authenticated, closed and serialize exact decisions
+  ---
+  duration_ms: 70.9771
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery-control.test.ts:1:2935'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    404 !== 200
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 200
+  actual: 404
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery-control.test.ts:63:12)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-manager-rFY0NS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-control-2b5w3E","existsAtExit":false}
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3596.9408
