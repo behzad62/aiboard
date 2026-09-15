@@ -1,0 +1,42 @@
+[
+  {
+    "path": "runner-v2/src/filesystem-mutation-fence.ts",
+    "sha256": "9880c5a226517bffc89acd1d20b67ffcfc267a7167b6ad70724d613171de8a4f"
+  },
+  {
+    "path": "runner-v2/src/execution-grants.ts",
+    "sha256": "3c94429a8b7754721875a601a3340ae1e7e3aa250df83694c9c5a55631493970"
+  },
+  {
+    "path": "runner-v2/src/tool-broker.ts",
+    "sha256": "e34d5b6c33d542ad106466df713ffb6df278b2efadceb7a75742ad0f9f961aef"
+  },
+  {
+    "path": "runner-v2/src/filesystem-tools.ts",
+    "sha256": "e5194680fb741ba129c1ebfa4bbfa78f66ac83253d81ad1d0a54f7bdb1bef708"
+  },
+  {
+    "path": "runner-v2/src/agent-contracts.ts",
+    "sha256": "44ad2cb6cb6fd3ce4b9ec46f1074d7c324dd418d6dae2b28bb538e53eb85c9d9"
+  },
+  {
+    "path": "runner-v2/src/git-baseline.ts",
+    "sha256": "aad749b629ff84b527175a49f4adce3e670fadb3585cc3a5f9a7845f6a28acb4"
+  },
+  {
+    "path": "runner-v2/src/git-bootstrap.ts",
+    "sha256": "0ff927075699c8f0c93288fe995792b5e26e04eb530adc87d0741a7b47b1a7b3"
+  },
+  {
+    "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "sha256": "7ee0fac032b68c3d7cc2bdf7669aa9cfc8678a58891ad44779e67f80dfd4a8cb"
+  },
+  {
+    "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "sha256": "e8bad9e4c70c03967e6987cd83ba3bc83fc0e0746ee9bdb2d570d60dc934411b"
+  },
+  {
+    "path": "runner-v2/test/language-invocation-propagation.test.ts",
+    "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+  }
+]

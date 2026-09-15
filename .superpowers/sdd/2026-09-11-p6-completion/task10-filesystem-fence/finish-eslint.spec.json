@@ -1,0 +1,11 @@
+{
+  "id": "finish-eslint",
+  "args": [
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/finish-source-freeze.json"
+  ]
+}

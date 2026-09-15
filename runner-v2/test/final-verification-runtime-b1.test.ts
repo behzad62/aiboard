@@ -14,6 +14,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { IntegrationManager } from "./support/git-fixture.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { minimalWindowsSemanticProbeEnvironment } from "../src/windows-process-semantic-probes.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { type FinalVerificationPlan, type FinalVerificationRuntimeSmokeInput } from "../src/final-verification-runtime.js";
@@ -347,6 +348,7 @@ async function createManagedExecution(fixture: Fixture) {
     projectRoot: fixture.project,
     stateDirectory: join(fixture.state, "managed-execution-host"),
     artifacts: new ArtifactStore(join(fixture.root, "managed-artifacts")),
+    ambientEnvironment: process.platform === "win32" ? minimalWindowsSemanticProbeEnvironment(process.env) : {},
   });
   const run = await host.bindRun({
     runId: fixture.runId,

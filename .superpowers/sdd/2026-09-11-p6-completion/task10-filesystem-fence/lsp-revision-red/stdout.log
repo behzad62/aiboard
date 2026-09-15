@@ -1,0 +1,41 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-l5YnwN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-3jtuIE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-sYPiv5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Wl4jzh"}
+# Subtest: LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+not ok 1 - LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+  ---
+  duration_ms: 14369.0522
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-real-host.test.ts:1:874'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"callId":"original-write-call","toolName":"fs.write","isError":true,"error":{"code":"expected_revision_required","message":"Read or inspect the file and supply its SHA-256 before replacing existing content."},"content":[{"type":"text","text":"Read or inspect the file and supply its SHA-256 before replacing existing content."},{"type":"json","value":{"path":"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-l5YnwN\\workspace Ω\\main.py","partialMutation":false,"completedNamespaceSteps":0}}]}
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-real-host.test.ts:45:12)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# exact native LSP fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-l5YnwN
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-l5YnwN","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-3jtuIE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-sYPiv5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Wl4jzh","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15102.1799

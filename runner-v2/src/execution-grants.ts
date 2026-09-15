@@ -123,6 +123,35 @@ interface GrantRecord {
 const GRANTS = new WeakMap<object, GrantRecord>();
 const CONSUMED_CLAIMS = new WeakMap<object, GrantRecord>();
 const AUTHORITIES = new WeakMap<ExecutionGrantAuthority, Readonly<{ identity: object; owned: Set<object> }>>();
+const FILESYSTEM_RESERVATIONS = new WeakSet<GrantRecord>();
+
+/** One filesystem effect inside the original Broker call. This is NOT a new
+ * grant or an isolation acquisition. Post-mutation diagnostics still consume
+ * the original grant; filesystem effects cannot run after that consumption.
+ */
+export function reserveExecutionGrantForFilesystemMutation(
+  authority: ExecutionGrantAuthority, grant: OpaqueExecutionGrant, binding: ExecutionGrantBinding,
+): Readonly<{
+  workspacePath: string;
+  access: ConsumedExecutionGrantClaims["access"];
+  externalApproved: boolean;
+  destructiveApproved: boolean;
+  assertCurrent(): void;
+}> {
+  const issuer = AUTHORITIES.get(authority);
+  if (!issuer) throw grantError("grant_forged");
+  const record = trustedRecord(grant, issuer.identity)!;
+  const assertCurrent = () => {
+    assertCurrentGrantRecord(record);
+    if (record.state !== "issued") throw grantError("grant_consumed");
+  };
+  assertCurrent();
+  if (!sameBinding(record.claims, binding) || !["fs.write", "fs.patch", "fs.move", "fs.delete"].includes(binding.toolName)) throw grantError("grant_mismatch");
+  if (FILESYSTEM_RESERVATIONS.has(record)) throw grantError("grant_consumed");
+  FILESYSTEM_RESERVATIONS.add(record);
+  return Object.freeze({ workspacePath: record.claims.workspacePath, access: record.claims.access,
+    externalApproved: record.claims.externalApproved, destructiveApproved: record.claims.destructiveApproved, assertCurrent });
+}
 
 export function createExecutionGrantAuthority(
   options: ExecutionGrantAuthorityOptions = {},

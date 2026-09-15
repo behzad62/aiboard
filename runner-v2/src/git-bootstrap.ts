@@ -28,7 +28,8 @@ export async function captureRunGitBaseline(input: Readonly<{
     const indexRoot = join(input.stateDirectory, "git-baselines", runnerRunStateSegment(input.runId));
     await mkdir(indexRoot, { recursive: true });
     result = await captureGitBaseline({ projectPath: input.projectPath, stateDirectory: indexRoot,
-      runId: input.runId, execute: binding.git.lifecycle("baseline").run });
+      runId: input.runId, execute: binding.git.lifecycle("baseline").run,
+      filesystemAuthorization: { authority: binding.executionGrants, permissionProfile: input.permissionProfile } });
   } catch (error) { failed = true; primary = error; }
   try { await binding?.close(); }
   catch (cleanup) { throw new AggregateError(failed ? [primary, cleanup] : [cleanup], "Git baseline ownership cleanup remains unverified."); }

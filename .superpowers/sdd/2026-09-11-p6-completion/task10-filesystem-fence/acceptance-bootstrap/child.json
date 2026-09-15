@@ -1,0 +1,22 @@
+{
+  "pid": 29972,
+  "identity": {
+    "Id": 29972,
+    "StartTimeUtc": "2026-09-15T07:53:53.9453238Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 44572,
+  "spawnedAt": "2026-09-15T07:53:54.334Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=baseline bootstrap",
+    "runner-v2/test/git-bootstrap.test.ts"
+  ]
+}

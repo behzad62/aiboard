@@ -1,0 +1,16 @@
+{
+  "id": "integration-early-loser-red",
+  "args": [
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-timeout=20000",
+    "--test-name-pattern=concurrent managers cannot delete",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-early-loser.probe.test.ts"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-early-loser.probe.test.ts"
+  ]
+}

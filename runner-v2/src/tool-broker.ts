@@ -1,5 +1,7 @@
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { lstat, realpath } from "node:fs/promises";
+import { authorizeFilesystemMutation, captureFilesystemMutation, filesystemMutationFailure,
+  isFilesystemMutation, filesystemMutationWorkspace } from "./filesystem-mutation-fence.js";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -163,8 +165,14 @@ export class ToolBroker implements AgentToolRuntime {
     this.registry.register({
       definition: tool.definition,
       validate: tool.validate,
-      execute: async (input, context) =>
-        await this.executeAuthorized(tool, input as TInput, context, extensionId),
+      execute: async (input, context) => {
+        try { return await this.executeAuthorized(tool, input as TInput, context, extensionId); }
+        catch (error) {
+          const refusal = isFilesystemMutation(tool.definition.name) && filesystemMutationFailure(error, this.workspacePath);
+          if (refusal) return refusal;
+          throw error;
+        }
+      },
     });
     if (extensionId) this.extensionIds.set(tool.definition.name, extensionId);
   }
@@ -250,11 +258,16 @@ export class ToolBroker implements AgentToolRuntime {
     context: ToolExecutionContext,
     extensionId?: string,
   ): Promise<ToolExecutionOutput> {
-    const toolContext = { ...context, workspacePath: this.workspacePath };
+    const workspacePath = isFilesystemMutation(tool.definition.name) ? filesystemMutationWorkspace(this.workspacePath) : this.workspacePath;
+    const toolContext = { ...context, workspacePath };
     const callId = context.callId ?? "unknown";
     const access = tool.assessAccess?.(input, toolContext) ?? {
       capability: tool.definition.effect,
     };
+    // Capture identities before any approval/grant await can allow substitution.
+    const mutationCapture = isFilesystemMutation(tool.definition.name)
+      ? captureFilesystemMutation(workspacePath, tool.definition.name, access.paths ?? [])
+      : undefined;
     const outsideWorkspace = await this.hasOutsidePath(access);
     const requiresApproval =
       this.permissionProfile !== "full" &&
@@ -388,7 +401,7 @@ export class ToolBroker implements AgentToolRuntime {
         // Tool approval policy may be read-only/guarded (e.g. verifier), while
         // execution retains the actual owner-selected run isolation profile.
         permissionProfile: this.git?.permissionProfile ?? this.permissionProfile,
-        workspacePath: this.workspacePath,
+        workspacePath,
         access: (access.paths !== undefined
           ? access.paths.map((entry) => ({
               path: entry.path,
@@ -412,7 +425,13 @@ export class ToolBroker implements AgentToolRuntime {
             this.decisions.get(callId)?.decision === "approved"),
         signal,
       });
-      const invocationContext = { ...toolContext, signal, executionGrant };
+      const filesystemMutation = mutationCapture ? authorizeFilesystemMutation(mutationCapture, {
+        authority: this.executionGrants, grant: executionGrant,
+        binding: { runId: context.runId, sessionId: context.sessionId, actor: context.actor,
+          toolName: tool.definition.name, callId, permissionProfile: this.git?.permissionProfile ?? this.permissionProfile },
+        signal,
+      }) : undefined;
+      const invocationContext = { ...toolContext, signal, executionGrant, filesystemMutation };
       const execution = this.git
         ? this.git.withCall(invocationContext, () => tool.execute(input, invocationContext))
         : tool.execute(input, invocationContext);
@@ -449,6 +468,11 @@ export class ToolBroker implements AgentToolRuntime {
         return output;
       }
       this.settleToolBudget(budgetReservationId);
+      const refusal = isFilesystemMutation(tool.definition.name) && filesystemMutationFailure(error, this.workspacePath);
+      if (refusal) {
+        this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, refusal);
+        return refusal;
+      }
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);

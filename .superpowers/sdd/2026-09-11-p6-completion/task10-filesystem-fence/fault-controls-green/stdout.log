@@ -1,0 +1,26 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VBAYC4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-UoEXar"}
+# Subtest: filesystem fence: publication is create-if-absent even after the final absence check
+ok 1 - filesystem fence: publication is create-if-absent even after the final absence check
+  ---
+  duration_ms: 42.0032
+  type: 'test'
+  ...
+# Subtest: filesystem fence: a new-file parent retarget cannot redirect create publication
+ok 2 - filesystem fence: a new-file parent retarget cannot redirect create publication
+  ---
+  duration_ms: 8.5873
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VBAYC4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-UoEXar","existsAtExit":false}
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 299.8486

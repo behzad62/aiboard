@@ -469,7 +469,7 @@ test("the live checkout rechecks ignored target paths after advancing the ref", 
   }
 });
 
-test("concurrent managers cannot delete the winning post-ref crash journal", async () => {
+for (const earlyLoser of [false, true]) test(`concurrent managers cannot delete the winning post-ref crash journal${earlyLoser ? " (early loser)" : ""}`, { timeout: 30_000 }, async () => {
   const fixture = await createFixture("handoff-concurrent-journals");
   try {
     await integrateFeature(fixture, "feature.txt", "integrated\n");
@@ -477,6 +477,9 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
     const winnerAdvanced = new Promise<void>((resolve) => { releaseWinner = resolve; });
     let releaseLoser!: () => void;
     const loserAttempted = new Promise<void>((resolve) => { releaseLoser = resolve; });
+    let releaseLoserCas!: () => void;
+    const loserAtCas = new Promise<void>((resolve) => { releaseLoserCas = resolve; });
+    let loserCasAttempts = 0;
     let commitCount = 0;
     let releaseCommits!: () => void;
     const bothCommitsCreated = new Promise<void>((resolve) => { releaseCommits = resolve; });
@@ -512,6 +515,7 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
           releaseLoser();
           assert.fail(`each transition must own a journal: ${applyJournalPaths(fixture).join(", ")}`);
         }
+        if (!earlyLoser) await loserAtCas;
         const result = await runGit(options);
         releaseWinner();
         return result;
@@ -530,6 +534,7 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
           releaseLoser();
           assert.fail(`each transition must own a journal: ${applyJournalPaths(fixture).join(", ")}`);
         }
+        loserCasAttempts++; releaseLoserCas();
         await winnerAdvanced;
         const result = await runGit(options);
         releaseLoser();
@@ -544,16 +549,21 @@ test("concurrent managers cannot delete the winning post-ref crash journal", asy
         throw new Error("winner terminated before checkout");
       },
     });
-    const loser = freshIntegration(fixture, { execute: loserExecute });
+    const loser = freshIntegration(fixture, { execute: loserExecute,
+      ...(earlyLoser ? { afterProjectApplyJournalWritten: async () => { await winnerAdvanced; } } : {}),
+    });
     await Promise.all([winner.initialize(), loser.initialize()]);
 
     const [winnerResult, loserResult] = await Promise.allSettled([
       winner.applyToProject(),
-      loser.applyToProject(),
+      // The loser may refuse in assertProjectUnchanged before its CAS callback.
+      // Always release the winner when that operation settles, not only on CAS.
+      loser.applyToProject().finally(releaseLoser),
     ]);
     assert.equal(winnerResult.status, "rejected");
     assert.match(String((winnerResult as PromiseRejectedResult).reason), /winner terminated/i);
     assert.equal(loserResult.status, "rejected");
+    assert.equal(loserCasAttempts, earlyLoser ? 0 : 1, "both refusal phases are explicitly exercised");
     assert.match(String((loserResult as PromiseRejectedResult).reason), /project changed/i);
     assert.equal(applyJournalPaths(fixture).length, 1, "only the winning journal survives");
 

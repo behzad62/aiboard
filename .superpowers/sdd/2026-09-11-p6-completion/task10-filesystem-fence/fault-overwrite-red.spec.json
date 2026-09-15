@@ -1,0 +1,10 @@
+{
+  "id": "fault-overwrite-red",
+  "pattern": "publication is create-if-absent",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/reverse-fault.mjs"
+  ]
+}

@@ -1,3 +1,4 @@
+import { createExecutionGrantAuthority } from "../../src/execution-grants.js";
 /** Explicit test-only finite Git fixture adapter. It is NOT the runtime under
  * test and is never imported by production. Caller/manager compatibility tests
  * use real Git against their own temporary repositories; separate native host
@@ -102,8 +103,12 @@ export class TypeScriptIntelligence extends ActualTypeScriptIntelligence {
   constructor(repository: ConstructorParameters<typeof ActualTypeScriptIntelligence>[0] = new RepositoryIntelligence()) { super(repository); }
 }
 import { captureGitBaseline as actualCaptureGitBaseline } from "../../src/git-baseline.js";
-export function captureGitBaseline(options: Parameters<typeof actualCaptureGitBaseline>[0]) {
-  return actualCaptureGitBaseline({ ...options, execute: options.execute ?? runGit });
+export async function captureGitBaseline(options: Parameters<typeof actualCaptureGitBaseline>[0]) {
+  const owned = options.filesystemAuthorization ? undefined : createExecutionGrantAuthority();
+  try {
+    return await actualCaptureGitBaseline({ ...options, execute: options.execute ?? runGit,
+      filesystemAuthorization: options.filesystemAuthorization ?? { authority: owned!, permissionProfile: "full" } });
+  } finally { await owned?.revokeAll("cleanup"); }
 }
 import { inspectRepository as actualInspectRepository } from "../../src/git-repository.js";
 export function inspectRepository(path: string, execute: Parameters<typeof actualInspectRepository>[1] = runGit) {

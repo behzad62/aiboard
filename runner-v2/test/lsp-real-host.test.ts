@@ -12,12 +12,15 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import type { RepositoryIntelligence } from "../src/repository-intelligence.js";
 import { createOwnedLspFixture } from "./support/lsp-owned-fixture.js";
+import { minimalWindowsSemanticProbeEnvironment } from "../src/windows-process-semantic-probes.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 test("LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority", { timeout: 120_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "p683-native-")); t.diagnostic(`exact native LSP fixture acquired: ${root}`);
   const workspace = join(root, "workspace Ω"); await mkdir(workspace); await writeFile(join(workspace, "main.py"), "value = 1\nprint(value)\n");
-  const owned = createOwnedLspFixture(root, workspace);
+  // The deny-by-default host needs explicit, non-secret OS bootstrap variables.
+  const owned = createOwnedLspFixture(root, workspace,
+    process.platform === "win32" ? minimalWindowsSemanticProbeEnvironment(process.env) : {});
   const fallback = { descriptor: { id: "builtin", displayName: "builtin", extensions: [".ts"], rootMarkers: [], priority: 0 },
     workspaceSymbols: async () => ({ status: "unsupported_language", results: [], truncated: false }), definition: async () => assert.fail("wrong provider"), references: async () => assert.fail("wrong provider"), diagnostics: async () => assert.fail("wrong provider"), close: async () => undefined } as LanguageIntelligenceProvider;
   const router = new LanguageProviderRouter({ builtInProvider: fallback, extensionProviders: [], environment: {}, lspTransportFactory: owned.transportFactory,
@@ -38,7 +41,15 @@ test("LSP real shared host is lazy and code plus filesystem diagnostics retain e
     const record = run.streamingState.readSession(sessionId)!;
     assert.equal(record.callId, "original-code-call"); assert.equal(record.toolName, "code.diagnostics"); assert.equal(record.agentSessionId, "agent-one");
     assert.deepEqual(record.actor, { role: "worker", id: "actual-worker" }); assert.deepEqual(record.envelope.access, []);
-    const changed = await invoke("fs.write", "original-write-call", { path: "main.py", content: "value = 2\nprint(value)\n" });
+    const missingRevision = await invoke("fs.write", "missing-revision-call", { path: "main.py", content: "value = 2\nprint(value)\n" });
+    assert.equal(missingRevision.error?.code, "expected_revision_required");
+    const inspected = await invoke("fs.read", "prior-read-call", { path: "main.py" });
+    assert.equal(inspected.isError, false, JSON.stringify(inspected));
+    const metadata = inspected.content.find((block) => block.type === "json");
+    assert.ok(metadata?.type === "json");
+    const expectedSha256 = (metadata.value as { sha256: string }).sha256;
+    assert.match(expectedSha256, /^[a-f0-9]{64}$/);
+    const changed = await invoke("fs.write", "original-write-call", { path: "main.py", content: "value = 2\nprint(value)\n", expectedSha256 });
     assert.equal(changed.isError, false, JSON.stringify(changed));
     assert.doesNotMatch(JSON.stringify(changed), /diagnosticsUnavailable/);
     assert.equal(run.streamingState.listSessionIds().length, 1, "same exact agent/root uses fresh grants without a replacement process");

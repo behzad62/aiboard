@@ -1,0 +1,8 @@
+{
+  "id": "edge-green-1",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ]
+}

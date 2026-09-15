@@ -1,0 +1,22 @@
+{
+  "pid": 33040,
+  "identity": {
+    "Id": 33040,
+    "StartTimeUtc": "2026-09-15T08:14:49.1363427Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 28576,
+  "spawnedAt": "2026-09-15T08:14:49.438Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=concurrent managers cannot delete",
+    "runner-v2/test/integration-manager.test.ts"
+  ]
+}

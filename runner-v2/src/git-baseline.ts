@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  appendFile,
   lstat,
   readFile,
   rm,
-  writeFile,
 } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
+import type { PermissionProfile } from "./contracts.js";
+import { ExecutionGrantError, type ExecutionGrantAuthority } from "./execution-grants.js";
+import { captureFilesystemMutation, authorizeFilesystemMutation, fencedWrite, filesystemMutationWorkspace } from "./filesystem-mutation-fence.js";
 
 import { requireGitRunner } from "./git-command.js";
 import { inspectRepository, type GitRunner } from "./git-repository.js";
@@ -41,6 +42,8 @@ export interface CaptureGitBaselineOptions {
   runId: string;
   maxUntrackedFileBytes?: number;
   execute?: GitRunner;
+  /** Existing run-owned authority, not a new policy or ambient bootstrap bypass. */
+  filesystemAuthorization?: Readonly<{ authority: ExecutionGrantAuthority; permissionProfile: PermissionProfile }>;
 }
 
 export interface GitBaseline {
@@ -67,7 +70,7 @@ export async function captureGitBaseline(
   let initializedRepository = false;
 
   if (!inspection.repository || !inspection.headRevision) {
-    await addDefaultIgnoreRules(projectPath);
+    await addDefaultIgnoreRules(projectPath, options);
     initializedRepository = true;
   }
   if (!inspection.repository) {
@@ -191,24 +194,28 @@ export async function captureGitBaseline(
   }
 }
 
-async function addDefaultIgnoreRules(projectPath: string): Promise<void> {
+async function addDefaultIgnoreRules(configuredProjectPath: string, options: CaptureGitBaselineOptions): Promise<void> {
+  const projectPath = filesystemMutationWorkspace(configuredProjectPath);
   const ignorePath = join(projectPath, ".gitignore");
-  let existing = "";
-  try {
-    existing = await readFile(ignorePath, "utf8");
-  } catch {
-    // A missing ignore file is expected for most non-repositories.
-  }
+  const capture = captureFilesystemMutation(projectPath, "fs.write", [{ path: ignorePath, access: "write" }]);
+  let bytes: Buffer | undefined;
+  try { bytes = await readFile(ignorePath); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const existing = bytes?.toString("utf8") ?? "";
   if (existing.includes("# AIBoard runner safety defaults")) return;
-  if (existing.length === 0) {
-    await writeFile(ignorePath, DEFAULT_IGNORE_BLOCK.trimStart(), "utf8");
-  } else {
-    await appendFile(
-      ignorePath,
-      `${existing.endsWith("\n") ? "" : "\n"}${DEFAULT_IGNORE_BLOCK}`,
-      "utf8"
-    );
-  }
+  const authorization = options.filesystemAuthorization;
+  if (!authorization) throw new ExecutionGrantError("grant_forged", "Git bootstrap filesystem mutation requires the existing run-owned authority.");
+  const binding = { runId: options.runId, sessionId: "run-git:baseline", actor: { role: "runner_internal" as const, id: "git:baseline" },
+    toolName: "fs.write", callId: `baseline-ignore-${randomUUID()}`, permissionProfile: authorization.permissionProfile };
+  const grant = await authorization.authority.issue({ ...binding, workspacePath: projectPath,
+    access: [{ path: ignorePath, mode: "write" }], externalApproved: false, destructiveApproved: false, networkApproved: false });
+  try {
+    const filesystemMutation = authorizeFilesystemMutation(capture, { authority: authorization.authority, grant, binding });
+    const content = existing.length === 0 ? DEFAULT_IGNORE_BLOCK.trimStart()
+      : existing + (existing.endsWith("\n") ? "" : "\n") + DEFAULT_IGNORE_BLOCK;
+    fencedWrite({ ...binding, workspacePath: projectPath, executionGrant: grant, filesystemMutation }, ignorePath,
+      Buffer.from(content), bytes ? createHash("sha256").update(bytes).digest("hex") : undefined, false);
+  } finally { await authorization.authority.revoke(grant, "completed"); }
 }
 
 async function filterUntrackedFiles(

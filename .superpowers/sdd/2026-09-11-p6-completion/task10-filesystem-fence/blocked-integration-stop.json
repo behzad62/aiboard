@@ -1,0 +1,8 @@
+{
+  "time": "2026-09-15T07:34:31.1405928Z",
+  "reason": "Existing concurrent-journal fixture made no progress for more than six minutes; preserve root and mark this test subprocess failed, allowing the diagnostic affected run to continue",
+  "pid": 44236,
+  "parent": 3012,
+  "creationUtc": "2026-09-15T07:26:06.6461720Z",
+  "ownedDescendants": 0
+}

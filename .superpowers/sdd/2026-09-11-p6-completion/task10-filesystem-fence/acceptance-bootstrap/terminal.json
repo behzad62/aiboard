@@ -1,0 +1,25 @@
+{
+  "id": "acceptance-bootstrap",
+  "startedAt": "2026-09-15T07:53:53.512Z",
+  "finishedAt": "2026-09-15T07:53:55.274Z",
+  "wrapperPid": 44572,
+  "testPid": 29972,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 442,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=baseline bootstrap",
+    "runner-v2/test/git-bootstrap.test.ts"
+  ],
+  "rootCount": 3,
+  "retainedRoots": []
+}

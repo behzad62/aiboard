@@ -1,0 +1,40 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-9Wye6a"}
+# Subtest: baseline bootstrap full binds the real run/profile and closes its owner before returning
+ok 1 - baseline bootstrap full binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 10.625
+  type: 'test'
+  ...
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-9Wye6a
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-9Wye6a
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-CbXmpO"}
+# Subtest: baseline bootstrap project binds the real run/profile and closes its owner before returning
+ok 2 - baseline bootstrap project binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 4.5924
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-91QimT"}
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-CbXmpO
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-CbXmpO
+# Subtest: baseline bootstrap guarded binds the real run/profile and closes its owner before returning
+ok 3 - baseline bootstrap guarded binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 4.8153
+  type: 'test'
+  ...
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-91QimT
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-91QimT
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-9Wye6a","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-CbXmpO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-91QimT","existsAtExit":false}
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1223.7931

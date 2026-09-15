@@ -1,0 +1,24 @@
+{
+  "id": "integration-concurrency-diagnostic",
+  "startedAt": "2026-09-15T07:37:28.291Z",
+  "finishedAt": "2026-09-15T07:37:39.488Z",
+  "wrapperPid": 24084,
+  "testPid": 48148,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 442,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-timeout=20000",
+    "--test-name-pattern=concurrent managers cannot delete",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-concurrency.probe.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

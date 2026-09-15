@@ -1,4 +1,5 @@
 import type { OpaqueExecutionGrant } from "./execution-grants.js";
+import type { FilesystemMutationPermit } from "./filesystem-mutation-fence.js";
 
 export type AgentRole = "architect" | "worker" | "subagent" | "verifier";
 
@@ -125,6 +126,8 @@ export interface ToolExecutionContext {
   toolName?: string;
   /** Runner-created after authorization. Model input can never populate this field. */
   executionGrant?: OpaqueExecutionGrant;
+  /** Single-use last-mile ticket, backed by that same original Broker grant. */
+  filesystemMutation?: FilesystemMutationPermit;
 }
 
 export type ToolPathAccessMode = "read" | "write" | "delete";

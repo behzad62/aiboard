@@ -16,7 +16,8 @@ import { emptyRunnerCapabilitiesConfig } from "../../src/runner-capabilities-con
 let sequence = 0;
 /** Test-only composition of the real execution host, real grants and LSP adapter.
  * No private process launch, PID control or global production default is added. */
-export function createOwnedLspFixture(root: string, workspace: string) {
+export function createOwnedLspFixture(root: string, workspace: string,
+  ambientEnvironment: Readonly<Record<string, string | undefined>> = {}) {
   const state = root === workspace ? mkdtempSync(join(tmpdir(), "p683-external-state-")) : join(root, `lsp-shared-state-${++sequence}`); mkdirSync(state, { recursive: true });
   const runId = `lsp-fixture-${sequence}`;
   let host: ExecutionHost | undefined; let run: ExecutionHostRunBinding | undefined;
@@ -25,7 +26,7 @@ export function createOwnedLspFixture(root: string, workspace: string) {
   const ensure = async () => {
     if (closed) throw new Error("Exact LSP fixture owner is closed.");
     return await (preparing ??= (async () => {
-      host = createExecutionHost({ projectRoot: workspace, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")) });
+      host = createExecutionHost({ projectRoot: workspace, stateDirectory: state, ambientEnvironment, artifacts: new ArtifactStore(join(state, "artifacts")) });
       run = await host.bindRun({ runId, permissionProfile: "full", capabilityContract: { digest: "a".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
       return run;
     })());

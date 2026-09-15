@@ -1,0 +1,7 @@
+{
+  "id": "posix-generation-red",
+  "pattern": "POSIX",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ]
+}
