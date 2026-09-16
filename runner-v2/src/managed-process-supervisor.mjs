@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+// RUNNER_RAW_PROCESS_BOUNDARY: managed-process Windows Job bootstrap host; workload launch remains inside the owned supervisor lifecycle.
 import { timingSafeEqual } from "node:crypto";
 import {
   appendFileSync,
@@ -11,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 
 const PROTOCOL = "aiboard-managed-process/v1";
+const MAX_STOP_DEADLINE_MS = 60_000;
 const bootstrapProcessId = process.argv[2];
 const bootstrapStatusPath = process.argv[3];
 if (!bootstrapProcessId || !bootstrapStatusPath) {
@@ -314,7 +316,14 @@ function drainInteractiveOutput(stream, readable) {
   // conversational protocols whose small response must arrive before the next
   // request (or before stdin closes).
   const availableRead = Math.min(maximumRead, readable.readableLength);
-  if (availableRead < 1) return;
+  if (availableRead < 1) {
+    // In paused/readable mode, a backpressure window can drain to zero while
+    // libuv still has unread pipe bytes or EOF to surface. read(0) requests
+    // another underlying read without consuming data, so exact stream-end
+    // proof can arrive instead of leaving Job-empty cleanup latched forever.
+    readable.read(0);
+    return;
+  }
   const chunk = readable.read(availableRead);
   if (!chunk) return;
   retainInteractiveOutput(stream, chunk);
@@ -448,7 +457,7 @@ function startupFailed(error) {
 async function stopOwnedTree(signal, requestedDeadline) {
   if (status.status === "stopped") return;
   stopping = true;
-  const deadlineMs = Math.max(250, Math.min(30_000, requestedDeadline || 5_000));
+  const deadlineMs = Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, requestedDeadline || config.stopDeadlineMs || MAX_STOP_DEADLINE_MS));
   if (config.interactive) {
     // The interactive host dedicates its stdin to the child. Its exact process
     // exit closes the kill-on-close Job handle; the exit listener records proof.

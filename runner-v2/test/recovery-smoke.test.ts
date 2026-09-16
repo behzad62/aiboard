@@ -10,6 +10,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { runGit } from "./support/git-fixture.js";
+import { reconcileRunnerStartup, RunnerCleanupBlockedError } from "../src/runner-resource-cleanup.js";
 
 interface Readiness {
   protocolVersion: number;
@@ -26,6 +27,29 @@ const tsxPath = fileURLToPath(
   new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url)
 );
 
+
+test("startup recovery blocks readiness when an owned resource class cannot be reconciled", async () => {
+  let acceptedWork = false;
+  await assert.rejects(
+    (async () => {
+      await reconcileRunnerStartup([{
+        resource: "nativeBuildRuntime",
+        covers: ["processes", "backends", "isolation", "grants", "spills", "tempRoots"],
+        reconcile: async () => {
+          throw new Error("retained OCI lease is not proven empty");
+        },
+      }]);
+      acceptedWork = true;
+    })(),
+    (error: unknown) => {
+      assert.ok(error instanceof RunnerCleanupBlockedError);
+      assert.equal(error.code, "runner_startup_reconciliation_blocked");
+      assert.equal(error.blockers[0]?.resource, "nativeBuildRuntime");
+      return true;
+    },
+  );
+  assert.equal(acceptedWork, false);
+});
 test("CLI recovers a paused run and preserves event continuity after restart", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-runner-recovery-"));
   const projectPath = join(directory, "project");

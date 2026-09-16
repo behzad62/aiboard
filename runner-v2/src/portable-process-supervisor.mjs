@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+// RUNNER_RAW_PROCESS_BOUNDARY: portable lifecycle supervisor launches, inspects, and terminates owned child trees.
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

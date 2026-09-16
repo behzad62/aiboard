@@ -1,3 +1,4 @@
+# RUNNER_RAW_PROCESS_BOUNDARY: audited Win32 CreateProcess/Job Object host for managed and LSP workloads.
 $ErrorActionPreference = "Stop"
 
 Add-Type -TypeDefinition @'
@@ -268,7 +269,7 @@ public static class ManagedProcessJobHost
                 {
                     if (inputLine == null)
                     {
-                        TerminateAndProve(job, 5000);
+                        TerminateAndProve(job, DefaultStopDeadlineMs);
                         return 0;
                     }
                     int deadline = ParseDeadline(inputLine);
@@ -460,10 +461,12 @@ public static class ManagedProcessJobHost
         finally { Marshal.FreeHGlobal(pointer); }
     }
 
+    private const int DefaultStopDeadlineMs = 60000;
+
     private static void TerminateAndProve(IntPtr job, int deadlineMs)
     {
         if (!TerminateJobObject(job, 1)) ThrowWin32("TerminateJobObject");
-        DateTime deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(250, Math.Min(30000, deadlineMs)));
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(250, Math.Min(DefaultStopDeadlineMs, deadlineMs)));
         while (DateTime.UtcNow < deadline)
         {
             if (ActiveProcesses(job) == 0) return;
@@ -476,12 +479,12 @@ public static class ManagedProcessJobHost
     {
         const string marker = "\"deadlineMs\":";
         int start = line.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0) return 5000;
+        if (start < 0) return DefaultStopDeadlineMs;
         start += marker.Length;
         int end = start;
         while (end < line.Length && char.IsDigit(line[end])) end++;
         int value;
-        return int.TryParse(line.Substring(start, end - start), out value) ? value : 5000;
+        return int.TryParse(line.Substring(start, end - start), out value) ? value : DefaultStopDeadlineMs;
     }
 
     private static IntPtr BuildEnvironmentBlock(IDictionary<string, string> environment)

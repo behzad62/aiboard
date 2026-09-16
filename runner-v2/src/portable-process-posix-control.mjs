@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+// RUNNER_RAW_PROCESS_BOUNDARY: POSIX process/group identity inspection for owned-tree lifecycle enforcement.
 import { readFileSync } from "node:fs";
 
 const POSIX_INSPECTION_DEADLINE_MS = 15_000;

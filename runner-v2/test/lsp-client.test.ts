@@ -240,9 +240,11 @@ test("LSP client settles cancellation before a backpressured pipe and bounds the
     await rejectsBefore(backpressuredWrite, 2_000, isLspError("write_failed"));
     assert.deepEqual(settlements, ["abort", "timeout", "write"]);
     assert.equal(client.stats().state, "failed");
-    // The shared owner must join an issued backend write (the Job host retains
-    // its 5 s control effect) before certifying the six cleanup facts. The old
-    // private-process 1.5 s bound is not the shared 30 s lifecycle contract.
+    // The shared owner must join an issued backend write before certifying all
+    // six cleanup facts. Each Windows Job control attempt is bounded at 5 s so
+    // a stalled write cannot monopolize the lane, while the authorized cleanup
+    // owner still retains its separate 60 s outer budget. This 30 s behavioral
+    // bound proves the blocked write releases the lane well inside that budget.
     const cleanupStarted = Date.now();
     await completesBefore(client.close(), 30_000);
     t.diagnostic(`verified shared backpressure close: ${Date.now() - cleanupStarted} ms`);

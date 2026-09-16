@@ -10,6 +10,7 @@ import { resolveLanguageServerExecutable } from "./language-server-executable.js
 import { ManagedProcessError, type ManagedProcessSnapshot } from "./managed-process-contracts.js";
 import type { ManagedProcessIdentity, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
 import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "./session-authority.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { StreamingSessionRecord } from "./streaming-session-store.js";
 
 type Facade = Awaited<ReturnType<ExecutionHostRunBinding["openStreaming"]>>;
@@ -75,26 +76,30 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       try {
         entry.opening = (async () => {
           const cwd = await realpath(request.cwd);
-          const prepared = environments.prepare({ ambient: options.environment, explicitOverrides: request.environment });
-          const executable = await environments.withChildEnvironment(prepared.capability, environment =>
-            resolveLanguageServerExecutable(request.command, { commandSearchDirectory: cwd, environment }));
           const imageExecutable = !isAbsolute(request.command) && /^[A-Za-z0-9._-]+$/.test(request.command) ? request.command : undefined;
           if (options.permissionProfile !== "full" && !imageExecutable) {
             throw new ManagedProcessError("process_launch_failed", "Managed strict isolation cannot represent the host executable inside the configured image; launch is unavailable before process creation.");
           }
+          const prepared = environments.prepare({ ambient: options.environment, explicitOverrides: request.environment });
+          const executable = options.permissionProfile === "full"
+            ? await environments.withChildEnvironment(prepared.capability, environment =>
+                resolveLanguageServerExecutable(request.command, { commandSearchDirectory: cwd, environment }))
+            : undefined;
+          const launchExecutable = executable?.path ?? imageExecutable!;
+          const launchIdentity = executable ?? Object.freeze({ imageExecutable });
           if (signal.aborted) throw cancelled();
           const id = request.identity.processId;
           return await run.openStreaming({ sessionId: sessionId(id), launchId: launchId(id),
             grant: request.context.executionGrant!, binding: bindingFor(request.context, options.permissionProfile), signal,
-            failedLaunchCleanupTimeoutMs: Math.min(request.cleanupTimeoutMs, 30000), protocolStreams: [],
+            failedLaunchCleanupTimeoutMs: Math.min(request.cleanupTimeoutMs, AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS), protocolStreams: [],
             explicitEnvironment: request.environment,
             envelope: { access: [{ canonicalPath: cwd, mode: "write" }], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false },
             ...(imageExecutable ? { imageExecutable } : {}),
             intent: { invocationId: launchId(id), runId: run.runId, sessionId: request.identity.sessionId, kind: "command",
-              executable: executable.path, arguments: request.args, workingDirectory: cwd, requestedCapabilities: ["tree_termination", "verified_emptiness"] },
+              executable: launchExecutable, arguments: request.args, workingDirectory: cwd, requestedCapabilities: ["tree_termination", "verified_emptiness"] },
             // Arbitrary commands have no application handshake. The shared host
             // has already authenticated launch and channel ownership at this seam.
-            verifyHandshake: async () => createHash("sha256").update(JSON.stringify({ id, executable, args: request.args, cwd })).digest("hex"),
+            verifyHandshake: async () => createHash("sha256").update(JSON.stringify({ id, executable: launchIdentity, args: request.args, cwd })).digest("hex"),
             onTerminal: observation => { entry.terminal = observation; request.onTerminal(observation); },
           });
         })().finally(() => { entry.openingSettled = true; });
@@ -148,7 +153,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       authorizations.forEach((authorization, index) => run.sessionAuthority.assertOperationAuthorization(authorization, assertions[index]!));
       return Object.freeze(results);
     },
-    async stop(target, context, signal = "SIGTERM", timeoutMs = 30000) {
+    async stop(target, context, signal = "SIGTERM", timeoutMs = AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS) {
       if (!["SIGTERM", "SIGINT", "SIGKILL"].includes(signal)) throw refused("Unsupported managed stop signal.");
       const record = recordOf(target);
       if (context) {

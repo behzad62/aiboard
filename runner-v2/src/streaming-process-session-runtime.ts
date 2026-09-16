@@ -1,4 +1,5 @@
 import { readFinalizedEvidenceReference } from "./evidence-continuation.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { BoundedOutputObservation, BoundedOutputSpoolResult } from "./bounded-output-spool.js";
 import { assertSessionEnvelopeSubset } from "./session-authority.js";
 import { createStreamingRequestOperation } from "./streaming-request-operation.js";
@@ -1288,7 +1289,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     attachment: PrivateAttachment,
     disposition: "backend_unavailable" | "outcome_unknown",
   ) => {
-    const deadlineAt = clock().getTime() + 30_000;
+    const deadlineAt = clock().getTime() + AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
     return await runAdoptedCleanup(sessionId, deadlineAt, disposition, attachment);
   };
 
@@ -1301,7 +1302,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     writer.apply({ type: "begin_stopping", sessionId: current.sessionId, ownerId: current.ownerId, fencingToken: current.fencingToken, expectedRevision: current.revision, at: clock().toISOString() });
     const attachment = attachments.get(current.sessionId);
     if (attachment) await settleAdoptedAttachment(current.sessionId, attachment, "backend_unavailable");
-    else await runAdoptedCleanup(current.sessionId, clock().getTime() + 30000, "backend_unavailable");
+    else await runAdoptedCleanup(current.sessionId, clock().getTime() + AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, "backend_unavailable");
     return Object.freeze({ record: options.kernel.store.readBySession(current.sessionId), evidence: finalizedEvidence.get(current.sessionId) });
   };
   const finalizedForObservation = async (sessionId: string, assertCurrent: () => void) => {
@@ -1375,7 +1376,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     },
     async open(request: StreamingOpenRequest) {
       const failedCleanupMs = request.failedLaunchCleanupTimeoutMs ?? 1000;
-      if (!Number.isSafeInteger(failedCleanupMs) || failedCleanupMs < 1 || failedCleanupMs > 30000)
+      if (!Number.isSafeInteger(failedCleanupMs) || failedCleanupMs < 1 || failedCleanupMs > AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS)
         throw runnerSessionError("launch_failed", "Failed-launch cleanup lifecycle bound is invalid.");
       throwIfAborted(request.signal);
       const staged = options.sessions.stageLaunch({ sessionId: request.sessionId, launchId: request.launchId, grant: request.grant, binding: request.binding });

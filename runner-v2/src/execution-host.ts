@@ -46,9 +46,8 @@ import {
   type RunnerInternalProcessKernel,
 } from "./runner-internal-process-kernel.js";
 import { createSessionAuthority, type SessionAuthority } from "./session-authority.js";
-import {
-  type StreamingRuntimeOptions,
-} from "./streaming-process-session-runtime.js";
+import type { StreamingRuntimeOptions } from "./streaming-process-session-runtime.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import {
   openSqliteStreamingSessionStore,
   type HostLaunchRecord,
@@ -578,16 +577,16 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
             try { await input.managedProcesses.stopRun(input.runId); } catch (error) { failures.push(error); }
             try { await executionGrants.revokeAll("cleanup"); } catch (error) { failures.push(error); }
             try {
-              consumeStreamingRecovery(await streamingRuntime.reconcileStartup({ maxRecords: 1_024, timeoutMs: 30_000 }));
+              consumeStreamingRecovery(await streamingRuntime.reconcileStartup({ maxRecords: 1_024, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS }));
             } catch (error) { failures.push(error); }
             for (const sessionId of streamingKernel.store.listSessionIds()) {
               if (streamingKernel.store.readBySession(sessionId)?.state === "released") continue;
               try {
-                await streamingRuntime.cleanupOwnedSession({ sessionId, timeoutMs: 30_000 });
+                await streamingRuntime.cleanupOwnedSession({ sessionId, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS });
               } catch (error) { failures.push(error); }
             }
             try {
-              consumeStreamingRecovery(await streamingRuntime.reconcileStartup({ maxRecords: 1_024, timeoutMs: 30_000 }));
+              consumeStreamingRecovery(await streamingRuntime.reconcileStartup({ maxRecords: 1_024, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS }));
             } catch (error) { failures.push(error); }
             for (const sessionId of streamingKernel.store.listSessionIds()) {
               const record = streamingKernel.store.readBySession(sessionId);

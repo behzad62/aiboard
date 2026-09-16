@@ -32,6 +32,7 @@ import {
   type RunnerCapabilitiesConfig,
 } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { createRunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
 import { openSqliteStreamingSessionStore } from "../src/streaming-session-store.js";
 import { withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
@@ -686,6 +687,20 @@ test("MCP calls require approval outside Full Access", async () => {
   }
 });
 
+test("required strict MCP Docker fixture refuses unavailable Docker instead of silently skipping", () => {
+  const previousRequired = process.env.RUNNER_V2_REQUIRE_DOCKER;
+  const previousCli = process.env.RUNNER_V2_TEST_DOCKER_CLI;
+  try {
+    process.env.RUNNER_V2_REQUIRE_DOCKER = "1";
+    process.env.RUNNER_V2_TEST_DOCKER_CLI = join(tmpdir(), "missing-task12-docker-cli");
+    assert.throws(() => availableDockerNodeFixture(), /required strict MCP Docker OCI integration/i);
+  } finally {
+    if (previousRequired === undefined) delete process.env.RUNNER_V2_REQUIRE_DOCKER;
+    else process.env.RUNNER_V2_REQUIRE_DOCKER = previousRequired;
+    if (previousCli === undefined) delete process.env.RUNNER_V2_TEST_DOCKER_CLI;
+    else process.env.RUNNER_V2_TEST_DOCKER_CLI = previousCli;
+  }
+});
 test("strict public MCP uses the separately attested portable image command and refuses unsafe host identities", { timeout: 120_000 }, async (t) => {
   const docker = availableDockerNodeFixture();
   if (!docker) return t.skip("Docker with the local node:24-slim image is unavailable; no pull or weakening attempted.");
@@ -1035,9 +1050,11 @@ test("public MCP manager crash recovery cleans its exact launched server tree wi
   const ensureRecovery = async () => {
     if (recoveryRun) return recoveryRun;
     const recovery = await constructOwnedMcpFixture(stateDirectory, async (own) => {
+      const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
       const host = own("host", createExecutionHost({
         projectRoot: projectDirectory, stateDirectory,
         artifacts: new ArtifactStore(join(stateDirectory, "artifacts")),
+        ambientEnvironment,
         ...(process.platform === "win32" ? { processHostFacts: {
           portableDuplex: "verified" as const, windowsBatchArgv: "verified" as const,
           exactTreeBirth: "verified" as const, jobContainment: "unavailable" as const,
@@ -1350,10 +1367,12 @@ async function ownedManager(
   onStateDirectoryCreated?.(stateDirectory);
   return constructOwnedMcpFixture(stateDirectory, async (own) => {
   const artifacts = new ArtifactStore(join(stateDirectory, "artifacts"));
+  const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
   const host = own("host", createExecutionHost({
     projectRoot: projectDirectory,
     stateDirectory,
     artifacts,
+    ambientEnvironment,
     ...(process.platform === "win32" ? {
       processHostFacts: {
         portableDuplex: "verified" as const,
@@ -1367,6 +1386,7 @@ async function ownedManager(
     projectDirectory,
     stateDirectory,
     processKernel: host.internalProcesses,
+    ambientEnvironment,
   }));
   const attestation = await internal.attestConfiguredCapabilities({
     mcpServers: servers,
@@ -1430,10 +1450,12 @@ async function strictOwnedManager(
       allowNetwork: false,
     }],
   };
+  const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
   const host = own("host", createExecutionHost({
     projectRoot: projectDirectory,
     stateDirectory,
     artifacts,
+    ambientEnvironment,
     ...(process.platform === "win32" ? {
       processHostFacts: {
         portableDuplex: "verified" as const,
@@ -1447,6 +1469,7 @@ async function strictOwnedManager(
     projectDirectory,
     stateDirectory,
     processKernel: host.internalProcesses,
+    ambientEnvironment,
   }));
   const attestation = await internal.attestConfiguredCapabilities({
     mcpServers: [server],
@@ -1504,7 +1527,10 @@ function availableDockerNodeFixture(): string | undefined {
     execFileSync(executable, ["info", "--format", "{{.ServerVersion}}"], { stdio: "ignore" });
     execFileSync(executable, ["image", "inspect", "node:24-slim"], { stdio: "ignore" });
     return executable;
-  } catch {
+  } catch (error) {
+    if (process.env.RUNNER_V2_REQUIRE_DOCKER === "1") {
+      throw new Error("Required strict MCP Docker OCI integration is unavailable or node:24-slim is not prepared.", { cause: error });
+    }
     return undefined;
   }
 }

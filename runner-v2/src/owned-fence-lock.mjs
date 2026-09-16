@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+// RUNNER_RAW_PROCESS_BOUNDARY: platform process-identity probe for fencing; probes do not authorize workload launch.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";

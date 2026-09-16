@@ -3,10 +3,12 @@ import { join } from "node:path";
 
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../../src/native-build-factory.js";
 import type { ExecutionInvocationIntent } from "../../src/execution-safety-contracts.js";
 import { emptyRunnerCapabilitiesConfig } from "../../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../../src/runner-capability-contract.js";
 import { runnerRunStateSegment } from "../../src/run-state-identity.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "../../src/cleanup-timeouts.js";
 import type { StreamingRuntimeOptions } from "../../src/streaming-process-session-runtime.js";
 import type { SqliteStreamingSessionStoreOptions } from "../../src/streaming-session-store.js";
 import { recoverAndCloseRealStreamingOwner } from "./real-streaming-crash-lifecycle.js";
@@ -44,6 +46,7 @@ export async function createRealStreamingHarness(input: {
     projectRoot: input.projectDirectory,
     stateDirectory: input.stateDirectory,
     artifacts: new ArtifactStore(join(input.stateDirectory, "artifacts")),
+    ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
     ...(process.platform === "win32" ? {
       processHostFacts: {
         portableDuplex: "verified" as const,
@@ -113,7 +116,7 @@ export async function createRealStreamingHarness(input: {
     binding,
     async cleanupOutstandingForTest() {
       await recoverAndCloseRealStreamingOwner(
-        () => run.recover({ maxRecords: 1_024, timeoutMs: 30_000 }),
+        () => run.recover({ maxRecords: 1_024, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS }),
         () => host.close(),
       );
     },

@@ -6,6 +6,7 @@ import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding } from "../../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../../src/native-build-factory.js";
 import { createExecutionHostLspTransportFactory } from "../../src/execution-host-lsp-transport.js";
 import { LspClient, type LspClientOptions } from "../../src/lsp-client.js";
 import type { LspTransportFactory, LspOwnedTransport } from "../../src/lsp-transport.js";
@@ -17,7 +18,7 @@ let sequence = 0;
 /** Test-only composition of the real execution host, real grants and LSP adapter.
  * No private process launch, PID control or global production default is added. */
 export function createOwnedLspFixture(root: string, workspace: string,
-  ambientEnvironment: Readonly<Record<string, string | undefined>> = {}) {
+  ambientEnvironment: Readonly<Record<string, string | undefined>> = snapshotNativeBuildAmbientEnvironment()) {
   const state = root === workspace ? mkdtempSync(join(tmpdir(), "p683-external-state-")) : join(root, `lsp-shared-state-${++sequence}`); mkdirSync(state, { recursive: true });
   const runId = `lsp-fixture-${sequence}`;
   let host: ExecutionHost | undefined; let run: ExecutionHostRunBinding | undefined;

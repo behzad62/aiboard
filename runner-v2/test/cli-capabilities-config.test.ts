@@ -407,15 +407,13 @@ test("CLI records an unsupported persisted execution-safety version as a per-run
   }
 });
 
-test("CLI records a non-capability runtime recovery failure with its initialization stage", async () => {
+test("CLI records a non-capability runtime recovery failure and blocks readiness", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-cli-runtime-recovery-stage-"));
   const project = join(root, "project");
   const state = join(root, "state");
   const config = join(root, "runner-capabilities.json");
   const runId = "runtime_recovery_without_baseline";
   const token = "cli-runtime-recovery-stage-token";
-  let runner: TrackedCliChild | undefined;
-  let readinessSucceeded = false;
   mkdirSync(project);
   mkdirSync(state);
   writeCapabilitiesConfig(config, []);
@@ -425,9 +423,10 @@ test("CLI records a non-capability runtime recovery failure with its initializat
   }, state);
   saveActiveBuild(state, project, runId, contract);
   try {
-    runner = spawnCli(project, state, config, token);
-    await awaitCliReadiness(runner);
-    readinessSucceeded = true;
+    const outcome = await runCliToExit(project, state, config, token);
+    assert.equal(outcome.code, 1);
+    assert.equal(outcome.stdout, "");
+    assert.match(outcome.stderr, /startup reconciliation is blocked by nativeBuildRuntime/i);
 
     const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
     try {
@@ -438,14 +437,7 @@ test("CLI records a non-capability runtime recovery failure with its initializat
       recovered.close();
     }
   } finally {
-    try {
-      if (runner) {
-        const close = await terminateCliChild(runner);
-        if (readinessSucceeded) assertSuccessfulCliShutdown(close);
-      }
-    } finally {
-      await removeFixtureRoot(root);
-    }
+    await removeFixtureRoot(root);
   }
 });
 

@@ -2,6 +2,7 @@ import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import type { PermissionProfile } from "./contracts.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { ExecutionGrantBinding } from "./execution-grants.js";
 import type { ExecutionHostRunBinding } from "./execution-host.js";
 import type { ExecutionHostStreamingHandshakeChannel } from "./execution-host-streaming.js";
@@ -13,7 +14,7 @@ import { McpProtocolError } from "./mcp-rpc-peer.js";
 import type { StreamingRequestChannel } from "./streaming-request-operation.js";
 import type { StreamingSessionRecord } from "./streaming-session-store.js";
 
-const MCP_CLEANUP_TIMEOUT_MS = 30_000;
+const MCP_CLEANUP_TIMEOUT_MS = AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
 type StreamingFacade = Awaited<ReturnType<ExecutionHostRunBinding["openStreaming"]>>;
 
 /** Exact per-call host adapter. It never issues an execution grant or invents an

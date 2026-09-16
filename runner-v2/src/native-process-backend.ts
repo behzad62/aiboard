@@ -1,3 +1,4 @@
+// RUNNER_RAW_PROCESS_BOUNDARY: portable/native backend process creation and host probes are confined here.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";

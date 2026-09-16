@@ -1,0 +1,170 @@
+name: Runner V2 portable execution
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-contract:
+    name: Portable contract (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup maintained Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run portable contract and recovery gates
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/process-backend-contract.test.ts
+          runner-v2/test/portable-process-protocol.test.ts
+          runner-v2/test/portable-process-channel.test.ts
+          runner-v2/test/cli-capabilities-config.test.ts
+          runner-v2/test/native-build-manager.test.ts
+          runner-v2/test/recovery-smoke.test.ts
+          runner-v2/test/runner-resource-cleanup.test.ts
+          runner-v2/test/static-adapter-policy.test.ts
+
+  native-adapter:
+    name: Native adapter (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup maintained Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run current native adapter tests
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/windows-process-backend.test.ts
+          runner-v2/test/windows-job-process-channel.test.ts
+          runner-v2/test/posix-process-backend.test.ts
+          runner-v2/test/managed-shared-native.test.ts
+          runner-v2/test/mcp-lazy-native.test.ts
+
+  package-gate:
+    name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup maintained Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Prove package/archive and installed entrypoint parity
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/package-parity.test.ts
+          runner-v2/test/runner-entrypoints.test.ts
+          runner-v2/test/node-version.test.ts
+          runner-v2/test/portable-execution-workflow.test.ts
+      - name: Publish archives for cross-host checksum
+        run: node scripts/publish-downloads.mjs --output-dir runner-v2-ci-package
+      - name: Record cross-host package hashes
+        run: >-
+          node scripts/runner-v2-package-hashes.mjs write
+          --input-dir runner-v2-ci-package
+          --output runner-v2-package-hashes-${{ matrix.os }}.json
+          --label ${{ matrix.os }}
+      - name: Upload cross-host package hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-v2-package-hashes-${{ matrix.node-version }}-${{ matrix.os }}
+          path: runner-v2-package-hashes-${{ matrix.os }}.json
+          if-no-files-found: error
+
+  package-cross-host:
+    name: Cross-host package reproducibility (Node ${{ matrix.node-version }})
+    needs: package-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup maintained Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Download package hash reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runner-v2-package-hashes-${{ matrix.node-version }}-*
+          path: runner-v2-cross-host-hashes
+          merge-multiple: true
+      - name: Compare package hashes across maintained hosts
+        run: >-
+          node scripts/runner-v2-package-hashes.mjs compare
+          --input-dir runner-v2-cross-host-hashes
+          --expected-labels windows-latest,ubuntu-latest,macos-latest
+
+  docker-oci-integration:
+    name: Real Docker OCI integration (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify Docker daemon
+        run: docker info
+      - name: Prepare immutable fixture images
+        run: |
+          docker pull alpine:latest
+          docker pull node:24-slim
+      - name: Run attested Docker-provider integrations
+        env:
+          RUNNER_V2_REQUIRE_DOCKER: "1"
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/oci-execution-isolation-provider.test.ts
+          runner-v2/test/managed-strict-oci.test.ts
+          runner-v2/test/mcp-tools.test.ts
+
+

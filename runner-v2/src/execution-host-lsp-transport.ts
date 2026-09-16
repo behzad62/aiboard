@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExecutionHostRunBinding } from "./execution-host.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionGrantBinding } from "./execution-grants.js";
 import type { StreamingHandshakeControl } from "./streaming-process-session-runtime.js";
@@ -10,7 +11,7 @@ import { assertLanguageServerExecutableIdentity, resolveLanguageServerExecutable
 import { LspClientError } from "./lsp-client.js";
 import type { LspOwnedTransport, LspProtocolWriter, LspTransportFactory, LspTransportOpenRequest } from "./lsp-transport.js";
 
-const CLEANUP_MS = 30_000;
+const CLEANUP_MS = AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
 // Shared interactive channels bound one concrete input effect to 1 MiB. LSP
 // framing is a byte stream, so a larger logical JSON-RPC frame is serialized as
 // bounded writes while retaining one deadline for the whole protocol write.

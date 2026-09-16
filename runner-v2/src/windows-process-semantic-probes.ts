@@ -1,3 +1,4 @@
+// RUNNER_RAW_PROCESS_BOUNDARY: Windows process semantic certification probes require direct OS command execution.
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";

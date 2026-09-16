@@ -12,6 +12,7 @@ import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import type { ManagedProcessService } from "../src/managed-process.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 const providerId = "managed-strict-oci";
@@ -23,6 +24,7 @@ test("strict managed execution refuses host-only identity before backend create 
   const project = join(root, "project"), state = join(root, "state"); await mkdir(project); await mkdir(state);
   const config: RunnerCapabilitiesConfig = { extensions: [], languageServers: [], isolationProviders: [{ id: providerId, type: "oci", cliPath: docker, image: "node:24-slim", allowNetwork: false }] };
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")),
+    ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
     ...(process.platform === "win32" ? { processHostFacts: { portableDuplex: "verified" as const, windowsBatchArgv: "verified" as const, exactTreeBirth: "verified" as const, jobContainment: "unavailable" as const } } : {}) });
   let run: ExecutionHostRunBinding | undefined; let failed = false; let primary: unknown;
   try {
@@ -69,7 +71,12 @@ function availableDocker(): string | undefined {
     execFileSync(docker, ["info", "--format", "{{.ServerVersion}}"], { stdio: "ignore" });
     execFileSync(docker, ["image", "inspect", "node:24-slim"], { stdio: "ignore" });
     return docker;
-  } catch { return undefined; }
+  } catch (error) {
+    if (process.env.RUNNER_V2_REQUIRE_DOCKER === "1") {
+      throw new Error("Required strict managed Docker OCI integration is unavailable or node:24-slim is not prepared.", { cause: error });
+    }
+    return undefined;
+  }
 }
 function ownedContainers(docker: string): string {
   return execFileSync(docker, ["ps", "-aq", "--filter", `label=ai-board.runner-v2.provider=${providerId}`], { encoding: "utf8" }).trim();

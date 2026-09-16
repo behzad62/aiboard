@@ -5,6 +5,7 @@ import type { McpDiscoveryResult } from "./runner-internal-execution-context.js"
 import { requireGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import { statSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -301,6 +302,15 @@ export interface NativeBuildFactoryOptions {
   ) => AgentModel;
 }
 
+export const NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE = Object.freeze([
+  "processes",
+  "backends",
+  "isolation",
+  "grants",
+  "spills",
+  "tempRoots",
+] as const);
+
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly artifactReachability: ArtifactReachabilityGuard;
@@ -396,7 +406,7 @@ export class NativeBuildFactory {
       );
       const hostRecovery = await executionHostBinding.recover({
         maxRecords: 1_024,
-        timeoutMs: 30_000,
+        timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS,
       });
       assertIsolationRecoveryClear(hostRecovery.isolation);
       await cleanupRecoveredMcpTransports(executionHostBinding);

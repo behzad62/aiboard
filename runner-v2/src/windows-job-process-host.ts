@@ -1,5 +1,7 @@
+// RUNNER_RAW_PROCESS_BOUNDARY: Windows Job containment host and helper probes require direct OS process APIs.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { dirname, join, resolve } from "node:path";
@@ -10,7 +12,8 @@ import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
 
 const PROTOCOL = "aiboard-managed-process/v1";
-const DEFAULT_DEADLINE_MS = 5_000;
+const DEFAULT_START_DEADLINE_MS = 5_000;
+const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
 const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 2_000;
 const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
 
@@ -59,7 +62,7 @@ export interface WindowsJobChannelState {
 export interface WindowsJobProcessHostOptions {
   readonly stateDirectory: string; readonly platform?: NodeJS.Platform;
   readonly idFactory?: () => string; readonly clock?: () => string;
-  readonly maxPollBytes?: number; readonly startDeadlineMs?: number; readonly stopDeadlineMs?: number;
+  readonly maxPollBytes?: number; readonly startDeadlineMs?: number; readonly controlDeadlineMs?: number; readonly stopDeadlineMs?: number;
   readonly maxRetainedOutputChunks?: number; readonly maxRetainedOutputBytes?: number;
   readonly maxRetainedOutputChunkBytes?: number;
   readonly maxInputBytes?: number;
@@ -102,6 +105,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly clock: () => string;
   private readonly maxPollBytes: number;
   private readonly startDeadlineMs: number;
+  private readonly controlDeadlineMs: number;
   private readonly stopDeadlineMs: number;
   private readonly maxRetainedOutputChunks: number;
   private readonly maxRetainedOutputBytes: number;
@@ -120,8 +124,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
-    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_DEADLINE_MS;
-    this.stopDeadlineMs = options.stopDeadlineMs ?? DEFAULT_DEADLINE_MS;
+    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_DEADLINE_MS;
+    this.controlDeadlineMs = options.controlDeadlineMs ?? DEFAULT_CONTROL_DEADLINE_MS;
+    this.stopDeadlineMs = options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
     this.maxRetainedOutputChunks = options.maxRetainedOutputChunks ?? 16;
     this.maxRetainedOutputBytes = options.maxRetainedOutputBytes ?? 256 * 1024;
     this.maxRetainedOutputChunkBytes = options.maxRetainedOutputChunkBytes ?? 16 * 1024;
@@ -359,7 +364,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       await this.authenticatedStatus(current);
       if (!current.interactive || current.inputClosed) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input is unavailable.");
       if (sequence !== (current.nextInputSequence ?? 1)) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input sequence is stale.");
-      const result = await supervisorRequest<{ acknowledged: true; sequence: number }>(current.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64"), fence }, this.stopDeadlineMs + 250);
+      const result = await supervisorRequest<{ acknowledged: true; sequence: number }>(current.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64"), fence }, this.controlDeadlineMs + 250);
       if (result.acknowledged !== true || result.sequence !== sequence) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
       current.nextInputSequence = sequence + 1; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current); return result;
     });
@@ -372,7 +377,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.assertActive(current);
       await this.authenticatedStatus(current);
       if (current.inputClosed) return;
-      await supervisorRequest<{ acknowledged: true }>(current.supervisor, "/close-input", "POST", { fence }, this.stopDeadlineMs + 250);
+      await supervisorRequest<{ acknowledged: true }>(current.supervisor, "/close-input", "POST", { fence }, this.controlDeadlineMs + 250);
       current.inputClosed = true; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current);
     });
   }
@@ -389,7 +394,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.readRetainedOutputFrame(current, stream, frame);
         if (endOffset !== frame.endOffset) throw new WindowsJobHostError("process_control_unavailable", "Windows Job output acknowledgement must match the exact retained frame.");
       }
-      const acknowledged = await supervisorRequest<{ acknowledged: true; stream: "stdout" | "stderr"; endOffset: number; status: SupervisorStatus }>(current.supervisor, "/ack-output", "POST", { stream, endOffset, fence }, this.stopDeadlineMs + 250);
+      const acknowledged = await supervisorRequest<{ acknowledged: true; stream: "stdout" | "stderr"; endOffset: number; status: SupervisorStatus }>(current.supervisor, "/ack-output", "POST", { stream, endOffset, fence }, this.controlDeadlineMs + 250);
       if (acknowledged.acknowledged !== true || acknowledged.stream !== stream || acknowledged.endOffset !== endOffset)
         throw new WindowsJobHostError("process_control_unavailable", "Windows Job supervisor output acknowledgement is invalid.");
       this.assertStatusIdentity(current, acknowledged.status);
@@ -428,7 +433,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.assertStatusIdentity(record, status);
     if (!status.ownershipReleased && record.supervisor.port > 0) {
       try {
-        status = await supervisorRequest<SupervisorStatus>(record.supervisor, "/status", "GET", undefined, this.stopDeadlineMs + 250);
+        status = await supervisorRequest<SupervisorStatus>(record.supervisor, "/status", "GET", undefined, this.controlDeadlineMs + 250);
       } catch (error) {
         const durable = readSupervisorStatus(record.supervisor.statusPath);
         if (!durable || durable.status !== "stopped" || !durable.ownershipReleased) throw error;
@@ -644,7 +649,7 @@ async function waitForSupervisor(supervisor: SupervisorRecord, processId: string
   }
   throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not become ready before the deadline.");
 }
-async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_DEADLINE_MS + 250): Promise<T> {
+async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_START_DEADLINE_MS + 250): Promise<T> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<T>((resolvePromise, reject) => {
     let settled = false;

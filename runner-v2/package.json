@@ -6,7 +6,7 @@
     "node": ">=22.13.0 <23 || >=24.0.0 <25"
   },
   "bin": {
-    "aiboard-runner-v2": "./src/cli.ts"
+    "aiboard-runner-v2": "./bin/aiboard-runner-v2.mjs"
   },
   "scripts": {
     "dev": "tsx src/cli.ts --",

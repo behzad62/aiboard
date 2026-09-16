@@ -12,6 +12,7 @@ import { createRunnerInternalExecutionContext } from "./runner-internal-executio
 import { captureRunGitBaseline } from "./git-bootstrap.js";
 import {
   classifyNativeBuildRecoveryError,
+  NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE,
   NativeBuildFactory,
   preflightRecoveredRunnerCapabilities,
   snapshotNativeBuildAmbientEnvironment,
@@ -36,6 +37,7 @@ import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
 import type { RunState } from "./contracts.js";
 import {
   closeRunnerResources,
+  reconcileRunnerStartup,
   startupFailureWithCleanup,
   type RunnerResources,
 } from "./runner-resource-cleanup.js";
@@ -158,7 +160,6 @@ async function main(): Promise<void> {
       },
     });
     resources.buildFactory = buildFactory;
-    const blockingRecoveryFailures: unknown[] = [];
     const builds = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(
         join(options.stateDirectory, "build-specs.sqlite")
@@ -180,13 +181,6 @@ async function main(): Promise<void> {
       },
       onRecoverySpecError: (runId, error) => {
         recordRuntimeRecoveryFailure(supervisor, runId, error);
-        const classified = classifyNativeBuildRecoveryError(error);
-        if (
-          classified?.kind === "capability" &&
-          classified.code === "capability_preflight_failed"
-        ) {
-          blockingRecoveryFailures.push(error);
-        }
       },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
@@ -202,6 +196,18 @@ async function main(): Promise<void> {
       prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
     });
     resources.builds = builds;
+    await reconcileRunnerStartup([{
+      resource: "nativeBuildRuntime",
+      covers: NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE,
+      reconcile: async () => {
+        const report = await builds.recover();
+        if (report.failures.length === 0) return;
+        throw new AggregateError(
+          report.failures.map((failure) => failure.error),
+          `Native Build startup recovery left ${report.failures.length} unresolved owned resource failure(s): ${report.failures.map((failure) => `${failure.runId}:${failure.stage}`).join(", ")}.`,
+        );
+      },
+    }]);
     const server = new ControlServer({
       supervisor,
       builds,
@@ -238,14 +244,6 @@ async function main(): Promise<void> {
       },
     });
     resources.server = server;
-    await builds.recover();
-    if (blockingRecoveryFailures.length === 1) throw blockingRecoveryFailures[0];
-    if (blockingRecoveryFailures.length > 1) {
-      throw new AggregateError(
-        blockingRecoveryFailures,
-        "Runner startup rejected one or more active Build capability startups.",
-      );
-    }
     const address = await server.start(options.port);
 
     const readiness = {

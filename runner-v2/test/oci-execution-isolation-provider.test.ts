@@ -1613,7 +1613,10 @@ function availableDockerFixture(): string | undefined {
     execFileSync(executable, ["info", "--format", "{{.ServerVersion}}"], { stdio: "ignore" });
     execFileSync(executable, ["image", "inspect", "alpine:latest"], { stdio: "ignore" });
     return executable;
-  } catch {
+  } catch (error) {
+    if (process.env.RUNNER_V2_REQUIRE_DOCKER === "1") {
+      throw new Error("Required real Docker OCI integration is unavailable or alpine:latest is not prepared.", { cause: error });
+    }
     return undefined;
   }
 }

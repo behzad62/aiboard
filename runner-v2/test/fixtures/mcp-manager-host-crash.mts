@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../../src/native-build-factory.js";
 import { createExecutionHostMcpTransportFactory } from "../../src/execution-host-mcp-transport.js";
 import { McpManager } from "../../src/mcp-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../../src/runner-capabilities-config.js";
@@ -25,10 +26,12 @@ const servers = [{
     .map(quoteConfiguredArgument)
     .join(" "),
 }];
+const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
 const host = createExecutionHost({
   projectRoot: projectDirectory,
   stateDirectory,
   artifacts: new ArtifactStore(join(stateDirectory, "artifacts")),
+  ambientEnvironment,
   ...(process.platform === "win32" ? {
     processHostFacts: {
       portableDuplex: "verified" as const,
@@ -42,6 +45,7 @@ const internal = createRunnerInternalExecutionContext({
   projectDirectory,
   stateDirectory,
   processKernel: host.internalProcesses,
+  ambientEnvironment,
 });
 const attestation = await internal.attestConfiguredCapabilities({
   mcpServers: servers,

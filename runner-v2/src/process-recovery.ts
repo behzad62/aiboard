@@ -1,5 +1,6 @@
 /** On-demand proposal controller. Ordinary process lifecycle never imports this module. */
 import { randomUUID } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { AgentModel } from "./agent-contracts.js";
 import {
   reserveExecutionGrantForProcessRecovery,
@@ -262,7 +263,7 @@ export function createStreamingProcessRecoveryRuntime(options: {
             throw new ProcessRecoveryError("recovery_expired");
         };
         assertAuthority();
-        const timeoutMs = Math.min(30_000, Date.parse(request.expiresAt) - clock().getTime(),
+        const timeoutMs = Math.min(AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, Date.parse(request.expiresAt) - clock().getTime(),
           Date.parse(reservation.expiresAt) - clock().getTime());
         if (timeoutMs < 1) throw new ProcessRecoveryError("recovery_expired");
         await options.runtime.cleanupOwnedSession({
@@ -518,8 +519,8 @@ export class ProcessRecoveryController {
   }
   private now(): Date { return this.options.clock?.() ?? new Date(); }
   private timeoutMs(): number {
-    const value = this.options.timeoutMs ?? 30_000;
-    if (!Number.isSafeInteger(value) || value < 1 || value > 30_000) throw new ProcessRecoveryError("invalid_recovery_proposal");
+    const value = this.options.timeoutMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
+    if (!Number.isSafeInteger(value) || value < 1 || value > AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS) throw new ProcessRecoveryError("invalid_recovery_proposal");
     return value;
   }
   private find(proposalId: string): RecoveryAuditRecord | undefined {

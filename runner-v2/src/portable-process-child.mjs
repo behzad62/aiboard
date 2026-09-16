@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+// RUNNER_RAW_PROCESS_BOUNDARY: portable child bootstrap launches only the already-authorized workload behind durable ownership.
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import {

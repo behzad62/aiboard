@@ -50,6 +50,22 @@ export interface NativeBuildRuntimeHandle {
 /** Authoritative lifecycle states that may be projected by a terminal reader. */
 export type HistoricalTerminalState = "completed" | "failed" | "stopped";
 
+export type NativeBuildRecoveryFailureStage =
+  | "spec_validation"
+  | "runtime_construction"
+  | "quiescence"
+  | "settled_cleanup";
+
+export interface NativeBuildRecoveryFailure {
+  readonly runId: string;
+  readonly stage: NativeBuildRecoveryFailureStage;
+  readonly error: unknown;
+}
+
+export interface NativeBuildRecoveryReport {
+  readonly failures: readonly NativeBuildRecoveryFailure[];
+}
+
 export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
@@ -111,19 +127,34 @@ export class NativeBuildManager implements BuildControlPlane {
 
   constructor(private readonly options: NativeBuildManagerOptions) {}
 
-  async recover(): Promise<void> {
+  async recover(): Promise<NativeBuildRecoveryReport> {
     const active: string[] = [];
     const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
     const quiesceFailed = new Set<string>();
+    const failures: NativeBuildRecoveryFailure[] = [];
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
+        let shouldRecover = true;
         try {
-          if (this.options.shouldRecoverSpec && !await this.options.shouldRecoverSpec(spec)) {
+          shouldRecover = !this.options.shouldRecoverSpec || await this.options.shouldRecoverSpec(spec);
+        } catch (error) {
+          failures.push({ runId: spec.runId, stage: "spec_validation", error });
+          this.options.onRecoverySpecError?.(spec.runId, error);
+          this.options.onPumpError?.(spec.runId, error);
+          continue;
+        }
+        if (!shouldRecover) {
+          try {
             await this.ensureHistoricalRuntime(spec);
-            continue;
+          } catch (error) {
+            this.options.onPumpError?.(spec.runId, error);
           }
+          continue;
+        }
+        try {
           await this.options.validateRecoveredSpec?.(spec);
         } catch (error) {
+          failures.push({ runId: spec.runId, stage: "spec_validation", error });
           this.options.onRecoverySpecError?.(spec.runId, error);
           this.options.onPumpError?.(spec.runId, error);
           continue;
@@ -132,6 +163,7 @@ export class NativeBuildManager implements BuildControlPlane {
         try {
           handle = await this.ensureRuntime(spec);
         } catch (error) {
+          failures.push({ runId: spec.runId, stage: "runtime_construction", error });
           this.options.onRecoverySpecError?.(spec.runId, error);
           this.options.onPumpError?.(spec.runId, error);
           continue;
@@ -178,6 +210,7 @@ export class NativeBuildManager implements BuildControlPlane {
           }
         } catch (error) {
           quiesceFailed.add(spec.runId);
+          failures.push({ runId: spec.runId, stage: "quiescence", error });
           this.options.onPumpError?.(spec.runId, error);
         }
         const status = handle.runtime.projection().status;
@@ -198,7 +231,12 @@ export class NativeBuildManager implements BuildControlPlane {
         }
       }
       for (const [runId, handle] of settled) {
-        await this.tryCleanupSettledRun(runId, handle);
+        try {
+          await this.cleanupSettledRun(runId, handle);
+        } catch (error) {
+          failures.push({ runId, stage: "settled_cleanup", error });
+          this.options.onPumpError?.(runId, error);
+        }
       }
     };
     if (this.options.runArtifactCompaction) {
@@ -206,16 +244,20 @@ export class NativeBuildManager implements BuildControlPlane {
     } else {
       await compactAndCleanup();
     }
-    for (const runId of active) {
-      if (this.require(runId).runtime.projection().status === "completed") {
-        this.options.onPumpResult?.(runId, {
-          status: "completed",
-          action: "recovered_settled_build",
-        });
-      } else {
-        this.activate(runId);
+    // Readiness is global: no recovered run may resume effects until every blocking startup owner has reconciled.
+    if (failures.length === 0) {
+      for (const runId of active) {
+        if (this.require(runId).runtime.projection().status === "completed") {
+          this.options.onPumpResult?.(runId, {
+            status: "completed",
+            action: "recovered_settled_build",
+          });
+        } else {
+          this.activate(runId);
+        }
       }
     }
+    return { failures: Object.freeze([...failures]) };
   }
 
   async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {

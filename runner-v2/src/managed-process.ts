@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import { lstatSync, mkdirSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
@@ -49,7 +50,7 @@ export class ManagedProcessService {
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = bound(options.maxPollBytes ?? MAX_MANAGED_OUTPUT_BYTES, 1, MAX_MANAGED_OUTPUT_BYTES);
     this.startDeadlineMs = bound(options.startDeadlineMs ?? 30_000, 1, 120_000);
-    this.stopDeadlineMs = bound(options.stopDeadlineMs ?? 30_000, 1, 120_000);
+    this.stopDeadlineMs = bound(options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, 1, 120_000);
     mkdirSync(this.stateDirectory, { recursive: true, mode: 0o700 });
     const directory = lstatSync(this.stateDirectory);
     if (!directory.isDirectory() || directory.isSymbolicLink()) throw new ManagedProcessError("process_record_invalid", "Managed state directory identity is invalid.");

@@ -3595,3 +3595,50 @@ async function checkpointTwice(
   }, "2026-07-14T00:00:02.000Z");
   return oldHash;
 }
+
+test("terminal historical reader failure is diagnostic and does not block active-resource startup reconciliation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-historical-report-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  specs.save(spec);
+  const recoveryErrors: unknown[] = [];
+  const pumpErrors: Array<{ runId: string; error: unknown }> = [];
+  const manager = new NativeBuildManager({
+    specs,
+    shouldRecoverSpec: () => false,
+    terminalStateForHistoricalSpec: () => "completed",
+    createRuntime: async () => { throw new Error("terminal history must not construct a live runtime"); },
+    createHistoricalRuntime: async () => { throw new Error("historical reader unavailable"); },
+    onRecoverySpecError: (_runId, error) => recoveryErrors.push(error),
+    onPumpError: (runId, error) => pumpErrors.push({ runId, error }),
+  });
+  try {
+    const report = await manager.recover();
+    assert.deepEqual(report.failures, [], "terminal read-only projection failure is not unresolved active ownership");
+    assert.deepEqual(recoveryErrors, [], "terminal reader failure must not mutate active recovery state");
+    assert.equal(pumpErrors.length, 1);
+    assert.equal(pumpErrors[0]?.runId, spec.runId);
+    assert.match(String(pumpErrors[0]?.error), /historical reader unavailable/i);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test("startup recovery returns typed failure details instead of silently accepting unresolved active resources", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-startup-report-"));
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  specs.save(spec);
+  const manager = new NativeBuildManager({
+    specs,
+    createRuntime: async () => { throw new Error("owned backend recovery remained unresolved"); },
+  });
+  try {
+    const report = await manager.recover();
+    assert.deepEqual(report.failures.map((failure) => ({ runId: failure.runId, stage: failure.stage })), [
+      { runId: "run_1", stage: "runtime_construction" },
+    ]);
+    assert.match(String(report.failures[0]?.error), /owned backend recovery remained unresolved/i);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

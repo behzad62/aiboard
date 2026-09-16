@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost, type ExecutionHostRunBinding } from "../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { createManagedProcessTools } from "../src/managed-process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -19,7 +20,7 @@ async function withHost(t: TestContext, body: (f: { project: string; quit: strin
   const project = join(root, "project"), state = join(root, "state"), script = join(project, "server.mjs"), quit = join(project, "quit");
   await mkdir(project); await mkdir(state); await writeFile(script, program);
   const artifacts = new ArtifactStore(join(state, "artifacts"));
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts }); let run: ExecutionHostRunBinding | undefined, failed = false, primary: unknown;
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() }); let run: ExecutionHostRunBinding | undefined, failed = false, primary: unknown;
   try {
     run = await host.bindRun({ runId: "managed-native", permissionProfile: "full", capabilityContract: { digest: "d".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
     const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, executionGrants: run.executionGrants, artifacts });

@@ -1,3 +1,4 @@
+// RUNNER_RAW_PROCESS_BOUNDARY: configured OCI runtime invocation is confined to this attested isolation provider.
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {

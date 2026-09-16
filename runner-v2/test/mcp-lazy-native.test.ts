@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { createRunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
 import { createExecutionHostMcpTransportFactory } from "../src/execution-host-mcp-transport.js";
 import { McpManager, createMcpTools } from "../src/mcp-tools.js";
@@ -18,8 +19,9 @@ test("MCP real host stays lazy then reuses only exact fresh-grant agent sessions
   const root = await mkdtemp(join(tmpdir(), "p682-native-")); t.diagnostic(`exact native MCP fixture acquired: ${root}`);
   const project = join(root, "project"); const state = join(root, "state"); await mkdir(project); await mkdir(state);
   const artifacts = new ArtifactStore(join(state, "artifacts"));
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts });
-  const internal = createRunnerInternalExecutionContext({ projectDirectory: project, stateDirectory: state, processKernel: host.internalProcesses });
+  const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment });
+  const internal = createRunnerInternalExecutionContext({ projectDirectory: project, stateDirectory: state, processKernel: host.internalProcesses, ambientEnvironment });
   let manager: McpManager | undefined; let failed = false; let primary: unknown;
   try {
     const config = emptyRunnerCapabilitiesConfig(); const runId = "mcp-lazy-real";

@@ -1,6 +1,7 @@
 import { authorizeSessionLeaseOwnership } from "./session-authority.js";
 import { transferExecutionIsolationLeaseToSession } from "./execution-isolation-provider.js";
 import { createHash } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 
 import type { ChildEnvironmentFactory } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -285,7 +286,7 @@ export function createExecutionHostStreamingGraph(
               transferExecutionIsolationLeaseToSession(options.isolation, selection,
                 authorizeSessionLeaseOwnership(options.sessions, facade.sessionId));
             } catch (primary) {
-              try { await runtime.cleanupOwnedSession({ sessionId: facade.sessionId, timeoutMs: 30_000 }); }
+              try { await runtime.cleanupOwnedSession({ sessionId: facade.sessionId, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS }); }
               catch (cleanup) { throw new AggregateError([primary, cleanup], "MCP adopted isolation transfer could not certify cleanup."); }
               throw primary;
             }
