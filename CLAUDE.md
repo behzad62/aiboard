@@ -47,6 +47,10 @@ No app runtime env vars are needed: the app is fully client-side and provider AP
 
 Platform: development happens on Windows / PowerShell. Gotcha: running `npm run build` while the dev server is up corrupts the dev server's `.next` (it starts returning 500s) — restart the dev server after a production build.
 
+## Runner V2 Task 12 mandate
+
+For any Runner V2 Task 12 / P6 acceptance work, **read `docs/runner-v2/task-12-bounded-gates.md` first and follow it as the authoritative execution plan**. Resume from `docs/runner-v2/task-12-status.md` and update that file as gates advance. Do not replace the bounded gates with generic CI repair, weaken fail-closed process ownership/fencing semantics, skip affected portable coverage, or inflate timeouts merely to make CI green. Complete gates in order with targeted evidence and independent review; reserve the full integrated matrix for Gate G.
+
 ## Architecture
 
 A **fully client-side** Next.js 15 app (App Router, React 19, TS strict, static export — no backend, no API routes). Several AI models discuss a topic across rounds and a judge model synthesizes the final answer; Build mode turns the judge into an Architect that plans tasks for worker models. Everything — storage, the engines, provider calls — runs in the browser tab. Import alias `@/*` → repo root.
