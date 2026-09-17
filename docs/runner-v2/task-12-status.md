@@ -4,7 +4,7 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
-- Gate 0 baseline: IN_PROGRESS
+- Gate 0 baseline: PASS
 - Gate A fencing: NOT_STARTED
 - Gate B POSIX: NOT_STARTED
 - Gate C Windows: NOT_STARTED
@@ -15,31 +15,63 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 ## Current gate
 
-T12-0 — Controlled repair baseline.
+T12-0 — Controlled repair baseline is complete. Next gate: T12-A — Exact ownership, authorization, and fencing.
 
-## Current commit
+## Clean repair workspace
 
-Populate/refresh from live repository before implementation; the documentation insertion began from short HEAD `bf57a2de`.
+- Worktree: `D:\repos\ai-discussion-board\.worktrees\runner-v2-task12-bounded`
+- Branch: `codex/runner-v2-task12-bounded`
+- Canonical Task-12 PR head used as repair base: `cb5320b60ffa6130950db49c59263b4b4501977b`
+- Plan/docs replay commit: `3bcb40b0`
+- Extracted POSIX safety commit: `7317fa49`
+- Extracted capabilities-config confinement commit: `99b4cfb2`
 
-## Failing invariant
+## Baseline provenance
 
-Baseline cleanliness/history and extraction of legitimate Task-12-only fixes must be verified before Gate A begins.
+The previous local branch remains available for forensic reference, but its checkpoint history is deliberately excluded from this repair branch:
+
+- `9878a12b9ed1cffe317145a9fa9d465370a03df1` — 1,716 files / ~12.6M inserted lines; contaminated checkpoint.
+- `bf57a2de71fe5eea8b88fe53764900264c764603` — mixed 10-file Runner runtime checkpoint layered on `9878a12b`.
+
+Neither checkpoint is in `codex/runner-v2-task12-bounded` ancestry.
+
+Legitimate reviewed fixes extracted from `9878a12b`:
+- POSIX membership parser fails closed for PID 0 / invalid non-positive rows except positive PID + PGID 0 kernel-thread rows.
+- POSIX post-anchor force control re-attests recorded descendant birth witnesses before group signaling.
+- Capabilities config canonical confinement rejects parent-alias escape into the project while preserving host-native aliases.
+
+## Quarantined local-only patches
+
+Do not copy these into the repair branch without the owning gate's review:
+- `9878a12b` managed-stop/session-runtime attempt in `streaming-process-session-runtime.ts` and its test: Gate A must redesign exact fence continuity; the audit found the stale-owner TOCTOU still unresolved.
+- `bf57a2de` Windows/portable/MCP coordination patch: Gate C must independently review it before inclusion.
+- Benchmark/calibration/generated artifacts contained in `9878a12b`: excluded from Task-12 repair history.
 
 ## Targeted tests/evidence
 
-No implementation test is accepted merely by this status file. Record exact commands/results as each gate proceeds.
+RED before extraction:
+- `npx tsx --test --test-concurrency=1 runner-v2/test/posix-process-backend.test.ts runner-v2/test/runner-capabilities-config.test.ts`
+- Result: 44 pass, 7 fail, 1 skip. Failures were the intended stale-PGID/parser/config regressions.
+
+GREEN after extraction:
+- Same command.
+- Result: 55 pass, 0 fail, 1 skip; POSIX native fixture skipped on Windows by design.
+
+Baseline hygiene evidence:
+- clean repair branch forked directly from `cb5320b6`;
+- no `9878a12b` or `bf57a2de` in repair ancestry;
+- no competing process was found using the new repair worktree;
+- dependency reuse is an ignored local `node_modules` junction only, not repository content.
+
 ## Reviewer status
 
-T12-0 not yet independently accepted under this new bounded-gate plan.
+T12-0 baseline evidence has been controller-verified. It is a repository-hygiene prerequisite, not a functional acceptance gate. Gates A-G still require their documented independent review before acceptance.
 
 ## Known later-gate issues
 
-Seed from the independent audit and revalidate against live code before acting:
-- Gate A: managed-stop lease-renewal fencing TOCTOU risk.
-- Gate B: stale-PGID destructive-control and parser fail-closed requirements.
-- Gate C: Windows coordination/cleanup ownership failures.
-- Gate D: macOS host-native canonical alias versus arbitrary symlink handling.
-- Gate E: supervisor/output/release settlement and real Docker lifecycle.
-- Gate F: certified preset timeout requires causal classification, not timeout inflation.
-
-When evidence proves any item already fixed, record the validating commit/tests here and mark only the corresponding gate state; do not skip its independent review.
+- Gate A: managed-stop lease-renewal fencing TOCTOU remains unresolved and is next.
+- Gate B: extracted POSIX safety fix is present as `7317fa49`, but Gate B still needs its full invariant review and POSIX-host evidence.
+- Gate C: `bf57a2de` coordination patch remains quarantined pending independent Windows review.
+- Gate D: extracted config confinement fix is present as `99b4cfb2`; broader macOS `/var -> /private/var` capability-contract handling remains unresolved.
+- Gate E: supervisor/output/release settlement and real Docker lifecycle remain open.
+- Gate F: certified preset timeout still requires causal classification, not timeout inflation.
