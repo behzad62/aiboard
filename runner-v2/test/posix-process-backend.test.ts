@@ -624,6 +624,61 @@ test("C4 POSIX rejects malformed nonempty ps identity and membership rows", asyn
     [9002, 9003],
     "kernel threads with pgid 0 must not void an otherwise exact membership snapshot",
   );
+  assert.equal(control.parsePosixGroupMembers("0 9002\n9002 9002\n", 9002), undefined,
+    "pid 0 with a positive pgid is not a kernel thread and must fail closed");
+  assert.equal(control.parsePosixGroupMembers("9003 -1\n9002 9002\n", 9002), undefined,
+    "a negative pgid row must fail closed");
+  assert.equal(control.parsePosixGroupMembers("9002 12.5\n", 9002), undefined,
+    "a non-integer numeric membership row must fail closed");
+  assert.equal(control.parsePosixGroupMembers("abc 9002\n9002 9002\n", 9002), undefined,
+    "a non-numeric membership row must fail closed");
+});
+
+test("C4 POSIX descendant reattestation refuses a recycled PGID without a recorded birth witness", async () => {
+  const control = await import("../src/portable-process-posix-control.mjs");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const recorded = new Map([[9003, "original-descendant-birth"]]);
+  assert.deepEqual(
+    control.reattestOwnedPosixDescendants(
+      workloadGroup,
+      recorded,
+      (pid: number) => pid === 9100
+        ? { state: "present", value: { pid: 9100, groupId: 9002, birth: "recycled-birth" } }
+        : { state: "absent" },
+      () => [9100],
+    ),
+    { state: "identity_mismatch" },
+  );
+  assert.deepEqual(
+    control.reattestOwnedPosixDescendants(
+      workloadGroup,
+      recorded,
+      (pid: number) => pid === 9003
+        ? { state: "present", value: { pid: 9003, groupId: 9002, birth: "original-descendant-birth" } }
+        : { state: "absent" },
+      () => [9003, 9004],
+    ),
+    { state: "ready", members: [9003, 9004] },
+  );
+  assert.deepEqual(
+    control.reattestOwnedPosixDescendants(
+      workloadGroup,
+      recorded,
+      () => ({ state: "absent" }),
+      () => [],
+    ),
+    { state: "empty" },
+  );
+  assert.deepEqual(
+    control.reattestOwnedPosixDescendants(
+      workloadGroup,
+      recorded,
+      () => ({ state: "absent" }),
+      () => [9003],
+    ),
+    { state: "empty" },
+    "a listed PID that is already gone between ps and inspect is emptiness, not an unprovable recycled group",
+  );
 });
 
 test("C4 POSIX barrier records bind prepared, go, and anchor release to captured current authority", async () => {
@@ -1333,7 +1388,7 @@ test("C4 POSIX producer keeps the real channel unsettled until closed pipes drai
     writeAtomic: (path: string, value: string) => writeFileSync(path, value),
   });
   const pipeDrain = extractOptionalNamedFunction(supervisorSource, "posixOutputPipesDrained");
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "forgetRetiredOutput")}\n${extractNamedFunction(supervisorSource, "handleChannelAcks")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "drainOutput")}\n${pipeDrain}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "forgetRetiredOutput")}\n${extractNamedFunction(supervisorSource, "handleChannelAcks")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "drainOutput")}\n${pipeDrain}\n${extractTickPosix(supervisorSource)}`, context);
   const provider = createPortableProcessChannelProvider({
     replayCapacityChunks: 16,
     replayCapacityBytes: 256 * 1024,
@@ -1483,7 +1538,7 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
     withCurrentFenceEffect: (_ownerId: string, _fencingToken: number, effect: () => unknown) => ({ status: "applied", value: effect() }),
     writeAtomic: (path: string, value: string) => writeFileSync(path, value),
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "forgetRetiredOutput")}\n${extractNamedFunction(supervisorSource, "handleChannelAcks")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "drainOutput")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "forgetRetiredOutput")}\n${extractNamedFunction(supervisorSource, "handleChannelAcks")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "drainOutput")}\n${extractTickPosix(supervisorSource)}`, context);
   const provider = createPortableProcessChannelProvider({
     replayCapacityChunks: 1,
     replayCapacityBytes: 256 * 1024,
@@ -1711,7 +1766,7 @@ test("C4 POSIX supervisor retires forced workload causally and waits for output 
     stdoutPath: "root/stdout.log",
     writeAtomic: () => undefined,
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}\n${extractNamedFunction(supervisorSource, "forgetRetiredOutput")}\n${extractNamedFunction(supervisorSource, "handleChannelAcks")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}\n${extractNamedFunction(supervisorSource, "forgetRetiredOutput")}\n${extractNamedFunction(supervisorSource, "handleChannelAcks")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("handleControl()", context);
   assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGKILL"]], "the only forced signal targets the detached workload group");
@@ -1822,7 +1877,7 @@ test("C4 POSIX supervisor releases an exact lone anchor only after executable ex
     },
     existsSync: () => false,
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "samePosixWorkloadGroup")}\n${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "refreshPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "recordCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "samePosixWorkloadGroup")}\n${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "refreshPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "recordCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "posixOutputSettled")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("tickPosix()", context);
   assert.deepEqual(writes.map(({ path, value }) => ({ path, value: typeof value === "string" ? JSON.parse(value) : JSON.parse(JSON.stringify(value)) })), [{
@@ -1965,7 +2020,7 @@ test("C4 POSIX supervisor refuses anchor release when membership changes inside 
     writeAtomic: (path: string, value: string) => { writes.push({ path, value }); },
     existsSync: () => false,
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("tickPosix()", context);
   assert.equal(reattestations, 2, "the exact anchor must be observed again inside the release fence");
@@ -2030,7 +2085,7 @@ test("C4 POSIX supervisor replaces an unconsumed anchor release marker after a h
     refreshPosixChildStatus: () => undefined,
     writeAtomic: (path: string, value: string) => { writes.push({ path, value: JSON.parse(value) }); },
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("tickPosix()", context);
   assert.deepEqual(writes, [{
@@ -2121,7 +2176,7 @@ test("C4 POSIX supervisor retains authority when an anchor exits before reportin
     refreshPosixChildStatus: undefined,
     writeAtomic: (path: string, value: string) => { writes.push({ path, value: JSON.parse(value) }); },
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "samePosixWorkloadGroup")}\n${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "refreshPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "recordCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "samePosixWorkloadGroup")}\n${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "refreshPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "recordCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("tickPosix()", context);
   assert.deepEqual(writes, [{
@@ -2215,7 +2270,7 @@ test("C4 POSIX supervisor rejects mismatched released records and non-clean anch
       targetSignal: null,
       drainOutput: () => undefined,
     });
-    vm.runInContext(`${extractNamedFunction(supervisorSource, "samePosixWorkloadGroup")}\n${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "refreshPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "recordCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+    vm.runInContext(`${extractNamedFunction(supervisorSource, "samePosixWorkloadGroup")}\n${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "refreshPosixChildStatus")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "recordCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractTickPosix(supervisorSource)}`, context);
     vm.runInContext(`handlePosixAnchorExit(${code === null ? "null" : code}, ${signal === null ? "null" : JSON.stringify(signal)}); tickPosix()`, context);
     return {
       exits,
@@ -2286,7 +2341,7 @@ test("C4 POSIX supervisor retains uncertain authority when a forced anchor exits
     drainOutput: () => undefined,
     refreshPosixChildStatus: () => undefined,
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("handlePosixAnchorExit(null, 'SIGKILL'); tickPosix()", context);
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(posixWorkloadRetirement)", context)), { state: "active" });
@@ -2377,7 +2432,7 @@ test("C4 POSIX supervisor keeps its anchor through graceful control before one e
     refreshPosixChildStatus: () => undefined,
     writeAtomic: (path: string, value: unknown) => { writes.push({ path, value }); },
   });
-  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractNamedFunction(supervisorSource, "tickPosix")}`, context);
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "hasCausalPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractNamedFunction(supervisorSource, "markPosixPipeClosed")}\n${extractNamedFunction(supervisorSource, "handlePosixAnchorExit")}\n${extractTickPosix(supervisorSource)}`, context);
 
   vm.runInContext("handleControl(); tickPosix()", context);
   assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGTERM"]]);
@@ -2395,10 +2450,10 @@ test("C4 POSIX supervisor keeps its anchor through graceful control before one e
   assert.ok(publications.some(({ status }) => status === "running"));
 });
 
-test("C4 POSIX force after authenticated anchor exit still signals the recorded workload group", () => {
+test("C4 POSIX force after authenticated anchor exit refuses a numeric group that cannot be re-attested", () => {
   const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
   const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
-  const request = { nonce: "dead-anchor-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const request = { nonce: "recycled-pgid-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
   const signals: Array<[number, NodeJS.Signals]> = [];
   const publications: Array<{ status: string; error?: string }> = [];
   const context = vm.createContext({
@@ -2414,6 +2469,7 @@ test("C4 POSIX force after authenticated anchor exit still signals the recorded 
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: true,
     posixForceControlApplied: false,
+    posixRecordedMembers: new Map([[9003, "original-descendant-birth"]]),
     posixSupervisorBirth: "supervisor-birth",
     posixWorkloadGroup: workloadGroup,
     process: {
@@ -2422,6 +2478,7 @@ test("C4 POSIX force after authenticated anchor exit still signals the recorded 
     },
     publish: (status: string, error?: string) => { publications.push({ status, error }); },
     reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixDescendants: () => ({ state: "identity_mismatch" }),
     readFileSync: (path: string) => {
       const normalized = path.replace(/\\/g, "/");
       if (normalized === "root/control.json") return JSON.stringify(request);
@@ -2437,15 +2494,16 @@ test("C4 POSIX force after authenticated anchor exit still signals the recorded 
   });
   vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
   vm.runInContext("handleControl()", context);
-  assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGKILL"]], "force after exact anchor exit must still signal the recorded group, not refuse numeric-only control");
-  assert.equal(vm.runInContext("posixForceControlApplied", context), true);
-  assert.equal(publications.some(({ error }) => /anchor is unavailable at the control boundary/i.test(error ?? "")), false);
+  assert.deepEqual(signals, [], "a recycled or unprovable PGID must never receive a destructive group signal");
+  assert.equal(vm.runInContext("posixForceControlApplied", context), false);
+  assert.equal(publications.at(-1)?.status, "outcome_unknown");
+  assert.match(publications.at(-1)?.error ?? "", /refus(e|ing) numeric-only group control/i);
 });
 
-test("C4 POSIX force after authenticated anchor exit treats an empty-group ESRCH as applied control", () => {
+test("C4 POSIX force after authenticated anchor exit retries an unprovable inspect without poisoning status", () => {
   const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
   const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
-  const request = { nonce: "dead-anchor-force-esrch", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const request = { nonce: "retry-unprovable-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
   const signals: Array<[number, NodeJS.Signals]> = [];
   const publications: Array<{ status: string; error?: string }> = [];
   const context = vm.createContext({
@@ -2461,18 +2519,16 @@ test("C4 POSIX force after authenticated anchor exit treats an empty-group ESRCH
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: true,
     posixForceControlApplied: false,
+    posixRecordedMembers: new Map([[9003, "original-descendant-birth"]]),
     posixSupervisorBirth: "supervisor-birth",
     posixWorkloadGroup: workloadGroup,
     process: {
       pid: 9001,
-      kill: (pid: number, signal: NodeJS.Signals) => {
-        signals.push([pid, signal]);
-        const error = Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
-        throw error;
-      },
+      kill: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); },
     },
     publish: (status: string, error?: string) => { publications.push({ status, error }); },
     reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixDescendants: () => ({ state: "outcome_unknown" }),
     readFileSync: (path: string) => {
       const normalized = path.replace(/\\/g, "/");
       if (normalized === "root/control.json") return JSON.stringify(request);
@@ -2487,10 +2543,113 @@ test("C4 POSIX force after authenticated anchor exit treats an empty-group ESRCH
     unlinkSync: () => undefined,
   });
   vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
-  assert.doesNotThrow(() => vm.runInContext("handleControl()", context), "kernel ESRCH for an already-empty recorded group must not crash the supervisor");
-  assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGKILL"]], "force must still target the recorded group even when the kernel reports it empty");
-  assert.equal(vm.runInContext("posixForceControlApplied", context), true, "empty-group ESRCH is proof the recorded group is gone, so force must count as applied");
-  assert.equal(publications.some(({ error }) => /ESRCH|anchor is unavailable at the control boundary/i.test(error ?? "")), false);
+  vm.runInContext("handleControl()", context);
+  assert.deepEqual(signals, [], "an unprovable inspect must not receive a destructive group signal");
+  assert.equal(vm.runInContext("posixForceControlApplied", context), false);
+  assert.equal(vm.runInContext("handledControl", context), 0, "a transient inspect race must leave the force request retryable");
+  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false, "output settlement requires running|stopping|stopped");
+});
+
+test("C4 POSIX force after authenticated anchor exit signals only a re-attested descendant group", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "proven-descendant-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  let descendantAttestations = 0;
+  const context = vm.createContext({
+    Error,
+    JSON,
+    Number,
+    PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json",
+    fencePath: "root/fence.json",
+    handledControl: 0,
+    join,
+    lockHolderPath: "root/lock-holder.json",
+    posixAnchorExited: true,
+    posixForceControlApplied: false,
+    posixRecordedMembers: new Map([[9003, "descendant-birth"]]),
+    posixSupervisorBirth: "supervisor-birth",
+    posixWorkloadGroup: workloadGroup,
+    process: {
+      pid: 9001,
+      kill: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); },
+    },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixDescendants: () => {
+      descendantAttestations += 1;
+      return { state: "ready", members: [9003] };
+    },
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/control.json") return JSON.stringify(request);
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    signalOwnedPosixGroup,
+    existsSync: (path: string) => path.replace(/\\/g, "/") === "root/control.json",
+    unlinkSync: () => undefined,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
+  vm.runInContext("handleControl()", context);
+  assert.ok(descendantAttestations >= 1, "force after anchor exit must re-attest recorded descendants before signaling");
+  assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGKILL"]]);
+  assert.equal(vm.runInContext("posixForceControlApplied", context), true);
+});
+
+test("C4 POSIX force after authenticated anchor exit does not signal an empty recorded group", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "empty-descendant-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  const context = vm.createContext({
+    Error,
+    JSON,
+    Number,
+    PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json",
+    fencePath: "root/fence.json",
+    handledControl: 0,
+    join,
+    lockHolderPath: "root/lock-holder.json",
+    posixAnchorExited: true,
+    posixForceControlApplied: false,
+    posixRecordedMembers: new Map([[9003, "descendant-birth"]]),
+    posixSupervisorBirth: "supervisor-birth",
+    posixWorkloadGroup: workloadGroup,
+    process: {
+      pid: 9001,
+      kill: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); },
+    },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixDescendants: () => ({ state: "empty" }),
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/control.json") return JSON.stringify(request);
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    signalOwnedPosixGroup,
+    existsSync: (path: string) => path.replace(/\\/g, "/") === "root/control.json",
+    unlinkSync: () => undefined,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
+  vm.runInContext("handleControl()", context);
+  assert.deepEqual(signals, [], "an empty recorded group must not be signalled by numeric PGID");
+  assert.equal(vm.runInContext("posixForceControlApplied", context), true, "an empty exact descendant snapshot is applied force without a destructive signal");
+  assert.equal(publications.some(({ error }) => /numeric-only group control/i.test(error ?? "")), false);
 });
 
 test("C4 POSIX fixture finalizer fails closed and retains its exact authority on force failure", async () => {
@@ -3039,6 +3198,9 @@ function extractOptionalNamedFunction(source: string, name: string): string {
     ts.isFunctionDeclaration(statement) && statement.name?.text === name,
   );
   return declaration?.getText(file) ?? "";
+}
+function extractTickPosix(source: string): string {
+  return `function recordOwnedPosixMembers() {}\n${extractNamedFunction(source, "tickPosix")}`;
 }
 function extractNamedFunction(source: string, name: string): string {
   const file = ts.createSourceFile("portable-process-supervisor.mjs", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);

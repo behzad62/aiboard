@@ -10,6 +10,7 @@ import {
   listOwnedPosixGroupMembers,
   parsePosixBootstrapPrepared,
   reattestOwnedPosixAnchor,
+  reattestOwnedPosixDescendants,
   signalOwnedPosixGroup,
 } from "./portable-process-posix-control.mjs";
 import {
@@ -91,6 +92,7 @@ let posixAnchorReleaseRequested = false;
 let posixAnchorReleaseAuthority = null;
 let posixChildReleasedAnchorRelease = null;
 let posixForceControlApplied = false;
+const posixRecordedMembers = new Map();
 let posixChildStatusSignature;
 let posixStdoutClosed = false;
 let posixStderrClosed = false;
@@ -264,6 +266,18 @@ function handlePosixAnchorExit(code, signal) {
   publish("running");
 }
 
+function recordOwnedPosixMembers(memberPids) {
+  if (posixAnchorExited || !posixWorkloadGroup || !Array.isArray(memberPids)) return;
+  for (const pid of memberPids) {
+    const inspection = inspectPosixProcessIdentity(pid);
+    if (inspection.state !== "present" || !inspection.value || inspection.value.pid !== pid ||
+        inspection.value.groupId !== posixWorkloadGroup.groupId || typeof inspection.value.birth !== "string" ||
+        inspection.value.birth.length === 0)
+      continue;
+    posixRecordedMembers.set(pid, inspection.value.birth);
+  }
+}
+
 function tickPosix() {
   handleChannelAcks();
   handleChannelInput();
@@ -310,6 +324,7 @@ function tickPosix() {
     publish("outcome_unknown", "POSIX workload anchor identity or group membership is unavailable.");
     return;
   }
+  recordOwnedPosixMembers(anchor.members);
   if (posixAnchorReleaseRequested && !hasCurrentPosixAnchorReleaseAuthority()) {
     posixAnchorReleaseRequested = false;
     posixAnchorReleaseAuthority = null;
@@ -869,14 +884,40 @@ function handleControl() {
     }
   } else {
     // Force after an authenticated child-exit must still control remaining
-    // descendants. Requiring a live leader here would refuse C4 cleanup once
-    // the launcher has already exited and left a detached process group.
+    // descendants, but only after a recorded birth witness proves the numeric
+    // group is still the original owned workload. A recycled PGID is refused.
     if (request.action === "force_terminate" && posixAnchorExited === true && posixWorkloadGroup) {
-      completeControl(request, () => {
+      const observedDescendants = reattestOwnedPosixDescendants(posixWorkloadGroup, posixRecordedMembers);
+      if (observedDescendants.state === "empty") {
+        completeControl(request, () => {
+          posixForceControlApplied = true;
+          return { state: "signalled" };
+        });
+        return;
+      }
+      if (observedDescendants.state === "outcome_unknown") {
+        // Refuse the numeric kill, but do not poison status. Output settlement
+        // only accepts running|stopping|stopped; a transient inspect race must
+        // retry on the next tick instead of making retained output unprovable.
+        return;
+      }
+      if (observedDescendants.state !== "ready") {
+        publish("outcome_unknown", "POSIX workload descendants are unavailable at the control boundary; refusing numeric-only group control.");
+        return;
+      }
+      const applied = completeControl(request, () => {
+        const current = reattestOwnedPosixDescendants(posixWorkloadGroup, posixRecordedMembers);
+        if (current.state === "empty") {
+          posixForceControlApplied = true;
+          return { state: "signalled" };
+        }
+        if (current.state !== "ready") return { state: "anchor_unavailable" };
         signalOwnedPosixGroup(request.action, process.kill, posixWorkloadGroup.groupId);
         posixForceControlApplied = true;
         return { state: "signalled" };
       });
+      if (applied?.state === "anchor_unavailable")
+        publish("outcome_unknown", "POSIX workload descendants are unavailable at the control boundary; refusing numeric-only group control.");
       return;
     }
     const observedAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);

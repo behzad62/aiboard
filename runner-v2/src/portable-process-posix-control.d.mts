@@ -25,6 +25,16 @@ export function reattestOwnedPosixAnchor(
   inspect?: (pid: number) => PosixProcessIdentityInspection,
   listMembers?: (groupId: number) => readonly number[] | undefined,
 ): PosixAnchorAttestation;
+export type PosixDescendantAttestation =
+  | { readonly state: "ready"; readonly members: readonly number[] }
+  | { readonly state: "empty" }
+  | { readonly state: "identity_mismatch" | "outcome_unknown" };
+export function reattestOwnedPosixDescendants(
+  workloadGroup: PosixWorkloadGroupIdentity,
+  recordedMembers: ReadonlyMap<number, string>,
+  inspect?: (pid: number) => PosixProcessIdentityInspection,
+  listMembers?: (groupId: number) => readonly number[] | undefined,
+): PosixDescendantAttestation;
 export function parsePosixBootstrapPrepared(
   value: unknown,
   nonce: string,
