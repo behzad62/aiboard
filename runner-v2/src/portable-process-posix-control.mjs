@@ -70,8 +70,13 @@ export function parsePosixGroupMembers(output, groupId) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const match = /^(\d+)\s+(\d+)$/.exec(trimmed);
-    if (!match || !positivePid(Number(match[1])) || !positivePid(Number(match[2]))) return undefined;
-    if (Number(match[2]) === groupId) members.push(Number(match[1]));
+    if (!match) return undefined;
+    const pid = Number(match[1]);
+    const pgid = Number(match[2]);
+    // Kernel threads report pgid 0. Skipping them keeps host `ps -e` snapshots
+    // usable; a truly malformed row still fails closed.
+    if (!positivePid(pid) || !positivePid(pgid)) continue;
+    if (pgid === groupId) members.push(pid);
   }
   return members;
 }

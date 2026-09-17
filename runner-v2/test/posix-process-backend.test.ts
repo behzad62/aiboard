@@ -619,6 +619,11 @@ test("C4 POSIX rejects malformed nonempty ps identity and membership rows", asyn
   assert.equal(control.parsePosixPsIdentity(9002, "not-a-process"), undefined);
   assert.deepEqual(control.parsePosixGroupMembers(" 9002 9002\n 9003 9002\n", 9002), [9002, 9003]);
   assert.equal(control.parsePosixGroupMembers("9002 9002\nmalformed-row\n", 9002), undefined);
+  assert.deepEqual(
+    control.parsePosixGroupMembers("2 0\n1 1\n 9002 9002\n 9003 9002\n", 9002),
+    [9002, 9003],
+    "kernel threads with pgid 0 must not void an otherwise exact membership snapshot",
+  );
 });
 
 test("C4 POSIX barrier records bind prepared, go, and anchor release to captured current authority", async () => {

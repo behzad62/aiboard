@@ -77,6 +77,8 @@ test("native adapter CI runs each host-specific backend suite only on the hosts 
   for (const windowsOnly of ["windows-process-backend.test.ts", "windows-job-process-channel.test.ts"])
     assert.match(owning(windowsOnly), /if:\s*runner\.os\s*==\s*'Windows'/,
       `${windowsOnly} must be gated to Windows hosts.`);
+  assert.match(owning("windows-process-backend.test.ts"), /--test-concurrency=1/,
+    "Windows native adapter tests must run serially; Job/startup probes starve under default node:test parallelism.");
   assert.match(owning("posix-process-backend.test.ts"), /if:\s*runner\.os\s*!=\s*'Windows'/,
     "The POSIX backend suite must be gated to POSIX hosts.");
   for (const portable of ["managed-shared-native.test.ts", "mcp-lazy-native.test.ts"])

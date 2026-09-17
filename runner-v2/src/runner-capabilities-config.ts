@@ -1,5 +1,5 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import {
   parseLanguageProviderDescriptor,
@@ -107,9 +107,20 @@ export async function loadRunnerCapabilitiesConfig(
     );
   }
   const requested = resolve(pathValue);
+  let canonicalParent;
+  try {
+    canonicalParent = resolve(await realpath(dirname(requested)));
+  } catch (error) {
+    throw new RunnerCapabilitiesConfigError(
+      "config_unavailable",
+      "Runner capabilities configuration does not exist.",
+      { cause: error },
+    );
+  }
+  const candidate = join(canonicalParent, basename(requested));
   let metadata;
   try {
-    metadata = await lstat(requested);
+    metadata = await lstat(candidate);
   } catch (error) {
     throw new RunnerCapabilitiesConfigError(
       "config_unavailable",
@@ -129,8 +140,8 @@ export async function loadRunnerCapabilitiesConfig(
       "Runner capabilities configuration must be a regular file.",
     );
   }
-  const actual = await realpath(requested);
-  if (normalizePath(actual) !== normalizePath(requested)) {
+  const actual = resolve(await realpath(candidate));
+  if (normalizePath(actual) !== normalizePath(candidate)) {
     throw new RunnerCapabilitiesConfigError(
       "symbolic_config",
       "Runner capabilities configuration resolves through a symbolic path.",

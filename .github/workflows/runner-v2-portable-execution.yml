@@ -63,7 +63,7 @@ jobs:
       - name: Run Windows-only native adapter tests
         if: runner.os == 'Windows'
         run: >-
-          node node_modules/tsx/dist/cli.mjs --test
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/windows-process-backend.test.ts
           runner-v2/test/windows-job-process-channel.test.ts
       - name: Run POSIX-only native adapter tests

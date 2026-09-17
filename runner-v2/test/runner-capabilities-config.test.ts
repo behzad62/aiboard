@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -135,6 +135,32 @@ test("capability configuration rejects unknown fields, duplicate identities, rel
     fixture.close();
   }
 });
+
+test("capability configuration loads a regular file whose directory prefix canonicalizes", async () => {
+  const fixture = configFixture("prefix-alias");
+  const aliasRoot = join(dirname(fixture.root), `${basename(fixture.root)}-alias`);
+  try {
+    fixture.write({ version: 1, extensions: [], languageServers: [] });
+    symlinkSync(fixture.root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    const aliased = join(aliasRoot, basename(fixture.path));
+    assert.notEqual(
+      normalizePath(aliased),
+      normalizePath(realpathSync(aliased)),
+      "the fixture must exercise a non-canonical directory prefix",
+    );
+    const loaded = await loadRunnerCapabilitiesConfig(aliased);
+    assert.deepEqual(loaded.extensions, []);
+    assert.deepEqual(loaded.languageServers, []);
+  } finally {
+    rmSync(aliasRoot, { recursive: true, force: true });
+    fixture.close();
+  }
+});
+
+function normalizePath(path: string): string {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
 
 function server(id: string) {
   return {
