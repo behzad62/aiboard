@@ -1,0 +1,27 @@
+{
+  "id": "editor-argv-red",
+  "startedAt": "2026-09-14T15:45:37.597Z",
+  "finishedAt": "2026-09-14T15:45:38.256Z",
+  "wrapperPid": 42764,
+  "testPid": 26840,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=operations that would require an editor",
+    "runner-v2/test/git-execution-policy.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-Ddhy9Q"
+  ]
+}

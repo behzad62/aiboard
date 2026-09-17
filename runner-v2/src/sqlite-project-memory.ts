@@ -15,6 +15,7 @@ import type {
 } from "./project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
 import type { AgentActor } from "./agent-contracts.js";
+import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
 
 interface MemoryRow {
   sequence: number;
@@ -27,12 +28,23 @@ interface MemoryRow {
   payload_json: string;
 }
 
+export interface SqliteProjectMemoryStoreOptions {
+  /** Opens an existing durable memory log without schema or mutation authority. */
+  readOnly?: boolean;
+}
+
 export class SqliteProjectMemoryStore implements ProjectMemoryStore {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
 
-  constructor(databasePath: string) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+  constructor(
+    databasePath: string,
+    options: SqliteProjectMemoryStoreOptions = {},
+  ) {
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS project_memory_events (
@@ -52,6 +64,7 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
   }
 
   propose(input: ProposeProjectMemoryInput): ProjectMemoryEntry {
+    this.assertWritable();
     assertBase(input.projectId, input.content, input.concepts);
     assertProvenance(input);
     const memoryId = `memory_${createHash("sha256")
@@ -81,6 +94,7 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
   }
 
   promote(input: PromoteProjectMemoryInput): ProjectMemoryEntry {
+    this.assertWritable();
     assertArchitect(input.actor);
     const event = this.append({
       projectId: input.projectId,
@@ -94,6 +108,7 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
   }
 
   archive(input: ArchiveProjectMemoryInput): ProjectMemoryEntry {
+    this.assertWritable();
     assertArchitect(input.actor);
     if (!input.reason.trim()) throw new Error("Archive reason is required.");
     const event = this.append({
@@ -155,6 +170,11 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
 
   close(): void {
     this.database.close();
+  }
+
+  historicalProvenance(): HistoricalReadProvenance {
+    if (!this.readOnly) return "durable";
+    return this.hasTable("project_memory_events") ? "durable" : "unavailable";
   }
 
   private append(input: Omit<ProjectMemoryEvent, "sequence" | "eventId">): ProjectMemoryEvent {
@@ -219,6 +239,22 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
     const entry = rebuildProjectMemories(this.events(projectId)).get(memoryId);
     if (!entry) throw new Error(`Unknown memory ${memoryId}.`);
     return cloneEntry(entry);
+  }
+
+  private assertWritable(): void {
+    if (this.readOnly) {
+      throw new Error("A read-only project memory store cannot mutate memory.");
+    }
+  }
+
+  private hasTable(tableName: string): boolean {
+    return Boolean(
+      this.database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        )
+        .get(tableName),
+    );
   }
 }
 

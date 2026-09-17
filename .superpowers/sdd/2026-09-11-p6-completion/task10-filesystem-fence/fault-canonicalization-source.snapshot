@@ -1,0 +1,453 @@
+/** Trusted native workspace mutation seam, after the original Broker authorization.
+ * Every create/write/patch/mkdir/link/rename/unlink/rmdir revalidates actual paths
+ * and authority. NO operation here is atomic compare-and-swap or a kernel sandbox:
+ * outside writers can race the final path-based syscall; POSIX inode reuse is
+ * another residual ABA limitation. Detected changes fail closed with progress.
+ * Atomic replacement preserves complete bytes, not ACLs/xattrs or crash durability.
+ */
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import type { ToolExecutionOutput, ToolPathAccess } from "./agent-contracts.js";
+import { ExecutionGrantError, reserveExecutionGrantForFilesystemMutation,
+  type ExecutionGrantAuthority, type ExecutionGrantBinding, type OpaqueExecutionGrant } from "./execution-grants.js";
+
+export type FilesystemMutationErrorCode = "expected_revision_required" | "invalid_revision" | "revision_conflict"
+  | "target_already_exists" | "target_missing" | "filesystem_alias" | "filesystem_identity_changed"
+  | "hardlink_confinement_unprovable" | "filesystem_safety_unsupported" | "filesystem_cleanup_unverified"
+  | "directory_not_empty" | "ambiguous_patch";
+export class FilesystemMutationError extends Error {
+  constructor(readonly code: FilesystemMutationErrorCode, message: string,
+    readonly details: Readonly<Record<string, unknown>> = {}) {
+    super(message); this.name = "FilesystemMutationError";
+  }
+}
+const OPERATIONS = ["fs.write", "fs.patch", "fs.move", "fs.delete"] as const;
+type Operation = typeof OPERATIONS[number];
+export function isFilesystemMutation(name: string): name is Operation {
+  return (OPERATIONS as readonly string[]).includes(name);
+}
+const CAPTURE: unique symbol = Symbol("filesystem-mutation-capture");
+const PERMIT: unique symbol = Symbol("filesystem-mutation-permit");
+export interface FilesystemMutationCapture { readonly [CAPTURE]: true }
+export interface FilesystemMutationPermit { readonly [PERMIT]: true }
+interface Identity { dev: bigint; ino: bigint; birth: bigint; useBirth: boolean; directory: boolean; mode: number }
+interface Captured {
+  workspace: string;
+  operation: Operation;
+  targets: readonly Readonly<ToolPathAccess>[];
+  identities: Map<string, Identity | null>;
+  directories: Map<string, readonly string[]>;
+  tree: string[];
+}
+interface Authorized extends Captured {
+  binding: ExecutionGrantBinding;
+  grant: OpaqueExecutionGrant;
+  assertCurrent(): void;
+  used: boolean;
+  effects: number;
+}
+export interface FilesystemMutationContext {
+  runId: string;
+  sessionId: string;
+  actor: ExecutionGrantBinding["actor"];
+  callId?: string;
+  toolName?: string;
+  workspacePath?: string;
+  executionGrant?: OpaqueExecutionGrant;
+  filesystemMutation?: FilesystemMutationPermit;
+  signal?: AbortSignal;
+}
+const CAPTURES = new WeakMap<object, Captured>();
+const PERMITS = new WeakMap<object, Authorized>();
+const normalize = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const within = (root: string, path: string) => { const r = relative(root, path); return r === "" || (r !== ".." && !r.startsWith(`..${sep}`) && !isAbsolute(r)); };
+function fail(code: FilesystemMutationErrorCode, path: string, message: string): never {
+  throw new FilesystemMutationError(code, message, { path });
+}
+// Native identity is device/inode/type. On POSIX, use supplemental birthtime
+// only when the capture distinguishes it from documented ctime/zero fallbacks.
+// Ambiguous creation time cannot prove inode generations: that external-writer
+// ABA limitation remains explicit rather than treating changing ctime as identity.
+function identity(stat: fs.BigIntStats, path: string, links = 1n): Identity {
+  if (stat.isSymbolicLink()) fail("filesystem_alias", path, "Symbolic links, junctions and name-surrogate reparse aliases are not mutable targets or parents.");
+  if ((!stat.isDirectory() && !stat.isFile()) || stat.ino === 0n) fail("filesystem_safety_unsupported", path, "A stable regular-file/directory identity could not be established.");
+  if (stat.isFile() && stat.nlink !== links) fail("hardlink_confinement_unprovable", path, "File link count does not prove confinement to the authorized object.");
+  return { dev: stat.dev, ino: stat.ino, birth: stat.birthtimeNs, useBirth: process.platform === "win32" || (stat.birthtimeNs > 0n && stat.birthtimeNs !== stat.ctimeNs), directory: stat.isDirectory(), mode: Number(stat.mode & 0o777n) };
+}
+function observe(path: string, links = 1n): Identity | null {
+  try { return identity(fs.lstatSync(path, { bigint: true }), path, links); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+function same(a: Identity | null | undefined, b: Identity | null): boolean {
+  return a === null ? b === null : !!a && !!b && a.dev === b.dev && a.ino === b.ino && (!a.useBirth || a.birth === b.birth) && a.directory === b.directory;
+}
+function chain(path: string): string[] {
+  const result = [resolve(path)];
+  while (dirname(result[0]!) !== result[0]) result.unshift(dirname(result[0]!));
+  return result;
+}
+/** Resolve a configured root once per call; aliases BELOW it remain forbidden. */
+export function filesystemMutationWorkspace(path: string): string {
+  const root = resolve(path);
+  if (fs.lstatSync(root).isSymbolicLink()) fail("filesystem_alias", root, "The configured workspace root must be a real directory, as required by its grant authority.");
+  return fs.realpathSync.native(root);
+}
+function canonical(path: string): void {
+  const canonicalPath = fs.realpathSync.native(path);
+  if (normalize(canonicalPath) !== normalize(path)) throw new FilesystemMutationError(
+    "filesystem_alias", "The final canonical path or spelling is not the authorized path.",
+    { path, canonicalPath, recovery: "Inspect the canonical path and submit a new authorized request using its exact spelling; the existing grant cannot be redirected." },
+  );
+}
+function safePath(workspace: string, requested: string): string {
+  if (typeof requested !== "string" || !requested || requested.includes("\0")) throw new ExecutionGrantError("grant_invalid_path", "A non-empty filesystem path is required.");
+  const path = resolve(workspace, requested);
+  if (process.platform === "win32") {
+    const pieces = path.slice(parse(path).root.length).split(sep);
+    if (path.startsWith("\\\\") || pieces.some((p) => /[:. ]$/.test(p) || p.includes(":") || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p)))
+      fail("filesystem_safety_unsupported", path, "Device, stream, UNC and ambiguous Win32 path forms are not supported for trusted mutation.");
+  }
+  return path;
+}
+function captureChain(record: Captured, path: string): void {
+  for (const component of chain(path)) {
+    const observed = observe(component);
+    if (observed) canonical(component);
+    if (component !== path && observed && !observed.directory) fail("filesystem_safety_unsupported", component, "The mutation parent is not a directory.");
+    const key = normalize(component);
+    if (record.identities.has(key) && !same(record.identities.get(key), observed)) fail("filesystem_identity_changed", component, "Identity changed during authorization capture.");
+    record.identities.set(key, observed);
+  }
+}
+function captureTree(record: Captured, path: string, depth = 0): void {
+  if (depth > 64) fail("filesystem_safety_unsupported", path, "The captured tree exceeds 64 levels; split this operation.");
+  if (record.tree.length >= 10_000) fail("filesystem_safety_unsupported", path, "The bounded mutation manifest exceeds 10000 entries; split the operation.");
+  captureChain(record, path); record.tree.push(path);
+  if (!record.identities.get(normalize(path))?.directory) return;
+  const children = fs.readdirSync(path).sort(); record.directories.set(normalize(path), children);
+  for (const child of children) captureTree(record, safePath(path, child), depth + 1);
+}
+
+/** Read-only capture BEFORE authorization can yield. Only the original Broker
+ * or the run-owned bootstrap can bind this capture to an existing real grant.
+ */
+export function captureFilesystemMutation(workspace: string, operation: Operation,
+  paths: readonly ToolPathAccess[]): FilesystemMutationCapture {
+  if (!isAbsolute(workspace)) throw new ExecutionGrantError("grant_invalid_path", "Mutation workspace must be absolute.");
+  const record: Captured = { workspace: safePath(workspace, workspace), operation,
+    targets: paths.map((entry) => Object.freeze({ path: safePath(workspace, entry.path), access: entry.access })),
+    identities: new Map(), directories: new Map(), tree: [] };
+  const expected = operation === "fs.move" ? ["delete", "write"] : [operation === "fs.delete" ? "delete" : "write"];
+  if (!isFilesystemMutation(operation) || paths.length !== expected.length || paths.some((p, i) => p.access !== expected[i])) throw new ExecutionGrantError("grant_mismatch", "The exact filesystem operation paths/access do not match.");
+  captureChain(record, record.workspace);
+  if (!record.identities.get(normalize(record.workspace))?.directory) fail("target_missing", workspace, "Workspace identity is unavailable.");
+  for (const target of record.targets) {
+    if (normalize(target.path) === normalize(record.workspace) || dirname(target.path) === target.path) fail("filesystem_safety_unsupported", target.path, "The workspace or volume root cannot be a mutation target.");
+    captureChain(record, target.path);
+  }
+  if (operation === "fs.move" || operation === "fs.delete") captureTree(record, record.targets[0]!.path);
+  const capture = Object.freeze({ [CAPTURE]: true }) as FilesystemMutationCapture;
+  CAPTURES.set(capture, record); return capture;
+}
+export function authorizeFilesystemMutation(capture: FilesystemMutationCapture, input: Readonly<{
+  authority: ExecutionGrantAuthority; grant: OpaqueExecutionGrant; binding: ExecutionGrantBinding; signal?: AbortSignal;
+}>): FilesystemMutationPermit {
+  const captured = CAPTURES.get(capture);
+  if (!captured || captured.operation !== input.binding.toolName) throw new ExecutionGrantError("grant_forged", "Filesystem authorization capture is not Runner-owned.");
+  CAPTURES.delete(capture);
+  const reservation = reserveExecutionGrantForFilesystemMutation(input.authority, input.grant, input.binding);
+  const binding = Object.freeze({ ...input.binding, actor: Object.freeze({ ...input.binding.actor }) });
+  const createOnly = captured.targets.map((target) => target.access === "write" && captured.identities.get(normalize(target.path)) === null);
+  const assertCurrent = () => {
+    if (input.signal?.aborted) throw new ExecutionGrantError("grant_revoked", "Filesystem call was cancelled.");
+    reservation.assertCurrent();
+    if (captured.operation === "fs.delete" && !reservation.destructiveApproved) throw new ExecutionGrantError("grant_escalation", "Deletion requires the original grant destructive approval.");
+    if (normalize(reservation.workspacePath) !== normalize(captured.workspace)) throw new ExecutionGrantError("grant_mismatch", "Filesystem workspace does not match the original grant.");
+    for (const [index, target] of captured.targets.entries()) {
+      const entry = reservation.access.find((p) => normalize(p.canonicalPath) === normalize(target.path));
+      if (!entry || (entry.mode !== "write" && !(entry.mode === "create" && createOnly[index])) || (!within(captured.workspace, target.path) && !reservation.externalApproved))
+        throw new ExecutionGrantError("grant_escalation", "Filesystem mutation does not have exact original path/access authority.");
+    }
+  };
+  assertCurrent();
+  const permit = Object.freeze({ [PERMIT]: true }) as FilesystemMutationPermit;
+  PERMITS.set(permit, { ...captured, binding, grant: input.grant, assertCurrent, used: false, effects: 0 });
+  return permit;
+}
+
+/** This synchronous last-mile critical section has no JS scheduling gap. It is
+ * NOT atomic CAS: an external process may still race between checks and a native
+ * filesystem syscall. It is not a kernel sandbox against a hostile FS writer.
+ */
+function revalidate(record: Captured, path: string, links = 1n): void {
+  void record; void links; resolve(path); // DELIBERATE lexical-only regression
+}
+function current(record: Authorized, path: string, links = 1n): void {
+  revalidate(record, record.workspace); revalidate(record, path, links); record.assertCurrent();
+}
+function take(context: FilesystemMutationContext, operation: Operation, paths: readonly string[]): Authorized {
+  const record = context.filesystemMutation && PERMITS.get(context.filesystemMutation);
+  if (!record) throw new ExecutionGrantError("grant_forged", "Filesystem mutation requires its original ToolBroker authorization.");
+  if (record.used) throw new ExecutionGrantError("grant_consumed", "This call's filesystem mutation was already used.");
+  record.used = true;
+  const b = record.binding;
+  if (operation !== record.operation || context.toolName !== b.toolName || context.callId !== b.callId || context.runId !== b.runId ||
+      context.sessionId !== b.sessionId || context.actor.id !== b.actor.id || context.actor.role !== b.actor.role ||
+      context.executionGrant !== record.grant || !context.workspacePath || normalize(context.workspacePath) !== normalize(record.workspace) ||
+      paths.length !== record.targets.length || paths.some((p, i) => resolve(p) !== resolve(record.targets[i]!.path)))
+    throw new ExecutionGrantError("grant_mismatch", "A filesystem permit cannot change its call, path, operation or run ownership.");
+  record.assertCurrent(); return record;
+}
+const FAILURE_PROGRESS = new WeakMap<object, Readonly<Record<string, unknown>>>();
+function perform<T>(context: FilesystemMutationContext, operation: Operation, paths: readonly string[], action: (record: Authorized) => T): T {
+  const record = take(context, operation, paths);
+  try { return action(record); }
+  catch (error) {
+    const failure = translate(error, paths[0]!);
+    if (failure !== null && typeof failure === "object") FAILURE_PROGRESS.set(failure, {
+      partialMutation: record.effects > 0, completedNamespaceSteps: record.effects,
+      ...(record.effects > 0 ? { recovery: "Inspect affected paths before retrying; completed namespace changes are not rolled back." } : {}),
+    });
+    throw failure;
+  }
+}
+function absent(path: string): void {
+  if (observe(path)) fail("target_already_exists", path, "Creation and move destinations are create-only and cannot overwrite.");
+}
+function remember(record: Captured, path: string, links = 1n): Identity {
+  const id = observe(path, links);
+  if (!id) fail("filesystem_identity_changed", path, "The just-created filesystem object disappeared.");
+  record.identities.set(normalize(path), id); return id;
+}
+function parents(record: Authorized, path: string, create: boolean): void {
+  for (const parent of chain(dirname(path))) {
+    if (record.identities.get(normalize(parent))) { current(record, parent); continue; }
+    if (!create) fail("target_missing", parent, "Parent directory does not exist; explicitly request createDirectories.");
+    current(record, dirname(parent)); absent(parent); record.assertCurrent();
+    try { fs.mkdirSync(parent); } catch (error) { throw translate(error, parent); }
+    record.effects++; remember(record, parent); current(record, parent);
+  }
+}
+function translate(error: unknown, path: string): unknown {
+  if (error instanceof FilesystemMutationError || error instanceof ExecutionGrantError) return error;
+  switch ((error as NodeJS.ErrnoException | undefined)?.code) {
+    case "EEXIST": return new FilesystemMutationError("target_already_exists", "Create-only destination already exists.", { path });
+    case "ENOENT": return new FilesystemMutationError("target_missing", "The filesystem object disappeared.", { path });
+    case "ENOTEMPTY": return new FilesystemMutationError("filesystem_identity_changed", "Directory membership changed; no unobserved entry was removed.", { path });
+    case "EXDEV": case "ENOTSUP": case "EOPNOTSUPP": case "ENOSYS":
+      return new FilesystemMutationError("filesystem_safety_unsupported", "The filesystem does not support the required safe primitive.", { path });
+    default: return error;
+  }
+}
+function linkPublicationFailure(error: unknown, path: string): unknown {
+  const osCode = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (["EPERM", "EACCES", "EMLINK", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(osCode ?? ""))
+    return new FilesystemMutationError("filesystem_safety_unsupported", "Create-only publication requires a hard-link primitive that this filesystem or its permissions did not permit.",
+      { path, osCode, recovery: "Use a filesystem and permissions supporting hard-link publication. No overwriting or partial-byte fallback was attempted." });
+  return translate(error, path);
+}
+function checkedRevision(record: Authorized, path: string, expected: unknown): { bytes: Buffer; fd: number } {
+  if (expected === undefined) fail("expected_revision_required", path, "Read or inspect the file and supply its SHA-256 before replacing existing content.");
+  if (typeof expected !== "string" || !/^[a-fA-F0-9]{64}$/.test(expected)) fail("invalid_revision", path, "expectedSha256 must be a 64-digit SHA-256.");
+  current(record, dirname(path));
+  const observed = observe(path);
+  if (!observed) throw new FilesystemMutationError("revision_conflict", "Expected file does not exist.", { path, expectedSha256: expected, currentSha256: null });
+  if (observed.directory) fail("filesystem_safety_unsupported", path, "Content replacement requires a regular file.");
+  canonical(path);
+  const fd = fs.openSync(path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = fs.fstatSync(fd, { bigint: true });
+    if (!same(observed, identity(before, path))) fail("filesystem_identity_changed", path, "Opened file identity differs from the actual target.");
+    const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd, { bigint: true });
+    const actual = digest(bytes);
+    if (actual !== expected.toLowerCase() || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+      throw new FilesystemMutationError("revision_conflict", "File changed since it was read.", { path, expectedSha256: expected, currentSha256: actual });
+    identity(after, path); current(record, path);
+    return { bytes, fd };
+  } catch (error) { fs.closeSync(fd); throw error; }
+}
+function recheckOpenRevision(record: Authorized, path: string, fd: number, expectedBytes: Buffer): void {
+  // readFileSync(fd) already advanced to EOF. Rehash with explicit positions,
+  // bounded by the prior read length, while retaining the POSIX object handle.
+  const before = fs.fstatSync(fd, { bigint: true });
+  const observed = identity(before, path);
+  if (!same(record.identities.get(normalize(path)), observed)) fail("filesystem_identity_changed", path, "The retained revision handle changed identity.");
+  const hash = createHash("sha256"); const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (position < expectedBytes.length) {
+    const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, expectedBytes.length - position), position);
+    if (count === 0) break;
+    hash.update(buffer.subarray(0, count)); position += count;
+  }
+  const after = fs.fstatSync(fd, { bigint: true });
+  if (!same(observed, identity(after, path))) fail("filesystem_identity_changed", path, "The retained revision handle changed identity.");
+  const actual = hash.digest("hex"), expected = digest(expectedBytes);
+  if (position !== expectedBytes.length || before.size !== BigInt(expectedBytes.length) || before.size !== after.size
+      || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || actual !== expected)
+    throw new FilesystemMutationError("revision_conflict", "File changed after the final revision read.",
+      { path, expectedSha256: expected, currentSha256: before.size === after.size && after.size === BigInt(position) ? actual : null });
+  record.assertCurrent();
+}
+function cleanupTemporary(record: Authorized, temporary: string, owned: Identity, links: bigint): void {
+  // Cleanup may outlive grant revocation, but never follows a changed parent.
+  revalidate(record, record.workspace); revalidate(record, dirname(temporary));
+  const actual = observe(temporary, links);
+  if (!same(owned, actual)) fail("filesystem_cleanup_unverified", temporary, "Temporary identity changed; cleanup was not authorized.");
+  fs.unlinkSync(temporary); record.identities.set(normalize(temporary), null);
+}
+function publish(record: Authorized, path: string, bytes: Buffer, expected: unknown, replacement: boolean): void {
+  const temporary = join(dirname(path), `.aiboard-${randomUUID()}.tmp`);
+  let fd: number | undefined; let owned: Identity | undefined; let published = false; let created = false; let primary: unknown;
+  try {
+    current(record, dirname(path)); record.identities.set(normalize(temporary), null); absent(temporary); record.assertCurrent();
+    fd = fs.openSync(temporary, "wx", record.identities.get(normalize(path))?.mode ?? 0o666);
+    created = true;
+    owned = identity(fs.fstatSync(fd, { bigint: true }), temporary);
+    record.identities.set(normalize(temporary), owned);
+    current(record, temporary); fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
+    current(record, temporary); identity(fs.fstatSync(fd, { bigint: true }), temporary);
+    if (replacement) {
+      const fresh = checkedRevision(record, path, expected);
+      // Windows requires closing the destination handle for replacement.
+      // POSIX retains it through rename, rehashing from position zero first.
+      // Neither branch offers atomic CAS against an external path writer.
+      const retainHandle = process.platform !== "win32";
+      if (!retainHandle) fs.closeSync(fresh.fd);
+      try {
+        current(record, temporary); current(record, path);
+        if (retainHandle) {
+          recheckOpenRevision(record, path, fresh.fd, fresh.bytes);
+          current(record, temporary); current(record, path);
+        }
+        fs.renameSync(temporary, path);
+        published = true; record.effects++; record.identities.set(normalize(temporary), null);
+        record.identities.set(normalize(path), owned);
+      } finally { if (retainHandle) fs.closeSync(fresh.fd); }
+      current(record, path);
+    } else {
+      current(record, dirname(path)); absent(path); record.assertCurrent();
+      // Exclusive publication preserves complete temp-written contents. Do not
+      // emulate unavailable hard-link primitives with an overwriting rename.
+      try { fs.linkSync(temporary, path); }
+      catch (error) { throw linkPublicationFailure(error, path); }
+      published = true; record.effects++; record.identities.set(normalize(path), owned);
+      current(record, path, 2n); current(record, temporary, 2n);
+    }
+  } catch (error) { primary = translate(error, path); }
+  finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (created && !owned) throw new FilesystemMutationError("filesystem_cleanup_unverified", "Staging identity could not be established; its diagnostic object was retained, not unsafely deleted.",
+      { path, temporary, mutationPublished: published, retainedResource: true, primary: primary instanceof Error ? primary.message : null });
+    if (owned && !(replacement && published)) {
+      try { cleanupTemporary(record, temporary, owned, published ? 2n : 1n); }
+      catch (cleanup) {
+        throw new FilesystemMutationError("filesystem_cleanup_unverified", "Owned staging cleanup could not be proven; preserve the diagnostic path.",
+          { path, temporary, mutationPublished: published, primary: primary instanceof Error ? primary.message : null, cleanup: String(cleanup) });
+      }
+    }
+  }
+  if (primary) throw primary;
+}
+function write(record: Authorized, path: string, expected: unknown, createDirectories: boolean,
+  transform: (original: Buffer) => Buffer): Buffer {
+  const original = record.identities.get(normalize(path));
+  if (original === undefined) throw new ExecutionGrantError("grant_mismatch", "Uncaptured replacement target.");
+  if (!original) {
+    current(record, dirname(path)); absent(path);
+    if (expected !== undefined || record.operation === "fs.patch") {
+      if (expected === undefined) fail("expected_revision_required", path, "Patching requires a prior SHA-256 revision.");
+      throw new FilesystemMutationError("revision_conflict", "Expected file does not exist.", { path, expectedSha256: expected, currentSha256: null });
+    }
+    const bytes = Buffer.from(transform(Buffer.alloc(0)));
+    parents(record, path, createDirectories); publish(record, path, bytes, undefined, false); return bytes;
+  }
+  const read = checkedRevision(record, path, expected);
+  let bytes: Buffer;
+  try { bytes = Buffer.from(transform(read.bytes)); }
+  finally { fs.closeSync(read.fd); }
+  publish(record, path, bytes, expected, true); return bytes;
+}
+export function fencedWrite(context: FilesystemMutationContext, path: string, bytes: Buffer,
+  expectedSha256: unknown, createDirectories: boolean): Buffer {
+  return perform(context, "fs.write", [path], (record) => write(record, path, expectedSha256, createDirectories, () => bytes));
+}
+export function fencedPatch(context: FilesystemMutationContext, path: string, expectedSha256: unknown,
+  transform: (original: Buffer) => Buffer): Buffer {
+  return perform(context, "fs.patch", [path], (record) => write(record, path, expectedSha256, false, transform));
+}
+function preflightTree(record: Authorized): void {
+  for (const path of record.tree) {
+    current(record, path);
+    const children = record.directories.get(normalize(path));
+    if (children && JSON.stringify(fs.readdirSync(path).sort()) !== JSON.stringify(children)) fail("filesystem_identity_changed", path, "Directory membership changed after authorization.");
+  }
+}
+function removeExact(record: Authorized, path: string, directory: boolean): void {
+  current(record, path);
+  try { if (directory) fs.rmdirSync(path); else fs.unlinkSync(path); }
+  catch (error) { throw translate(error, path); }
+  record.effects++; record.identities.set(normalize(path), null);
+}
+export function fencedDelete(context: FilesystemMutationContext, path: string, recursive: boolean): void {
+  return perform(context, "fs.delete", [path], (record) => {
+  if (!record.identities.get(normalize(path))) fail("target_missing", path, "Deletion requires an existing captured target.");
+  if (!recursive && record.directories.has(normalize(path)) && record.tree.length > 1) fail("directory_not_empty", path, "Non-empty directory deletion requires recursive:true.");
+  preflightTree(record);
+  for (const entry of [...record.tree].reverse()) removeExact(record, entry, record.identities.get(normalize(entry))!.directory);
+  });
+}
+function moveFile(record: Authorized, source: string, destination: string): void {
+  current(record, source); current(record, dirname(destination)); absent(destination); record.assertCurrent();
+  const sourceIdentity = record.identities.get(normalize(source))!;
+  try { fs.linkSync(source, destination); } catch (error) { throw translate(error, destination); }
+  record.effects++; record.identities.set(normalize(destination), sourceIdentity);
+  // Exactly the two authorized names, no unknown hard-link residual.
+  current(record, destination, 2n); current(record, source, 2n); record.assertCurrent();
+  try { fs.unlinkSync(source); } catch (error) { throw translate(error, source); }
+  record.effects++; record.identities.set(normalize(source), null); current(record, destination);
+}
+export function fencedMove(context: FilesystemMutationContext, source: string, destination: string, createDirectories: boolean): void {
+  return perform(context, "fs.move", [source, destination], (record) => {
+  if (!record.identities.get(normalize(source))) fail("target_missing", source, "Move source does not exist.");
+  current(record, dirname(destination)); absent(destination);
+  if (within(source, destination)) fail("filesystem_safety_unsupported", destination, "Moving a directory into itself is not supported.");
+  preflightTree(record); parents(record, destination, createDirectories);
+  if (!record.identities.get(normalize(source))!.directory) { moveFile(record, source, destination); return; }
+  // Directory moves are a bounded, fenced sequence, not an atomic rename.
+  // Failures preserve partial progress; no rollback deletes unknown objects.
+  for (const entry of record.tree) {
+    const target = join(destination, relative(source, entry));
+    record.identities.set(normalize(target), null);
+    current(record, entry); current(record, dirname(target)); absent(target); record.assertCurrent();
+    if (record.identities.get(normalize(entry))!.directory) {
+      try { fs.mkdirSync(target); } catch (error) { throw translate(error, target); }
+      record.effects++; remember(record, target); current(record, target);
+    } else moveFile(record, entry, target);
+  }
+  for (const entry of [...record.tree].reverse()) if (record.directories.has(normalize(entry))) removeExact(record, entry, true);
+  });
+}
+export function filesystemMutationFailure(error: unknown, workspace: string): ToolExecutionOutput | undefined {
+  const progress = error !== null && typeof error === "object" ? FAILURE_PROGRESS.get(error) : undefined;
+  if (!(error instanceof FilesystemMutationError) && !(error instanceof ExecutionGrantError)) {
+    if (!progress && !(error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string")) return undefined;
+    const message = error instanceof Error ? error.message : String(error);
+    return { isError: true, error: { code: "filesystem_operation_failed", message }, content: [{ type: "text", text: message },
+      { type: "json", value: { ...progress, osCode: (error as NodeJS.ErrnoException).code ?? null } }] };
+  }
+  if (error instanceof FilesystemMutationError && error.code === "revision_conflict") {
+    const currentSha256 = error.details.currentSha256 ?? null;
+    const message = currentSha256
+      ? "File changed since it was read. Use currentSha256 to retry after confirming the replacement still applies."
+      : "Expected file does not exist. Re-inspect the path before retrying.";
+    return { isError: true, error: { code: error.code, message }, content: [{ type: "text", text: message },
+      { type: "json", value: { path: relative(workspace, String(error.details.path)).split(sep).join("/"),
+        expectedSha256: error.details.expectedSha256, currentSha256,
+        recovery: currentSha256 ? "Retry fs.patch with currentSha256 after confirming the replacement still applies." : "Re-inspect the path before retrying." } },
+      ...(progress ? [{ type: "json" as const, value: progress }] : [])] };
+  }
+  return { isError: true, error: { code: error.code, message: error.message }, content: [{ type: "text", text: error.message },
+    { type: "json", value: { ...(error instanceof FilesystemMutationError ? error.details : {}), ...progress } }] };
+}

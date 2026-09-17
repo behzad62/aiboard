@@ -1,0 +1,41 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-K1FYCv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ELylzh"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-8bNBSf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-MVGnm5"}
+# Subtest: LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+not ok 1 - LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+  ---
+  duration_ms: 5638.9095
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-real-host.test.ts:1:780'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"callId":"original-code-call","toolName":"code.diagnostics","content":[{"type":"text","text":"Windows Job writer fence effect lock is unavailable: Error: Supervisor returned HTTP 409: {\"error\":\"input_unavailable\"}"}],"isError":true,"error":{"code":"code_intelligence_failed","message":"Windows Job writer fence effect lock is unavailable: Error: Supervisor returned HTTP 409: {\"error\":\"input_unavailable\"}"}}
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-real-host.test.ts:36:12)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# exact native LSP fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-K1FYCv
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-K1FYCv","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ELylzh","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-8bNBSf","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-MVGnm5","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9993.9697

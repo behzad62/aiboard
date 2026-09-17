@@ -1,0 +1,7 @@
+{
+  "id": "finish-fixture-regression",
+  "pattern": "concurrent managers cannot delete",
+  "tests": [
+    "runner-v2/test/integration-manager.test.ts"
+  ]
+}

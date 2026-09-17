@@ -1,0 +1,21 @@
+{
+  "pid": 27976,
+  "identity": {
+    "Id": 27976,
+    "StartTimeUtc": "2026-09-14T21:43:03.4217450Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 44864,
+  "spawnedAt": "2026-09-14T21:43:03.720Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts"
+  ]
+}

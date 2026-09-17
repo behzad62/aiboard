@@ -1,0 +1,24 @@
+{
+  "time": "2026-09-15T08:31:27.578Z",
+  "reason": "First explicit git add returned an ignored .superpowers ancestor warning after staging only approved paths. Retried with -f for the exact approved paths, without reset or broad staging.",
+  "partialPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/plan.md",
+    "runner-v2/src/agent-contracts.ts",
+    "runner-v2/src/execution-grants.ts",
+    "runner-v2/src/filesystem-mutation-fence.ts",
+    "runner-v2/src/filesystem-tools.ts",
+    "runner-v2/src/git-baseline.ts",
+    "runner-v2/src/git-bootstrap.ts",
+    "runner-v2/src/tool-broker.ts",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-mutation-routing.test.ts",
+    "runner-v2/test/final-verification-runtime-b1.test.ts",
+    "runner-v2/test/integration-manager.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts",
+    "runner-v2/test/lsp-real-host.test.ts",
+    "runner-v2/test/support/git-fixture.ts",
+    "runner-v2/test/support/lsp-owned-fixture.ts"
+  ],
+  "noCommitOccurred": true
+}

@@ -1,0 +1,34 @@
+{
+  "pid": 21028,
+  "identity": {
+    "Id": 21028,
+    "StartTimeUtc": "2026-09-14T16:07:57.6306999Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T16:07:57.665Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\integration-manager-focused-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=change sets integrate serially|integration conflicts are mechanical|a later attempt can integrate|evidence-backed no-change|final handoff applies|final handoff rejects dirty|a fresh manager repairs|the real apply path leaves|crash recovery never overwrites|the live checkout rechecks",
+    "runner-v2/test/integration-manager.test.ts"
+  ],
+  "spec": {
+    "tests": [
+      "runner-v2/test/integration-manager.test.ts"
+    ],
+    "id": "integration-manager-focused-green",
+    "pattern": "change sets integrate serially|integration conflicts are mechanical|a later attempt can integrate|evidence-backed no-change|final handoff applies|final handoff rejects dirty|a fresh manager repairs|the real apply path leaves|crash recovery never overwrites|the live checkout rechecks"
+  }
+}

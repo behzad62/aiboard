@@ -1,0 +1,22 @@
+{
+  "pid": 30912,
+  "identity": {
+    "Id": 30912,
+    "StartTimeUtc": "2026-09-14T15:36:56.6142713Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 31300,
+  "spawnedAt": "2026-09-14T15:36:56.881Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=repository clean filter",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "id": "rpc-replay-restored",
+  "target": "runner-v2/src/lsp-client.ts",
+  "test": "runner-v2/test/lsp-shared-client.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green",
+  "sourceFinalSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+  "testFinalSha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e",
+  "redReceipt": {
+    "id": "fault-rpc-replay-restored-red",
+    "startedAt": "2026-09-12T17:26:27.443Z",
+    "finishedAt": "2026-09-12T17:26:28.606Z",
+    "wrapperPid": 115992,
+    "testPid": 117532,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared client never replays",
+      "runner-v2/test/lsp-shared-client.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "fault-rpc-replay-restored-green",
+    "startedAt": "2026-09-12T17:26:28.653Z",
+    "finishedAt": "2026-09-12T17:26:29.337Z",
+    "wrapperPid": 120452,
+    "testPid": 120392,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared client never replays",
+      "runner-v2/test/lsp-shared-client.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-terminal.json",
+      "sha256": "e0bf702596d4634dad29084f9c475d25d10730cc620a3939a67b14b4da7b86af"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-inputs-before.json",
+      "sha256": "fde2a2d6ba8ffbb086f99736f3ed8e2da8cae650e62b318468bb56e48174d13f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-inputs-after.json",
+      "sha256": "fde2a2d6ba8ffbb086f99736f3ed8e2da8cae650e62b318468bb56e48174d13f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-stdout.log",
+      "sha256": "cba1db4b0d7142ebec7b0cc4c4f10528dacb042259f1e05717571bbd106ae7fb"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-wrapper.json",
+      "sha256": "7b32779f9a0712f2e43ee12c08ecb1bf96e20ab5e0595c69700c79b791c2b2a6"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/red-child.json",
+      "sha256": "9569a4e9e12dfcbe4b95ffe5624b5e61ea7adf40b2285f61c09820eb5c8f0487"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-terminal.json",
+      "sha256": "3eb2c84dfec40c6263b2cd7c8aa9a4c320542507aab055fb75ce95c3d986301a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-inputs-before.json",
+      "sha256": "bb1c521900aa3f6f211a92abdc1adbf35c5991a8caf9d794ec564e27d9ab2521"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-inputs-after.json",
+      "sha256": "bb1c521900aa3f6f211a92abdc1adbf35c5991a8caf9d794ec564e27d9ab2521"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-stdout.log",
+      "sha256": "e89eb353bcf0295b4e70e671530c4188920a89b3e4ff25cf44d382d497e9f0aa"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-wrapper.json",
+      "sha256": "bf7cade3a10b048e7b823abe0d4d22eee649731e7582020b9acc0bcc143dcfa8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-rpc-replay-restored-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/rpc-replay-restored/green-child.json",
+      "sha256": "2bc7f1b69bf2d7080f4ab4836c559af13949c3ca8e7b15627d8057e831725f93"
+    }
+  ]
+}

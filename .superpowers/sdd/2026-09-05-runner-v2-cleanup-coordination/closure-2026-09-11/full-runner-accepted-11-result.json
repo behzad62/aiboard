@@ -1,0 +1,14 @@
+{
+  "index": 11,
+  "label": "test-native-build-steering-ui",
+  "exitCode": 0,
+  "startedAt": "2026-09-11T10:21:47.175853+00:00",
+  "finishedAt": "2026-09-11T10:21:48.649374+00:00",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/tsx/dist/cli.mjs",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "scripts/test-native-build-steering-ui.tsx"
+  ]
+}

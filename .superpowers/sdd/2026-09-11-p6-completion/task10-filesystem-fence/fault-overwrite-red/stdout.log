@@ -1,0 +1,38 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-dYE3x1"}
+# Subtest: filesystem fence: publication is create-if-absent even after the final absence check
+not ok 1 - filesystem fence: publication is create-if-absent even after the final absence check
+  ---
+  duration_ms: 41.5914
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-mutation-fence.test.ts:1:859'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'replacement'
+    - 'race-winner'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'race-winner'
+  actual: 'replacement'
+  operator: 'strictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:91:37)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:49:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Task 10 RED/diagnostic root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-dYE3x1
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-dYE3x1","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 330.7763

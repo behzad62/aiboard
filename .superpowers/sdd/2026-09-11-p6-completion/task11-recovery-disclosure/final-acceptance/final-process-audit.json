@@ -1,0 +1,18 @@
+﻿{
+    "capturedAt":  "2026-09-15T19:40:44.7921095Z",
+    "acceptanceCutoff":  "2026-09-15T19:15:55.4549504Z",
+    "acceptedRunProcesses":  [
+
+                             ],
+    "historicalRetainedExclusions":  [
+                                         {
+                                             "processId":  65484,
+                                             "parentProcessId":  44980,
+                                             "name":  "node.exe",
+                                             "createdAt":  "2026-09-15T13:05:42.0926120Z",
+                                             "commandLine":  "\"C:\\Program Files\\nodejs\\node.exe\" D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\src\\managed-process-supervisor.mjs process_4afcfb96-e8c8-421b-acf4-94d0bc87d808 \"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard native final verification factory w15I0n\\runner state\\managed-processes-job-host\\process_4afcfb96-e8c8-421b-acf4-94d0bc87d808\\supervisor.jsonl\"",
+                                             "classification":  "historical_retained_exclusion"
+                                         }
+                                     ],
+    "acceptedRunProcessAuditClean":  true
+}

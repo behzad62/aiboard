@@ -1,0 +1,7 @@
+{
+  "id": "causal-hook-red",
+  "tests": [
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "pattern": "pre-commit hook"
+}

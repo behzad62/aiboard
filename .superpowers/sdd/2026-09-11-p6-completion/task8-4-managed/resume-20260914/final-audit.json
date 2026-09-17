@@ -1,0 +1,147 @@
+{
+  "at": "2026-09-14T09:13:30.177Z",
+  "head": "59becb95ec49b56bbe33be5426b0f44e084dacb9",
+  "branch": "codex/runner-v2-robust-build",
+  "protectedCount": 3529,
+  "protectedDrift": [],
+  "indexMatchesBaseline": true,
+  "cached": [],
+  "runnerHashes": [
+    {
+      "path": "runner-v2/src/evidence-continuation.ts",
+      "sha256": "ca90293787f8f424cfad811d38416ac2f0353931e34d1b93e65cfcbb3ff0210a"
+    },
+    {
+      "path": "runner-v2/src/execution-host.ts",
+      "sha256": "3c5633d01fb488cf1597499f1359f1179e78676de6a609454202addf5473221d"
+    },
+    {
+      "path": "runner-v2/src/final-verification-runtime.ts",
+      "sha256": "6b6291898e36d2e023ac2a7ef2ad126a9b6ae9d2b204efa2ff7e776928e27ea7"
+    },
+    {
+      "path": "runner-v2/src/managed-process-tools.ts",
+      "sha256": "07343b4674b2d48de44836473316c67bc054764d9a08586751bd91f757e55f0f"
+    },
+    {
+      "path": "runner-v2/src/managed-process.ts",
+      "sha256": "babd84db33fed2cad99f5f31a3bcb6e59c6609dddf94654eda9724a318a27e3e"
+    },
+    {
+      "path": "runner-v2/src/native-build-factory.ts",
+      "sha256": "f1eea961215fcbbbdf11f41475a8aa79ec89e5f084572dd9aee7a060e5ab73ad"
+    },
+    {
+      "path": "runner-v2/src/portable-process-supervisor.mjs",
+      "sha256": "b967dd5dd01e216b05877e6fd5438a36be55357af8892c94864c3bf5bad930f0"
+    },
+    {
+      "path": "runner-v2/src/protocol-evidence-tee.ts",
+      "sha256": "c52b354d6d5bc4c1d11bfa74375055a9690944e1a0d74fa5145136ecaa9b21ed"
+    },
+    {
+      "path": "runner-v2/src/session-authority.ts",
+      "sha256": "cbd0784c36e6fe2d72bf6f81615f4816743d0be579fc2b17d322fc669b5da127"
+    },
+    {
+      "path": "runner-v2/src/streaming-process-session-runtime.ts",
+      "sha256": "7857fd6af49163a6494e5ab763c52fafa492d3a96d3b6f40716aad6113d3f962"
+    },
+    {
+      "path": "runner-v2/src/windows-job-process-channel.ts",
+      "sha256": "e6ea0c79aec3369615207ad4df91c574e3daa04e1906840a52f7d48ca70bd288"
+    },
+    {
+      "path": "runner-v2/test/final-verification-runtime-b1.test.ts",
+      "sha256": "5d37fd423e6ecdfd39066102571f2585b4892d7d53cd97de01b86ea2339da8fa"
+    },
+    {
+      "path": "runner-v2/test/managed-process.test.ts",
+      "sha256": "74a8172a60d9d33c19d13f5d8f2f682abc4785967198c5b08fd35d605bdc41a3"
+    },
+    {
+      "path": "runner-v2/test/portable-supervisor-input.test.ts",
+      "sha256": "6f01efe7d01145dfac6547ca9484a01c3feb255f3532a6bf76b95c6fe491d981"
+    },
+    {
+      "path": "runner-v2/test/posix-process-backend.test.ts",
+      "sha256": "00770b522a2e5d43ea345d4dafef446b576a0d2fc95adc08abfdb00120bd9f71"
+    },
+    {
+      "path": "runner-v2/test/remaining-fixture-finalizers.test.ts",
+      "sha256": "457d11d0b90badfc719cadc2854b0387fda9bb277b584160b034fb5d69e57285"
+    },
+    {
+      "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "sha256": "b70c3c52edd4ad379cd3b32b9f99e24b4a9747bfa32635972cf8df7768735109"
+    },
+    {
+      "path": "runner-v2/test/support/one-shot-command-executor.ts",
+      "sha256": "8f008092107ee403e50541ef23c4508797a3ed759e0e93ca3ce80d6107a190ca"
+    },
+    {
+      "path": "runner-v2/test/windows-process-backend.test.ts",
+      "sha256": "3860259ebc1901436b08b64b6b6cb0dafb7e6958793317b13a219b84493b0eed"
+    },
+    {
+      "path": "runner-v2/src/execution-host-managed-transport.ts",
+      "sha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d"
+    },
+    {
+      "path": "runner-v2/src/managed-process-contracts.ts",
+      "sha256": "7c6fd3047f0aa4499e15f2fa8bc30b2c7dd4b0bcfaac9e01c8997a8f9146ffd5"
+    },
+    {
+      "path": "runner-v2/src/managed-process-history.ts",
+      "sha256": "041aa1164664b0ae82201e1a24628d3b1d4093d435d005631d035ada27b25eda"
+    },
+    {
+      "path": "runner-v2/src/managed-process-record.ts",
+      "sha256": "36d9fa03ef7f34b3077c5430efd9efa9eaeb8c23735870181735bab04a667f30"
+    },
+    {
+      "path": "runner-v2/src/managed-process-transport.ts",
+      "sha256": "9df566d3e8be62936933687f6ffaa9179db858404127899034de0accabb3e6fa"
+    },
+    {
+      "path": "runner-v2/test/bounded-output-observation.test.ts",
+      "sha256": "ece2960f0ad19fddb2fc739021ee73febe7e77dc93e9bf1cfbe711678354d496"
+    },
+    {
+      "path": "runner-v2/test/final-verification-managed-authority.test.ts",
+      "sha256": "1eb8f172de12255e66926ac84f7a005e872338b0ee6f9fbb92350bda08aa2dc9"
+    },
+    {
+      "path": "runner-v2/test/managed-backend-boundary.test.ts",
+      "sha256": "8786b2131ac13863e9e2ab8dbfd8d42101cf1bed00ac95032eedb8f302bbbede"
+    },
+    {
+      "path": "runner-v2/test/managed-observation-authority.test.ts",
+      "sha256": "a10cdf038b71afa59a17f257d5c21fc66efbb87f1b56d151db947c7a074ce248"
+    },
+    {
+      "path": "runner-v2/test/managed-record-compatibility.test.ts",
+      "sha256": "6ad8c900aee5aaaf6ab9fa15ba789d45df76c24596765ddda3f8144a784b9280"
+    },
+    {
+      "path": "runner-v2/test/managed-shared-facade.test.ts",
+      "sha256": "9742b9a1b9b228d4ff282f9042f785f66e4501bb4d826cca7864d89d6773b905"
+    },
+    {
+      "path": "runner-v2/test/managed-shared-native.test.ts",
+      "sha256": "41031638cf0f33fb9453de3874851c72620e98a44e6ea1d789fc0bf0277adf10"
+    },
+    {
+      "path": "runner-v2/test/managed-strict-oci.test.ts",
+      "sha256": "5d67ad0261db5ec7f7a6d2e0fa2e6575e7955c875010b2376d2e0e70bf1e24bf"
+    },
+    {
+      "path": "runner-v2/test/managed-tool-await.test.ts",
+      "sha256": "948933a6dda13cd7f15e6bb8613002aaa10984fd52728e44df60084fa3777e64"
+    },
+    {
+      "path": "runner-v2/test/windows-job-terminal-observation.test.ts",
+      "sha256": "741d77ebfbf94940e105c243781fed9e131801050cb325cbf52ed13be3d854bc"
+    }
+  ]
+}

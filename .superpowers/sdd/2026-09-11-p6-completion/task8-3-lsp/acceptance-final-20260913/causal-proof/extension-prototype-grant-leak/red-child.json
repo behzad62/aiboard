@@ -1,0 +1,22 @@
+{
+  "pid": 70504,
+  "identity": {
+    "Id": 70504,
+    "StartTimeUtc": "2026-09-12T17:26:16.4713996Z",
+    "Path": null
+  },
+  "wrapperPid": 76756,
+  "spawnedAt": "2026-09-12T17:26:17.616Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP router never forwards",
+    "runner-v2/test/lsp-server-control.test.ts"
+  ]
+}

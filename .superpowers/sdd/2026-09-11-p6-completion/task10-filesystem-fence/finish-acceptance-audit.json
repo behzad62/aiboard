@@ -1,0 +1,3127 @@
+{
+  "time": "2026-09-15T08:28:48.283Z",
+  "verified": true,
+  "sourceInputs": [
+    {
+      "path": "runner-v2/src/agent-contracts.ts",
+      "sha256": "44ad2cb6cb6fd3ce4b9ec46f1074d7c324dd418d6dae2b28bb538e53eb85c9d9"
+    },
+    {
+      "path": "runner-v2/src/execution-grants.ts",
+      "sha256": "6f4d505272a4f70ce55c169fe5d466baa99bf9d915c3f511a05f589afa95e00f"
+    },
+    {
+      "path": "runner-v2/src/filesystem-tools.ts",
+      "sha256": "e5194680fb741ba129c1ebfa4bbfa78f66ac83253d81ad1d0a54f7bdb1bef708"
+    },
+    {
+      "path": "runner-v2/src/git-baseline.ts",
+      "sha256": "23facbeac641010c29b0d58a198680de759ec5aec6f902f1eba085c63d3cebed"
+    },
+    {
+      "path": "runner-v2/src/git-bootstrap.ts",
+      "sha256": "0ff927075699c8f0c93288fe995792b5e26e04eb530adc87d0741a7b47b1a7b3"
+    },
+    {
+      "path": "runner-v2/src/tool-broker.ts",
+      "sha256": "e971fa0203e6e6ed76d8be93b7c23717c4cd1a0021e1ca562a20e92c6e88c2ab"
+    },
+    {
+      "path": "runner-v2/test/language-invocation-propagation.test.ts",
+      "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+    },
+    {
+      "path": "runner-v2/test/support/git-fixture.ts",
+      "sha256": "92cf67eb8836334c5b98aa24b26c74ceca0b025ffe355335cd2fd027f724d1aa"
+    },
+    {
+      "path": "runner-v2/src/filesystem-mutation-fence.ts",
+      "sha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+      "sha256": "f27ee5ac1a025a705382e57ce68af8c6894e483779f120f371b2600a7a7ebcdc"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-routing.test.ts",
+      "sha256": "d6e72af9db5a834167abbd489b500d1a17a2b72b1853794d500265178d6849db"
+    },
+    {
+      "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+      "sha256": "638e7f293782f7882e72bd2d355f61f36b2a3072f9a29991c760357adeb0b09f"
+    },
+    {
+      "path": "runner-v2/test/lsp-real-host.test.ts",
+      "sha256": "9be26dc2315a104f47932e96ffd726c44e0e2aceac98137d8039f1eb874d7654"
+    },
+    {
+      "path": "runner-v2/test/support/lsp-owned-fixture.ts",
+      "sha256": "9baa0062be02bd590adc275211202d22c4e198e4cc5ed53fb6816fffc7a50cd8"
+    },
+    {
+      "path": "runner-v2/test/final-verification-runtime-b1.test.ts",
+      "sha256": "62464017283aa37bec261b2c5f4f2d9793a38a260b1272d594b26ab81430d205"
+    },
+    {
+      "path": "runner-v2/test/integration-manager.test.ts",
+      "sha256": "e98783b79f44ed6af24dd72944ea63af328853ef299ec5ec7f3196ed836c871e"
+    }
+  ],
+  "affectedTests": 311,
+  "acceptedRoots": 486,
+  "runs": [
+    {
+      "id": "finish-main",
+      "tests": 308,
+      "pass": 308,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rootCount": 477,
+      "receiptSha256": "316c3d3c9e62797d01b24969d793a57f632e4df70da74ba6667cf14074ec22c9",
+      "inputManifestSha256": "976ec25432e497ddd7a9304db70bbd242c82a7bb8754bc53fd216aa343409fb2",
+      "roots": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-change-set-contract-JKnoRu",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-change-set-ownership-p2a9BN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-change-set-actor-ownership-XmB8Vs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-ZMM0rp",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-credentials-jbYjJL",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-credential-clone-JHtlQy",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-current-Tgt8Ni",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-expiry-owner-9NaKG5",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-deny-lroEiU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-path-hcI7Lg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\runner-grant-race-xtoSHh",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-6ZoO2A",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-tHWlQK",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-b2GDVJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-QwEX7M",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-CQdhJm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-FD4w9v",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-5nTB8R",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-d3Lzy1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-3yRKsC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-aZXAhD",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Q8GNou",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-OB15Vm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-79ywpC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-jnnIUa",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-5YpWua",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-pbMnPu",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-AJZgsM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-940q9e",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Xtmc3i",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-ewYhSg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-ohKe8y",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-a9bweV",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-6QPQP8",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-NODQC9",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-9OK1KE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Vexaaa",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-QnALwg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Tba70v",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-wiFyc6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-M6Z85R",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-5znjcG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-z701dc",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-L4RZ1L",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-9vXx9J",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-yhLyry",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-lFEa8Z",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-GT7eKI",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-tUruN4",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-9IKcE5",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Q94S6s",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-JZlTKt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-sdP0FQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-vS9Wjv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-VgVKiy",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Gg5GOc",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-XiquQB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-HM2uMf",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-DNYpP7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-1ecejl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-T17Nb6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-tKXMSV",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-VmizkA",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-frTB1b",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-eiLMZw",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-vOKPRv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-eTW56D",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Jg8wdj",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-FcXlZr",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-P5QWeB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-NUZnIl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-vjNPAd",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-HyjVi4",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-LmphFa",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-wapx6x",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-EE2VIr",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-UbG0P1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-tools-LkJjVJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-patch-crlf-sSrV6N",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-git-aware-RxJJA0",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-mutations-GfZBeH",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-diagnostics-KQzIxR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-diagnostic-failure-e7bKTI",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fs-benchmark-policy-33DO8g",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-browser-complete-wyxqjX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-browser-missing-screenshot-GGe4RV",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-browser-redirect-aB4jUV",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-browser-policy-yUrPi7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-browser-navigation-thrown-3d79cs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-browser-navigation-cancelled-znwjA6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-archive-jKXnIw",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-structured-redaction-IXXAmW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-crash-after-workspace-delete-j3RjL4",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-legacy-archive-repair-r6TfcB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-archive-rebind-eKDr1N",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-forged-receipt-gmSP6E",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-diagnostic-failure-Lg2jFC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-process-failure-0JSwtg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-owner-idempotent-YbxnA0",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-multiple-generations-pzOxe8",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-guidance-retirement-JtGhYO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-concurrent-guidance-retirement-KyIZsu",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-fv-cleanup-guidance-adopts-newer-generation-w70HJr",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-profile-mNBStY",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-profile-authority-nF0yJ0",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-profile-invalid-L9FqiZ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-profile-replay-UeAlCk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-policy-authority-b0CJrt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-policy-authority-Z2dCJO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-manager-kE7OMF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-manager-TKHezm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-manager-E5dmJG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-manager-s2MwPo",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-manager-ZQ8LU0",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-manager-sEJzkx",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-ports-80LS99",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-port-revision-hZTas1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-server-manager-XBIjOv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-server-manager-v45xXM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-server-manager-KJv5cj",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-server-manager-9wpMEC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-b1-smoke success-EAY63S",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-umPnLm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-X93UPa",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-CgSEIl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-193D46",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-b1-smoke timeout-fKUh5C",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-IdVzpr",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-C00HZj",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-vnnFUK",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-hC9KrQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-b1-smoke unhealthy exit-YMVMDF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-SLKfdI",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-1YGss6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-9VDf1c",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-2ZKXAq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-b1-smoke cancellation-9uEILY",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-LqKYOU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-zeQEKi",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-PvPcR7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-p0DFr7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-spill-output-bVb5Ad",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-spill-missing-ngKrB7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-spill-corrupt-xzZs7p",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-typed-isolation_capability_unavailable-lhrDOv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-typed-isolation_revocation_failed-pdkZZW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-typed-outcome_unknown-IMm6fd",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-production-output-matrix-18vL4b",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-qyJovq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-production-spill-fault-j7YnCu",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-tw2PaX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-success-So6Lfk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-0KQsSG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-dependency-provisioning-2YZv7Y",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-23Rw5L",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-single-category-qYMMH8",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-UNK8k9",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-failures-OweXqf",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-RTGvPg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-process-tree-P6Zl7y",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-YFSd3e",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-final-verification-stale-vLo2J2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-x7JFHQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-baseline-dirty-mdon5m",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-baseline-new-rbWwGr",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-baseline-unborn-Bw37lk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-caller-K330HY",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-baseline-guard-EXsajk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-jw90Te",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-kL1aHX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-4EwdIq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-27znkn",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-tpUvGR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-vO2SMM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-xt43Gw",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-rjwNvl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-bjNwlt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-AuZpJt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-NYJsLA",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-SkMnB1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-SwurHm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-context-4ryQDu",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-git-tools-7ukaZB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-ordered-yshBUL",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-conflict-DVlzEW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-attempt-base-JnJpO3",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-no-change-a2Yihb",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-apply-lFfois",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-dirty-G7TdMR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-crash-repair-3rMt1H",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-real-crash-7g7S2X",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-ignored-crash-nOGGDv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-ignored-race-1zoaRN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-QsgxgZ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-pplbLR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-abandoned-and-winner-6rsncL",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-standalone-abandoned-relyHF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-retirement-resume-iJEzvQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-winner-anchor-iai5Oq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-winner-release-death-66anCf",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-winner-parent-ownership-dKtkst",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-crash-mismatch-YV46re",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-crash-ref-moved-2CPGs2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-journal-lifecycle-SKoyBj",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-detached-jeoiG2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-conflict-ih4snR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-rollback-8X1pYc",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-stage-race-RiMLGs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-ref-race-OJlDE2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-throw-SBtaPJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-files-EPFhkk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-json-budget-PNRFbH",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-project-files-kwlIJ8",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-project-files-pinned-haCw0K",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-cleanup-QphcSo",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-cleanup-empty-stale-unmarked-bUqqcg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-initialize-empty-legacy-EQsXaC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-initialize-empty-legacy-cleanup-only-iGxsvl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-cleanup-nonempty-stale-brOQzM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-cleanup-unexpected-path-HYOiXI",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-PCeH1l",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-3i0bL4",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-HUnaIz",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-jdVwfX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-QESkf8",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-YLt2gN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-YStuAz",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-e6lSrn",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-jfx9Fq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-architect-reassigned-review-WZxmo5",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-architect-steering-jZ70zO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-architect-ecJFJh",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-architect-extension-project-bkzHAP",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-architect-extension-full-17HVEO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-plan-only-tools-T4gcse",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-architect-resume-X0sPNF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-execution-host-mcp-order-CvWCMZ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-CC63H4",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-QRv7qv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-tdA17v",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-metadata-Y3LcfC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-metadata-Y3LcfC\\state\\capability-snapshots\\.staging-ENw66o",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-metadata-Y3LcfC\\state\\builds\\capability-metadata-9edcc03a39\\extension-executions\\.0677af4400a8cb12-e8c1oO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-ooF8oC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-glUyLN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-qYCjE7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-start-cleanup-ZGR1SZ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-start-cleanup-ZGR1SZ\\state\\capability-snapshots\\.staging-Ute4hE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-standalone-preflight-close-retry-wUjzWC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-standalone-preflight-close-retry-wUjzWC\\state\\extension-executions\\.3ceaab75a4e558c2-A088J4",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-partial-start-disposer-retry-TSDNDT",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-partial-start-disposer-retry-TSDNDT\\state\\extension-executions\\.bef6069c44697cb9-HN0JIt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-router-collision-disposer-retry-mzh1d1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-router-collision-disposer-retry-mzh1d1\\state\\extension-executions\\.f3d7786ed56e164e-D2gDRl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-evaluation-sazryM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-evaluation-sazryM\\state\\capability-snapshots\\.staging-WXcynJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-factory-Z1YYtZ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-factory-Z1YYtZ\\state\\capability-snapshots\\.staging-TdLEUz",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-missing-snapshot-XOZNoH",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-missing-snapshot-XOZNoH\\state\\capability-snapshots\\.staging-xi1pF2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-corrupt-snapshot-hFumMs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-corrupt-snapshot-hFumMs\\state\\capability-snapshots\\.staging-IEXpEE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-preflight-lsp-wF2VJB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-contract-q5TIjn",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-recovery-contract-q5TIjn\\state\\capability-snapshots\\.staging-cZ5zqG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-helper-dependency-contract-AKtHht",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-helper-dependency-contract-AKtHht\\state\\capability-snapshots\\.staging-VQFII9",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-legacy-capability-contract-dzdY1f",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-legacy-capability-contract-dzdY1f\\state\\capability-snapshots\\.staging-fyhUAw",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-execution-safety-contract-JdfLHR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-snapshot-replacement-VGlxDI",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-snapshot-replacement-VGlxDI\\state\\capability-snapshots\\.staging-1nRqMp",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-snapshot-replacement-VGlxDI\\state\\builds\\capability-extension-snapshot-replacemen-ac50b6f312\\extension-executions\\.02add0e1b1838345-58j4fU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-fCmmSy",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-vIoJSE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-5aGVUn",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-tool-observation-ZkoXTp",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-tool-observation-ZkoXTp\\state\\capability-snapshots\\.staging-E5DTRl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-tool-observation-ZkoXTp\\state\\builds\\capability-extension-tool-observation-5edb5eb1bf\\extension-executions\\.0677af4400a8cb12-vi6FmV",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-6psRJ5",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-g9Vdts",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-5uEseE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-language-close-1kfGHP",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-language-close-1kfGHP\\state\\capability-snapshots\\.staging-zxVKeJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-extension-language-close-1kfGHP\\state\\builds\\capability-extension-language-close-a6f485b07d\\extension-executions\\.3c5f4d73efafb169-xuTf8b",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-CAweNb",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-k4jjNn",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-eBRkOX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-atomic-2NbS2m",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-atomic-2NbS2m\\state\\capability-snapshots\\.staging-e4xrIb",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-atomic-2NbS2m\\state\\builds\\capability-atomic-f3e56529da\\extension-executions\\.4a1ebe8af4c5b5b1-YAtfNB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-reserved-twFrZk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-reserved-twFrZk\\state\\capability-snapshots\\.staging-lfomUm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-reserved-twFrZk\\state\\builds\\capability-reserved-3f9cfa92ac\\extension-executions\\.4bdbf80681b45464-ZDmqXK",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-execution_isolation-KPbdiR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-execution_isolation-KPbdiR\\state\\capability-snapshots\\.staging-3RO9m5",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-capabilities-ltUL3I",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-capabilities-ltUL3I\\state\\capability-snapshots\\.staging-sh20IZ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-capabilities-ltUL3I\\state\\builds\\runtime-construction-capabilities-c2144e95b5\\extension-executions\\.0677af4400a8cb12-YkW0XH",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-evidence_store-LgUEfD",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-evidence_store-LgUEfD\\state\\capability-snapshots\\.staging-6GYmkT",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-evidence_store-LgUEfD\\state\\builds\\runtime-construction-evidence-store-18e527f405\\extension-executions\\.0677af4400a8cb12-PTIrq7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-scheduler_store-kS4IPI",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-scheduler_store-kS4IPI\\state\\capability-snapshots\\.staging-rWsiT2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-scheduler_store-kS4IPI\\state\\builds\\runtime-construction-scheduler-store-c4cfcb6c97\\extension-executions\\.0677af4400a8cb12-Wzqlh2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-session_store-RuvCEz",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-session_store-RuvCEz\\state\\capability-snapshots\\.staging-fwNkkW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-session_store-RuvCEz\\state\\builds\\runtime-construction-session-store-86eaeb0ad5\\extension-executions\\.0677af4400a8cb12-6WI5o1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-tool_ledger-MeLnRU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-tool_ledger-MeLnRU\\state\\capability-snapshots\\.staging-9NZ8em",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-tool_ledger-MeLnRU\\state\\builds\\runtime-construction-tool-ledger-29381f9a8e\\extension-executions\\.0677af4400a8cb12-E4dwFQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-budget_ledger-SpoH6O",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-budget_ledger-SpoH6O\\state\\capability-snapshots\\.staging-os3opz",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-budget_ledger-SpoH6O\\state\\builds\\runtime-construction-budget-ledger-0779643d62\\extension-executions\\.0677af4400a8cb12-zKmuiY",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-workspace_manager-VCpIN2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-workspace_manager-VCpIN2\\state\\capability-snapshots\\.staging-bqZGqe",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-workspace_manager-VCpIN2\\state\\builds\\runtime-construction-workspace-manager-0d5c1a0cd6\\extension-executions\\.0677af4400a8cb12-PvkW9v",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-integration_workspace-TZSfIM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-integration_workspace-TZSfIM\\state\\capability-snapshots\\.staging-qO46uX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-integration_workspace-TZSfIM\\state\\builds\\runtime-construction-integration-workspa-efec5553ad\\extension-executions\\.0677af4400a8cb12-EZ1mAB",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-verification_workspace-ahhj0q",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-verification_workspace-ahhj0q\\state\\capability-snapshots\\.staging-ybalQJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-verification_workspace-ahhj0q\\state\\builds\\runtime-construction-verification-worksp-b289e3e05a\\extension-executions\\.0677af4400a8cb12-qWfyfE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-independent_verifier_workspace-yMaYf7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-independent_verifier_workspace-yMaYf7\\state\\capability-snapshots\\.staging-Mt9AjQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-independent_verifier_workspace-yMaYf7\\state\\builds\\runtime-construction-independent-verifie-3fd6daeb82\\extension-executions\\.0677af4400a8cb12-8HfZZb",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-memory_store-Vh4I8q",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-memory_store-Vh4I8q\\state\\capability-snapshots\\.staging-XjkzsG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-memory_store-Vh4I8q\\state\\builds\\runtime-construction-memory-store-440a0a3e6c\\extension-executions\\.0677af4400a8cb12-tiF4Fq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-managed_process_service-omKMYs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-managed_process_service-omKMYs\\state\\capability-snapshots\\.staging-e44hlM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-managed_process_service-omKMYs\\state\\builds\\runtime-construction-managed-process-ser-fccb111fe3\\extension-executions\\.0677af4400a8cb12-gYg4ER",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-handle-close-ownership-dnAH71",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-handle-close-ownership-dnAH71\\state\\capability-snapshots\\.staging-BD9jWC",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-handle-close-ownership-dnAH71\\state\\builds\\runtime-handle-close-ownership-da59f740f0\\extension-executions\\.0677af4400a8cb12-tuTp5x",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-ObUs9W",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-paUypo",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-7XEebS",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-cleanup-retry-Jm0kU6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-cleanup-retry-Jm0kU6\\state\\capability-snapshots\\.staging-cn6kvU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-construction-cleanup-retry-Jm0kU6\\state\\builds\\runtime-construction-cleanup-retry-12e687607c\\extension-executions\\.0677af4400a8cb12-P0qGcw",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-capability-close-retry-bQwoY6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-capability-close-retry-bQwoY6\\state\\capability-snapshots\\.staging-FilXiJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-runtime-capability-close-retry-bQwoY6\\state\\builds\\runtime-capability-close-retry-ca6246e4c5\\extension-executions\\.3ceaab75a4e558c2-ILB9pz",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-pre-handle-disposer-retention-kfKZ7R",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-pre-handle-disposer-retention-kfKZ7R\\state\\capability-snapshots\\.staging-vm4U9j",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-pre-handle-disposer-retention-kfKZ7R\\state\\builds\\pre-handle-disposer-retention-df2c4dd6e9\\extension-executions\\.17d7b351aeed3c25-zvIWIL",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-provider-owner-c5mCNq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-terminal-pzbeGt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-terminal-pzbeGt\\state\\capability-snapshots\\.staging-vsPNjG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-uLoCKW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-Maw1lj",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-wQvigN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-Za0LYF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-GnIjeE",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-missing-stores-hdISGM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-no-global-authority-ymkCly",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-close-retry-6DVkLS",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-ByR7Rs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-snapshot-removal-retry-O1754V",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-sPRtWS",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-h9s6tp",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-construction-cleanup-oOTTLg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-WXxY0a",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-durable-observations-hsMVXu",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-hsUEuD",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-yv1KLP",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-ETBjcY",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-uAA8mk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-qjZVRG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-ysLTL1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-dE2XVX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-qhoPdR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-N06sbv",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-96dktc",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-rFmKcm",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-C3u9BH",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-xnkXHo",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-Pdefvx",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-hQypbF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-X4t9SO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-Gk7Vw7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-GscK6b",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-frozen-non-sqlite-observations-d1K7RF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-wOxVuU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-oGlyux",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-WIDHL6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-lfLgqh",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-OAy0qe",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-Uds46s",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-CjyA7b",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-1IEkjk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-2PLzHD",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-OCQprf",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-rwYIHW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-G7p7HV",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-XQh3uw",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-3QPUoD",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-RIMAxT",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-AbCw4w",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-XcuOXL",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-5NqT29",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-unmigrated-observations-ueLE5i",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-kw3BTF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-SmeuWT",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-DIisTT",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-HOGrOl",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-8xkeac",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-SWRphP",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-partial-transcript-itECnM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-5lIE8a",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-oC5jrs",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-zdjJ43",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-wal-observation-QGySKM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-1stKIx",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-sqlite-feOIRy",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-historical-schema-RksTvF",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-terminal-failed-8Q2kx0",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-capabilities-historical-terminal-stopped-k5pK0g",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-mcp-census-NvQUb2",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard native final verification factory dmqE6f",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-ad1Kuj",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-Eim2qX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-skByXr",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\playwright-artifacts-JKiCza",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\playwright_chromiumdev_profile-9IJoz7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-preferred-gilbqg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-provider-fallback-14luZh",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-context-j2ICYS",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-budget-attribution-yj0c5j",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-authority-5oxg9V",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-stale-89et3c",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-verdict-aSyUhN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-verdict-replay-gcXLVS",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-verifier-verdict-pending-TV58xY",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-worker-8MCSWU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-vjqsXq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-native-worker-cancel-1yQN0g",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-readonly-subagent-5m61Ir",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-subagent-language-sZVNcO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-attributed-subagent-2gLqlG",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-paths-muIav7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-permission-6e5jWU",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-external-kRMn7n",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-idempotency-fAUhfy",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-budget-IDaVHR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-output-H6CucN",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-broker-grant-SS7ZRt",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-tool-ledger-replay-RB8cri",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-tool-ledger-doubt-DAMqiL",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-create exact-ha0DTH",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-independent-verifier-f40Nj3",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-reopen-GSGQfn",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-containment-Z6tnTd",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-outside-VQyXf7",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-dirty-canonical-2dBcbq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-verification-cleanup-jJ7Bw1",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-extension-live-BDHfcJ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-language-live-e5t5Jb",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-runtime-a61xxX",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-Yccp1T",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-browser-evidence-JwDg79",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-no-change-WndJwq",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-9gSqdM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-subagent-Wz72R6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-production-one-shot-I43fby",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-worker-criterion-contract-rT8nMM",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspaces-mzPEQg",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-clean-B5sxXW",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-bounded-u5vl25",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-retries-5k8Gyf",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-cleanup-rJDYDk",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-root-race-xJawTO",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-empty-stale-xFx03R",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-nonempty-stale-1apjHR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-owner-z9U4T9",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-workspace-associated-ZGyZV0",
+          "exists": false
+        }
+      ]
+    },
+    {
+      "id": "finish-bootstrap",
+      "tests": 3,
+      "pass": 3,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rootCount": 3,
+      "receiptSha256": "b9ee2a2e649a9061c0aeea8c288891a411f67e1152658e44e1770e5c411d8ede",
+      "inputManifestSha256": "0a4d5c7ad656a01e482a8e83b9f4575bbc93428c33cd5d2651c6befdc1c5fb9a",
+      "roots": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-t0detR",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-KoMuXQ",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-WoIsT4",
+          "exists": false
+        }
+      ]
+    },
+    {
+      "id": "finish-typescript",
+      "rootCount": 0,
+      "receiptSha256": "42ae7451b3c93b3a997392941005155813df5a58fd0a6cf68c262349cf720f05",
+      "inputManifestSha256": "e0fc5d94bab7b2bc26a4d938c8b8a6d0d90af92220cef23b9d42c72e972b73ad",
+      "roots": []
+    },
+    {
+      "id": "finish-eslint",
+      "rootCount": 0,
+      "receiptSha256": "4547d8d1ac21b033993bd61bba9931de8a986b8e6042e0917689ff152aea6971",
+      "inputManifestSha256": "32a4542187ad5a8603b472d0f4c7e4fd47a84b611b5f939bb2cd41782a2bdd24",
+      "roots": []
+    },
+    {
+      "id": "finish-diff",
+      "rootCount": 0,
+      "receiptSha256": "63f422505878509a873ef604c8b0686ccf8c19aa3bc457c79feaef35d488fd9a",
+      "inputManifestSha256": "215bf592225c585dcf83e5d2b9a2996198640f534484cc3d86f67a80dcc0ef8e",
+      "roots": []
+    },
+    {
+      "id": "finish-fixture-regression",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rootCount": 2,
+      "receiptSha256": "689465dc1812215d00f881a0fc11330804204fab271df7673656f26866d50146",
+      "inputManifestSha256": "b28042009cb79ef778482d7424360a3c767a13c5917c4cfce9d0239bad96a9d1",
+      "roots": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-EqAvK3",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-DMWXGU",
+          "exists": false
+        }
+      ]
+    },
+    {
+      "id": "final-causal/fault-final-controls-green",
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rootCount": 2,
+      "receiptSha256": "a825407aac78f6faee503c193baeb687c1e8e6e71683110dce8ee7c39e786b84",
+      "inputManifestSha256": "7c6261b77330b6c64c8bc3f21946148a0aa782a327005144c95d2cfde32fc9ed",
+      "roots": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-JbCmj6",
+          "exists": false
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Ek7hUU",
+          "exists": false
+        }
+      ],
+      "reuseScope": "Exact unchanged fence and dependency bytes; only integration-manager.test.ts differs, and is not imported by this causal command."
+    },
+    {
+      "id": "final-causal/fault-canonicalization-restored-green",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rootCount": 1,
+      "receiptSha256": "57b964c872636dec2530ac3412e9e4674c3e2b578360536fd14742df2a08dde1",
+      "inputManifestSha256": "bbad0a9c3f9d0fa891846235642a655890986f230971f7eb9bb1fcadbba61e42",
+      "roots": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-y0KrOC",
+          "exists": false
+        }
+      ],
+      "reuseScope": "Exact unchanged fence and dependency bytes; only integration-manager.test.ts differs, and is not imported by this causal command."
+    },
+    {
+      "id": "final-causal/fault-overwrite-restored-green",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rootCount": 1,
+      "receiptSha256": "0c57e00f94340d161c065dc08caf3dd3c1e5ac60c22d450072dcae72ae2ad3e0",
+      "inputManifestSha256": "d6a8161bf13e057e9b0f555cdc62717452fa0962db9593328b2c290dd46d5ed2",
+      "roots": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-QBtTqB",
+          "exists": false
+        }
+      ],
+      "reuseScope": "Exact unchanged fence and dependency bytes; only integration-manager.test.ts differs, and is not imported by this causal command."
+    }
+  ],
+  "history": [
+    {
+      "id": "acceptance-bootstrap",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 44572,
+      "childPid": 29972,
+      "startedAt": "2026-09-15T07:53:53.512Z",
+      "finishedAt": "2026-09-15T07:53:55.274Z"
+    },
+    {
+      "id": "acceptance-diff",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 47144,
+      "childPid": 54492,
+      "startedAt": "2026-09-15T07:54:20.598Z",
+      "finishedAt": "2026-09-15T07:54:21.443Z"
+    },
+    {
+      "id": "acceptance-eslint",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 51832,
+      "childPid": 39224,
+      "startedAt": "2026-09-15T07:54:04.327Z",
+      "finishedAt": "2026-09-15T07:54:20.536Z"
+    },
+    {
+      "id": "acceptance-main",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-SjZKM0",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 16424,
+      "childPid": 50284,
+      "startedAt": "2026-09-15T07:53:32.840Z",
+      "finishedAt": "2026-09-15T08:09:15.065Z"
+    },
+    {
+      "id": "acceptance-typescript",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 15120,
+      "childPid": 17228,
+      "startedAt": "2026-09-15T07:53:55.365Z",
+      "finishedAt": "2026-09-15T07:54:04.264Z"
+    },
+    {
+      "id": "bootstrap-green-1",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "PASSING_ASSERTIONS_WITH_RETAINED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-git-inspection-GfknDO",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 25932,
+      "childPid": 38504,
+      "startedAt": "2026-09-14T21:44:27.892Z",
+      "finishedAt": "2026-09-14T21:44:35.626Z"
+    },
+    {
+      "id": "bootstrap-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-6xdu8I",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-nyAiFT",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 44864,
+      "childPid": 27976,
+      "startedAt": "2026-09-14T21:43:03.080Z",
+      "finishedAt": "2026-09-14T21:43:06.275Z"
+    },
+    {
+      "id": "edge-green-1",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 38564,
+      "childPid": 49140,
+      "startedAt": "2026-09-14T21:55:44.390Z",
+      "finishedAt": "2026-09-14T21:55:48.461Z"
+    },
+    {
+      "id": "edge-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-AiVJVM",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-07W64J",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 33840,
+      "childPid": 8292,
+      "startedAt": "2026-09-14T21:52:49.513Z",
+      "finishedAt": "2026-09-14T21:52:51.146Z"
+    },
+    {
+      "id": "eslint-1",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 44608,
+      "childPid": 45780,
+      "startedAt": "2026-09-14T22:17:58.348Z",
+      "finishedAt": "2026-09-14T22:18:09.802Z"
+    },
+    {
+      "id": "fault-canonicalization-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-mWXqI7",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 34292,
+      "childPid": 49104,
+      "startedAt": "2026-09-15T07:19:53.850Z",
+      "finishedAt": "2026-09-15T07:19:54.559Z"
+    },
+    {
+      "id": "fault-canonicalization-restored-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 1292,
+      "childPid": 43800,
+      "startedAt": "2026-09-15T07:19:54.618Z",
+      "finishedAt": "2026-09-15T07:19:55.237Z"
+    },
+    {
+      "id": "fault-controls-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 47252,
+      "childPid": 41016,
+      "startedAt": "2026-09-14T22:20:58.219Z",
+      "finishedAt": "2026-09-14T22:20:58.897Z"
+    },
+    {
+      "id": "fault-final-controls-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 21592,
+      "childPid": 41692,
+      "startedAt": "2026-09-15T07:19:53.103Z",
+      "finishedAt": "2026-09-15T07:19:53.780Z"
+    },
+    {
+      "id": "fault-overwrite-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-dYE3x1",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 49776,
+      "childPid": 47284,
+      "startedAt": "2026-09-15T07:19:55.297Z",
+      "finishedAt": "2026-09-15T07:19:56.018Z"
+    },
+    {
+      "id": "fault-overwrite-restored-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 47496,
+      "childPid": 320,
+      "startedAt": "2026-09-15T07:19:56.077Z",
+      "finishedAt": "2026-09-15T07:19:56.741Z"
+    },
+    {
+      "id": "final-affected",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-AvJQYz",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-6eYSKs",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-IkNRQ7",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-8Ovatb",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-KXxyZ6",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-VbkZWD",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-YoiknJ",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-eyN5vC",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-hEfNk9",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-KPgdke",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-e53FxZ",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-i6QyJn",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-git-inspection-WfuOso",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-0SMy7k",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 44972,
+      "childPid": 3012,
+      "startedAt": "2026-09-15T07:22:44.324Z",
+      "finishedAt": "2026-09-15T07:41:03.590Z"
+    },
+    {
+      "id": "final-causal/fault-canonicalization-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-zhVQxN",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 46140,
+      "childPid": 55824,
+      "startedAt": "2026-09-15T07:52:27.500Z",
+      "finishedAt": "2026-09-15T07:52:28.277Z"
+    },
+    {
+      "id": "final-causal/fault-canonicalization-restored-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 52328,
+      "childPid": 42088,
+      "startedAt": "2026-09-15T07:52:28.349Z",
+      "finishedAt": "2026-09-15T07:52:29.023Z"
+    },
+    {
+      "id": "final-causal/fault-final-controls-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 54840,
+      "childPid": 51808,
+      "startedAt": "2026-09-15T07:52:26.650Z",
+      "finishedAt": "2026-09-15T07:52:27.433Z"
+    },
+    {
+      "id": "final-causal/fault-overwrite-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-fo87AF",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 51004,
+      "childPid": 51308,
+      "startedAt": "2026-09-15T07:52:29.088Z",
+      "finishedAt": "2026-09-15T07:52:29.895Z"
+    },
+    {
+      "id": "final-causal/fault-overwrite-restored-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 36896,
+      "childPid": 41752,
+      "startedAt": "2026-09-15T07:52:29.962Z",
+      "finishedAt": "2026-09-15T07:52:30.679Z"
+    },
+    {
+      "id": "final-diff-check",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 44532,
+      "childPid": 33928,
+      "startedAt": "2026-09-15T07:22:15.731Z",
+      "finishedAt": "2026-09-15T07:22:16.554Z"
+    },
+    {
+      "id": "final-eslint",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 49436,
+      "childPid": 36376,
+      "startedAt": "2026-09-15T07:21:54.485Z",
+      "finishedAt": "2026-09-15T07:22:08.242Z"
+    },
+    {
+      "id": "final-typecheck",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 11604,
+      "childPid": 32148,
+      "startedAt": "2026-09-15T07:22:08.298Z",
+      "finishedAt": "2026-09-15T07:22:15.677Z"
+    },
+    {
+      "id": "finish-bootstrap",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 14816,
+      "childPid": 43860,
+      "startedAt": "2026-09-15T08:15:52.688Z",
+      "finishedAt": "2026-09-15T08:15:54.235Z"
+    },
+    {
+      "id": "finish-diff",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 57492,
+      "childPid": 6868,
+      "startedAt": "2026-09-15T08:16:16.421Z",
+      "finishedAt": "2026-09-15T08:16:17.173Z"
+    },
+    {
+      "id": "finish-eslint",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 49536,
+      "childPid": 48468,
+      "startedAt": "2026-09-15T08:16:02.306Z",
+      "finishedAt": "2026-09-15T08:16:16.365Z"
+    },
+    {
+      "id": "finish-fixture-regression",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 28576,
+      "childPid": 33040,
+      "startedAt": "2026-09-15T08:14:48.751Z",
+      "finishedAt": "2026-09-15T08:15:06.686Z"
+    },
+    {
+      "id": "finish-main",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 27064,
+      "childPid": 60364,
+      "startedAt": "2026-09-15T08:15:39.185Z",
+      "finishedAt": "2026-09-15T08:28:06.401Z"
+    },
+    {
+      "id": "finish-typescript",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "ACCEPTED_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 49020,
+      "childPid": 42236,
+      "startedAt": "2026-09-15T08:15:54.295Z",
+      "finishedAt": "2026-09-15T08:16:02.244Z"
+    },
+    {
+      "id": "focused-green-1",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 10748,
+      "childPid": 44192,
+      "startedAt": "2026-09-14T21:41:58.057Z",
+      "finishedAt": "2026-09-14T21:42:02.399Z"
+    },
+    {
+      "id": "implementation-1",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-R2WCIj",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-JhIJxe",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 48476,
+      "childPid": 39716,
+      "startedAt": "2026-09-14T21:40:33.086Z",
+      "finishedAt": "2026-09-14T21:40:37.115Z"
+    },
+    {
+      "id": "initial-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-905IBe",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-g8mHwO",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-5tqNiT",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-1T3vIf",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-94sWuE",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Mlkz8i",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-c1HT9v",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-uJBnTt",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Cld4tY",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-99Vykc",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-OhnB6e",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-pggQRf",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-raVYi8",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-iUlDi8",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Rgnmcl",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-G1P3OG",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-PIGsPa",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 47616,
+      "childPid": 47852,
+      "startedAt": "2026-09-14T21:19:44.898Z",
+      "finishedAt": "2026-09-14T21:19:45.750Z"
+    },
+    {
+      "id": "integration-concurrency-diagnostic",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 24084,
+      "childPid": 48148,
+      "startedAt": "2026-09-15T07:37:28.291Z",
+      "finishedAt": "2026-09-15T07:37:39.488Z"
+    },
+    {
+      "id": "integration-early-loser-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-cyIUZx",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 51144,
+      "childPid": 16320,
+      "startedAt": "2026-09-15T08:01:26.805Z",
+      "finishedAt": "2026-09-15T08:01:43.097Z"
+    },
+    {
+      "id": "integration-fixture-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 48228,
+      "childPid": 52812,
+      "startedAt": "2026-09-15T08:04:38.058Z",
+      "finishedAt": "2026-09-15T08:04:56.589Z"
+    },
+    {
+      "id": "language-migration",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-zfB99C",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 7224,
+      "childPid": 46624,
+      "startedAt": "2026-09-14T21:46:18.946Z",
+      "finishedAt": "2026-09-14T21:46:19.640Z"
+    },
+    {
+      "id": "lsp-migration-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 26584,
+      "childPid": 49200,
+      "startedAt": "2026-09-15T07:12:33.344Z",
+      "finishedAt": "2026-09-15T07:13:03.148Z"
+    },
+    {
+      "id": "lsp-migration-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-K1FYCv",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-duplex-ELylzh",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-batch-8bNBSf",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-semantic-tree-MVGnm5",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 30828,
+      "childPid": 47368,
+      "startedAt": "2026-09-15T06:59:40.338Z",
+      "finishedAt": "2026-09-15T06:59:53.503Z"
+    },
+    {
+      "id": "lsp-revision-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-l5YnwN",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 20696,
+      "childPid": 42144,
+      "startedAt": "2026-09-15T07:06:42.234Z",
+      "finishedAt": "2026-09-15T07:06:57.824Z"
+    },
+    {
+      "id": "posix-generation-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-WlLPyH",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 38720,
+      "childPid": 46412,
+      "startedAt": "2026-09-14T22:11:56.575Z",
+      "finishedAt": "2026-09-14T22:11:57.401Z"
+    },
+    {
+      "id": "pre-fault-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 39008,
+      "childPid": 13296,
+      "startedAt": "2026-09-14T22:17:45.638Z",
+      "finishedAt": "2026-09-14T22:17:52.314Z"
+    },
+    {
+      "id": "red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-arAFA4",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-x1RNPg",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-JzaUZc",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-igtBkF",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-7PZ7Dk",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-h11syF",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-DqEytS",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-ke0Yxp",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-c08pun",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-yfTugA",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-qgGZ2D",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-2XNgiy",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-6y22jb",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-4ugx0E",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-cSH1Qh",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-GNUgBw",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 9108,
+      "childPid": 30628,
+      "startedAt": "2026-09-14T21:22:22.120Z",
+      "finishedAt": "2026-09-14T21:22:23.051Z"
+    },
+    {
+      "id": "review-fixes-green-1",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Ltiw8J",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 26144,
+      "childPid": 18396,
+      "startedAt": "2026-09-14T22:09:49.500Z",
+      "finishedAt": "2026-09-14T22:09:55.141Z"
+    },
+    {
+      "id": "review-fixes-green-2",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 41872,
+      "childPid": 48056,
+      "startedAt": "2026-09-14T22:10:58.143Z",
+      "finishedAt": "2026-09-14T22:10:59.825Z"
+    },
+    {
+      "id": "review-regression-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-vmEbhr",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-DbtWmq",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-8WuEsq",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Uw0wBH",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Y0hv0V",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 16772,
+      "childPid": 15604,
+      "startedAt": "2026-09-14T22:08:31.489Z",
+      "finishedAt": "2026-09-14T22:08:33.884Z"
+    },
+    {
+      "id": "review2-focused",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 7996,
+      "childPid": 31532,
+      "startedAt": "2026-09-15T06:57:39.582Z",
+      "finishedAt": "2026-09-15T06:57:45.429Z"
+    },
+    {
+      "id": "review2-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 4832,
+      "childPid": 47776,
+      "startedAt": "2026-09-15T06:55:36.410Z",
+      "finishedAt": "2026-09-15T06:55:37.485Z"
+    },
+    {
+      "id": "review2-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-f8NuCJ",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Pm8yxm",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-J89GMg",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-EVOpei",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-y1px0X",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 24812,
+      "childPid": 25460,
+      "startedAt": "2026-09-15T06:52:12.744Z",
+      "finishedAt": "2026-09-15T06:52:13.867Z"
+    },
+    {
+      "id": "review3-focused",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 54424,
+      "childPid": 54832,
+      "startedAt": "2026-09-15T07:43:04.534Z",
+      "finishedAt": "2026-09-15T07:43:11.797Z"
+    },
+    {
+      "id": "review3-staging-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 18696,
+      "childPid": 55428,
+      "startedAt": "2026-09-15T07:42:39.060Z",
+      "finishedAt": "2026-09-15T07:42:40.009Z"
+    },
+    {
+      "id": "review3-staging-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-kB24w7",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-kcweiR",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-bouWOo",
+          "existsNow": true
+        },
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-yRLu1v",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 36064,
+      "childPid": 37200,
+      "startedAt": "2026-09-15T07:30:00.728Z",
+      "finishedAt": "2026-09-15T07:30:01.577Z"
+    },
+    {
+      "id": "review3-typecheck",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 34804,
+      "childPid": 54040,
+      "startedAt": "2026-09-15T07:43:11.848Z",
+      "finishedAt": "2026-09-15T07:43:19.495Z"
+    },
+    {
+      "id": "root-policy-red",
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "classification": "RED_FAILED_DIAGNOSTIC",
+      "retainedAtReceipt": [
+        {
+          "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-dEnx2W",
+          "existsNow": true
+        }
+      ],
+      "wrapperPid": 40348,
+      "childPid": 14320,
+      "startedAt": "2026-09-14T22:16:38.364Z",
+      "finishedAt": "2026-09-14T22:16:39.100Z"
+    },
+    {
+      "id": "smoke-environment-green",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 53752,
+      "childPid": 56092,
+      "startedAt": "2026-09-15T07:46:38.582Z",
+      "finishedAt": "2026-09-15T07:47:47.080Z"
+    },
+    {
+      "id": "typecheck-1",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 34864,
+      "childPid": 7848,
+      "startedAt": "2026-09-14T22:17:52.358Z",
+      "finishedAt": "2026-09-14T22:17:58.297Z"
+    },
+    {
+      "id": "typecheck-review2",
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "classification": "HISTORICAL_GREEN",
+      "retainedAtReceipt": [],
+      "wrapperPid": 35468,
+      "childPid": 37136,
+      "startedAt": "2026-09-15T07:13:03.196Z",
+      "finishedAt": "2026-09-15T07:13:09.663Z"
+    }
+  ],
+  "sourceFreezeSha256": "e188d3061897cbdae8e1ac77a081182e96087d3e2675073717ed24b9ca5b80eb",
+  "causalSha256": "eb8fe34c84384462d1c79f2b0a73fc28dd42b773fa1624afbb23878101093542",
+  "reviewHashes": [
+    {
+      "id": "review-4",
+      "sha256": "723407b4fb311d19e2c0c799a995fca4558ad6347e9c0161027036e3fd0ca90c"
+    },
+    {
+      "id": "review-fixture",
+      "sha256": "6d75199f56a8ac55364a5311f18285af13b253b94d3c9e2c13576c60b72d83b5"
+    }
+  ],
+  "note": "Only named GREEN cohorts are accepted. Earlier failed, deliberately weakened and intentionally retained diagnostic runs remain separately classified; process audit is separate. No root is deleted by this audit."
+}

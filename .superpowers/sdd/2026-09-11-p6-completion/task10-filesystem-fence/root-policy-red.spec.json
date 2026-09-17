@@ -1,0 +1,7 @@
+{
+  "id": "root-policy-red",
+  "pattern": "original grant root policy",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "diff-check-acceptance",
+  "executable": "git",
+  "args": [
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "pid": 24104,
+  "identity": {
+    "pid": 24104,
+    "unavailable": true
+  },
+  "wrapperPid": 23172,
+  "spawnedAt": "2026-09-15T14:31:24.302Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-client.mts"
+  ]
+}

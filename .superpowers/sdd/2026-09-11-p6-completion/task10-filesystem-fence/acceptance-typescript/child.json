@@ -1,0 +1,17 @@
+{
+  "pid": 17228,
+  "identity": {
+    "Id": 17228,
+    "StartTimeUtc": "2026-09-15T07:53:55.8046384Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 15120,
+  "spawnedAt": "2026-09-15T07:53:56.200Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "pid": 39640,
+  "identity": {
+    "Id": 39640,
+    "StartTimeUtc": "2026-09-14T15:59:45.0662585Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 46488,
+  "spawnedAt": "2026-09-14T15:59:45.376Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^(?!historical Git query owns separate transient state and exposes no active-run writer$).*",
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-preflight.test.ts",
+    "runner-v2/test/git-repository.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/git-production-managers.test.ts",
+    "runner-v2/test/git-caller-audit.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-control-refusal.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/workspace-manager.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/child-environment.test.ts"
+  ]
+}

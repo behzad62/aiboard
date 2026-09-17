@@ -1,0 +1,4 @@
+{
+  "id": "kernel-review-green",
+  "tests": ["runner-v2/test/process-recovery-kernel.test.ts"]
+}

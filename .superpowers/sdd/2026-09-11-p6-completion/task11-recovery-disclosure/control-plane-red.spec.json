@@ -1,0 +1,6 @@
+{
+  "id": "control-plane-red",
+  "tests": [
+    "runner-v2/test/process-recovery-control.test.ts"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "pid": 19272,
+  "identity": {
+    "Id": 19272,
+    "StartTimeUtc": "2026-09-13T19:40:48.6185503Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-13T19:40:48.656Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\current-raw-launch-policy-red.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+    "runner-v2/test/lsp-caller-audit.test.ts"
+  ],
+  "spec": {
+    "id": "current-raw-launch-policy-red",
+    "tests": [
+      "runner-v2/test/lsp-caller-audit.test.ts"
+    ],
+    "pattern": "^LSP migrated family contains no direct launch signal shell or ambient environment fallback$"
+  }
+}

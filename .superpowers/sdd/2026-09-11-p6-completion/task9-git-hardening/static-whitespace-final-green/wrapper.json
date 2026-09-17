@@ -1,0 +1,32 @@
+{
+  "pid": 25240,
+  "identity": {
+    "Id": 25240,
+    "StartTimeUtc": "2026-09-14T19:55:16.9876515Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T19:55:17.026Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\static-whitespace-final-green.spec.json"
+  ],
+  "command": [
+    "git",
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ],
+  "spec": {
+    "id": "static-whitespace-final-green",
+    "executable": "git",
+    "args": [
+      "diff",
+      "--check",
+      "--",
+      "runner-v2"
+    ]
+  }
+}

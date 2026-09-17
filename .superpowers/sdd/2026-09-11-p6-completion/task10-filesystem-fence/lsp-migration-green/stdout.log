@@ -1,0 +1,27 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-IpcWbj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-CCj1D4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-56sANq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-pRGyUm"}
+# Subtest: LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+ok 1 - LSP real shared host is lazy and code plus filesystem diagnostics retain exact fresh ToolBroker authority
+  ---
+  duration_ms: 28722.8261
+  type: 'test'
+  ...
+# exact native LSP fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-IpcWbj
+# actual code grant, actual post-write grant, separate agent, protocol shutdown and shared release verified
+# certified native LSP fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-native-IpcWbj
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-native-IpcWbj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-CCj1D4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-56sANq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-pRGyUm","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 29398.3466

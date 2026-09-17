@@ -1,0 +1,54 @@
+{
+  "id": "causal-final-hook-red",
+  "pattern": "pre-commit hook",
+  "sentinel": "hook-sentinel.txt",
+  "expected": "hook",
+  "beforeHash": "b1425d99a8cd46620934a9aebafea7f8000af0cc50c6b84ed6860c66a8da42db",
+  "afterHash": "b1425d99a8cd46620934a9aebafea7f8000af0cc50c6b84ed6860c66a8da42db",
+  "restoredExact": true,
+  "mutatedHash": "41955d9b44feac515498704f0dce8e1908a30645fcbace7f5b8c11d6a8615c23",
+  "replacements": [
+    {
+      "oldValue": "\"core.hooksPath=\", ",
+      "newValue": ""
+    }
+  ],
+  "childExit": 1,
+  "terminal": {
+    "id": "causal-final-hook-red",
+    "startedAt": "2026-09-14T19:48:44.117Z",
+    "finishedAt": "2026-09-14T19:48:58.955Z",
+    "wrapperPid": 16888,
+    "testPid": 32120,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 437,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=pre-commit hook",
+      "runner-v2/test/git-indirect-execution-policy.test.ts"
+    ],
+    "rootCount": 4,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-F3u0eA"
+    ]
+  },
+  "sentinelProof": {
+    "matches": [
+      {
+        "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task9-hook-F3u0eA\\hook-sentinel.txt",
+        "content": "hook"
+      }
+    ]
+  },
+  "controllerError": null,
+  "finishedAt": "2026-09-14T19:48:58.964Z"
+}

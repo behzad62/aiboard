@@ -1,0 +1,8 @@
+{ "id": "affected-1", "tests": [
+  "runner-v2/test/durable-process-store.test.ts",
+  "runner-v2/test/subprocess-runtime.test.ts",
+  "runner-v2/test/one-shot-command-executor.test.ts",
+  "runner-v2/test/one-shot-output-capture.test.ts",
+  "runner-v2/test/scheduler-store.test.ts",
+  "runner-v2/test/recovery-smoke.test.ts"
+] }

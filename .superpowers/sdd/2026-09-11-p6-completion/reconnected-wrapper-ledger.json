@@ -1,0 +1,30 @@
+[
+  {
+    "gate": "git-host-integrated-green",
+    "processId": 29768,
+    "terminalReceiptPresent": true,
+    "exitCode": 1,
+    "sameOwnedWrapperStillRunning": false
+  },
+  {
+    "gate": "git-host-binary-green",
+    "processId": 43924,
+    "terminalReceiptPresent": true,
+    "exitCode": 0,
+    "sameOwnedWrapperStillRunning": false
+  },
+  {
+    "gate": "git-host-output-affected",
+    "processId": 33852,
+    "terminalReceiptPresent": true,
+    "exitCode": 0,
+    "sameOwnedWrapperStillRunning": false
+  },
+  {
+    "gate": "git-reconnected-final",
+    "processId": 51308,
+    "terminalReceiptPresent": true,
+    "exitCode": 0,
+    "sameOwnedWrapperStillRunning": false
+  }
+]

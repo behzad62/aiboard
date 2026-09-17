@@ -1,0 +1,282 @@
+[
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/phase-c-final-report.md",
+    "sha256": "0ccff8520e5513f09b81e32c9fd51b943ee9c8946349d6fcd1c115b84bac1650",
+    "bytes": 9689
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/closure-acceptance-proof.json",
+    "sha256": "1c18b0447128fc4fb0829e53fb8acfe344d25dc6b536935dd1d27e5ecf47ad0e",
+    "bytes": 3467
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/final-resource-ledger.json",
+    "sha256": "4a39739870b0730bab1f7d01320e9720417d3e58817f0d426856878e532926f9",
+    "bytes": 4201092
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/closure-command-wrapper-ledger.json",
+    "sha256": "d2e381c84e21ebc84f9f35cbdea158a4fd79b8a864dce7af992916999eeb6b4d",
+    "bytes": 3976
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/closure-verification-static.json",
+    "sha256": "1d31ec980d7de0f72562e80f491b8ef70de62b53e732b52909549ef44c90ab0b",
+    "bytes": 97
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/closure-material-evidence-index.json",
+    "sha256": "baf9ae3dc26d619400a226686f60481dcc6e6ef2d4c972ba3996d90f90565444",
+    "bytes": 7601
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-terminal.json",
+    "sha256": "94c6e53ccca76f10153cb42bd9a2e0508d25f77110f691dbaadea03bb0bab3fe",
+    "bytes": 15041
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-source-before.json",
+    "sha256": "cefe1d79d203a11b28d6c20e2e87a81abed2cd23fa7d0812b1af5e0f610ffc9c",
+    "bytes": 54388
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-source-after.json",
+    "sha256": "cefe1d79d203a11b28d6c20e2e87a81abed2cd23fa7d0812b1af5e0f610ffc9c",
+    "bytes": 54388
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-command-manifest.json",
+    "sha256": "8d76bddd7254a129b9b8c1df09369eda48183462aafc8c5f356f296455ec6fa4",
+    "bytes": 20233
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-report.md",
+    "sha256": "85318ab4fd25e4db33d4458c24c97612dcbab425464b5b3d9c2d009431a6c8fd",
+    "bytes": 50172
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/progress.md",
+    "sha256": "55e831b3e57ac86aea8268a7e8d94aea55d569c672fed5353722859ffc08110f",
+    "bytes": 198731
+  },
+  {
+    "path": "docs/superpowers/plans/2026-09-05-runner-v2-cleanup-coordination.md",
+    "sha256": "fd2106093fc5dfea93e4c02851604956513d4a743a59a82fabdd9dee5c420905",
+    "bytes": 36253
+  },
+  {
+    "path": "docs/superpowers/plans/2026-08-28-runner-v2-portable-execution-safety.md",
+    "sha256": "5fcb4ff1aa2c8c32faf77eaa17ea53061b794d7d171515ff1ee4322d4c028f2b",
+    "bytes": 40017
+  },
+  {
+    "path": "docs/superpowers/plans/2026-08-26-runner-v2-robust-build-improvements.md",
+    "sha256": "5520eefb9731e77014d4d8327d912c781ec33e60af26ecb431e07f07598d4a4c",
+    "bytes": 78332
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-00-result.json",
+    "sha256": "adac17573277a3b92d0943b8068492e908e63586e0b7996e29035455716da0a8",
+    "bytes": 8508
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-01-result.json",
+    "sha256": "189f114af5a0a3caf960b45e694339f7adb4ff3fc344e47dca0ddf8d6a726880",
+    "bytes": 395
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-02-result.json",
+    "sha256": "6491c14fe6a9645c75807500c73e6b224e3c936fbf6585dd1e2a97e03a36a861",
+    "bytes": 401
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-03-result.json",
+    "sha256": "fd75b4ceefffa163ad7f4ca72ace08a888e192f2c1941137a9a303b72535e65e",
+    "bytes": 407
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-04-result.json",
+    "sha256": "6752eaf1893ebf92b8a0946f97e3d71188d6d9b8d7e03d420e02db5d7ae3d8a6",
+    "bytes": 403
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-05-result.json",
+    "sha256": "bd98a4d5414067bfd89a92235e9b62c3671a361458fdfa858dab0f4f132b552b",
+    "bytes": 411
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-06-result.json",
+    "sha256": "a974661b593b2955e5ae6ddda1160b75f6ed68dbd10cdf0d8dbc786d022a16c9",
+    "bytes": 399
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-07-result.json",
+    "sha256": "fa667734c5004bc563c5c3068ad63681ebec4c666cec2219007297a8a73d837b",
+    "bytes": 395
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-08-result.json",
+    "sha256": "3720e55336bc0eb2b7fb4dfec55c6ce3165f56ee9eb31259cb6d73faaa3f7176",
+    "bytes": 407
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-09-result.json",
+    "sha256": "e84c2209f7a1645aef52b2991ff46f7756d2381f82d9b0c3ac578ac167c7888f",
+    "bytes": 399
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-10-result.json",
+    "sha256": "63f0d57723feadbd47dfd40ea30a370a69c6b0e7ecc66f994e74a75b8715fbf0",
+    "bytes": 394
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-11-result.json",
+    "sha256": "609a20f55fc88e9242edf54d30f1ab6c1689381223a7aa57ba2eef24b36cabee",
+    "bytes": 412
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-12-result.json",
+    "sha256": "1c4ec7908a793a1d639809f24098d92f2b06fb0b0e6ed6b7db9fc87b88819d4c",
+    "bytes": 410
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-00-tests.log",
+    "sha256": "fdc866d1e7124f354fb79c783e73094025dc3de754e08ab2d7a5ded7279423cd",
+    "bytes": 1178641
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-00-tests.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-01-test-runner-v2-client.log",
+    "sha256": "e01af5920d3cb0d68fafcc154b78aca8e18efda0b384e7f95dc22a611ff322b7",
+    "bytes": 22
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-01-test-runner-v2-client.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-02-test-native-build-policy.log",
+    "sha256": "8154f19e391f1614228ea09d6521227775ed452966caae987e5d26ffce681d08",
+    "bytes": 25
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-02-test-native-build-policy.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-03-test-native-build-policy-ui.log",
+    "sha256": "015ba8c4599ff4c45af431f34948f64b39367f47ef9df581ded8362f84d4204b",
+    "bytes": 28
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-03-test-native-build-policy-ui.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-04-test-native-build-cutover.log",
+    "sha256": "4ffbb42a78abf95abdab7faf4fbd935a2bef4a020b25eeffbf22982e2046eaf0",
+    "bytes": 26
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-04-test-native-build-cutover.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-05-test-native-build-pause-gates.log",
+    "sha256": "e9a017fa7cc979d62ab5843d66824959caef24b22651efdaca8a1c277ce47fcc",
+    "bytes": 30
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-05-test-native-build-pause-gates.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-06-test-native-model-usage.log",
+    "sha256": "a9b69ce58cd44dfd28b9e1b4bed8c49a9a0f6c3ddc791aff6243f35ea1e1fbea",
+    "bytes": 38
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-06-test-native-model-usage.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-07-test-build-live-state.log",
+    "sha256": "2e8792c1c2a0413d1b85fd3ff5af83a6f3f9806192503d792c51f896e9c7bb66",
+    "bytes": 33
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-07-test-build-live-state.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-08-test-build-transcript-panel.log",
+    "sha256": "2b63fa7bba22552ee75230a78f8a032e2071e7de4016b6f38457b9780102d99f",
+    "bytes": 441
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-08-test-build-transcript-panel.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-09-test-native-build-files.log",
+    "sha256": "2eb0a3df7d71a2e7c858f47147c213229f7d10e7a4f0ec57fef4c9e23ef18eb7",
+    "bytes": 24
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-09-test-native-build-files.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-10-test-build-run-stats.log",
+    "sha256": "dc98075e3db2c32f9e1ef181c624f30001eb92c458cfa6cc13233f6c07298d1e",
+    "bytes": 37
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-10-test-build-run-stats.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-11-test-native-build-steering-ui.log",
+    "sha256": "61bde517b8f6e887f6018e5c92c013401c2cc60a5a7f6328ec7e00f5c79af3c1",
+    "bytes": 40
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-11-test-native-build-steering-ui.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-12-test-runner-v2-observability.log",
+    "sha256": "186b1aaae707e5e3404f41817c0dbb69dd9aa7c70a83ecd201f7e2bff12bebcd",
+    "bytes": 35
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-12-test-runner-v2-observability.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-wrapper.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/closure-2026-09-11/full-runner-accepted-wrapper.stdout.log",
+    "sha256": "b8f194df9acd63db6fe90b4fc83055b0b83ee387f5a61a3177f63ed14b7094e6",
+    "bytes": 268
+  }
+]

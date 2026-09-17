@@ -62,8 +62,9 @@ export default function BuildModePage() {
           Build execution never runs in the browser. Runner V2 owns durable
           checkpoints, isolated Git worktrees, native tools, skills, project
           memory, evidence, provider failover, and recovery. It requires Git
-          and Node.js 24.18.0 or newer and stops before model calls when
-          prerequisites are missing. When the Architect finishes, the run
+          and a maintained Node.js LTS release (22.x or 24.x) and stops before
+          model calls when prerequisites are missing. Node 22.x requires
+          22.13.0 or newer for node:sqlite. When the Architect finishes, the run
           pauses for your final project handoff decision.
         </p>
       </section>

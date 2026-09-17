@@ -1,0 +1,21 @@
+{
+  "pid": 16320,
+  "identity": {
+    "Id": 16320,
+    "StartTimeUtc": "2026-09-15T08:01:27.1476580Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 51144,
+  "spawnedAt": "2026-09-15T08:01:27.444Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-timeout=20000",
+    "--test-name-pattern=concurrent managers cannot delete",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-early-loser.probe.test.ts"
+  ]
+}

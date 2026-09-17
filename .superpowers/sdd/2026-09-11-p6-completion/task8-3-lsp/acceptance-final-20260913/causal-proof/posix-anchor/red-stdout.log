@@ -1,0 +1,72 @@
+TAP version 13
+# Subtest: POSIX supervisor joins an already consumed anchor release under current ownership: takeover
+not ok 1 - POSIX supervisor joins an already consumed anchor release under current ownership: takeover
+  ---
+  duration_ms: 2.1681
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\posix-anchor-release-takeover.test.ts:1:695'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\posix-anchor-release-takeover.test.ts:25:10)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1325:25)
+    Test.start (node:internal/test_runner/test:1191:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17)
+  ...
+# Subtest: POSIX supervisor joins an already consumed anchor release under current ownership: coordination
+not ok 2 - POSIX supervisor joins an already consumed anchor release under current ownership: coordination
+  ---
+  duration_ms: 0.4993
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\posix-anchor-release-takeover.test.ts:1:695'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\posix-anchor-release-takeover.test.ts:26:180)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1325:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:911:18)
+    Test.postRun (node:internal/test_runner/test:1465:19)
+    Test.run (node:internal/test_runner/test:1390:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: POSIX supervisor joins an already consumed anchor release under current ownership: forged
+ok 3 - POSIX supervisor joins an already consumed anchor release under current ownership: forged
+  ---
+  duration_ms: 0.4353
+  type: 'test'
+  ...
+# Subtest: POSIX supervisor joins an already consumed anchor release under current ownership: regressed
+ok 4 - POSIX supervisor joins an already consumed anchor release under current ownership: regressed
+  ---
+  duration_ms: 0.3765
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 2
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 238.3592

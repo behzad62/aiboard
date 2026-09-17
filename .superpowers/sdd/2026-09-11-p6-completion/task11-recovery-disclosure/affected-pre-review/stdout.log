@@ -1,0 +1,3019 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-api-VdH1hy"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-native-build-fijPgu"}
+# Subtest: control API authenticates every route and drives durable lifecycle
+ok 1 - control API authenticates every route and drives durable lifecycle
+  ---
+  duration_ms: 142.9256
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-permissions-kgBLBa"}
+# Subtest: control API stores provider credentials without returning secrets and provisions native Builds
+ok 2 - control API stores provider credentials without returning secrets and provisions native Builds
+  ---
+  duration_ms: 214.4566
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-git-F8FoAg"}
+# Subtest: control API lists and decides durable permission requests
+ok 3 - control API lists and decides durable permission requests
+  ---
+  duration_ms: 62.6513
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-bootstrap-iL73rt"}
+# Subtest: run creation stops before persistence when Git is unavailable
+ok 4 - run creation stops before persistence when Git is unavailable
+  ---
+  duration_ms: 31.7673
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-historical-build-0WlXRa"}
+# Subtest: Git bootstrap failure becomes a durable failed run before model work
+ok 5 - Git bootstrap failure becomes a durable failed run before model work
+  ---
+  duration_ms: 38.5155
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-build-Pln2aB"}
+# Subtest: terminal historical Build reads expose durable provenance through every GET endpoint and audit
+ok 6 - terminal historical Build reads expose durable provenance through every GET endpoint and audit
+  ---
+  duration_ms: 102.04
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-steering-hVaAxb"}
+# Subtest: native Build projections and pump controls are runner-owned API routes
+ok 7 - native Build projections and pump controls are runner-owned API routes
+  ---
+  duration_ms: 313.5998
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-guidance-identical-fqCERs"}
+# Subtest: authenticated steering routes enforce validation, unique concurrency, idempotency conflicts, and exact question versions
+ok 8 - authenticated steering routes enforce validation, unique concurrency, idempotency conflicts, and exact question versions
+  ---
+  duration_ms: 220.642
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-guidance-conflict-jPSfm0"}
+# Subtest: concurrent identical guidance retries both succeed with one durable event and version
+ok 9 - concurrent identical guidance retries both succeed with one durable event and version
+  ---
+  duration_ms: 74.225
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-guidance-lost-response-oVYSUe"}
+# Subtest: concurrent conflicting guidance retries yield one success, one conflict, and one durable winner
+ok 10 - concurrent conflicting guidance retries yield one success, one conflict, and one durable winner
+  ---
+  duration_ms: 76.1151
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-sse-av45sK"}
+# Subtest: guidance retry after a lost post-append response replays one WAL event without changing the objective
+ok 11 - guidance retry after a lost post-append response replays one WAL event without changing the objective
+  ---
+  duration_ms: 90.5411
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-limit-QorCfJ"}
+# Subtest: SSE reconnect replays only events after the acknowledged sequence
+ok 12 - SSE reconnect replays only events after the acknowledged sequence
+  ---
+  duration_ms: 46.9908
+  type: 'test'
+  ...
+# Subtest: control API rejects request bodies larger than one MiB
+ok 13 - control API rejects request bodies larger than one MiB
+  ---
+  duration_ms: 35.8027
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-api-VdH1hy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-native-build-fijPgu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-permissions-kgBLBa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-git-F8FoAg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-bootstrap-iL73rt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-historical-build-0WlXRa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-build-Pln2aB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-steering-hVaAxb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-guidance-identical-fqCERs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-guidance-conflict-jPSfm0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-guidance-lost-response-oVYSUe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-sse-av45sK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-control-limit-QorCfJ","existsAtExit":false}
+# Subtest: Runner-created store kernel rejects structural authority and claims output intent durably
+ok 14 - Runner-created store kernel rejects structural authority and claims output intent durably
+  ---
+  duration_ms: 2.6324
+  type: 'test'
+  ...
+# Subtest: strict per-state parser rejects forged prepared completion and illegal state fields
+ok 15 - strict per-state parser rejects forged prepared completion and illegal state fields
+  ---
+  duration_ms: 1.4279
+  type: 'test'
+  ...
+# Subtest: closed mutation log is the sole authority for prepared and terminal row facts
+ok 16 - closed mutation log is the sole authority for prepared and terminal row facts
+  ---
+  duration_ms: 3.2259
+  type: 'test'
+  ...
+# Subtest: monotonic fencing rejects a stale owner even after it rereads the new revision
+ok 17 - monotonic fencing rejects a stale owner even after it rereads the new revision
+  ---
+  duration_ms: 2.2871
+  type: 'test'
+  ...
+# Subtest: effect journal rejects takeover, stale settlement, and replay until semantic commit
+ok 18 - effect journal rejects takeover, stale settlement, and replay until semantic commit
+  ---
+  duration_ms: 4.4743
+  type: 'test'
+  ...
+# Subtest: effect journal preserves concurrent markers and consumes only the exact family effect id
+ok 19 - effect journal preserves concurrent markers and consumes only the exact family effect id
+  ---
+  duration_ms: 4.5017
+  type: 'test'
+  ...
+# Subtest: effect family consumer matrix accepts only the exact semantic mutation
+ok 20 - effect family consumer matrix accepts only the exact semantic mutation
+  ---
+  duration_ms: 45.9249
+  type: 'test'
+  ...
+# Subtest: late exact signal consumer cannot weaken an already proven exit
+ok 21 - late exact signal consumer cannot weaken an already proven exit
+  ---
+  duration_ms: 19.5824
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-effect-journal-9SpTWg"}
+# Subtest: completed effect marker survives SQLite restart and tampering fails integrity
+ok 22 - completed effect marker survives SQLite restart and tampering fails integrity
+  ---
+  duration_ms: 70.1773
+  type: 'test'
+  ...
+# Subtest: blocked-exit recovery mutation is authenticated and scoped only to bound cleanup blockers
+ok 23 - blocked-exit recovery mutation is authenticated and scoped only to bound cleanup blockers
+  ---
+  duration_ms: 4.1625
+  type: 'test'
+  ...
+# Subtest: terminal parser cross-validates history revision observation stop result escalation and cleanup
+ok 24 - terminal parser cross-validates history revision observation stop result escalation and cleanup
+  ---
+  duration_ms: 6.2461
+  type: 'test'
+  ...
+# Subtest: keyed semantic fingerprint covers environment and deadline without dictionary-guessable SHA
+ok 25 - keyed semantic fingerprint covers environment and deadline without dictionary-guessable SHA
+  ---
+  duration_ms: 0.4465
+  type: 'test'
+  ...
+# Subtest: exact prepare retries converge while divergent retries and stale CAS commands conflict
+ok 26 - exact prepare retries converge while divergent retries and stale CAS commands conflict
+  ---
+  duration_ms: 2.3387
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-E3tGeE"}
+# Subtest: SQLite prepare is atomic across concurrent store instances and divergent requests conflict
+ok 27 - SQLite prepare is atomic across concurrent store instances and divergent requests conflict
+  ---
+  duration_ms: 31.7666
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-HFNe8O"}
+# Subtest: SQLite corruption fails closed on reopen instead of returning a forged cached result
+ok 28 - SQLite corruption fails closed on reopen instead of returning a forged cached result
+  ---
+  duration_ms: 45.5141
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-m4PC9k"}
+# Subtest: actual persisted row contains no command, argument, cwd, secret, native handle, or spill path
+ok 29 - actual persisted row contains no command, argument, cwd, secret, native handle, or spill path
+  ---
+  duration_ms: 35.6703
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-odPC1y"}
+# Subtest: SQLite transactionally migrates legacy writable schema without trusting old rows
+ok 30 - SQLite transactionally migrates legacy writable schema without trusting old rows
+  ---
+  duration_ms: 43.0376
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-ro-ZW6zgq"}
+# Subtest: read-only legacy inspection neither mutates schema nor globally crashes
+ok 31 - read-only legacy inspection neither mutates schema nor globally crashes
+  ---
+  duration_ms: 23.6741
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-effect-journal-9SpTWg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-E3tGeE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-HFNe8O","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-store-m4PC9k","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-odPC1y","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-legacy-ro-ZW6zgq","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-Lh7Cip"}
+# Subtest: issues a canonical opaque grant and consumes it for exactly its bound call
+ok 32 - issues a canonical opaque grant and consumes it for exactly its bound call
+  ---
+  duration_ms: 8.9527
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-credentials-3TEuQO"}
+# Subtest: retains only the bounded approved credential names in consumed claims
+ok 33 - retains only the bounded approved credential names in consumed claims
+  ---
+  duration_ms: 2.6662
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-credential-clone-1oNMKu"}
+# Subtest: clones every public credential-name result instead of sharing authority-owned arrays
+ok 34 - clones every public credential-name result instead of sharing authority-owned arrays
+  ---
+  duration_ms: 2.0155
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-current-muiTmq"}
+# Subtest: makes consumed claims unusable after the ToolBroker revokes their opaque grant
+ok 35 - makes consumed claims unusable after the ToolBroker revokes their opaque grant
+  ---
+  duration_ms: 2.0713
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-expiry-owner-nHU4JE"}
+# Subtest: observing expired consumed claims leaves exactly-once cleanup to ToolBroker revocation
+ok 36 - observing expired consumed claims leaves exactly-once cleanup to ToolBroker revocation
+  ---
+  duration_ms: 2.1065
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-deny-oiCmPZ"}
+# Subtest: denies forged, mismatched, escalated, expired, revoked, and restarted grants
+ok 37 - denies forged, mismatched, escalated, expired, revoked, and restarted grants
+  ---
+  duration_ms: 5.8663
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-path-u4ztCd"}
+# Subtest: rejects access escalation and symbolic canonical roots before issuance
+ok 38 - rejects access escalation and symbolic canonical roots before issuance
+  ---
+  duration_ms: 2.4042
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-race-ZjOBLk"}
+# Subtest: restart and cancellation close an asynchronous issuance barrier
+ok 39 - restart and cancellation close an asynchronous issuance barrier
+  ---
+  duration_ms: 1.9426
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-Lh7Cip","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-credentials-3TEuQO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-credential-clone-1oNMKu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-current-muiTmq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-expiry-owner-nHU4JE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-deny-oiCmPZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-path-u4ztCd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-grant-race-ZjOBLk","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-credential-graph-LPgXUq"}
+# Subtest: real ExecutionHost run excludes ungranted credentials from child environment and exact supervisor argv
+ok 40 - real ExecutionHost run excludes ungranted credentials from child environment and exact supervisor argv
+  ---
+  duration_ms: 3416.1066
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-credential-graph-JUzv4V"}
+# Subtest: real ExecutionHost internal-discovery excludes ungranted credentials from child environment and exact supervisor argv
+ok 41 - real ExecutionHost internal-discovery excludes ungranted credentials from child environment and exact supervisor argv
+  ---
+  duration_ms: 6800.482
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-credential-graph-LPgXUq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-credential-graph-JUzv4V","existsAtExit":false}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-8fe3dccf-7444-429a-96ce-83ae21a84173"}
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-8fe3dccf-7444-429a-96ce-83ae21a84173"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-8fe3dccf-7444-429a-96ce-83ae21a84173"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-5d439fb0-86e9-4a50-992e-de6976c0d549"}
+# Subtest: ExecutionHost close conjunction retains a pre-adoption unknown launch and exact retry authority
+ok 42 - ExecutionHost close conjunction retains a pre-adoption unknown launch and exact retry authority
+  ---
+  duration_ms: 158.9847
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-5d439fb0-86e9-4a50-992e-de6976c0d549"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-5d439fb0-86e9-4a50-992e-de6976c0d549"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-2bb363b2-5a30-4cc2-b401-d9463050d946"}
+# Subtest: ExecutionHost close conjunction independently checks launches beyond bounded recovery
+ok 43 - ExecutionHost close conjunction independently checks launches beyond bounded recovery
+  ---
+  duration_ms: 4592.7178
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-2bb363b2-5a30-4cc2-b401-d9463050d946"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-2bb363b2-5a30-4cc2-b401-d9463050d946"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-fc2a6152-0bf1-46a4-815a-7adc54a693f2"}
+# Subtest: ExecutionHost close conjunction consumes blocked recovery when durable settlement fails
+ok 44 - ExecutionHost close conjunction consumes blocked recovery when durable settlement fails
+  ---
+  duration_ms: 121.9447
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-fc2a6152-0bf1-46a4-815a-7adc54a693f2"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-fc2a6152-0bf1-46a4-815a-7adc54a693f2"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-83e1d278-4853-4935-9bd9-f7c63611d3a6"}
+# Subtest: ExecutionHost close conjunction validates handed-off launch with released session
+ok 45 - ExecutionHost close conjunction validates handed-off launch with released session
+  ---
+  duration_ms: 157.1695
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-83e1d278-4853-4935-9bd9-f7c63611d3a6"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-83e1d278-4853-4935-9bd9-f7c63611d3a6"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-6896947c-7022-45c1-b7dd-5809279e4f27"}
+# Subtest: ExecutionHost close conjunction validates handed-off launch with missing session
+ok 46 - ExecutionHost close conjunction validates handed-off launch with missing session
+  ---
+  duration_ms: 90.7833
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-6896947c-7022-45c1-b7dd-5809279e4f27"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-baf0ac4d-1692-4251-b141-a9a98774750c"}
+# Subtest: one ExecutionHost creates isolated per-run grants stores runtimes and cleanup ownership
+ok 47 - one ExecutionHost creates isolated per-run grants stores runtimes and cleanup ownership
+  ---
+  duration_ms: 105.1878
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-baf0ac4d-1692-4251-b141-a9a98774750c"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-8037bde8-1283-46d9-af07-6b86f3eea308"}
+# Subtest: ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings
+ok 48 - ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings
+  ---
+  duration_ms: 71.8792
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-8037bde8-1283-46d9-af07-6b86f3eea308"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-eb70e670-b5fc-4e89-b3ae-c646046e2ee2"}
+# Subtest: ExecutionHost excludes provider-prefixed credentials from its captured child source
+ok 49 - ExecutionHost excludes provider-prefixed credentials from its captured child source
+  ---
+  duration_ms: 3.3619
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-eb70e670-b5fc-4e89-b3ae-c646046e2ee2"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-86ccf4fc-97bf-479c-9cf0-41dd5897b76e"}
+# Subtest: failed ExecutionHost run construction unwinds its opened SQLite resources
+ok 50 - failed ExecutionHost run construction unwinds its opened SQLite resources
+  ---
+  duration_ms: 30.5867
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-86ccf4fc-97bf-479c-9cf0-41dd5897b76e"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-38b709cb-3802-461c-9d06-d69328c1afab"}
+# Subtest: run binding retains membership and retries a transient cleanup failure
+ok 51 - run binding retains membership and retries a transient cleanup failure
+  ---
+  duration_ms: 62.4149
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-38b709cb-3802-461c-9d06-d69328c1afab"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-62411575-771a-4e6f-aec2-cba03c3eca5c"}
+# Subtest: ExecutionHost close retains failed bindings and retries its exact cleanup graph
+ok 52 - ExecutionHost close retains failed bindings and retries its exact cleanup graph
+  ---
+  duration_ms: 62.7961
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-e1718b44-3130-4881-842b-3b231f8bfd43"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted active
+ok 53 - fresh ExecutionHost close accounts for unreleased adopted active
+  ---
+  duration_ms: 116.2726
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-6a382bca-bb8f-4651-83d0-a93c4be9c2df"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted stopping
+ok 54 - fresh ExecutionHost close accounts for unreleased adopted stopping
+  ---
+  duration_ms: 100.4534
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-258fc5b4-fe70-49c5-ac84-36cdca1de342"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted input_unavailable
+ok 55 - fresh ExecutionHost close accounts for unreleased adopted input_unavailable
+  ---
+  duration_ms: 106.6469
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-fd2fc2ab-4aa3-4dd3-9669-47a403cdf147"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted backend_unavailable
+ok 56 - fresh ExecutionHost close accounts for unreleased adopted backend_unavailable
+  ---
+  duration_ms: 105.3851
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-c24ae340-274b-4d11-ae45-68a5b402e5c4"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted outcome_unknown
+ok 57 - fresh ExecutionHost close accounts for unreleased adopted outcome_unknown
+  ---
+  duration_ms: 95.7596
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-aa66396a-2554-48b8-b63b-9bec070e7351"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted cleanup_pending
+ok 58 - fresh ExecutionHost close accounts for unreleased adopted cleanup_pending
+  ---
+  duration_ms: 89.4838
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-19b51b3a-091d-459e-9b48-9eaebfd391dd"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted cleanup_blocked
+ok 59 - fresh ExecutionHost close accounts for unreleased adopted cleanup_blocked
+  ---
+  duration_ms: 101.6521
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-mG8ocl"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-oi8KiF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QGdZsW"}
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-19b51b3a-091d-459e-9b48-9eaebfd391dd"}
+# Subtest: two real concurrent run bindings cannot cross grants outputs or cleanup effects
+ok 60 - two real concurrent run bindings cannot cross grants outputs or cleanup effects
+  ---
+  duration_ms: 16202.2885
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-mG8ocl","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-oi8KiF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QGdZsW","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-legacy-steering-upgrade-4DxRHj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-pause-quiesce-ou1vPe"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recovery-quiesce-mHqx85"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-error-quiesce-ExbuWC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-question-blocked-EDaoZr"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-wake-vjRJwS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-retirement-Gv2o9n"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-retirement-barrier-ZKzNt4"}
+# Subtest: recovery upgrades a parent-format acknowledged interruption while adopting a newer verification generation
+ok 61 - recovery upgrades a parent-format acknowledged interruption while adopting a newer verification generation
+  ---
+  duration_ms: 127.0818
+  type: 'test'
+  ...
+# Subtest: explicit pause quiesces exact run resources without invoking workspace cleanup
+ok 62 - explicit pause quiesces exact run resources without invoking workspace cleanup
+  ---
+  duration_ms: 19.296
+  type: 'test'
+  ...
+# Subtest: startup recovery quiesces active run resources without removing verification state
+ok 63 - startup recovery quiesces active run resources without removing verification state
+  ---
+  duration_ms: 23.0517
+  type: 'test'
+  ...
+# Subtest: autonomous pump error durably pauses then quiesces exact run resources
+ok 64 - autonomous pump error durably pauses then quiesces exact run resources
+  ---
+  duration_ms: 21.0595
+  type: 'test'
+  ...
+# Subtest: an unanswered Architect question quiesces the autonomous pump without pausing the run
+ok 65 - an unanswered Architect question quiesces the autonomous pump without pausing the run
+  ---
+  duration_ms: 24.4128
+  type: 'test'
+  ...
+# Subtest: durable steering appends before the manager wakes the autonomous pump
+ok 66 - durable steering appends before the manager wakes the autonomous pump
+  ---
+  duration_ms: 21.6255
+  type: 'test'
+  ...
+# Subtest: durable steering retires the exact invalidated verification generation before pumping
+ok 67 - durable steering retires the exact invalidated verification generation before pumping
+  ---
+  duration_ms: 20.8263
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-guidance-replay-no-effects-ISs1kq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-terminal-guidance-replay-5cHNUp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-guidance-retirement-retry-TctdJk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-retirement-recovery-CUKpCK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-adoption-recovery-Hq7sUe"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-active-wake-HKYAfL"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-il2DRi"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-pump-rNRXre"}
+# Subtest: active pump cannot consume guidance until exact verification retirement completes
+ok 68 - active pump cannot consume guidance until exact verification retirement completes
+  ---
+  duration_ms: 41.1962
+  type: 'test'
+  ...
+# Subtest: acknowledged exact guidance replay performs no later lifecycle side effects
+ok 69 - acknowledged exact guidance replay performs no later lifecycle side effects
+  ---
+  duration_ms: 18.5871
+  type: 'test'
+  ...
+# Subtest: completed exact guidance replay succeeds without touching a failing cleanup service
+ok 70 - completed exact guidance replay succeeds without touching a failing cleanup service
+  ---
+  duration_ms: 18.1306
+  type: 'test'
+  ...
+# Subtest: exact retry after post-append retirement failure retries cleanup and releases durable progress
+ok 71 - exact retry after post-append retirement failure retries cleanup and releases durable progress
+  ---
+  duration_ms: 18.6408
+  type: 'test'
+  ...
+# Subtest: recovery retires a durably invalidated generation after post-append cleanup failure
+ok 72 - recovery retires a durably invalidated generation after post-append cleanup failure
+  ---
+  duration_ms: 20.858
+  type: 'test'
+  ...
+# Subtest: recovery adopts an invalidated generation without removing a newer current workspace
+ok 73 - recovery adopts an invalidated generation without removing a newer current workspace
+  ---
+  duration_ms: 18.3322
+  type: 'test'
+  ...
+# Subtest: steering that lands during an active pump schedules a post-checkpoint wake
+ok 74 - steering that lands during an active pump schedules a post-checkpoint wake
+  ---
+  duration_ms: 18.5827
+  type: 'test'
+  ...
+# Subtest: native Build manager recreates persisted runtimes and closes resources
+ok 75 - native Build manager recreates persisted runtimes and closes resources
+  ---
+  duration_ms: 21.074
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-pump-do4i7I"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handoff-replay-iEwitS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handoff-steering-race-fD5tbC"}
+# Subtest: native Build manager owns one autonomous pump per active run
+ok 76 - native Build manager owns one autonomous pump per active run
+  ---
+  duration_ms: 37.1138
+  type: 'test'
+  ...
+# Subtest: recovery autonomously restarts only runs the supervisor still marks active
+ok 77 - recovery autonomously restarts only runs the supervisor still marks active
+  ---
+  duration_ms: 19.8508
+  type: 'test'
+  ...
+# Subtest: completed project handoff replays without applying the project twice
+ok 78 - completed project handoff replays without applying the project twice
+  ---
+  duration_ms: 19.1196
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-guidance-wins-handoff-11pOip"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-yield-zlasLV"}
+# Subtest: guidance and project handoff are linearized before external project mutation
+ok 79 - guidance and project handoff are linearized before external project mutation
+  ---
+  duration_ms: 19.2402
+  type: 'test'
+  ...
+# Subtest: guidance that wins handoff serialization prevents external project mutation
+ok 80 - guidance that wins handoff serialization prevents external project mutation
+  ---
+  duration_ms: 21.4364
+  type: 'test'
+  ...
+# Subtest: a brand-new native Build starts with no recovered provider cooldowns
+ok 81 - a brand-new native Build starts with no recovered provider cooldowns
+  ---
+  duration_ms: 0.2453
+  type: 'test'
+  ...
+# Subtest: worker routing excludes Architect-only runtimes from the worker pool
+ok 82 - worker routing excludes Architect-only runtimes from the worker pool
+  ---
+  duration_ms: 0.2666
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-auto-handoff-nJdGv9"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-plan-handoff-KKspWe"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-missing-policy-hef0e6"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-failed-handoff-BnfdOa"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-cleanup-failure-d0O5KP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-cleanup-gywqiT"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-compact-Ju3DYb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-scan-error-tAg5R8"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-self-lease-uP8bMK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-manual-step-finalize-qxnBVE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-manual-run-gc-s8g1Xr"}
+# Subtest: autonomous pump continues after bounded progress without user Resume
+ok 83 - autonomous pump continues after bounded progress without user Resume
+  ---
+  duration_ms: 29.4546
+  type: 'test'
+  ...
+# Subtest: requested Finish or Budgeted handoff auto-applies once and cleans up after settlement
+ok 84 - requested Finish or Budgeted handoff auto-applies once and cleans up after settlement
+  ---
+  duration_ms: 19.9021
+  type: 'test'
+  ...
+# Subtest: Plan-only requested handoff remains paused for the user
+ok 85 - Plan-only requested handoff remains paused for the user
+  ---
+  duration_ms: 18.346
+  type: 'test'
+  ...
+# Subtest: a requested handoff without a durable policy is not auto-applied
+ok 86 - a requested handoff without a durable policy is not auto-applied
+  ---
+  duration_ms: 18.884
+  type: 'test'
+  ...
+# Subtest: automatic apply failure leaves requested handoff paused without cleanup
+ok 87 - automatic apply failure leaves requested handoff paused without cleanup
+  ---
+  duration_ms: 19.7113
+  type: 'test'
+  ...
+# Subtest: cleanup failure does not reclassify an already settled handoff as paused
+ok 88 - cleanup failure does not reclassify an already settled handoff as paused
+  ---
+  duration_ms: 19.3462
+  type: 'test'
+  ...
+# Subtest: recovery retries cleanup for a durably settled Build
+ok 89 - recovery retries cleanup for a durably settled Build
+  ---
+  duration_ms: 18.8957
+  type: 'test'
+  ...
+# Subtest: recovery compacts every non-running Build, skips active Builds, and continues after one compaction error
+ok 90 - recovery compacts every non-running Build, skips active Builds, and continues after one compaction error
+  ---
+  duration_ms: 23.5101
+  type: 'test'
+  ...
+# Subtest: recovery reports a global reachability scan failure and still activates recoverable work
+ok 91 - recovery reports a global reachability scan failure and still activates recoverable work
+  ---
+  duration_ms: 19.3091
+  type: 'test'
+  ...
+# Subtest: settlement requests live compaction after releasing its own activity lease
+ok 92 - settlement requests live compaction after releasing its own activity lease
+  ---
+  duration_ms: 18.3243
+  type: 'test'
+  ...
+# Subtest: public step auto-applies Finish handoff and finalizes cleanup once
+ok 93 - public step auto-applies Finish handoff and finalizes cleanup once
+  ---
+  duration_ms: 21.0078
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-manual-plan-only-2Xc6HI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-resume-race-UPpRlT"}
+# Subtest: public runUntilBlocked performs live physical cleanup after completion
+ok 94 - public runUntilBlocked performs live physical cleanup after completion
+  ---
+  duration_ms: 77.6133
+  type: 'test'
+  ...
+# Subtest: public step leaves Plan-only handoff requested without mutation or cleanup
+ok 95 - public step leaves Plan-only handoff requested without mutation or cleanup
+  ---
+  duration_ms: 18.6631
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-gate-mjGeQt"}
+# Subtest: lifecycle mutations wait during live compaction and pass two recomputes eligibility
+ok 96 - lifecycle mutations wait during live compaction and pass two recomputes eligibility
+  ---
+  duration_ms: 20.3471
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-delete-4CiHlK"}
+# Subtest: live compaction waits for active work, blocks new work, and scans once
+ok 97 - live compaction waits for active work, blocks new work, and scans once
+  ---
+  duration_ms: 20.6995
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-coalesce-MrzET6"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-generation-l3vhE5"}
+# Subtest: live settlement physically deletes obsolete checkpoints without touching active-run artifacts
+ok 98 - live settlement physically deletes obsolete checkpoints without touching active-run artifacts
+  ---
+  duration_ms: 89.3322
+  type: 'test'
+  ...
+# Subtest: concurrent settlements coalesce into one live reachability scan
+ok 99 - concurrent settlements coalesce into one live reachability scan
+  ---
+  duration_ms: 19.4516
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-failure-784NM5"}
+# Subtest: settlement admitted after a live scan schedules a fresh compaction generation
+ok 100 - settlement admitted after a live scan schedules a fresh compaction generation
+  ---
+  duration_ms: 107.8588
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-close-ZSf3wy"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-close-cleanup-tdEdAf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handle-close-retry-LiStq1"}
+# Subtest: a failed live reachability scan retains artifacts and reopens the activity gate
+ok 101 - a failed live reachability scan retains artifacts and reopens the activity gate
+  ---
+  duration_ms: 69.8384
+  type: 'test'
+  ...
+# Subtest: close rejects work queued behind live compaction and waits for active work
+ok 102 - close rejects work queued behind live compaction and waits for active work
+  ---
+  duration_ms: 20.108
+  type: 'test'
+  ...
+# Subtest: close retries cleanup that failed after settlement
+ok 103 - close retries cleanup that failed after settlement
+  ---
+  duration_ms: 17.9297
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handle-close-retry-LiStq1\\\\success-state\\\\extension-executions\\\\.3cb5b6246a9aa3ab-lCzGeo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handle-close-retry-LiStq1\\\\failed-state\\\\extension-executions\\\\.e0e413278cf1b0f7-fy3v9B"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-projection-close-rotMkC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-close-handoff-aX5F86"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-capability-contract-MzI78U"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-runtime-recovery-error-86mjjD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-historical-read-RmizIH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-historical-mutations-zEZszv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-capability-stamp-OXQ4K9"}
+# Subtest: manager close shares failures then retries only the handle that still owns a child
+ok 104 - manager close shares failures then retries only the handle that still owns a child
+  ---
+  duration_ms: 166.2668
+  type: 'test'
+  ...
+# C5 finalizer10 acquired exact manager fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-build-manager-handle-close-retry-LiStq1
+# C5 finalizer10 removed certified manager fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-build-manager-handle-close-retry-LiStq1
+# Subtest: manager close aggregates projection failure but still closes the reachable handle
+ok 105 - manager close aggregates projection failure but still closes the reachable handle
+  ---
+  duration_ms: 18.6281
+  type: 'test'
+  ...
+# Subtest: close waits for an in-flight automatic handoff before closing resources
+ok 106 - close waits for an in-flight automatic handoff before closing resources
+  ---
+  duration_ms: 18.09
+  type: 'test'
+  ...
+# Subtest: recovery rejects an active missing capability contract before constructing its runtime
+ok 107 - recovery rejects an active missing capability contract before constructing its runtime
+  ---
+  duration_ms: 17.9797
+  type: 'test'
+  ...
+# Subtest: recovery routes an active runtime-construction failure through the durable recovery error path
+ok 108 - recovery routes an active runtime-construction failure through the durable recovery error path
+  ---
+  duration_ms: 18.1134
+  type: 'test'
+  ...
+# Subtest: terminal legacy Builds retain read-only historical projections without constructing a live runtime
+ok 109 - terminal legacy Builds retain read-only historical projections without constructing a live runtime
+  ---
+  duration_ms: 18.0734
+  type: 'test'
+  ...
+# Subtest: historical Builds reject every manager mutation before invoking a replayed runtime
+ok 110 - historical Builds reject every manager mutation before invoking a replayed runtime
+  ---
+  duration_ms: 19.3607
+  type: 'test'
+  ...
+# Subtest: new Builds persist a runner-prepared capability contract before runtime construction
+ok 111 - new Builds persist a runner-prepared capability contract before runtime construction
+  ---
+  duration_ms: 19.8299
+  type: 'test'
+  ...
+# Subtest: configured usage marks an Architect-only capability mismatch unavailable
+ok 112 - configured usage marks an Architect-only capability mismatch unavailable
+  ---
+  duration_ms: 0.281
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-legacy-steering-upgrade-4DxRHj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-pause-quiesce-ou1vPe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recovery-quiesce-mHqx85","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-error-quiesce-ExbuWC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-question-blocked-EDaoZr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-wake-vjRJwS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-retirement-Gv2o9n","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-retirement-barrier-ZKzNt4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-guidance-replay-no-effects-ISs1kq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-terminal-guidance-replay-5cHNUp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-guidance-retirement-retry-TctdJk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-retirement-recovery-CUKpCK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-adoption-recovery-Hq7sUe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-steering-active-wake-HKYAfL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-il2DRi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-pump-rNRXre","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-pump-do4i7I","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handoff-replay-iEwitS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handoff-steering-race-fD5tbC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-guidance-wins-handoff-11pOip","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-yield-zlasLV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-auto-handoff-nJdGv9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-plan-handoff-KKspWe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-missing-policy-hef0e6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-failed-handoff-BnfdOa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-cleanup-failure-d0O5KP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-cleanup-gywqiT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-compact-Ju3DYb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-recover-scan-error-tAg5R8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-self-lease-uP8bMK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-manual-step-finalize-qxnBVE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-manual-run-gc-s8g1Xr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-manual-plan-only-2Xc6HI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-resume-race-UPpRlT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-gate-mjGeQt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-delete-4CiHlK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-coalesce-MrzET6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-generation-l3vhE5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-failure-784NM5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-live-gc-close-ZSf3wy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-close-cleanup-tdEdAf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handle-close-retry-LiStq1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handle-close-retry-LiStq1\\\\success-state\\\\extension-executions\\\\.3cb5b6246a9aa3ab-lCzGeo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-handle-close-retry-LiStq1\\\\failed-state\\\\extension-executions\\\\.e0e413278cf1b0f7-fy3v9B","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-projection-close-rotMkC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-close-handoff-aX5F86","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-capability-contract-MzI78U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-runtime-recovery-error-86mjjD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-historical-read-RmizIH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-historical-mutations-zEZszv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-build-manager-capability-stamp-OXQ4K9","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-arLBqX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-preconsume-qZA55i"}
+# Subtest: shared executor selects isolation before launch and releases after verified cleanup
+ok 113 - shared executor selects isolation before launch and releases after verified cleanup
+  ---
+  duration_ms: 13.9608
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unavailable-HAXQ2X"}
+# Subtest: a pre-consumption runtime failure revokes its runtime grant exactly once before isolation release
+ok 114 - a pre-consumption runtime failure revokes its runtime grant exactly once before isolation release
+  ---
+  duration_ms: 3.679
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unknown-KfzBsq"}
+# Subtest: strict capability failure happens before runtime launch
+ok 115 - strict capability failure happens before runtime launch
+  ---
+  duration_ms: 1.3673
+  type: 'test'
+  ...
+# Subtest: runtime outcome uncertainty still releases strict isolation and a release blocker wins truthfully
+ok 116 - runtime outcome uncertainty still releases strict isolation and a release blocker wins truthfully
+  ---
+  duration_ms: 1.3851
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-arLBqX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-preconsume-qZA55i","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unavailable-HAXQ2X","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-one-shot-unknown-KfzBsq","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-3ccf27ec-4aab-44b9-a045-fe61f5b3c11f-bcSsZ9"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-oNUWSO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-c2309dae-9b5b-4ac5-af57-61cac8b8c921-g6v8HK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-tH171Z"}
+# Subtest: process public family times out and cleans a TERM-ignoring grandchild
+ok 117 - process public family times out and cleans a TERM-ignoring grandchild
+  ---
+  duration_ms: 7067.9596
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-f009e83f-d4b2-4b0e-8078-138ab85253a6-y667XU"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-JCUvoJ"}
+# Subtest: process public family cancellation cleans its TERM-ignoring grandchild
+ok 118 - process public family cancellation cleans its TERM-ignoring grandchild
+  ---
+  duration_ms: 1021.8981
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-2221b58d-f048-46de-b36f-6a6a35b122ed-FQSPix"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-UX9zer"}
+# Subtest: process public family maps strict capability failure before launch
+ok 119 - process public family maps strict capability failure before launch
+  ---
+  duration_ms: 21.2816
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-f84ec82e-96d1-4565-9ea6-6c7100f3103f-GcyqJa"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-VHxau8"}
+# Subtest: process public family maps restart outcome_unknown and retains cleanup ownership
+ok 120 - process public family maps restart outcome_unknown and retains cleanup ownership
+  ---
+  duration_ms: 216.2609
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-9fbe3863-7db2-4aa5-96ea-8c37ced4e35e-uwjeXm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-M7kTfx"}
+# Subtest: evidence public family times out and cleans a TERM-ignoring grandchild
+ok 121 - evidence public family times out and cleans a TERM-ignoring grandchild
+  ---
+  duration_ms: 6986.6761
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-9fc497c0-908f-464a-987b-c92f85fcba63-HncXNL"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-IeAtq0"}
+# Subtest: evidence public family cancellation cleans its TERM-ignoring grandchild
+ok 122 - evidence public family cancellation cleans its TERM-ignoring grandchild
+  ---
+  duration_ms: 1132.6456
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-5ad0d23e-db7c-41f5-9786-3df8135bbab5-FJsmCs"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-IWzzqo"}
+# Subtest: evidence public family maps strict capability failure before launch
+ok 123 - evidence public family maps strict capability failure before launch
+  ---
+  duration_ms: 39.132
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-5c4a651b-e968-480a-a3e2-a66db6ad7ced-pjPOAh"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-Kq1Mlp"}
+# Subtest: evidence public family maps restart outcome_unknown and retains cleanup ownership
+ok 124 - evidence public family maps restart outcome_unknown and retains cleanup ownership
+  ---
+  duration_ms: 243.8801
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-75fa9ef8-dc33-4406-a640-f0cc680465f8-rImIsD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-kbevqf"}
+# Subtest: final-verification public family times out and cleans a TERM-ignoring grandchild
+ok 125 - final-verification public family times out and cleans a TERM-ignoring grandchild
+  ---
+  duration_ms: 8420.7659
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-c94299a9-7013-45fd-8c99-c3827eab6392-gWiFVS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-4yHLWm"}
+# Subtest: final-verification public family cancellation cleans its TERM-ignoring grandchild
+ok 126 - final-verification public family cancellation cleans its TERM-ignoring grandchild
+  ---
+  duration_ms: 2515.3233
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-aecd0717-5efc-4ddc-8363-cd7999977357-O2NZqO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-sfoZRi"}
+# Subtest: final-verification public family maps strict capability failure before launch
+ok 127 - final-verification public family maps strict capability failure before launch
+  ---
+  duration_ms: 1476.8722
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-ec7c638c-1fc7-4452-bd06-a43de8186db6-M8xSRI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-ol28mF"}
+# Subtest: final-verification public family maps restart outcome_unknown and retains cleanup ownership
+ok 128 - final-verification public family maps restart outcome_unknown and retains cleanup ownership
+  ---
+  duration_ms: 1661.2119
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-b896c180-feec-44a5-8ee6-b96813011f22-O6PPAN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-FAoF9n"}
+# Subtest: process public family queues cancellation after workload start but before durable bind
+ok 129 - process public family queues cancellation after workload start but before durable bind
+  ---
+  duration_ms: 1091.114
+  type: 'test'
+  ...
+# Subtest: process public family queues timeout after workload start but before durable bind
+ok 130 - process public family queues timeout after workload start but before durable bind
+  ---
+  duration_ms: 1443.732
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-3ccf27ec-4aab-44b9-a045-fe61f5b3c11f-bcSsZ9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-oNUWSO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-c2309dae-9b5b-4ac5-af57-61cac8b8c921-g6v8HK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-tH171Z","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-f009e83f-d4b2-4b0e-8078-138ab85253a6-y667XU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-JCUvoJ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-2221b58d-f048-46de-b36f-6a6a35b122ed-FQSPix","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-UX9zer","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-f84ec82e-96d1-4565-9ea6-6c7100f3103f-GcyqJa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-VHxau8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-9fbe3863-7db2-4aa5-96ea-8c37ced4e35e-uwjeXm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-M7kTfx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-9fc497c0-908f-464a-987b-c92f85fcba63-HncXNL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-IeAtq0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-evidence-5ad0d23e-db7c-41f5-9786-3df8135bbab5-FJsmCs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-IWzzqo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-5c4a651b-e968-480a-a3e2-a66db6ad7ced-pjPOAh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-Kq1Mlp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-75fa9ef8-dc33-4406-a640-f0cc680465f8-rImIsD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-kbevqf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-c94299a9-7013-45fd-8c99-c3827eab6392-gWiFVS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-4yHLWm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-final-verification-aecd0717-5efc-4ddc-8363-cd7999977357-O2NZqO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-sfoZRi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-ec7c638c-1fc7-4452-bd06-a43de8186db6-M8xSRI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-ol28mF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-process-b896c180-feec-44a5-8ee6-b96813011f22-O6PPAN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-FAoF9n","existsAtExit":false}
+# Subtest: one-shot command families have no native execution escape route
+ok 131 - one-shot command families have no native execution escape route
+  ---
+  duration_ms: 42.9926
+  type: 'test'
+  ...
+# Subtest: native factory owns one shared executor graph and injects it into worker and verification
+ok 132 - native factory owns one shared executor graph and injects it into worker and verification
+  ---
+  duration_ms: 0.7451
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-WJ3XZU"}
+# Subtest: bounded command capture complete never turns storage loss into partial protocol success
+ok 133 - bounded command capture complete never turns storage loss into partial protocol success
+  ---
+  duration_ms: 7.1339
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-WJ3XZU
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-WJ3XZU
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-sIQVij"}
+# Subtest: bounded command capture overflow never turns storage loss into partial protocol success
+ok 134 - bounded command capture overflow never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.4389
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-sIQVij
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-sIQVij
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-Jc4Kup"}
+# Subtest: bounded command capture incomplete-observation never turns storage loss into partial protocol success
+ok 135 - bounded command capture incomplete-observation never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.5479
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-Jc4Kup
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-Jc4Kup
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-TNQVC7"}
+# Subtest: bounded command capture disabled never turns storage loss into partial protocol success
+ok 136 - bounded command capture disabled never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.2035
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-TNQVC7
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-TNQVC7
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-1ZnHIE"}
+# Subtest: bounded command capture invalid-bound never turns storage loss into partial protocol success
+ok 137 - bounded command capture invalid-bound never turns storage loss into partial protocol success
+  ---
+  duration_ms: 1.4523
+  type: 'test'
+  ...
+# exact synthetic capture fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-1ZnHIE
+# exact capture fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-command-capture-1ZnHIE
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-WJ3XZU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-sIQVij","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-Jc4Kup","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-TNQVC7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-command-capture-1ZnHIE","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-manager-QnpDIY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-control-cV8trs"}
+# Subtest: native Build manager exposes recovery only through the live handle
+ok 138 - native Build manager exposes recovery only through the live handle
+  ---
+  duration_ms: 20.0931
+  type: 'test'
+  ...
+# Subtest: control server recovery routes are authenticated, closed and serialize exact decisions
+ok 139 - control server recovery routes are authenticated, closed and serialize exact decisions
+  ---
+  duration_ms: 96.4507
+  type: 'test'
+  ...
+# Subtest: CLI connects the native Build recovery plane to the authenticated control server
+ok 140 - CLI connects the native Build recovery plane to the authenticated control server
+  ---
+  duration_ms: 0.6989
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-manager-QnpDIY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-control-cV8trs","existsAtExit":false}
+# Subtest: execution disclosure names Full bypass, backend semantics, output loss and unresolved recovery
+ok 141 - execution disclosure names Full bypass, backend semantics, output loss and unresolved recovery
+  ---
+  duration_ms: 0.9756
+  type: 'test'
+  ...
+# Subtest: execution disclosure never upgrades absent or partial facts into confinement
+ok 142 - execution disclosure never upgrades absent or partial facts into confinement
+  ---
+  duration_ms: 0.1262
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-2Srzkm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-rvxjH1"}
+# Subtest: exceptional kernel requires an actual original-authority grant, not an approval boolean
+ok 143 - exceptional kernel requires an actual original-authority grant, not an approval boolean
+  ---
+  duration_ms: 49.4155
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-ZQD1FW"}
+# Subtest: exceptional kernel snapshots inspect action before yielding
+ok 144 - exceptional kernel snapshots inspect action before yielding
+  ---
+  duration_ms: 64.6136
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-vu7vAw"}
+# Subtest: exceptional kernel revocation while reattesting blocks later native effects
+ok 145 - exceptional kernel revocation while reattesting blocks later native effects
+  ---
+  duration_ms: 44.9337
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-Av7ugG"}
+# Subtest: exceptional kernel cleanup uses the ordinary output-finalize and backend-release path
+ok 146 - exceptional kernel cleanup uses the ordinary output-finalize and backend-release path
+  ---
+  duration_ms: 171.8779
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-kB2A9P"}
+# Subtest: exceptional kernel false emptiness is non-green and has no unconsumed verification effect
+ok 147 - exceptional kernel false emptiness is non-green and has no unconsumed verification effect
+  ---
+  duration_ms: 126.856
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-bbVprq"}
+# Subtest: exceptional kernel binds its grant to the original action and complete target
+ok 148 - exceptional kernel binds its grant to the original action and complete target
+  ---
+  duration_ms: 33.3367
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-2n94P6"}
+# Subtest: exceptional kernel refuses an expired native proposal before any probe
+ok 149 - exceptional kernel refuses an expired native proposal before any probe
+  ---
+  duration_ms: 34.2887
+  type: 'test'
+  ...
+# Subtest: exceptional kernel revocation after reconciliation prevents signal escalation
+ok 150 - exceptional kernel revocation after reconciliation prevents signal escalation
+  ---
+  duration_ms: 119.5728
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-2Srzkm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-rvxjH1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-ZQD1FW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-vu7vAw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-Av7ugG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-kB2A9P","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-bbVprq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-kernel-2n94P6","existsAtExit":false}
+# Subtest: ordinary process lifecycle has no model invocation dependency
+ok 151 - ordinary process lifecycle has no model invocation dependency
+  ---
+  duration_ms: 2.3722
+  type: 'test'
+  ...
+# Subtest: only exceptional recovery composition can construct the proposal model generator
+ok 152 - only exceptional recovery composition can construct the proposal model generator
+  ---
+  duration_ms: 19.3078
+  type: 'test'
+  ...
+# Subtest: ordinary execution host never dispatches exceptional recovery implicitly
+ok 153 - ordinary execution host never dispatches exceptional recovery implicitly
+  ---
+  duration_ms: 0.6061
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-APwD5s"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-R4Bdom"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1UDvY3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-vjDCMX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-HKGlp7"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Mfkamq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-p8lfbc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-rc2TC3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-X1tLBK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-4Tr56G"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-CBl33p"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-PQjCti"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-sjrFJT"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Y04jqM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-A2wcoo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cR9VP8"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-8PeYfD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-E0ZW2L"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2mTM2t"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-hggKiQ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-pA5oBd"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-MXtac0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-3YTfkb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-kVey2f"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-NjpMzg"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-DmvO1l"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-hmpsM0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-njIEhV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-gFONAk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-m5B5rb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-taPEPd"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-8WErfu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cLDcc2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-OanFqz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-4LiSOt"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-4oNT3N"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Bkss9f"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-J2hbz8"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-vGOXVB"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-nFoI1G"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-adapter-1b9SuJ"}
+# Subtest: process recovery: routine state prepared cannot call a model or effect
+ok 154 - process recovery: routine state prepared cannot call a model or effect
+  ---
+  duration_ms: 33.5034
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state launching cannot call a model or effect
+ok 155 - process recovery: routine state launching cannot call a model or effect
+  ---
+  duration_ms: 23.7832
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state running cannot call a model or effect
+ok 156 - process recovery: routine state running cannot call a model or effect
+  ---
+  duration_ms: 22.3321
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state stopping cannot call a model or effect
+ok 157 - process recovery: routine state stopping cannot call a model or effect
+  ---
+  duration_ms: 22.8473
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state exited cannot call a model or effect
+ok 158 - process recovery: routine state exited cannot call a model or effect
+  ---
+  duration_ms: 98.5683
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state verifying_empty cannot call a model or effect
+ok 159 - process recovery: routine state verifying_empty cannot call a model or effect
+  ---
+  duration_ms: 33.5905
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state cleaned cannot call a model or effect
+ok 160 - process recovery: routine state cleaned cannot call a model or effect
+  ---
+  duration_ms: 23.0139
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state cleanup_blocked cannot call a model or effect
+ok 161 - process recovery: routine state cleanup_blocked cannot call a model or effect
+  ---
+  duration_ms: 23.3143
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional orphaned accepts only a validated proposal
+ok 162 - process recovery: exceptional orphaned accepts only a validated proposal
+  ---
+  duration_ms: 36.4003
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional identity_mismatch accepts only a validated proposal
+ok 163 - process recovery: exceptional identity_mismatch accepts only a validated proposal
+  ---
+  duration_ms: 37.1349
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional backend_unavailable accepts only a validated proposal
+ok 164 - process recovery: exceptional backend_unavailable accepts only a validated proposal
+  ---
+  duration_ms: 34.6358
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional outcome_unknown accepts only a validated proposal
+ok 165 - process recovery: exceptional outcome_unknown accepts only a validated proposal
+  ---
+  duration_ms: 33.6985
+  type: 'test'
+  ...
+# Subtest: process recovery: changed runId is rejected before execution
+ok 166 - process recovery: changed runId is rejected before execution
+  ---
+  duration_ms: 23.5417
+  type: 'test'
+  ...
+# Subtest: process recovery: changed taskId is rejected before execution
+ok 167 - process recovery: changed taskId is rejected before execution
+  ---
+  duration_ms: 22.0086
+  type: 'test'
+  ...
+# Subtest: process recovery: changed sessionId is rejected before execution
+ok 168 - process recovery: changed sessionId is rejected before execution
+  ---
+  duration_ms: 21.5268
+  type: 'test'
+  ...
+# Subtest: process recovery: changed invocationId is rejected before execution
+ok 169 - process recovery: changed invocationId is rejected before execution
+  ---
+  duration_ms: 19.503
+  type: 'test'
+  ...
+# Subtest: process recovery: changed logicalProcessId is rejected before execution
+ok 170 - process recovery: changed logicalProcessId is rejected before execution
+  ---
+  duration_ms: 20.212
+  type: 'test'
+  ...
+# Subtest: process recovery: changed ownerId is rejected before execution
+ok 171 - process recovery: changed ownerId is rejected before execution
+  ---
+  duration_ms: 19.7419
+  type: 'test'
+  ...
+# Subtest: process recovery: changed revision is rejected before execution
+ok 172 - process recovery: changed revision is rejected before execution
+  ---
+  duration_ms: 20.566
+  type: 'test'
+  ...
+# Subtest: process recovery: changed fencingToken is rejected before execution
+ok 173 - process recovery: changed fencingToken is rejected before execution
+  ---
+  duration_ms: 20.0596
+  type: 'test'
+  ...
+# Subtest: process recovery: changed backendIdentity is rejected before execution
+ok 174 - process recovery: changed backendIdentity is rejected before execution
+  ---
+  duration_ms: 20.5158
+  type: 'test'
+  ...
+# Subtest: process recovery: changed birthFingerprint is rejected before execution
+ok 175 - process recovery: changed birthFingerprint is rejected before execution
+  ---
+  duration_ms: 18.8867
+  type: 'test'
+  ...
+# Subtest: process recovery: changed rootPid is rejected before execution
+ok 176 - process recovery: changed rootPid is rejected before execution
+  ---
+  duration_ms: 19.1858
+  type: 'test'
+  ...
+# Subtest: process recovery: same PID with recycled birth invalidates an authorized action
+ok 177 - process recovery: same PID with recycled birth invalidates an authorized action
+  ---
+  duration_ms: 25.3897
+  type: 'test'
+  ...
+# Subtest: process recovery: destructive action pauses and binds exact local-user approval
+ok 178 - process recovery: destructive action pauses and binds exact local-user approval
+  ---
+  duration_ms: 34.6612
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects expired authority
+ok 179 - process recovery: rejects expired authority
+  ---
+  duration_ms: 19.2844
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects scope authority
+ok 180 - process recovery: rejects scope authority
+  ---
+  duration_ms: 19.799
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects call authority
+ok 181 - process recovery: rejects call authority
+  ---
+  duration_ms: 19.7183
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects shell authority
+ok 182 - process recovery: rejects shell authority
+  ---
+  duration_ms: 19.0764
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects capability authority
+ok 183 - process recovery: rejects capability authority
+  ---
+  duration_ms: 25.6985
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects ownership authority
+ok 184 - process recovery: rejects ownership authority
+  ---
+  duration_ms: 29.0431
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects identity authority
+ok 185 - process recovery: rejects identity authority
+  ---
+  duration_ms: 24.8476
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects pending authority
+ok 186 - process recovery: rejects pending authority
+  ---
+  duration_ms: 26.3707
+  type: 'test'
+  ...
+# Subtest: process recovery: durable replay executes at most once and stores no raw model secrets
+ok 187 - process recovery: durable replay executes at most once and stores no raw model secrets
+  ---
+  duration_ms: 37.3318
+  type: 'test'
+  ...
+# Subtest: process recovery: a terminate whose cleanup stays pending is never reported as executed
+ok 188 - process recovery: a terminate whose cleanup stays pending is never reported as executed
+  ---
+  duration_ms: 43.2032
+  type: 'test'
+  ...
+# Subtest: process recovery: a process with no durable backend identity refuses every action
+ok 189 - process recovery: a process with no durable backend identity refuses every action
+  ---
+  duration_ms: 27.6508
+  type: 'test'
+  ...
+# Subtest: process recovery: a failing generator yields a typed refusal and no durable record
+ok 190 - process recovery: a failing generator yields a typed refusal and no durable record
+  ---
+  duration_ms: 21.2175
+  type: 'test'
+  ...
+# Subtest: process recovery: a generator may not widen or retarget the validated scope
+ok 191 - process recovery: a generator may not widen or retarget the validated scope
+  ---
+  duration_ms: 27.7877
+  type: 'test'
+  ...
+# Subtest: process recovery: concurrent execution requests share one durable claim
+ok 192 - process recovery: concurrent execution requests share one durable claim
+  ---
+  duration_ms: 37.6402
+  type: 'test'
+  ...
+# Subtest: process recovery: an in-flight claim observed after restart becomes outcome_unknown and never replays
+ok 193 - process recovery: an in-flight claim observed after restart becomes outcome_unknown and never replays
+  ---
+  duration_ms: 39.651
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-ownership-RFZDzE"}
+# Subtest: process recovery: subprocess adapter issues one exact native recovery grant and revokes it
+ok 194 - process recovery: subprocess adapter issues one exact native recovery grant and revokes it
+  ---
+  duration_ms: 9.5387
+  type: 'test'
+  ...
+# Subtest: process recovery: adapter never invents ownership when the shared kernel refuses recovery
+ok 195 - process recovery: adapter never invents ownership when the shared kernel refuses recovery
+  ---
+  duration_ms: 0.8364
+  type: 'test'
+  ...
+# Subtest: process recovery: model generator cannot author scope, target, call identity or expiry
+ok 196 - process recovery: model generator cannot author scope, target, call identity or expiry
+  ---
+  duration_ms: 0.601
+  type: 'test'
+  ...
+# Subtest: process recovery: model generator rejects extra command/scope authority
+ok 197 - process recovery: model generator rejects extra command/scope authority
+  ---
+  duration_ms: 0.1471
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-APwD5s","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-R4Bdom","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1UDvY3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-vjDCMX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-HKGlp7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Mfkamq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-p8lfbc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-rc2TC3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-X1tLBK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-4Tr56G","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-CBl33p","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-PQjCti","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-sjrFJT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Y04jqM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-A2wcoo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cR9VP8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-8PeYfD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-E0ZW2L","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2mTM2t","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-hggKiQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-pA5oBd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-MXtac0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-3YTfkb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-kVey2f","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-NjpMzg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-DmvO1l","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-hmpsM0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-njIEhV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-gFONAk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-m5B5rb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-taPEPd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-8WErfu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cLDcc2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-OanFqz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-4LiSOt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-4oNT3N","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Bkss9f","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-J2hbz8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-vGOXVB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-nFoI1G","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-adapter-1b9SuJ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-ownership-RFZDzE","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-runner-recovery-hH1W4c"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ENi79q"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-f7A3NV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-YrMDPi"}
+# Subtest: CLI recovers a paused run and preserves event continuity after restart
+ok 198 - CLI recovers a paused run and preserves event continuity after restart
+  ---
+  duration_ms: 41262.0427
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-runner-recovery-hH1W4c","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-policy-forgery-smseDc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-plan-policy-AMhHUg"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-store-68fHWk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-pre-p1-wal-zsvuth"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-evidence-45yJ4k"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-append-evidence-store-79E4iq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-adversarial-evidence-D5wzLi"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-review-evidence-ubKdBq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-acceptance-upgrade-IUufsJ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-completed-QJJXl4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-gate-boundary-FVS0wj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-evidence-boundary-Macb2i"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-assigned-worker-required-GoGO51"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-upgraded-worker-required-RzsIWN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-worker-evidence-controls-D6WLxN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-retry-projection-XNSd3B"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-corrupt-l2BuIb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-runtime-tTWJ6n"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-empty-handoff-Rt2aAX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-6AbJ9E"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-invalid-BmRJk7"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-revision-QZbwoC"}
+# Subtest: Finish and Budgeted reject forged plan-only handoff payloads
+ok 199 - Finish and Budgeted reject forged plan-only handoff payloads
+  ---
+  duration_ms: 46.4767
+  type: 'test'
+  ...
+# Subtest: durable plan-only policy requires a plan and survives handoff replay
+ok 200 - durable plan-only policy requires a plan and survives handoff replay
+  ---
+  duration_ms: 59.7492
+  type: 'test'
+  ...
+# Subtest: scheduler events recover exact task and blocking-guidance state
+ok 201 - scheduler events recover exact task and blocking-guidance state
+  ---
+  duration_ms: 42.3233
+  type: 'test'
+  ...
+# Subtest: raw pre-P1 scheduler WAL fixtures preserve ordering and one legacy gate across reopens
+ok 202 - raw pre-P1 scheduler WAL fixtures preserve ordering and one legacy gate across reopens
+  ---
+  duration_ms: 46.5091
+  type: 'test'
+  ...
+# Subtest: raw scheduler replay rejects missing evidence and reopens valid exact evidence
+ok 203 - raw scheduler replay rejects missing evidence and reopens valid exact evidence
+  ---
+  duration_ms: 100.8703
+  type: 'test'
+  ...
+# Subtest: scheduler append fails closed when acceptance evidence lacks an authoritative store
+ok 204 - scheduler append fails closed when acceptance evidence lacks an authoritative store
+  ---
+  duration_ms: 41.3678
+  type: 'test'
+  ...
+# Subtest: raw scheduler replay rejects foreign owner, task, attempt, and artifact evidence
+ok 205 - raw scheduler replay rejects foreign owner, task, attempt, and artifact evidence
+  ---
+  duration_ms: 217.4238
+  type: 'test'
+  ...
+# Subtest: raw scheduler replay rejects review artifact hashes outside valid submitted evidence
+ok 206 - raw scheduler replay rejects review artifact hashes outside valid submitted evidence
+  ---
+  duration_ms: 178.2241
+  type: 'test'
+  ...
+# Subtest: legacy active runs require exactly one acceptance-contract upgrade before submission
+ok 207 - legacy active runs require exactly one acceptance-contract upgrade before submission
+  ---
+  duration_ms: 165.3229
+  type: 'test'
+  ...
+# Subtest: legacy scheduler completion has no final-verification grandfathering
+ok 208 - legacy scheduler completion has no final-verification grandfathering
+  ---
+  duration_ms: 31.6554
+  type: 'test'
+  ...
+# Subtest: gated active legacy runs reject raw completion and handoff selection until upgrade
+ok 209 - gated active legacy runs reject raw completion and handoff selection until upgrade
+  ---
+  duration_ms: 55.1644
+  type: 'test'
+  ...
+# Subtest: durable submission rejects fabricated evidence IDs and hashes
+ok 210 - durable submission rejects fabricated evidence IDs and hashes
+  ---
+  duration_ms: 71.5695
+  type: 'test'
+  ...
+# Subtest: durable current criterion assignment requires an assigned worker identity
+ok 211 - durable current criterion assignment requires an assigned worker identity
+  ---
+  duration_ms: 167.1837
+  type: 'test'
+  ...
+# Subtest: durable submission rejects legacy worker absence after acceptance upgrade
+ok 212 - durable submission rejects legacy worker absence after acceptance upgrade
+  ---
+  duration_ms: 79.6981
+  type: 'test'
+  ...
+# Subtest: durable criterion submission permits only the assigned worker or an attributed descendant
+ok 213 - durable criterion submission permits only the assigned worker or an attributed descendant
+  ---
+  duration_ms: 121.9139
+  type: 'test'
+  ...
+# Subtest: retry clears the current acceptance projection while replay preserving versioned history
+ok 214 - retry clears the current acceptance projection while replay preserving versioned history
+  ---
+  duration_ms: 92.0603
+  type: 'test'
+  ...
+# Subtest: corrupt scheduler payload identifies the event
+ok 215 - corrupt scheduler payload identifies the event
+  ---
+  duration_ms: 34.753
+  type: 'test'
+  ...
+# Subtest: runtime assignments, provider cooldown, and Architect handoff recover durably
+ok 216 - runtime assignments, provider cooldown, and Architect handoff recover durably
+  ---
+  duration_ms: 63.6619
+  type: 'test'
+  ...
+# Subtest: a durable Architect handoff always offers an explicit retry of the current runtime
+ok 217 - a durable Architect handoff always offers an explicit retry of the current runtime
+  ---
+  duration_ms: 40.3912
+  type: 'test'
+  ...
+# Subtest: Architect plan reconciliation atomically cancels stale work and rewires dependents
+ok 218 - Architect plan reconciliation atomically cancels stale work and rewires dependents
+  ---
+  duration_ms: 38.7603
+  type: 'test'
+  ...
+# Subtest: plan reconciliation rejects live dependencies on cancelled tasks
+ok 219 - plan reconciliation rejects live dependencies on cancelled tasks
+  ---
+  duration_ms: 30.6633
+  type: 'test'
+  ...
+# Subtest: projection records the most recently integrated revision
+ok 220 - projection records the most recently integrated revision
+  ---
+  duration_ms: 38.1389
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-policy-forgery-smseDc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-plan-policy-AMhHUg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-store-68fHWk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-pre-p1-wal-zsvuth","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-evidence-45yJ4k","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-append-evidence-store-79E4iq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-adversarial-evidence-D5wzLi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-replay-review-evidence-ubKdBq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-acceptance-upgrade-IUufsJ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-completed-QJJXl4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-legacy-gate-boundary-FVS0wj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-evidence-boundary-Macb2i","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-assigned-worker-required-GoGO51","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-upgraded-worker-required-RzsIWN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-worker-evidence-controls-D6WLxN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-retry-projection-XNSd3B","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-corrupt-l2BuIb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-runtime-tTWJ6n","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-scheduler-empty-handoff-Rt2aAX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-6AbJ9E","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-reconcile-invalid-BmRJk7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-revision-QZbwoC","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-maR1pZ"}
+# Subtest: expired host recovery memory prepared records a fenced cleanup instead of remaining stranded
+ok 221 - expired host recovery memory prepared records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 15.14
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-maR1pZ
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-maR1pZ
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-O1UTPY"}
+# Subtest: expired host recovery memory isolated records a fenced cleanup instead of remaining stranded
+ok 222 - expired host recovery memory isolated records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 2.8103
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-O1UTPY
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-O1UTPY
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-uacfNn"}
+# Subtest: expired host recovery memory launching records a fenced cleanup instead of remaining stranded
+ok 223 - expired host recovery memory launching records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 1.9068
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-uacfNn
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-glezXI"}
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-uacfNn
+# Subtest: expired host recovery memory bound records a fenced cleanup instead of remaining stranded
+ok 224 - expired host recovery memory bound records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 3.5837
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-glezXI
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-glezXI
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-tHEplW"}
+# Subtest: expired host recovery memory channel-started records a fenced cleanup instead of remaining stranded
+ok 225 - expired host recovery memory channel-started records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 3.414
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-tHEplW
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-PpHo7D"}
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-tHEplW
+# Subtest: expired host recovery memory cleanup_pending records a fenced cleanup instead of remaining stranded
+ok 226 - expired host recovery memory cleanup_pending records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 2.2537
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-PpHo7D
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-PpHo7D
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-GmTnsU"}
+# Subtest: expired host recovery memory cleanup_blocked records a fenced cleanup instead of remaining stranded
+ok 227 - expired host recovery memory cleanup_blocked records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 2.5699
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-GmTnsU
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-7P27zv"}
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-GmTnsU
+# Subtest: expired host recovery sqlite prepared records a fenced cleanup instead of remaining stranded
+ok 228 - expired host recovery sqlite prepared records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 71.1505
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-7P27zv
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-zwARgQ"}
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-7P27zv
+# Subtest: expired host recovery sqlite isolated records a fenced cleanup instead of remaining stranded
+ok 229 - expired host recovery sqlite isolated records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 80.1536
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-zwARgQ
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-zwARgQ
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-KyuSHv"}
+# Subtest: expired host recovery sqlite launching records a fenced cleanup instead of remaining stranded
+ok 230 - expired host recovery sqlite launching records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 93.9766
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-KyuSHv
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-KyuSHv
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-3jHGU8"}
+# Subtest: expired host recovery sqlite bound records a fenced cleanup instead of remaining stranded
+ok 231 - expired host recovery sqlite bound records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 97.2235
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-3jHGU8
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-3jHGU8
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-D2pPlR"}
+# Subtest: expired host recovery sqlite channel-started records a fenced cleanup instead of remaining stranded
+ok 232 - expired host recovery sqlite channel-started records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 116.3212
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-D2pPlR
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-D2pPlR
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-E6jFRN"}
+# Subtest: expired host recovery sqlite cleanup_pending records a fenced cleanup instead of remaining stranded
+ok 233 - expired host recovery sqlite cleanup_pending records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 107.969
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-E6jFRN
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-E6jFRN
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-5WWKkw"}
+# Subtest: expired host recovery sqlite cleanup_blocked records a fenced cleanup instead of remaining stranded
+ok 234 - expired host recovery sqlite cleanup_blocked records a fenced cleanup instead of remaining stranded
+  ---
+  duration_ms: 128.0808
+  type: 'test'
+  ...
+# exact synthetic root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-5WWKkw
+# exact synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c-phase-expired-host-5WWKkw
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-maR1pZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-O1UTPY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-uacfNn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-glezXI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-tHEplW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-PpHo7D","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-GmTnsU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-7P27zv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-zwARgQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-KyuSHv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-3jHGU8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-D2pPlR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-E6jFRN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-expired-host-5WWKkw","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-5fTYYF"}
+# Subtest: C2 round9 memory checkpoint-present control preserves exact retained and new bytes
+ok 235 - C2 round9 memory checkpoint-present control preserves exact retained and new bytes
+  ---
+  duration_ms: 62.6864
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-5fTYYF
+# {"initialized":true,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-5fTYYF
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-D3lzME"}
+# Subtest: C2 round9 memory never-initialized recovery preserves exact retained and new bytes
+ok 236 - C2 round9 memory never-initialized recovery preserves exact retained and new bytes
+  ---
+  duration_ms: 35.5394
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-D3lzME
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-EmzBvT"}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-D3lzME
+# Subtest: C2 round9 memory rejects missing-proof
+ok 237 - C2 round9 memory rejects missing-proof
+  ---
+  duration_ms: 2.3202
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-EmzBvT
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-EmzBvT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-lZcRn8"}
+# Subtest: C2 round9 memory rejects consumed-stdout
+ok 238 - C2 round9 memory rejects consumed-stdout
+  ---
+  duration_ms: 2.5995
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-lZcRn8
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-lZcRn8
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-yDGoS7"}
+# Subtest: C2 round9 memory rejects consumed-stderr
+ok 239 - C2 round9 memory rejects consumed-stderr
+  ---
+  duration_ms: 2.0136
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yDGoS7
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yDGoS7
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-yt0dKQ"}
+# Subtest: C2 round9 memory rejects pending-ack
+ok 240 - C2 round9 memory rejects pending-ack
+  ---
+  duration_ms: 2.0585
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yt0dKQ
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yt0dKQ
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-i4hwct"}
+# Subtest: C2 round9 memory rejects corrupt-payload
+ok 241 - C2 round9 memory rejects corrupt-payload
+  ---
+  duration_ms: 2.7427
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-i4hwct
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":"Output digest does not match bytes."}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-i4hwct
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-MLyX3H"}
+# Subtest: C2 round9 memory rejects missing-replay
+ok 242 - C2 round9 memory rejects missing-replay
+  ---
+  duration_ms: 2.8446
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-MLyX3H
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-MLyX3H
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-fAEe8R"}
+# Subtest: C2 round9 memory rejects wrong-binding
+ok 243 - C2 round9 memory rejects wrong-binding
+  ---
+  duration_ms: 1.9258
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-fAEe8R
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-fAEe8R
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-ehfqP2"}
+# Subtest: C2 round9 memory rejects bad-sequence
+ok 244 - C2 round9 memory rejects bad-sequence
+  ---
+  duration_ms: 2.089
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-ehfqP2
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-Ja0hTz"}
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-ehfqP2
+# Subtest: C2 round9 memory rejects bad-offset
+ok 245 - C2 round9 memory rejects bad-offset
+  ---
+  duration_ms: 1.9474
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Ja0hTz
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Ja0hTz
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-UgNh2I"}
+# Subtest: C2 round9 memory rejects terminal-blocked
+ok 246 - C2 round9 memory rejects terminal-blocked
+  ---
+  duration_ms: 23.4123
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-UgNh2I
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-UgNh2I
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-bPEodh"}
+# Subtest: C2 round9 memory rejects takeover
+ok 247 - C2 round9 memory rejects takeover
+  ---
+  duration_ms: 1.8422
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-bPEodh
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-bPEodh
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-Pm8hjV"}
+# Subtest: C2 round9 memory rejects deadline
+ok 248 - C2 round9 memory rejects deadline
+  ---
+  duration_ms: 1.4861
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Pm8hjV
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-gGE5Co"}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Pm8hjV
+# Subtest: C2 round9 memory rejects revision-change
+ok 249 - C2 round9 memory rejects revision-change
+  ---
+  duration_ms: 1.9015
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-gGE5Co
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-gGE5Co
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-zM0y9g"}
+# Subtest: C2 round9 memory same-runtime-retry
+ok 250 - C2 round9 memory same-runtime-retry
+  ---
+  duration_ms: 38.7215
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-zM0y9g
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","quiesce","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-HyNjIT"}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-zM0y9g
+# Subtest: C2 round9 memory fresh-runtime-retry
+ok 251 - C2 round9 memory fresh-runtime-retry
+  ---
+  duration_ms: 43.9553
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-HyNjIT
+# {"initialized":false,"reattachments":2,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","reattach","subscribe","quiesce","ack1","ack2","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 2 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-HyNjIT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-rnlcQK"}
+# Subtest: C2 round9 memory rejects detach-failed
+ok 252 - C2 round9 memory rejects detach-failed
+  ---
+  duration_ms: 2.3473
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-rnlcQK
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-rnlcQK
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-zbyqJo"}
+# Subtest: C2 round9 memory rejects spool-failed
+ok 253 - C2 round9 memory rejects spool-failed
+  ---
+  duration_ms: 1.6913
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-zbyqJo
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-zbyqJo
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-ePuyTx"}
+# Subtest: C2 round9 sqlite checkpoint-present control preserves exact retained and new bytes
+ok 254 - C2 round9 sqlite checkpoint-present control preserves exact retained and new bytes
+  ---
+  duration_ms: 221.645
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-ePuyTx
+# {"initialized":true,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-ePuyTx
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-9Uxo6Y"}
+# Subtest: C2 round9 sqlite never-initialized recovery preserves exact retained and new bytes
+ok 255 - C2 round9 sqlite never-initialized recovery preserves exact retained and new bytes
+  ---
+  duration_ms: 218.7951
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-9Uxo6Y
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-26nWLK"}
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-9Uxo6Y
+# Subtest: C2 round9 sqlite rejects missing-proof
+ok 256 - C2 round9 sqlite rejects missing-proof
+  ---
+  duration_ms: 100.6773
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-26nWLK
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-26nWLK
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-pnrMaL"}
+# Subtest: C2 round9 sqlite rejects consumed-stdout
+ok 257 - C2 round9 sqlite rejects consumed-stdout
+  ---
+  duration_ms: 107.5869
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-pnrMaL
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-pnrMaL
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-Yq2LGd"}
+# Subtest: C2 round9 sqlite rejects consumed-stderr
+ok 258 - C2 round9 sqlite rejects consumed-stderr
+  ---
+  duration_ms: 107.8987
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-zo57Hk"}
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Yq2LGd
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Yq2LGd
+# Subtest: C2 round9 sqlite rejects pending-ack
+ok 259 - C2 round9 sqlite rejects pending-ack
+  ---
+  duration_ms: 98.232
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-zo57Hk
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-zo57Hk
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-cdN9jk"}
+# Subtest: C2 round9 sqlite rejects corrupt-payload
+ok 260 - C2 round9 sqlite rejects corrupt-payload
+  ---
+  duration_ms: 132.6398
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-cdN9jk
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":"Output digest does not match bytes."}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-cdN9jk
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-7ZqSPM"}
+# Subtest: C2 round9 sqlite rejects missing-replay
+ok 261 - C2 round9 sqlite rejects missing-replay
+  ---
+  duration_ms: 122.5549
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-7ZqSPM
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-7ZqSPM
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-QWvYch"}
+# Subtest: C2 round9 sqlite rejects wrong-binding
+ok 262 - C2 round9 sqlite rejects wrong-binding
+  ---
+  duration_ms: 108.1823
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-QWvYch
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-QWvYch
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-2PF21l"}
+# Subtest: C2 round9 sqlite rejects bad-sequence
+ok 263 - C2 round9 sqlite rejects bad-sequence
+  ---
+  duration_ms: 134.3793
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-2PF21l
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-2PF21l
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-N8O67g"}
+# Subtest: C2 round9 sqlite rejects bad-offset
+ok 264 - C2 round9 sqlite rejects bad-offset
+  ---
+  duration_ms: 142.1671
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-N8O67g
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-N8O67g
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-PE9J7Y"}
+# Subtest: C2 round9 sqlite rejects terminal-blocked
+ok 265 - C2 round9 sqlite rejects terminal-blocked
+  ---
+  duration_ms: 179.8955
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-PE9J7Y
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-PE9J7Y
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-WNZqqs"}
+# Subtest: C2 round9 sqlite rejects takeover
+ok 266 - C2 round9 sqlite rejects takeover
+  ---
+  duration_ms: 107.8801
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-WNZqqs
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-4vcKDu"}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-WNZqqs
+# Subtest: C2 round9 sqlite rejects deadline
+ok 267 - C2 round9 sqlite rejects deadline
+  ---
+  duration_ms: 104.2994
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-4vcKDu
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-4vcKDu
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-cW3g8A"}
+# Subtest: C2 round9 sqlite rejects revision-change
+ok 268 - C2 round9 sqlite rejects revision-change
+  ---
+  duration_ms: 118.9208
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-cW3g8A
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-cW3g8A
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-RGTUQ3"}
+# Subtest: C2 round9 sqlite same-runtime-retry
+ok 269 - C2 round9 sqlite same-runtime-retry
+  ---
+  duration_ms: 235.8937
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-RGTUQ3
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","quiesce","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 1 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-RGTUQ3
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c3Ah28"}
+# Subtest: C2 round9 sqlite fresh-runtime-retry
+ok 270 - C2 round9 sqlite fresh-runtime-retry
+  ---
+  duration_ms: 251.7162
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c3Ah28
+# {"initialized":false,"reattachments":2,"events":["isolation","reattach","subscribe","quiesce","ack1","ack2","reattach","subscribe","quiesce","ack1","ack2","release","unsubscribe","detach"],"outcomes":[{"launchId":"launch-1","disposition":"cleaned"}],"outputFailure":null}
+# {"continuationLoss":"none","diagnosticSpoolLoss":true}
+# closed owned DB and 2 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c3Ah28
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-aPKQD8"}
+# Subtest: C2 round9 sqlite rejects detach-failed
+ok 271 - C2 round9 sqlite rejects detach-failed
+  ---
+  duration_ms: 114.8276
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-aPKQD8
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-aPKQD8
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-UP05fK"}
+# Subtest: C2 round9 sqlite rejects spool-failed
+ok 272 - C2 round9 sqlite rejects spool-failed
+  ---
+  duration_ms: 112.566
+  type: 'test'
+  ...
+# fresh synthetic fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-UP05fK
+# {"initialized":false,"reattachments":1,"events":["isolation","reattach","detach"],"outcomes":[{"launchId":"launch-1","disposition":"blocked"}],"outputFailure":null}
+# closed owned DB and 0 spool handles; exact DB/artifact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-UP05fK
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-s-rbJ3fm"}
+# Subtest: C2 round9 memory atomic bootstrap rejects stale and fabricated authority
+ok 273 - C2 round9 memory atomic bootstrap rejects stale and fabricated authority
+  ---
+  duration_ms: 2.3338
+  type: 'test'
+  ...
+# fresh synthetic store fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-s-rbJ3fm
+# closed exact store; retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-s-rbJ3fm
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-s-ffA1WI"}
+# Subtest: C2 round9 sqlite atomic bootstrap rejects stale and fabricated authority
+ok 274 - C2 round9 sqlite atomic bootstrap rejects stale and fabricated authority
+  ---
+  duration_ms: 113.0512
+  type: 'test'
+  ...
+# fresh synthetic store fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-s-ffA1WI
+# closed exact store; retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-s-ffA1WI
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-6ah4qH"}
+# Subtest: C2 round9 SQLite bootstrap rollback and reopen at before-output
+ok 275 - C2 round9 SQLite bootstrap rollback and reopen at before-output
+  ---
+  duration_ms: 122.0227
+  type: 'test'
+  ...
+# fresh synthetic transaction fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-6ah4qH
+# closed DB; exact transaction test state retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-6ah4qH
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-SxfFIV"}
+# Subtest: C2 round9 SQLite bootstrap rollback and reopen at after-output
+ok 276 - C2 round9 SQLite bootstrap rollback and reopen at after-output
+  ---
+  duration_ms: 134.309
+  type: 'test'
+  ...
+# fresh synthetic transaction fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-SxfFIV
+# closed DB; exact transaction test state retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-SxfFIV
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-IT1N3C"}
+# Subtest: C2 round9 SQLite bootstrap rollback and reopen at before-host
+ok 277 - C2 round9 SQLite bootstrap rollback and reopen at before-host
+  ---
+  duration_ms: 134.3419
+  type: 'test'
+  ...
+# fresh synthetic transaction fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-IT1N3C
+# closed DB; exact transaction test state retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-IT1N3C
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-unMVLT"}
+# Subtest: C2 round9 SQLite bootstrap rollback and reopen at after-host
+ok 278 - C2 round9 SQLite bootstrap rollback and reopen at after-host
+  ---
+  duration_ms: 288.7853
+  type: 'test'
+  ...
+# fresh synthetic transaction fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-unMVLT
+# closed DB; exact transaction test state retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-unMVLT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-E3VK2X"}
+# Subtest: C2 round9 portable private snapshot pristine
+ok 279 - C2 round9 portable private snapshot pristine
+  ---
+  duration_ms: 6.0236
+  type: 'test'
+  ...
+# fresh non-native portable snapshot fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-E3VK2X
+# no native process/timer/subscription created; channel detached when returned; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-E3VK2X
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-o84nzs"}
+# Subtest: C2 round9 portable private snapshot retired-prefix
+ok 280 - C2 round9 portable private snapshot retired-prefix
+  ---
+  duration_ms: 7.1116
+  type: 'test'
+  ...
+# fresh non-native portable snapshot fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-o84nzs
+# no native process/timer/subscription created; channel detached when returned; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-o84nzs
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-IUUxbK"}
+# Subtest: C2 round9 portable private snapshot pending-ack
+ok 281 - C2 round9 portable private snapshot pending-ack
+  ---
+  duration_ms: 6.592
+  type: 'test'
+  ...
+# fresh non-native portable snapshot fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-IUUxbK
+# no native process/timer/subscription created; channel detached when returned; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-IUUxbK
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-Opt7Mj"}
+# Subtest: C2 round9 portable private snapshot corrupt-bytes
+ok 282 - C2 round9 portable private snapshot corrupt-bytes
+  ---
+  duration_ms: 3.6229
+  type: 'test'
+  ...
+# fresh non-native portable snapshot fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-Opt7Mj
+# no native process/timer/subscription created; channel detached when returned; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-Opt7Mj
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-nf0QZo"}
+# Subtest: C2 round9 portable private snapshot missing-checkpoint
+ok 283 - C2 round9 portable private snapshot missing-checkpoint
+  ---
+  duration_ms: 3.133
+  type: 'test'
+  ...
+# fresh non-native portable snapshot fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-nf0QZo
+# no native process/timer/subscription created; channel detached when returned; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-nf0QZo
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-Mtzy5Y"}
+# Subtest: C2 round9 portable private snapshot retirement-intent
+ok 284 - C2 round9 portable private snapshot retirement-intent
+  ---
+  duration_ms: 3.7601
+  type: 'test'
+  ...
+# fresh non-native portable snapshot fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-Mtzy5Y
+# no native process/timer/subscription created; channel detached when returned; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-Mtzy5Y
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-l-OLCS7j"}
+# Subtest: C2 round9 pending acquisition and late detach remain joined across timeout retry
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-9rqy0S"}
+ok 285 - C2 round9 pending acquisition and late detach remain joined across timeout retry
+  ---
+  duration_ms: 188.0163
+  type: 'test'
+  ...
+# fresh late-effect fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-l-OLCS7j
+# late acquisition/detach joined and DB closed; exact fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-l-OLCS7j
+# Subtest: C2 round9 SQLite refuses contradictory marker-without-row
+ok 286 - C2 round9 SQLite refuses contradictory marker-without-row
+  ---
+  duration_ms: 114.7729
+  type: 'test'
+  ...
+# fresh contradictory-authority fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-9rqy0S
+# closed exact deliberately contradictory test DB; no repair/deletion of fixture root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-9rqy0S
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-eGTxyb"}
+# Subtest: C2 round9 SQLite refuses contradictory row-without-marker
+ok 287 - C2 round9 SQLite refuses contradictory row-without-marker
+  ---
+  duration_ms: 104.4949
+  type: 'test'
+  ...
+# fresh contradictory-authority fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-eGTxyb
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-XFPDq4"}
+# closed exact deliberately contradictory test DB; no repair/deletion of fixture root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-eGTxyb
+# Subtest: C2 round9 SQLite refuses contradictory foreign-row-without-marker
+ok 288 - C2 round9 SQLite refuses contradictory foreign-row-without-marker
+  ---
+  duration_ms: 111.3165
+  type: 'test'
+  ...
+# fresh contradictory-authority fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-XFPDq4
+# closed exact deliberately contradictory test DB; no repair/deletion of fixture root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-XFPDq4
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-YHUXjJ"}
+# Subtest: C2 round9 SQLite refuses contradictory session-already-exists
+ok 289 - C2 round9 SQLite refuses contradictory session-already-exists
+  ---
+  duration_ms: 123.2393
+  type: 'test'
+  ...
+# fresh contradictory-authority fixture retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-YHUXjJ
+# closed exact deliberately contradictory test DB; no repair/deletion of fixture root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-YHUXjJ
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-5fTYYF","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-D3lzME","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-EmzBvT","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-lZcRn8","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-yDGoS7","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-yt0dKQ","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-i4hwct","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-MLyX3H","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-fAEe8R","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-ehfqP2","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-Ja0hTz","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-UgNh2I","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-bPEodh","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-Pm8hjV","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-gGE5Co","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-zM0y9g","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-HyNjIT","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-rnlcQK","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-zbyqJo","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-ePuyTx","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-9Uxo6Y","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-26nWLK","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-pnrMaL","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-Yq2LGd","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-zo57Hk","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-cdN9jk","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-7ZqSPM","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-QWvYch","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-2PF21l","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-N8O67g","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-PE9J7Y","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-WNZqqs","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-4vcKDu","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-cW3g8A","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-RGTUQ3","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c3Ah28","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-aPKQD8","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-UP05fK","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-s-rbJ3fm","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-s-ffA1WI","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-6ah4qH","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-SxfFIV","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-IT1N3C","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-t-unMVLT","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-E3VK2X","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-o84nzs","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-IUUxbK","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-Opt7Mj","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-nf0QZo","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-p-Mtzy5Y","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-l-OLCS7j","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-9rqy0S","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-eGTxyb","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-XFPDq4","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r9-c-YHUXjJ","existsAtExit":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-ag1rIU"}
+# Subtest: subprocess memory preserves exact binary tail through real spool and durable result
+ok 290 - subprocess memory preserves exact binary tail through real spool and durable result
+  ---
+  duration_ms: 66.4071
+  type: 'test'
+  ...
+# acquired synthetic process/output fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-ag1rIU
+# closed synthetic store/output; removed exact fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-ag1rIU
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-RI0FlI"}
+# Subtest: subprocess sqlite preserves exact binary tail through real spool and durable result
+ok 291 - subprocess sqlite preserves exact binary tail through real spool and durable result
+  ---
+  duration_ms: 109.9529
+  type: 'test'
+  ...
+# acquired synthetic process/output fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-RI0FlI
+# closed synthetic store/output; removed exact fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-binary-output-RI0FlI
+# Subtest: caller can provide only an opaque grant id and forged grant/result fields are rejected
+ok 292 - caller can provide only an opaque grant id and forged grant/result fields are rejected
+  ---
+  duration_ms: 0.782
+  type: 'test'
+  ...
+# Subtest: runtime denies a semantic tree guarantee when the active adapter attests only partial ownership
+ok 293 - runtime denies a semantic tree guarantee when the active adapter attests only partial ownership
+  ---
+  duration_ms: 3.7375
+  type: 'test'
+  ...
+# Subtest: runtime factory rejects malicious structural authority and launch sees a deep immutable intent snapshot
+ok 294 - runtime factory rejects malicious structural authority and launch sees a deep immutable intent snapshot
+  ---
+  duration_ms: 25.0731
+  type: 'test'
+  ...
+# Subtest: runtime is a closure facade exposing only intended invocation methods
+ok 295 - runtime is a closure facade exposing only intended invocation methods
+  ---
+  duration_ms: 0.9101
+  type: 'test'
+  ...
+# Subtest: every output and backend effect receives the durable owner fencing token
+ok 296 - every output and backend effect receives the durable owner fencing token
+  ---
+  duration_ms: 24.3534
+  type: 'test'
+  ...
+# Subtest: durable claim and output owner exist before first await so immediate cancel is queued
+ok 297 - durable claim and output owner exist before first await so immediate cancel is queued
+  ---
+  duration_ms: 36.7333
+  type: 'test'
+  ...
+# Subtest: crash-safe output intent precedes idempotent prepare and prepare failure is durable
+ok 298 - crash-safe output intent precedes idempotent prepare and prepare failure is durable
+  ---
+  duration_ms: 5.7972
+  type: 'test'
+  ...
+# Subtest: failed prelaunch output cleanup remains recoverable until owner cleanup succeeds
+ok 299 - failed prelaunch output cleanup remains recoverable until owner cleanup succeeds
+  ---
+  duration_ms: 9.4371
+  type: 'test'
+  ...
+# Subtest: recoverable launch cleanup blocker binds identity and persists without prelaunch cleanup or relaunch
+ok 300 - recoverable launch cleanup blocker binds identity and persists without prelaunch cleanup or relaunch
+  ---
+  duration_ms: 27.1192
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-DlrUOX"}
+# Subtest: restart reattests a live launch blocker and retry never relaunches
+ok 301 - restart reattests a live launch blocker and retry never relaunches
+  ---
+  duration_ms: 247.636
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-retry-oGGjFp"}
+# Subtest: expired same-owner retry advances its durable fence before effects and heartbeats across takeover attempts
+ok 302 - expired same-owner retry advances its durable fence before effects and heartbeats across takeover attempts
+  ---
+  duration_ms: 230.9272
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-cancel-PhythS"}
+# Subtest: expired same-owner cancellation advances its durable fence before a blocked signal and prevents takeover
+ok 303 - expired same-owner cancellation advances its durable fence before a blocked signal and prevents takeover
+  ---
+  duration_ms: 295.9615
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-fence-loss-vYzNUY"}
+# Subtest: durable in-flight reconciliation blocks takeover effects after heartbeat authority loss
+ok 304 - durable in-flight reconciliation blocks takeover effects after heartbeat authority loss
+  ---
+  duration_ms: 162.1096
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-signal-fence-loss-wLOV1H"}
+# Subtest: durable in-flight signal blocks takeover effects after heartbeat authority loss
+ok 305 - durable in-flight signal blocks takeover effects after heartbeat authority loss
+  ---
+  duration_ms: 194.6605
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-finalize-fence-loss-NWrgRi"}
+# Subtest: durable in-flight output finalization blocks takeover and duplicate release
+ok 306 - durable in-flight output finalization blocks takeover and duplicate release
+  ---
+  duration_ms: 182.1472
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-release-fence-loss-Yh5M2S"}
+# Subtest: durable in-flight backend release blocks takeover and duplicate release
+ok 307 - durable in-flight backend release blocks takeover and duplicate release
+  ---
+  duration_ms: 217.1689
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-reopen-fence-loss-bMOOlf"}
+# Subtest: durable recovery output reopen blocks takeover before any contender effect
+ok 308 - durable recovery output reopen blocks takeover before any contender effect
+  ---
+  duration_ms: 138.81
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-observe-write-fence-loss-J57173"}
+# Subtest: durable recovery observation covers blocked output writes and blocks takeover
+ok 309 - durable recovery observation covers blocked output writes and blocks takeover
+  ---
+  duration_ms: 109.5015
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-verify-empty-fence-loss-DRlpc2"}
+# Subtest: durable verified-empty inspection blocks takeover and duplicate cleanup effects
+ok 310 - durable verified-empty inspection blocks takeover and duplicate cleanup effects
+  ---
+  duration_ms: 188.6341
+  type: 'test'
+  ...
+# Subtest: same owner consumes signal before observe without losing either journal marker
+ok 311 - same owner consumes signal before observe without losing either journal marker
+  ---
+  duration_ms: 34.4233
+  type: 'test'
+  ...
+# Subtest: same owner consumes observe before signal without stranding the exact signal marker
+ok 312 - same owner consumes observe before signal without stranding the exact signal marker
+  ---
+  duration_ms: 34.5802
+  type: 'test'
+  ...
+# Subtest: observe-first preserves proven exit for every valid late signal response
+    # Subtest: exited
+    ok 1 - exited
+      ---
+      duration_ms: 36.2285
+      type: 'test'
+      ...
+    # Subtest: running
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-signal-estKzV"}
+    ok 2 - running
+      ---
+      duration_ms: 35.0203
+      type: 'test'
+      ...
+    1..2
+ok 313 - observe-first preserves proven exit for every valid late signal response
+  ---
+  duration_ms: 71.6511
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reopen-b2WXQO"}
+# Subtest: malformed observe-first signal remains completed across SQLite restart
+ok 314 - malformed observe-first signal remains completed across SQLite restart
+  ---
+  duration_ms: 697.4538
+  type: 'test'
+  ...
+# Subtest: cancel denies every live same-owner family except one active observation
+    # Subtest: output_reopen
+    ok 1 - output_reopen
+      ---
+      duration_ms: 119.7859
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reconcile-P7JpiF"}
+    # Subtest: backend_reconcile
+    ok 2 - backend_reconcile
+      ---
+      duration_ms: 116.3282
+      type: 'test'
+      ...
+    # Subtest: backend_verify_empty
+    ok 3 - backend_verify_empty
+      ---
+      duration_ms: 11.0331
+      type: 'test'
+      ...
+    1..3
+ok 315 - cancel denies every live same-owner family except one active observation
+  ---
+  duration_ms: 247.7466
+  type: 'test'
+  ...
+# Subtest: cancel table rejects active finalize verify and release effects
+    # Subtest: output_finalize
+    ok 1 - output_finalize
+      ---
+      duration_ms: 19.1625
+      type: 'test'
+      ...
+    # Subtest: backend_verify_empty
+    ok 2 - backend_verify_empty
+      ---
+      duration_ms: 20.5067
+      type: 'test'
+      ...
+    # Subtest: backend_release
+    ok 3 - backend_release
+      ---
+      duration_ms: 20.6416
+      type: 'test'
+      ...
+    1..3
+ok 316 - cancel table rejects active finalize verify and release effects
+  ---
+  duration_ms: 60.813
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_observe-iaDv5E"}
+# Subtest: malformed successful journaled calls remain completed and cannot repeat on retry cancel or restart
+    # Subtest: backend_observe
+    ok 1 - backend_observe
+      ---
+      duration_ms: 493.5699
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-output_finalize-9Fh206"}
+    # Subtest: output_finalize
+    ok 2 - output_finalize
+      ---
+      duration_ms: 81.0697
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_verify_empty-6rmdgY"}
+    # Subtest: backend_verify_empty
+    ok 3 - backend_verify_empty
+      ---
+      duration_ms: 90.8062
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_release-OD2kor"}
+    # Subtest: backend_release
+    ok 4 - backend_release
+      ---
+      duration_ms: 103.1993
+      type: 'test'
+      ...
+    1..4
+ok 317 - malformed successful journaled calls remain completed and cannot repeat on retry cancel or restart
+  ---
+  duration_ms: 769.4153
+  type: 'test'
+  ...
+# Subtest: raw journaled rejection remains started and blocks retry cancel and startup recovery
+ok 318 - raw journaled rejection remains started and blocks retry cancel and startup recovery
+  ---
+  duration_ms: 11.5075
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-raw-rejection-restart-b7ujva"}
+# Subtest: raw rejection marker survives SQLite restart and blocks every contender path
+ok 319 - raw rejection marker survives SQLite restart and blocks every contender path
+  ---
+  duration_ms: 75.0959
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-transient-heartbeat-lgwjjG"}
+# Subtest: transient heartbeat failure leaves a started marker after raw success and blocks contenders
+ok 320 - transient heartbeat failure leaves a started marker after raw success and blocks contenders
+  ---
+  duration_ms: 118.9206
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-fV8xUF"}
+# Subtest: restart closes a launch blocker only after natural exit and verified release
+ok 321 - restart closes a launch blocker only after natural exit and verified release
+  ---
+  duration_ms: 377.5528
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-Zy4uEs"}
+# Subtest: restart cancellation stops only the authenticated blocked identity and completes cleanup
+ok 322 - restart cancellation stops only the authenticated blocked identity and completes cleanup
+  ---
+  duration_ms: 256.3648
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unenforced-cancel-T6peTy"}
+# Subtest: restart cancellation preserves blocker evidence when authenticated escalation cannot enforce exit
+ok 323 - restart cancellation preserves blocker evidence when authenticated escalation cannot enforce exit
+  ---
+  duration_ms: 249.9752
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unavailable-DceGgL"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-outcome_unknown-WoWcR3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-identity_mismatch-A44xzz"}
+# Subtest: restart preserves typed launch blockers for unavailable, unknown, and mismatched backends
+ok 324 - restart preserves typed launch blockers for unavailable, unknown, and mismatched backends
+  ---
+  duration_ms: 351.2232
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-4pyq63"}
+# Subtest: stale restart owner cannot recover or cancel a leased launch blocker
+ok 325 - stale restart owner cannot recover or cancel a leased launch blocker
+  ---
+  duration_ms: 74.0869
+  type: 'test'
+  ...
+# Subtest: Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked
+ok 326 - Runner-private grant is atomically consumed, strictly snapshotted, run-bound, and expiry checked
+  ---
+  duration_ms: 4.508
+  type: 'test'
+  ...
+# Subtest: concurrent exact invocations share one operation while divergent retries conflict
+ok 327 - concurrent exact invocations share one operation while divergent retries conflict
+  ---
+  duration_ms: 33.8392
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-sqlite-s2LgMP"}
+# Subtest: separate SQLite runtime contenders durably elect one winner before grant or output effects
+ok 328 - separate SQLite runtime contenders durably elect one winner before grant or output effects
+  ---
+  duration_ms: 120.4483
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-contention-EQjYZ1"}
+# Subtest: separate OS processes contend through SQLite with one pre-effect owner
+ok 329 - separate OS processes contend through SQLite with one pre-effect owner
+  ---
+  duration_ms: 385.8681
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-init-lock-UGKUZD"}
+# Subtest: separate OS processes retry writable SQLite initialization across a transient schema lock
+ok 330 - separate OS processes retry writable SQLite initialization across a transient schema lock
+  ---
+  duration_ms: 5522.3575
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-lease-dy88RE"}
+# Subtest: live owner heartbeat prevents lease stealing throughout a blocked output effect
+ok 331 - live owner heartbeat prevents lease stealing throughout a blocked output effect
+  ---
+  duration_ms: 153.481
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-stale-fence-tUllfG"}
+# Subtest: stale owner completing an uncertain effect is rejected after safe expiry takeover
+ok 332 - stale owner completing an uncertain effect is rejected after safe expiry takeover
+  ---
+  duration_ms: 49.6053
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-launch-orphan-nZOJOb"}
+# Subtest: expired unbound launch is atomically orphaned without takeover cleanup or relaunch
+ok 333 - expired unbound launch is atomically orphaned without takeover cleanup or relaunch
+  ---
+  duration_ms: 54.7328
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-bound-recovery-aSSJW1"}
+# Subtest: expired bound active observation blocks takeover reconciliation until its owner settles
+ok 334 - expired bound active observation blocks takeover reconciliation until its owner settles
+  ---
+  duration_ms: 116.6668
+  type: 'test'
+  ...
+# Subtest: deadline is runtime-owned and persists interrupt terminate force escalation before effects
+ok 335 - deadline is runtime-owned and persists interrupt terminate force escalation before effects
+  ---
+  duration_ms: 62.8229
+  type: 'test'
+  ...
+# Subtest: cancellation during launch queues durable stop and signals only after identity bind
+ok 336 - cancellation during launch queues durable stop and signals only after identity bind
+  ---
+  duration_ms: 32.761
+  type: 'test'
+  ...
+# Subtest: terminal cancel is a read-only no-op and never signals a cleaned process
+ok 337 - terminal cancel is a read-only no-op and never signals a cleaned process
+  ---
+  duration_ms: 22.656
+  type: 'test'
+  ...
+# Subtest: fresh attestation mismatch blocks cancellation authority before signal
+ok 338 - fresh attestation mismatch blocks cancellation authority before signal
+  ---
+  duration_ms: 14.7269
+  type: 'test'
+  ...
+# Subtest: restart preserves durable timeout precedence after observation loss
+ok 339 - restart preserves durable timeout precedence after observation loss
+  ---
+  duration_ms: 13.3885
+  type: 'test'
+  ...
+# Subtest: backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns
+ok 340 - backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns
+  ---
+  duration_ms: 14.7011
+  type: 'test'
+  ...
+# Subtest: grant controller authority is scoped to exactly one kernel
+ok 341 - grant controller authority is scoped to exactly one kernel
+  ---
+  duration_ms: 0.7931
+  type: 'test'
+  ...
+# Subtest: durable timeout and cancellation outrank later cleanup failure
+ok 342 - durable timeout and cancellation outrank later cleanup failure
+  ---
+  duration_ms: 28.0402
+  type: 'test'
+  ...
+# Subtest: malformed backend results are classified and never become verified success
+ok 343 - malformed backend results are classified and never become verified success
+  ---
+  duration_ms: 19.1901
+  type: 'test'
+  ...
+# Subtest: output ownership is prepared before launch and finalized before verified cleanup
+ok 344 - output ownership is prepared before launch and finalized before verified cleanup
+  ---
+  duration_ms: 29.6664
+  type: 'test'
+  ...
+# Subtest: restart preserves each completed malformed observation without reopening output
+ok 345 - restart preserves each completed malformed observation without reopening output
+  ---
+  duration_ms: 13.7637
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-corrupt-P015Zd"}
+# Subtest: recovery reports a corrupt first SQLite row and still reconciles the later valid row
+ok 346 - recovery reports a corrupt first SQLite row and still reconciles the later valid row
+  ---
+  duration_ms: 67.9233
+  type: 'test'
+  ...
+# Subtest: exhaustive durable-state by reconcile-outcome matrix is fail-closed
+ok 347 - exhaustive durable-state by reconcile-outcome matrix is fail-closed
+  ---
+  duration_ms: 407.2811
+  type: 'test'
+  ...
+# Subtest: subprocess live output observation uses the actual backend bytes without persisting its callback
+ok 348 - subprocess live output observation uses the actual backend bytes without persisting its callback
+  ---
+  duration_ms: 21.6728
+  type: 'test'
+  ...
+# Subtest: subprocess runtime durably records the selected backend semantic capabilities
+ok 349 - subprocess runtime durably records the selected backend semantic capabilities
+  ---
+  duration_ms: 19.1617
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-ag1rIU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-binary-output-RI0FlI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-DlrUOX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-retry-oGGjFp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-cancel-PhythS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-same-owner-fence-loss-vYzNUY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-signal-fence-loss-wLOV1H","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-finalize-fence-loss-NWrgRi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-release-fence-loss-Yh5M2S","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-reopen-fence-loss-bMOOlf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-observe-write-fence-loss-J57173","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-verify-empty-fence-loss-DRlpc2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-signal-estKzV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reopen-b2WXQO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-cancel-deny-reconcile-P7JpiF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_observe-iaDv5E","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-output_finalize-9Fh206","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_verify_empty-6rmdgY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-malformed-backend_release-OD2kor","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-raw-rejection-restart-b7ujva","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-transient-heartbeat-lgwjjG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-fV8xUF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-Zy4uEs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unenforced-cancel-T6peTy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-unavailable-DceGgL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-outcome_unknown-WoWcR3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-identity_mismatch-A44xzz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-blocked-4pyq63","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-sqlite-s2LgMP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-process-contention-EQjYZ1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-init-lock-UGKUZD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-lease-dy88RE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-stale-fence-tUllfG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-launch-orphan-nZOJOb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-bound-recovery-aSSJW1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2-runtime-corrupt-P015Zd","existsAtExit":false}
+1..349
+# tests 361
+# suites 0
+# pass 361
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 143474.1786

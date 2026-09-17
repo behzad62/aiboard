@@ -1,41 +1,126 @@
-import { createHash } from "node:crypto";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
+import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
+import type { LspTransportFactory } from "./lsp-transport.js";
+import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
+import { requireGitRunner } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
+import { createHash, randomBytes } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { statSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, join, relative } from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AccountRunnerModel } from "./account-runner-model.js";
 import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
-import type { ModelCostBasisSnapshot } from "./budget-ledger.js";
+import {
+  rebuildBudgetProjection,
+  type BudgetProjection,
+  type ModelCostBasisSnapshot,
+} from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
-import { BuildRuntime, type IntegrationRuntimeDriver } from "./build-runtime.js";
+import { CapabilityRegistry } from "./capability-registry.js";
+import {
+  BuildRuntime,
+  type FinalVerificationCheckDriver,
+  type IndependentVerifierDriver,
+  type IntegrationRuntimeDriver,
+} from "./build-runtime.js";
+import type { AgentSessionProjection } from "./agent-session-store.js";
 import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
 import type { ModelCostEstimator } from "./budgeted-model.js";
 import type {
   BuildObservabilitySnapshot,
   BuildToolObservation,
 } from "./build-observability.js";
+import {
+  loadFinalVerificationDiagnostics,
+  projectExecutionSafetyObservability,
+  projectFinalVerificationObservability,
+  projectIndependentVerifierObservability,
+} from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
-import type { NativeBuildSpec } from "./build-spec.js";
+import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
+import { FinalVerificationRuntime } from "./final-verification-runtime.js";
+import {
+  finalVerificationProfileDigest,
+  FinalVerificationProfileAuthority,
+} from "./final-verification-profile.js";
+import { FinalVerificationPortAuthority } from "./final-verification-port-authority.js";
+import {
+  FinalVerificationDiagnosticsArchive,
+  OwnedFinalVerificationCleanup,
+  retireInvalidatedFinalVerificationGeneration,
+  validateOwnedFinalVerificationCleanupReceipt,
+  type FinalVerificationCleanupReceiptIdentity,
+} from "./final-verification-cleanup.js";
 import { GoogleModel } from "./google-model.js";
-import { ManagedProcessService } from "./managed-process.js";
-import type { NativeBuildRuntimeHandle } from "./native-build-manager.js";
+import { LanguageProviderRouter } from "./language-provider-router.js";
+import {
+  ManagedProcessService,
+  readHistoricalManagedProcessObservations,
+} from "./managed-process.js";
+import type {
+  HistoricalTerminalState,
+  NativeBuildRuntimeHandle,
+} from "./native-build-manager.js";
 import {
   projectNativeModelUsage,
   type NativeModelUsageRuntime,
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
+import {
+  NativeVerifierRuntime,
+  type NativeVerifierInspectionRequest,
+} from "./native-verifier-runtime.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
+import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
-import type { McpManager } from "./mcp-tools.js";
+import { createConfiguredOciIsolationSelector } from "./oci-execution-isolation-provider.js";
+import { readExecutionEnforcementState } from "./execution-isolation-provider.js";
+import {
+  createMcpTools,
+  McpManager,
+  type LiveMcpStatusRegistry,
+} from "./mcp-tools.js";
+import {
+  cleanupRecoveredMcpTransports,
+  createExecutionHostMcpTransportFactory,
+} from "./execution-host-mcp-transport.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type {
   ProviderConfigStore,
   RunnerProviderConfig,
 } from "./provider-config-store.js";
+import {
+  LocalPluginLoader,
+  RunnerExtensionLoadError,
+  type LoadedRunnerExtensions,
+  type RunnerExtensionCleanupDisposer,
+} from "./plugin-loader.js";
+import {
+  emptyRunnerCapabilitiesConfig,
+  type RunnerCapabilitiesConfig,
+} from "./runner-capabilities-config.js";
+import {
+  attestRunnerCapabilitiesLanguageServers,
+  RunnerCapabilityContractError,
+  cloneRunnerCapabilityContract,
+  createRunnerCapabilityContractSnapshot,
+  runnerCapabilitiesForContract,
+  runnerCapabilitySnapshotExtensionDirectories,
+  validateRunnerCapabilityContract,
+  validateRunnerCapabilityContractSnapshot,
+  type RunnerCapabilityContractErrorCode,
+} from "./runner-capability-contract.js";
+import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
+import { runnerRunStateSegment } from "./run-state-identity.js";
+import { RepositoryIntelligence } from "./repository-intelligence.js";
 import {
   providerUsageConfig,
   resolvedProviderBillingBasis,
@@ -43,14 +128,22 @@ import {
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
 import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
+import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
   rebuildSchedulerProjection,
   type SchedulerEvent,
+  type SchedulerProjection,
+  type BuildRiskAssessmentProjection,
 } from "./scheduler-store.js";
+import type { BuildRiskAssessmentInput } from "./risk-policy.js";
 import {
   SkillCatalog,
   type SharedSkillRoot,
+  type SkillMetadata,
 } from "./skill-catalog.js";
+import type {
+  HistoricalReadProvenance,
+} from "./historical-read-provenance.js";
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
 import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
@@ -58,47 +151,373 @@ import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
+import type { ToolLedgerEvent } from "./tool-ledger.js";
+import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 import { WorkspaceManager } from "./workspace-manager.js";
+import { VerificationWorkspaceManager } from "./verification-workspace.js";
+import { createChildEnvironmentFactory } from "./child-environment.js";
+import {
+  createExecutionGrantAuthority,
+  type ExecutionGrantAuthority,
+} from "./execution-grants.js";
+import type {
+  ExecutionHost,
+  ExecutionHostRunBinding,
+} from "./execution-host.js";
+import type {
+  McpConfigurationAttestation,
+  RunnerInternalExecutionContext,
+} from "./runner-internal-execution-context.js";
+import {
+  createProcessBackendRegistration,
+  createProcessBackendRegistry,
+} from "./process-backend.js";
+import { createPosixProcessBackend } from "./posix-process-backend.js";
+import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
+import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
+import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
+import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
+import {
+  ProcessRecoveryController,
+  createAgentProcessRecoveryGenerator,
+  createSubprocessProcessRecoveryRuntime,
+  type ProcessRecoveryRuntime,
+} from "./process-recovery.js";
+import {
+  createBoundedProcessOutputFactory,
+  createRuntimeBackedOneShotCommandExecutor,
+  type OneShotCommandExecutor,
+} from "./one-shot-command-executor.js";
+
+export type NativeBuildRuntimeResourceStage =
+  | "execution_host_binding"
+  | "mcp_discovery"
+  | "mcp_manager"
+  | "capabilities"
+  | "execution_isolation"
+  | "subprocess_runtime"
+  | "evidence_store"
+  | "scheduler_store"
+  | "session_store"
+  | "tool_ledger"
+  | "budget_ledger"
+  | "workspace_manager"
+  | "integration_workspace"
+  | "verification_workspace"
+  | "independent_verifier_workspace"
+  | "memory_store"
+  | "managed_process_service";
+
+export type NativeBuildRuntimeInitializationStage =
+  | NativeBuildRuntimeResourceStage
+  | "baseline"
+  | "runtime_configuration"
+  | "models"
+  | "runtime_drivers";
+
+/** A bounded, attributable failure while rebuilding a live native Build. */
+export class NativeBuildRuntimeInitializationError extends Error {
+  constructor(
+    readonly stage: NativeBuildRuntimeInitializationStage,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "NativeBuildRuntimeInitializationError";
+  }
+}
+
+export type NativeBuildRecoveryErrorClassification =
+  | { kind: "capability"; code: RunnerCapabilityContractErrorCode }
+  | { kind: "runtime"; stage: NativeBuildRuntimeInitializationStage };
+
+/**
+ * Cleanup aggregation must not erase the attributable construction failure.
+ * The primary error is always first, but recursively walking also handles the
+ * capability loader's own startup-plus-cleanup aggregate.
+ */
+export function classifyNativeBuildRecoveryError(
+  error: unknown,
+): NativeBuildRecoveryErrorClassification | undefined {
+  return classifyNativeBuildRecoveryErrorValue(error, new Set());
+}
+
+function classifyNativeBuildRecoveryErrorValue(
+  error: unknown,
+  seen: Set<unknown>,
+): NativeBuildRecoveryErrorClassification | undefined {
+  if (seen.has(error)) return undefined;
+  seen.add(error);
+  if (error instanceof RunnerCapabilityContractError) {
+    return { kind: "capability", code: error.code };
+  }
+  if (error instanceof NativeBuildRuntimeInitializationError) {
+    return { kind: "runtime", stage: error.stage };
+  }
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) {
+      const classified = classifyNativeBuildRecoveryErrorValue(nested, seen);
+      if (classified) return classified;
+    }
+  }
+  if (error instanceof Error && error.cause !== undefined) {
+    return classifyNativeBuildRecoveryErrorValue(error.cause, seen);
+  }
+  return undefined;
+}
+
+/** Test seam for exercising every construction boundary with real resources. */
+export interface NativeBuildRuntimeConstructionHooks {
+  afterAcquire?(stage: NativeBuildRuntimeResourceStage): void | Promise<void>;
+  beforeCleanup?(stage: NativeBuildRuntimeResourceStage): void | Promise<void>;
+}
 
 export interface NativeBuildFactoryOptions {
+  /** Explicit injected owner for non-CLI embeddings/tests; never a raw fallback. */
+  gitForRun?: (spec: NativeBuildSpec) => RunGitExecutionContext;
   projectRoot: string;
   stateDirectory: string;
   providerConfigs: ProviderConfigStore;
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
+  capabilitiesConfig?: RunnerCapabilitiesConfig;
+  /** Production supplies the single CLI-owned execution composition root. */
+  executionHost?: ExecutionHost;
+  /** Production MCP configuration is attested once, discovered ephemerally per run, then bound live per run. */
+  mcpServers?: readonly import("./mcp-tools.js").McpServerSpec[];
+  mcpAttestation?: readonly McpConfigurationAttestation[];
+  mcpStatusRegistry?: LiveMcpStatusRegistry;
+  internalExecutionContext?: RunnerInternalExecutionContext;
   baselineFor(runId: string): string;
   skillRoots?: readonly SharedSkillRoot[];
+  /** The CLI owns provider configuration cleanup when it manages the full process lifecycle. */
+  closeProviderConfigs?: boolean;
+  /** Injected only by focused lifecycle tests; live callers leave this undefined. */
+  runtimeConstructionHooks?: NativeBuildRuntimeConstructionHooks;
+  /** Injected only by focused construction-order tests. */
+  providerModelFactory?: (
+    config: RunnerProviderConfig,
+    artifacts: ArtifactStore,
+  ) => AgentModel;
 }
+
+export const NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE = Object.freeze([
+  "processes",
+  "backends",
+  "isolation",
+  "grants",
+  "spills",
+  "tempRoots",
+] as const);
 
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly artifactReachability: ArtifactReachabilityGuard;
-  private readonly memoryStore: SqliteProjectMemoryStore;
+  private memoryStore: SqliteProjectMemoryStore | undefined;
   private readonly browserBackend: PlaywrightBrowserBackend;
-  private readonly managedProcesses: ManagedProcessService;
+  private managedProcesses: ManagedProcessService | undefined;
+  private readonly incompleteConstructionCleanups = new Set<NativeBuildResourceCleanupStack>();
+  private closePromise: Promise<void> | undefined;
+  private providerConfigsClosed = false;
+  private browserBackendClosed = false;
   private closed = false;
+  private windowsProcessFactsPromise: Promise<ProcessHostSemanticFacts> | undefined;
 
   constructor(private readonly options: NativeBuildFactoryOptions) {
-    this.artifacts = new ArtifactStore(join(options.stateDirectory, "artifacts"));
+    this.artifacts = options.executionHost?.artifacts ??
+      new ArtifactStore(join(options.stateDirectory, "artifacts"));
     this.artifactReachability = new ArtifactReachabilityGuard(
       options.stateDirectory,
       this.artifacts
     );
-    this.memoryStore = new SqliteProjectMemoryStore(
-      join(options.stateDirectory, "project-memory.sqlite")
-    );
     this.browserBackend = new PlaywrightBrowserBackend(
       join(options.stateDirectory, "browser-sessions")
     );
-    this.managedProcesses = new ManagedProcessService({
-      stateDirectory: join(options.stateDirectory, "managed-processes"),
-    });
+  }
+
+  async prepareSpec(spec: NativeBuildSpec): Promise<NativeBuildSpec> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    const config = this.capabilitiesConfig();
+    return {
+      ...cloneBuildSpec(spec),
+      capabilityContract: await createRunnerCapabilityContractSnapshot(
+        config,
+        this.options.stateDirectory,
+        { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
+      ),
+    };
+  }
+
+  async validateRecoveryCapabilityContract(spec: NativeBuildSpec): Promise<void> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    await validateRunnerCapabilityContract(
+      spec.capabilityContract,
+      this.capabilitiesConfig(),
+      { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
+    );
   }
 
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    await this.closeIncompleteConstructionResources();
+    if (!spec.capabilityContract) {
+      throw new Error("Native Build runtime requires a Runner-prepared capability contract.");
+    }
+    await this.validateRecoveryCapabilityContract(spec);
+    await validateRunnerCapabilityContractSnapshot(
+      spec.capabilityContract,
+      this.options.stateDirectory,
+    );
+    const capabilitiesConfig = runnerCapabilitiesForContract(
+      this.capabilitiesConfig(),
+      spec.capabilityContract,
+    );
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
+    await mkdir(runRoot, { recursive: true });
+    const constructionResources = new NativeBuildResourceCleanupStack(
+      this.options.runtimeConstructionHooks,
+    );
+    let ownedMcpCleanup: RetryableNativeBuildCleanup | undefined;
+    let ownedExecutionHostBindingCleanup: RetryableNativeBuildCleanup | undefined;
+    let initializationStage: NativeBuildRuntimeInitializationStage = "capabilities";
+    try {
+    initializationStage = "baseline";
     const baselineRevision = this.options.baselineFor(spec.runId);
+    let executionHostBinding: ExecutionHostRunBinding | undefined;
+    if (this.options.executionHost) {
+      initializationStage = "execution_host_binding";
+      executionHostBinding = await this.options.executionHost.bindRun({
+        runId: spec.runId,
+        permissionProfile: spec.permissionProfile,
+        capabilityContract: spec.capabilityContract,
+        capabilitiesConfig,
+      });
+      if (relative(runRoot, executionHostBinding.runRoot) !== "") {
+        throw new Error("ExecutionHost returned a mismatched run root.");
+      }
+      constructionResources.add(
+        "execution_host_binding",
+        () => ownedExecutionHostBindingCleanup!.close(),
+        true,
+      );
+      ownedExecutionHostBindingCleanup = retryableNativeBuildCleanup(
+        () => executionHostBinding!.close(),
+      );
+      const hostRecovery = await executionHostBinding.recover({
+        maxRecords: 1_024,
+        timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS,
+      });
+      assertIsolationRecoveryClear(hostRecovery.isolation);
+      await cleanupRecoveredMcpTransports(executionHostBinding);
+      await cleanupRecoveredLspTransports(executionHostBinding);
+      await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_host_binding");
+    }
+    let runMcpManager = this.options.mcpManager;
+    if (this.options.internalExecutionContext) {
+      const servers = this.options.mcpServers ?? [];
+      const attestation = this.options.mcpAttestation ?? [];
+      initializationStage = "mcp_discovery";
+      const discovery = this.options.internalExecutionContext.createMcpDiscoveryExecutor({
+        runId: spec.runId,
+        servers,
+        attestation,
+      });
+      let discovered: McpDiscoveryResult;
+      try {
+        discovered = await discovery.discover();
+      } finally {
+        await discovery.close();
+      }
+      await this.options.runtimeConstructionHooks?.afterAcquire?.("mcp_discovery");
+      initializationStage = "mcp_manager";
+      if (!executionHostBinding) {
+        throw new Error("Live per-Build MCP requires its exact ExecutionHost run binding.");
+      }
+      const runtimeLaunches = await this.options.internalExecutionContext.resolveMcpRuntimeLaunches({
+        servers,
+        attestation,
+      });
+      runMcpManager = new McpManager({
+        runId: spec.runId,
+        discovery: discovered,
+        reattest: () => this.options.internalExecutionContext!.resolveMcpRuntimeLaunches({ servers, attestation }),
+        cwd: this.options.projectRoot,
+        servers,
+        transportFactory: createExecutionHostMcpTransportFactory({
+          run: executionHostBinding,
+          permissionProfile: spec.permissionProfile,
+          projectDirectory: this.options.projectRoot,
+          launches: runtimeLaunches,
+        }),
+      });
+      const statusRegistration: {
+        value?: Readonly<{ dispose(): void }>;
+      } = {};
+      const ownedMcpManager = runMcpManager;
+      ownedMcpCleanup = retryableNativeBuildCleanup(async () => {
+        await ownedMcpManager.close();
+        statusRegistration.value?.dispose();
+      });
+      constructionResources.add(
+        "mcp_manager",
+        () => ownedMcpCleanup!.close(),
+        true,
+      );
+      await runMcpManager.start();
+      statusRegistration.value = this.options.mcpStatusRegistry?.register(spec.runId, runMcpManager);
+      await this.options.runtimeConstructionHooks?.afterAcquire?.("mcp_manager");
+    }
+    initializationStage = "execution_isolation";
+    const executionIsolation = executionHostBinding?.isolation ??
+      await createConfiguredOciIsolationSelector(
+        capabilitiesConfig,
+        join(runRoot, "execution-isolation"),
+      );
+    if (!executionHostBinding) {
+      assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
+      constructionResources.add("execution_isolation", async () => {
+        assertIsolationRecoveryClear(await executionIsolation.recoverOwnedLeases());
+      }, true);
+    }
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("execution_isolation");
+    initializationStage = "capabilities";
+    const gitContext = executionHostBinding?.git ?? this.options.gitForRun?.(spec);
+    const runCapabilities = await createNativeRunCapabilities({
+      git: gitContext,
+      environment: this.options.executionHost?.filteredEnvironmentSource() ?? {},
+      ...(executionHostBinding ? { lspTransportFactory: createExecutionHostLspTransportFactory({
+        run: executionHostBinding, permissionProfile: spec.permissionProfile,
+        environment: this.options.executionHost!.filteredEnvironmentSource(),
+      }) } : {}),
+      config: {
+        ...capabilitiesConfig,
+        extensions: runnerCapabilitySnapshotExtensionDirectories(
+          spec.capabilityContract,
+          this.options.stateDirectory,
+        ),
+      },
+      projectDirectory: this.options.projectRoot,
+      stateDirectory: runRoot,
+      verifyExtensionIntegrity: async () => {
+        await validateRunnerCapabilityContractSnapshot(
+          spec.capabilityContract!,
+          this.options.stateDirectory,
+        );
+      },
+      reservedToolNames: [
+        ...RUNNER_BUILTIN_TOOL_NAMES,
+        ...(runMcpManager
+          ? createMcpTools(runMcpManager, this.artifacts).map(
+              (tool) => tool.definition.name,
+            )
+          : []),
+      ],
+    });
+    constructionResources.add("capabilities", () => runCapabilities.close(), true);
+    await runCapabilities.preflight();
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("capabilities");
+    initializationStage = "runtime_configuration";
     const selected = selectRuntimeCandidates(
       this.options.providerConfigs.load(),
       spec
@@ -110,12 +529,6 @@ export class NativeBuildFactory {
     const modelUsageRuntimes = selectedConfigs.map((config) =>
       configuredModelUsageRuntime(config, spec)
     );
-    const models = new Map<string, AgentModel>(
-      selectedConfigs.map((config) => [
-        config.runtimeId,
-        createProviderModel(config, this.artifacts),
-      ])
-    );
     const modelCostEstimators = new Map<string, ModelCostEstimator>(
       selectedConfigs.flatMap((config) => {
         const estimator = providerCostEstimator(config);
@@ -125,8 +538,30 @@ export class NativeBuildFactory {
     const modelCostBases = new Map<string, ModelCostBasisSnapshot>(
       selectedConfigs.map((config) => [config.runtimeId, providerModelCostBasis(config)])
     );
-    const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    initializationStage = "evidence_store";
+    const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    constructionResources.add("evidence_store", () => evidenceStore.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("evidence_store");
+    const finalVerificationPorts = new FinalVerificationPortAuthority(this.options.stateDirectory);
+    const finalVerificationProfiles = new FinalVerificationProfileAuthority({
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      portAuthority: finalVerificationPorts,
+      ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+    });
+    initializationStage = "scheduler_store";
+    const schedulerStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
+      evidenceStore,
+      artifacts: this.artifacts,
+      validateCleanupReceipt: (identity) =>
+        validateOwnedFinalVerificationCleanupReceipt(this.options.stateDirectory, identity),
+      validateExecutionProfile: ({ targetRevision, profile }) =>
+        finalVerificationProfiles.validate(profile, targetRevision),
+    });
+    constructionResources.add("scheduler_store", () => schedulerStore.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("scheduler_store");
     const schedulerEvents = schedulerStore.readRun(spec.runId);
+    initializationStage = "session_store";
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
       this.artifacts,
@@ -135,32 +570,222 @@ export class NativeBuildFactory {
           this.artifactReachability.removeIfGloballyUnreachable(hash),
       }
     );
+    constructionResources.add("session_store", () => sessions.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("session_store");
+    initializationStage = "tool_ledger";
     const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
-    const evidenceStore = new SqliteEvidenceStore(join(runRoot, "evidence.sqlite"));
+    constructionResources.add("tool_ledger", () => ledger.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("tool_ledger");
+    initializationStage = "budget_ledger";
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
       limitsFor: (scopeId) => {
         if (scopeId !== spec.runId) throw new Error(`Unknown budget scope ${scopeId}.`);
         return { ...spec.budgetLimits };
       },
     });
+    constructionResources.add("budget_ledger", () => budgetLedger.close(), true);
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("budget_ledger");
     budgetLedger.recoverInterruptedActive(
       spec.runId,
       `startup-recovery:${spec.runId}`,
     );
+    initializationStage = "workspace_manager";
     const workspaceManager = new WorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("workspace").run,
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       baselineRevision,
     });
+    constructionResources.add("workspace_manager", () => workspaceManager.cleanup());
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("workspace_manager");
+    initializationStage = "integration_workspace";
     const integrationManager = new IntegrationManager({
+      execute: requireGitRunner(gitContext).lifecycle("integration").run,
+      executeBytes: requireGitRunner(gitContext).lifecycle("integration").runBytes,
       repositoryRoot: this.options.projectRoot,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
       baselineRevision,
       initializationMode: integrationInitializationModeFromEvents(schedulerEvents),
     });
+    constructionResources.add("integration_workspace", () => integrationManager.cleanup());
     await integrationManager.initialize();
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("integration_workspace");
+    initializationStage = "verification_workspace";
+    const verificationWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+    });
+    constructionResources.add("verification_workspace", () => verificationWorkspace.cleanup());
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("verification_workspace");
+    initializationStage = "independent_verifier_workspace";
+    const verifierWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+      kind: "independent-verifier",
+    });
+    constructionResources.add(
+      "independent_verifier_workspace",
+      () => verifierWorkspace.cleanup(),
+    );
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_workspace");
+    if (
+      schedulerEvents.length > 0 &&
+      rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
+        "submitted"
+    ) {
+      await verifierWorkspace.cleanup();
+    }
+    const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      stopRun: (runId) => this.liveManagedProcesses().stopRun(runId),
+      closeBrowserRun: (runId) => this.browserBackend.closeRun(runId),
+      workspaceManager: verificationWorkspace,
+      diagnostics: new FinalVerificationDiagnosticsArchive({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+        stateDirectory: this.options.stateDirectory,
+        runId: spec.runId,
+        workspaceManager: verificationWorkspace,
+      }),
+    });
+    const hadMemoryStore = this.memoryStore !== undefined;
+    initializationStage = "memory_store";
+    const memoryStore = this.liveMemoryStore();
+    if (!hadMemoryStore) {
+      constructionResources.add("memory_store", () => {
+        memoryStore.close();
+        if (this.memoryStore === memoryStore) this.memoryStore = undefined;
+      });
+    }
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("memory_store");
+    const hadManagedProcesses = this.managedProcesses !== undefined;
+    initializationStage = "managed_process_service";
+    const managedProcesses = executionHostBinding?.managedProcesses ?? this.liveManagedProcesses();
+    if (!executionHostBinding && !hadManagedProcesses) {
+      constructionResources.add("managed_process_service", async () => {
+        await managedProcesses.close();
+        if (this.managedProcesses === managedProcesses) this.managedProcesses = undefined;
+      });
+    }
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("managed_process_service");
+    initializationStage = "subprocess_runtime";
+    let executionGrants: ExecutionGrantAuthority;
+    let commandExecution: OneShotCommandExecutor;
+    let processRecoveryRuntime: ProcessRecoveryRuntime;
+    if (executionHostBinding) {
+      executionGrants = executionHostBinding.executionGrants;
+      commandExecution = executionHostBinding.commandExecution;
+      processRecoveryRuntime = executionHostBinding.processRecoveryRuntime;
+    } else {
+    const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(this.options.stateDirectory, "managed-processes-job-host") });
+    const childEnvironments = createChildEnvironmentFactory({
+      credentialResolver: {
+        consume: () => {
+          throw new Error("No Runner child-environment credential grant is configured.");
+        },
+      },
+    });
+    const windowsFacts = process.platform === "win32"
+      ? await (this.windowsProcessFactsPromise ??= probeProcessHostSemantics({
+          ...createWindowsProcessSemanticProbeSource({
+            ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+          }),
+          activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
+        }))
+      : undefined;
+    const windowsPortableBackend = process.platform === "win32" && windowsFacts
+      ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable", semanticFacts: windowsFacts })
+      : undefined;
+    const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
+    const processBackends = process.platform === "win32"
+      ? [
+          ...(windowsBackendKinds.has("job") ? [{
+            stableAdapterId: "runner-windows-job-adapter-v1",
+            backendId: "runner-windows-job-v1",
+            codeIdentity: "runner-v2/windows-job-process-backend@1",
+            backend: new WindowsJobObjectProcessBackend(
+              windowsJobHost,
+              windowsFacts!.windowsBatchArgv,
+              windowsFacts!.jobContainment,
+            ),
+          }] : []),
+          ...(windowsBackendKinds.has("portable") ? [{
+            stableAdapterId: "runner-windows-portable-adapter-v1",
+            backendId: "runner-windows-supervisor-v1",
+            codeIdentity: "runner-v2/windows-portable-process-backend@1",
+            backend: windowsPortableBackend!,
+          }] : []),
+        ]
+      : [{
+          stableAdapterId: "runner-posix-process-group-adapter-v1",
+          backendId: "runner-posix-process-group-v1",
+          codeIdentity: "runner-v2/posix-process-backend@1",
+          backend: createPosixProcessBackend({ stateDirectory: join(runRoot, "process-backend") }),
+        }];
+    const subprocessKernel = createSubprocessRuntimeKernel({
+      registry: createProcessBackendRegistry(processBackends.map((processBackend) =>
+        createProcessBackendRegistration({
+          stableAdapterId: processBackend.stableAdapterId,
+          backendId: processBackend.backendId,
+          codeDigest: createHash("sha256")
+            .update(processBackend.codeIdentity)
+            .digest("hex"),
+          configDigest: createHash("sha256")
+            .update("runner-v2/native-one-shot-process-backend@1")
+            .digest("hex"),
+          backend: processBackend.backend,
+        }),
+      )),
+      state: { kind: "sqlite", path: join(runRoot, "subprocess-runtime.sqlite") },
+      stateKey: await loadOrCreateProcessStateKey(join(runRoot, "subprocess-runtime.key")),
+      clock: {
+        now: () => new Date(),
+        sleep: async (milliseconds) => await new Promise<void>((resolveSleep) => {
+          const timer = setTimeout(resolveSleep, milliseconds);
+          timer.unref();
+        }),
+      },
+      environments: childEnvironments,
+      outputs: createBoundedProcessOutputFactory({
+        spillRoot: join(runRoot, "subprocess-output"),
+        projectRoot: this.options.projectRoot,
+        artifacts: this.artifacts,
+      }),
+    });
+    await subprocessKernel.runtime.reconcileStartup();
+    executionGrants = createExecutionGrantAuthority();
+    commandExecution = createRuntimeBackedOneShotCommandExecutor({
+      runtime: subprocessKernel.runtime,
+      runtimeGrants: subprocessKernel.grantsController,
+      executionGrants,
+      isolation: executionIsolation,
+      permissionProfile: spec.permissionProfile,
+      ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
+      environments: childEnvironments,
+    });
+    processRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
+      runtime: subprocessKernel.runtime,
+      canRecoverExceptional: subprocessKernel.canRecoverExceptional,
+      store: subprocessKernel.readOnlyStore,
+      executionGrants,
+      permissionProfile: spec.permissionProfile,
+      workspacePath: this.options.projectRoot,
+    });
+    constructionResources.add("subprocess_runtime", async () => {
+      await executionGrants.revokeAll("cleanup");
+      await subprocessKernel.runtime.reconcileStartup();
+      subprocessKernel.readOnlyStore.close();
+    }, true);
+    }
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("subprocess_runtime");
     const initialHealth = providerHealthFromSchedulerEvents(
       schedulerStore.readRun(spec.runId)
     );
@@ -170,11 +795,30 @@ export class NativeBuildFactory {
       health,
     });
     const architectRouter = new RuntimeRouter({ candidates, health });
+    const verifierRouter = new RuntimeRouter({ candidates, health });
     const skillCatalog = new SkillCatalog({
       projectRoot: this.options.projectRoot,
       sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
     });
+    initializationStage = "models";
+    const providerModelFactory = this.options.providerModelFactory ?? createProviderModel;
+    const models = new Map<string, AgentModel>(
+      selectedConfigs.map((config) => [
+        config.runtimeId,
+        providerModelFactory(config, this.artifacts),
+      ])
+    );
+    const recoveryModel = models.get(spec.architectRuntimeId);
+    if (!recoveryModel) throw new Error("Exceptional recovery requires the configured Architect runtime.");
+    const processRecovery = new ProcessRecoveryController({
+      runId: spec.runId,
+      store: schedulerStore,
+      runtime: processRecoveryRuntime,
+      generate: createAgentProcessRecoveryGenerator({ model: recoveryModel }),
+    });
+    initializationStage = "runtime_drivers";
     const workerDriver = new NativeWorkerDriver({
+      git: gitContext,
       schedulerStore,
       router: workerRouter,
       health,
@@ -187,16 +831,20 @@ export class NativeBuildFactory {
       sessions,
       evidenceStore,
       skillCatalog,
-      memoryStore: this.memoryStore,
+      memoryStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
+      capabilityRegistry: runCapabilities.registry,
+      language: runCapabilities.language,
       budgetLedger,
       modelCostEstimators,
       modelCostBases,
       browserBackend: this.browserBackend,
-      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+      ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-      managedProcesses: this.managedProcesses,
+      managedProcesses,
+      execution: commandExecution,
+      executionGrants,
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -206,6 +854,8 @@ export class NativeBuildFactory {
         : {}),
     });
     const architectDriver = new NativeArchitectRuntime({
+      git: gitContext,
+      executionGrants,
       schedulerStore,
       router: architectRouter,
       health,
@@ -215,12 +865,15 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       skillCatalog,
-      memoryStore: this.memoryStore,
+      memoryStore,
       evidenceStore,
       projectId: spec.projectId,
       projectRoot: this.options.projectRoot,
+      canonicalProjectRoot: integrationManager.path,
       objective: spec.objective,
       runPolicy: spec.runPolicy,
+      capabilityRegistry: runCapabilities.registry,
+      language: runCapabilities.language,
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -235,17 +888,115 @@ export class NativeBuildFactory {
       ledger,
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       browserBackend: this.browserBackend,
-      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+      ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
     });
+    const nativeVerifier = new NativeVerifierRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      verifierRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      workspaceManager: {
+        workspaceKind: "independent-verifier",
+        create: async (targetRevision) =>
+          await verifierWorkspace.create(targetRevision),
+      },
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      verdictAuthority: new SchedulerVerifierVerdictAuthority(schedulerStore),
+    });
+    const independentVerifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      alwaysRequireIndependentVerifier:
+        spec.alwaysRequireIndependentVerifier,
+      assessRisk: async ({ projection }) => deriveNativeVerifierRiskInput({
+        projection,
+        sessions: await sessions.listRun(spec.runId),
+        schedulerEvents: schedulerStore.readRun(spec.runId),
+        toolEvents: ledger.listRun(spec.runId),
+        stricterQualification: spec.alwaysRequireIndependentVerifier,
+      }),
+      verify: async (request) => {
+        const result = await nativeVerifier.inspect(
+          buildNativeVerifierInspectionRequest({
+            runId: spec.runId,
+            objective: spec.objective,
+            architectRuntimeId:
+              request.projection.runtime.architect.runtimeId ??
+              spec.architectRuntimeId,
+            projection: request.projection,
+            sessions: await sessions.listRun(spec.runId),
+            risk: request.risk,
+            ...(request.preferredRuntimeId
+              ? { preferredRuntimeId: request.preferredRuntimeId }
+              : {}),
+            ...(request.signal ? { signal: request.signal } : {}),
+            providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+              spec.budgetLimits.maxActiveMs,
+              budgetLedger.snapshot(spec.runId).effective.activeMs,
+              Date.now(),
+            ),
+          }),
+        );
+        if (
+          (result.status === "verdict_submitted" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `verifier:${result.runtimeId}`,
+            );
+          }
+        }
+        if (result.status === "verdict_submitted") {
+          await verifierWorkspace.cleanup();
+          return { status: "verdict_submitted" };
+        }
+        if (result.status === "unavailable") {
+          return { status: "unavailable", reason: result.reason };
+        }
+        if (result.status === "suspended") {
+          return {
+            status: "suspended",
+            reason: result.reason,
+            runtimeId: result.runtimeId,
+            ...(result.error ? { error: result.error } : {}),
+          };
+        }
+        return {
+          status: "suspended",
+          reason: `unexpected_verifier_result:${result.status}`,
+        };
+      },
+    };
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
-        const task = rebuildSchedulerProjection(
+        const projection = rebuildSchedulerProjection(
           schedulerStore.readRun(spec.runId)
-        ).tasks[taskId];
-        if (!task) throw new Error(`Unknown integration task ${taskId}.`);
-        const session = await sessions.load(
-          `worker:${spec.runId}:${taskId}:${task.attempt}`
         );
+        const task = projection.tasks[taskId];
+        if (!task) throw new Error(`Unknown integration task ${taskId}.`);
+        const sessionId = resolveWorkerSessionId(
+          spec.runId,
+          taskId,
+          task.attempt,
+          task.assignedWorkerId ?? standardWorkerId(taskId, task.attempt),
+          projection.runtime.workerAssignments[`${taskId}:${task.attempt}`]?.sessionId
+        );
+        const session = await sessions.load(sessionId);
         if (!session.changeSet || session.changeSet.id !== changeSetId) {
           throw new Error(`Submitted change set ${changeSetId} is unavailable.`);
         }
@@ -259,13 +1010,92 @@ export class NativeBuildFactory {
             };
       },
     };
+    const finalVerificationDriver: FinalVerificationCheckDriver = {
+      executeCheck: async (input) => {
+        const verification = new FinalVerificationRuntime({
+          git: requireGitRunner(gitContext).lifecycle("verification").run,
+          workspaceManager: verificationWorkspace,
+          artifacts: this.artifacts,
+          evidenceStore,
+          runId: input.runId,
+          taskId: input.taskId,
+          attempt: input.attempt,
+          generationId: input.generationId,
+          checkCategory: input.category,
+          currentIntegrationRevision: () => integrationManager.revision,
+          managedProcessService: this.liveManagedProcesses(),
+          managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
+          browserBackend: this.browserBackend,
+          validatePortLease: async (lease) => await finalVerificationPorts.validate(
+            lease,
+            spec.runId,
+            input.targetRevision,
+          ),
+          execution: commandExecution,
+        });
+        const result = await verification.runCategory(
+          {
+            plan: input.plan,
+            executionProfile: input.executionProfile,
+            ...(input.executionProfile?.commands
+              ? { commands: input.executionProfile.commands }
+              : {}),
+            ...(input.executionProfile?.runtimeSmoke
+              ? { runtimeSmoke: input.executionProfile.runtimeSmoke }
+              : {}),
+            ...(input.executionProfile?.browser
+              ? { browser: input.executionProfile.browser }
+              : {}),
+            signal: input.signal,
+          },
+          input.category,
+        );
+        return {
+          workspacePath: result.workspacePath,
+          startedAt: result.startedAt,
+          finishedAt: result.finishedAt,
+          check: result.check,
+        };
+      },
+    };
     const runtime = new BuildRuntime({
       runId: spec.runId,
+      initialObjective: spec.objective,
       runPolicy: spec.runPolicy,
       store: schedulerStore,
       workerDriver,
       architectDriver,
       integrationDriver,
+      finalVerificationDriver,
+      finalVerificationCleanupDriver: {
+        cleanup: async (input) => {
+          const current = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId))
+            .finalVerification?.current;
+          const lease = current?.generationId === input.generationId &&
+            current.targetRevision === input.targetRevision
+            ? current.executionProfile.portLease
+            : undefined;
+          try {
+            return await finalVerificationCleanup.cleanup(input);
+          } finally {
+            if (lease) {
+              await finalVerificationPorts.release(lease, spec.runId, input.targetRevision);
+            }
+          }
+        },
+      },
+      finalVerificationProfileFor: async (targetRevision) =>
+        await finalVerificationProfiles.inspectAndPersist({
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+          repositoryRoot: integrationManager.path,
+          targetRevision,
+        }),
+      discardFinalVerificationProfile: async (profile) => {
+        if (profile.portLease) {
+          await finalVerificationPorts.release(profile.portLease, spec.runId, profile.targetRevision);
+        }
+      },
+      independentVerifier,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {
@@ -293,10 +1123,27 @@ export class NativeBuildFactory {
           Date.now()
         );
       },
+      evidenceStore,
+      artifacts: this.artifacts,
     });
     let closed = false;
+    let closing: Promise<void> | undefined;
     return {
       runtime,
+      processRecovery,
+      finalVerificationCleanup,
+      retireInvalidatedFinalVerification: async (generation, currentGeneration) =>
+        await retireInvalidatedFinalVerificationGeneration({
+          cleanup: finalVerificationCleanup,
+          generation,
+          currentGeneration,
+          releasePortLease: async (lease, targetRevision) =>
+            await finalVerificationPorts.release(
+              lease,
+              spec.runId,
+              targetRevision,
+            ),
+        }),
       usage: () => {
         const budget = budgetLedger.snapshot(spec.runId);
         return {
@@ -316,6 +1163,28 @@ export class NativeBuildFactory {
         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
         const schedulerEvents = schedulerStore.readRun(spec.runId);
         const schedulerProjection = rebuildSchedulerProjection(schedulerEvents);
+        const executionEnforcement = await executionIsolation.enforcementState();
+        const executionSafety = projectExecutionSafetyObservability({
+          permissionProfile: spec.permissionProfile,
+          isolation: executionEnforcement,
+          activeIsolationLeaseCount: executionIsolation.activeLeases().length,
+          grantStates: executionGrants.activeSnapshots().flatMap((grant) =>
+            grant.state === "revoked" ? [] : [grant.state]),
+          processes: processRecoveryRuntime.list?.() ?? [],
+          recovery: processRecovery.records(),
+        });
+        const finalGeneration = schedulerProjection.finalVerification?.current;
+        const diagnostics = finalGeneration
+          ? await loadFinalVerificationDiagnostics({
+              stateDirectory: this.options.stateDirectory,
+              runId: spec.runId,
+              expectedRunSegment: safeSegment(spec.runId),
+              diagnosticsPath: finalGeneration.cleanup?.diagnosticsPath,
+              generationId: finalGeneration.generationId,
+              taskId: finalGeneration.taskId,
+              targetRevision: finalGeneration.targetRevision,
+            })
+          : undefined;
         return {
           runId: spec.runId,
           budget: budgetLedger.snapshot(spec.runId),
@@ -335,10 +1204,10 @@ export class NativeBuildFactory {
           tools: toolCalls.slice(-1_000),
           evidence: evidenceStore.list({ runId: spec.runId, limit: 1_000 }),
           memories: [...rebuildProjectMemories(
-            this.memoryStore.events(spec.projectId)
+            this.liveMemoryStore().events(spec.projectId)
           ).values()],
           skills: await skillCatalog.discover(),
-          processes: this.managedProcesses.listRun(spec.runId).slice(-100).map(
+          processes: (await this.liveManagedProcesses().listRun(spec.runId)).slice(-100).map(
             (process) => ({
               ...process,
               stdout: process.stdout.slice(-8 * 1024),
@@ -352,6 +1221,19 @@ export class NativeBuildFactory {
             integrationRevision: integrationManager.revision,
             commits: await integrationManager.history(50),
           },
+          capabilities: {
+            extensions: runCapabilities.registry.manifests(),
+            languageProviders: runCapabilities.language.providerMetadata(),
+            languageRoutes: runCapabilities.language.auditRecords(),
+            executionEnforcement,
+          },
+          executionSafety: { availability: "live", ...executionSafety },
+          finalVerification: projectFinalVerificationObservability(
+            schedulerProjection,
+            diagnostics,
+          ),
+          independentVerifier:
+            projectIndependentVerifierObservability(schedulerProjection),
         };
       },
       transcript: async (afterSequence = 0) =>
@@ -375,35 +1257,581 @@ export class NativeBuildFactory {
           ? await integrationManager.applyToProject()
           : integrationManager.descriptor(false),
       cleanup: async () => {
+        if (ownedMcpCleanup && !ownedMcpCleanup.isComplete()) {
+          await this.options.runtimeConstructionHooks?.beforeCleanup?.("mcp_manager");
+          await ownedMcpCleanup.close();
+          constructionResources.completeHandleStage("mcp_manager");
+        }
         await cleanupSettledNativeBuild(
-          () => this.managedProcesses.stopRun(spec.runId),
+          async () => {
+            await this.liveManagedProcesses().stopRun(spec.runId);
+          },
           [
+            () => runCapabilities.close(),
             () => sessions.compactRun(spec.runId),
             () => workspaceManager.cleanup(),
+            () => verifierWorkspace.cleanup(),
             () => integrationManager.cleanup(),
           ],
           spec.runId
         );
+        // Git-dependent workspace cleanup must finish before its host/grants close.
+        if (ownedExecutionHostBindingCleanup && !ownedExecutionHostBindingCleanup.isComplete()) {
+          await this.options.runtimeConstructionHooks?.beforeCleanup?.("execution_host_binding");
+          await ownedExecutionHostBindingCleanup.close();
+          constructionResources.completeHandleStage("execution_host_binding");
+        }
       },
-      close: () => {
+      close: async () => {
         if (closed) return;
-        closed = true;
-        budgetLedger.close();
-        evidenceStore.close();
-        ledger.close();
-        sessions.close();
-        schedulerStore.close();
+        if (closing) return await closing;
+        const attempt = (async (): Promise<void> => {
+          await constructionResources.close("handle");
+          closed = true;
+        })();
+        closing = attempt;
+        try {
+          await attempt;
+        } finally {
+          if (closing === attempt) closing = undefined;
+        }
       },
     };
+    } catch (error) {
+      const pendingCapabilityCleanup = nativeCapabilityCleanupDisposer(error);
+      if (pendingCapabilityCleanup) {
+        constructionResources.add(
+          "capabilities",
+          () => pendingCapabilityCleanup.close(),
+          true,
+        );
+      }
+      const primary = nativeBuildConstructionFailure(initializationStage, error);
+      try {
+        await constructionResources.close("failure");
+      } catch (cleanupError) {
+        this.incompleteConstructionCleanups.add(constructionResources);
+        throw aggregateConstructionFailure(spec.runId, primary, cleanupError);
+      }
+      throw primary;
+    }
+  }
+
+  private capabilitiesConfig(): RunnerCapabilitiesConfig {
+    return this.options.capabilitiesConfig ?? emptyRunnerCapabilitiesConfig();
+  }
+
+  private async closeIncompleteConstructionResources(): Promise<void> {
+    const failures: unknown[] = [];
+    for (const resources of [...this.incompleteConstructionCleanups]) {
+      try {
+        await resources.close("failure");
+        if (resources.isComplete("failure")) {
+          this.incompleteConstructionCleanups.delete(resources);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "Could not finish cleanup from an earlier native Build construction failure.",
+      );
+    }
+  }
+
+  /** Mutable global stores are constructed only for a live runtime. */
+  private liveMemoryStore(): SqliteProjectMemoryStore {
+    return this.memoryStore ??= new SqliteProjectMemoryStore(
+      join(this.options.stateDirectory, "project-memory.sqlite"),
+    );
+  }
+
+  /** Historical readers must never reconcile or persist managed-process state. */
+  private liveManagedProcesses(): ManagedProcessService {
+    if (this.options.executionHost) return this.options.executionHost.managedProcesses;
+    return this.managedProcesses ??= new ManagedProcessService({
+      stateDirectory: join(this.options.stateDirectory, "managed-processes"),
+    });
+  }
+
+  /**
+   * Reopens only durable records for a terminal Build. It deliberately does
+   * not load capability code, construct models, or start owned processes.
+   */
+  async createHistorical(
+    spec: NativeBuildSpec,
+    terminalState: HistoricalTerminalState,
+  ): Promise<NativeBuildRuntimeHandle> {
+    if (this.closed) throw new Error("Native Build factory is closed.");
+    assertHistoricalTerminalState(terminalState);
+    const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
+    let evidenceStore: SqliteEvidenceStore | undefined;
+    let ledger: SqliteToolLedger | undefined;
+    let sessions: SqliteAgentSessionStore | undefined;
+    let budgetLedger: SqliteBudgetLedger | undefined;
+    let schedulerStore: SqliteSchedulerStore | undefined;
+    let historicalMemoryStore: SqliteProjectMemoryStore | undefined;
+    const historicalSqliteSnapshots: string[] = [];
+    const closedHistoricalStores = new Set<HistoricalCloseable>();
+    const removedHistoricalSqliteSnapshots = new Set<string>();
+    const closeHistoricalResources = async (): Promise<unknown[]> => {
+      const failures: unknown[] = [];
+      // Close in reverse acquisition order. Each successful close/removal is
+      // remembered so a transient failure can be retried without double-closing
+      // resources that were already released.
+      const stores: Array<HistoricalCloseable | undefined> = [
+        historicalMemoryStore,
+        schedulerStore,
+        budgetLedger,
+        sessions,
+        ledger,
+        evidenceStore,
+      ];
+      for (const store of stores) {
+        if (!store || closedHistoricalStores.has(store)) continue;
+        try {
+          store.close();
+          closedHistoricalStores.add(store);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      for (const directory of [...historicalSqliteSnapshots].reverse()) {
+        if (removedHistoricalSqliteSnapshots.has(directory)) continue;
+        try {
+          await rm(directory, { recursive: true, force: true });
+          removedHistoricalSqliteSnapshots.add(directory);
+        } catch (error) {
+          // Leave a failed directory recorded for a later close retry.
+          failures.push(error);
+        }
+      }
+      return failures;
+    };
+    try {
+      const evidencePath = join(runRoot, "evidence.sqlite");
+      const ledgerPath = join(runRoot, "tools.sqlite");
+      const sessionsPath = join(runRoot, "sessions.sqlite");
+      const budgetPath = join(runRoot, "budget.sqlite");
+      const schedulerPath = join(runRoot, "scheduler.sqlite");
+      const memoryPath = join(this.options.stateDirectory, "project-memory.sqlite");
+      const managedProcessPath = join(this.options.stateDirectory, "managed-processes");
+      const snapshotStorePath = async (source: string): Promise<string> => {
+        const snapshot = await materializeHistoricalSqliteSnapshot(source);
+        historicalSqliteSnapshots.push(snapshot.directory);
+        return snapshot.databasePath;
+      };
+      if (hasHistoricalStore(evidencePath)) {
+        evidenceStore = new SqliteEvidenceStore(await snapshotStorePath(evidencePath), {
+          readOnly: true,
+        });
+      }
+      if (hasHistoricalStore(ledgerPath)) {
+        ledger = new SqliteToolLedger(await snapshotStorePath(ledgerPath), { readOnly: true });
+      }
+      if (hasHistoricalStore(sessionsPath)) {
+        sessions = new SqliteAgentSessionStore(
+          await snapshotStorePath(sessionsPath),
+          this.artifacts,
+          { readOnly: true },
+        );
+      }
+      if (hasHistoricalStore(budgetPath)) {
+        budgetLedger = new SqliteBudgetLedger(await snapshotStorePath(budgetPath), {
+          limitsFor: () => spec.budgetLimits,
+          readOnly: true,
+        });
+      }
+      const historicalSchedulerPath = hasHistoricalStore(schedulerPath)
+        ? await snapshotStorePath(schedulerPath)
+        : undefined;
+      if (hasHistoricalStore(memoryPath)) {
+        historicalMemoryStore = new SqliteProjectMemoryStore(await snapshotStorePath(memoryPath), {
+          readOnly: true,
+        });
+      }
+      if (historicalSchedulerPath) {
+        const ports = new FinalVerificationPortAuthority(this.options.stateDirectory);
+        const profiles = new FinalVerificationProfileAuthority({
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          portAuthority: ports,
+          ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+        });
+        const acceptedProfiles = new Set<string>();
+        const acceptedCleanupReceipts = new Set<string>();
+        const profileKey = (targetRevision: string, profile: Parameters<typeof finalVerificationProfileDigest>[1]) =>
+          `${targetRevision}\u0000${finalVerificationProfileDigest(spec.runId, profile)}`;
+        const cleanupReceiptKey = (identity: FinalVerificationCleanupReceiptIdentity) =>
+          JSON.stringify(identity);
+        const openingSchedulerStore = new SqliteSchedulerStore(historicalSchedulerPath, {
+          evidenceStore,
+          artifacts: this.artifacts,
+          validateExecutionProfile: ({ targetRevision, profile }) => {
+            profiles.validate(profile, targetRevision);
+            acceptedProfiles.add(profileKey(targetRevision, profile));
+          },
+          validateCleanupReceipt: (identity) => {
+            validateOwnedFinalVerificationCleanupReceipt(this.options.stateDirectory, identity);
+            acceptedCleanupReceipts.add(cleanupReceiptKey(identity));
+          },
+          readOnly: true,
+        });
+        try {
+          // Authenticate every terminal event against the live Runner-owned
+          // archives once, before freezing the accepted identities below.
+          openingSchedulerStore.readRun(spec.runId);
+        } finally {
+          openingSchedulerStore.close();
+        }
+        schedulerStore = new SqliteSchedulerStore(historicalSchedulerPath, {
+          evidenceStore,
+          artifacts: this.artifacts,
+          validateExecutionProfile: ({ targetRevision, profile }) => {
+            if (!acceptedProfiles.has(profileKey(targetRevision, profile))) {
+              throw new Error("Historical final verification profile was not authenticated at handle open.");
+            }
+          },
+          validateCleanupReceipt: (identity) => {
+            if (!acceptedCleanupReceipts.has(cleanupReceiptKey(identity))) {
+              throw new Error("Historical final verification cleanup receipt was not authenticated at handle open.");
+            }
+          },
+          readOnly: true,
+        });
+      }
+      let integrationManager: IntegrationManager | undefined;
+      const historicalIntegrationManager = (): IntegrationManager => {
+        integrationManager ??= new IntegrationManager({
+          execute: (request) => this.options.executionHost
+            ? this.options.executionHost.withGitInspection({ runId: spec.runId, permissionProfile: spec.permissionProfile, capabilityContract: spec.capabilityContract!, capabilitiesConfig: this.capabilitiesConfig() }, (git) => git.run(request))
+            : requireGitRunner(this.options.gitForRun?.(spec)).lifecycle("inspection").run(request),
+          executeBytes: (request) => this.options.executionHost
+            ? this.options.executionHost.withGitInspection({ runId: spec.runId, permissionProfile: spec.permissionProfile, capabilityContract: spec.capabilityContract!, capabilitiesConfig: this.capabilitiesConfig() }, (git) => git.runBytes(request))
+            : requireGitRunner(this.options.gitForRun?.(spec)).lifecycle("inspection").runBytes(request),
+          repositoryRoot: this.options.projectRoot,
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          baselineRevision: this.options.baselineFor(spec.runId),
+          initializationMode: "cleanup-only",
+        });
+        return integrationManager;
+      };
+      const readEvents = (afterSequence = 0): SchedulerEvent[] =>
+        schedulerStore?.readRun(spec.runId, afterSequence) ?? [];
+      const budgetProjection = () =>
+        budgetLedger?.snapshot(spec.runId) ?? rebuildBudgetProjection(spec.runId, []);
+      const usageProvenance: HistoricalReadProvenance = budgetLedger
+        ? "durable"
+        : "unavailable";
+      const transcriptProvenance = async (): Promise<HistoricalReadProvenance> =>
+        sessions
+          ? await sessions.historicalTranscriptProvenance(spec.runId)
+          : "unavailable";
+      const evidenceProvenance = (): HistoricalReadProvenance =>
+        evidenceStore?.historicalProvenance() ?? "unavailable";
+      const memoryProvenance = (): HistoricalReadProvenance =>
+        historicalMemoryStore?.historicalProvenance() ?? "unavailable";
+      const processProvenance: HistoricalReadProvenance = hasHistoricalDirectory(managedProcessPath)
+        ? "durable"
+        : "unavailable";
+      const historicalUsage = () => {
+        const budget = budgetProjection();
+        return {
+          ...budget,
+          attributedModelReservationCount: Object.values(budget.reservations).filter(
+            (reservation) => reservation.kind === "model" && reservation.attribution,
+          ).length,
+          models: usageProvenance === "durable"
+            ? projectNativeModelUsage({
+                budget,
+                runtimes: historicalModelUsageRuntimes(budget),
+                providerHealth: providerHealthFromSchedulerEvents(readEvents()),
+              })
+            : [],
+          historicalProvenance: usageProvenance,
+        };
+      };
+      const historicalSkills = (): {
+        skills: SkillMetadata[];
+        provenance: HistoricalReadProvenance;
+      } => {
+        if (!ledger) return { skills: [], provenance: "unavailable" };
+        const skills = skillsFromHistoricalToolLedger(ledger.listRun(spec.runId));
+        return skills
+          ? { skills, provenance: "durable" }
+          : { skills: [], provenance: "unavailable" };
+      };
+      const historicalMemories = (): import("./project-memory.js").ProjectMemoryEntry[] => {
+        if (memoryProvenance() === "unavailable") return [];
+        return [...rebuildProjectMemories(
+          historicalMemoryStore!.events(spec.projectId),
+        ).values()].filter((memory) => memory.runId === spec.runId);
+      };
+      const projection = () => historicalSchedulerProjection(
+        spec,
+        readEvents(),
+        terminalState,
+      );
+      // SQLite inputs are materialized above, but managed-process records and
+      // diagnostic archives are bounded filesystem surfaces. Freeze them at
+      // historical-open time so every later audit remains an observation of
+      // the terminal state rather than a fresh read of mutable live files.
+      const historicalProcesses = processProvenance === "durable"
+        ? readHistoricalManagedProcessObservations(managedProcessPath, spec.runId)
+        : [];
+      const historicalFinalGeneration = projection().finalVerification?.current;
+      const historicalFinalVerificationDiagnostics = historicalFinalGeneration
+        ? await loadHistoricalFinalVerificationDiagnostics({
+            stateDirectory: this.options.stateDirectory,
+            runId: spec.runId,
+            diagnosticsPath: historicalFinalGeneration.cleanup?.diagnosticsPath,
+            generationId: historicalFinalGeneration.generationId,
+            taskId: historicalFinalGeneration.taskId,
+            targetRevision: historicalFinalGeneration.targetRevision,
+          })
+        : undefined;
+      const readOnlyError = (): never => {
+        throw new Error(`Historical Build ${spec.runId} is read-only.`);
+      };
+      const runtime = {
+        id: spec.runId,
+        projection,
+        events: (afterSequence = 0) => readEvents(afterSequence),
+        step: async () => readOnlyError(),
+        runUntilBlocked: async () => readOnlyError(),
+        pause: () => readOnlyError(),
+        resume: () => readOnlyError(),
+        continue: () => readOnlyError(),
+        selectArchitectHandoff: () => readOnlyError(),
+        selectVerifierRuntime: () => readOnlyError(),
+        submitUserGuidance: () => readOnlyError(),
+        submitManagedUserGuidance: () => readOnlyError(),
+        completeManagedUserGuidanceInterruption: () => readOnlyError(),
+        answerArchitectQuestion: () => readOnlyError(),
+        selectProjectHandoff: () => readOnlyError(),
+      } as unknown as BuildRuntime;
+      let closed = false;
+      let closing: Promise<void> | undefined;
+      return {
+        runtime,
+        historical: true,
+        usage: historicalUsage,
+        observability: async (): Promise<BuildObservabilitySnapshot> => {
+          const schedulerEvents = readEvents();
+          const transcriptHistoryProvenance = await transcriptProvenance();
+          const schedulerProjection = historicalSchedulerProjection(
+            spec,
+            schedulerEvents,
+            terminalState,
+          );
+          const agentSessions = transcriptHistoryProvenance === "unavailable"
+            ? []
+            : await sessions!.listRun(spec.runId);
+          const toolCalls = ledger ? summarizeToolCalls(ledger.listRun(spec.runId)) : [];
+          const skillSnapshot = historicalSkills();
+          const integrationRevision = schedulerProjection.projectHandoff?.integrationRevision
+            ?? schedulerProjection.integrationRevision;
+          return {
+            runId: spec.runId,
+            budget: historicalUsage(),
+            toolCallCount: toolCalls.length,
+            agents: agentSessions.map((session) => ({
+              sessionId: session.sessionId,
+              actor: { ...session.actor },
+              status: session.status,
+              turns: session.checkpoint?.turns ?? 0,
+              ...(session.suspensionReason
+                ? { suspensionReason: session.suspensionReason }
+                : {}),
+              ...(session.error ? { error: session.error } : {}),
+              ...(session.changeSetId ? { changeSetId: session.changeSetId } : {}),
+              lastSequence: session.lastSequence,
+            })),
+            tools: toolCalls.slice(-1_000),
+            evidence: evidenceProvenance() === "unavailable"
+              ? []
+              : evidenceStore!.list({ runId: spec.runId, limit: 1_000 }),
+            memories: historicalMemories(),
+            skills: skillSnapshot.skills,
+            processes: processProvenance === "durable"
+              ? structuredClone(historicalProcesses)
+              : [],
+            providers: Object.values(schedulerProjection.runtime.providerHealth),
+            events: schedulerEvents.slice(-1_000),
+            git: {
+              integrationBranch: schedulerProjection.projectHandoff?.integrationBranch ?? "",
+              integrationRevision: integrationRevision ?? "",
+              commits: integrationRevision
+                ? await historicalIntegrationManager().historicalHistory(integrationRevision)
+                : [],
+            },
+            ...(spec.capabilityContract
+              ? {
+                  capabilities: {
+                    extensions: [],
+                    languageProviders: [],
+                    languageRoutes: [],
+                    historicalContract: cloneRunnerCapabilityContract(spec.capabilityContract),
+                    executionEnforcement: await readExecutionEnforcementState(join(
+                      this.options.stateDirectory, "builds", safeSegment(spec.runId),
+                      "execution-isolation", "execution-enforcement-state.json",
+                    )),
+                  },
+                }
+              : {}),
+            executionSafety: {
+              availability: "unavailable",
+              reason: "historical_execution_safety_unavailable",
+            },
+            historical: {
+              terminalState,
+              provenance: {
+                usage: usageProvenance,
+                transcript: transcriptHistoryProvenance,
+                evidence: evidenceProvenance(),
+                memories: memoryProvenance(),
+                skills: skillSnapshot.provenance,
+                processes: processProvenance,
+                capabilities: spec.capabilityContract ? "durable" : "unavailable",
+                events: schedulerStore ? "durable" : "unavailable",
+                files: integrationRevision ||
+                  (schedulerProjection.projectHandoff?.appliedToProject &&
+                    schedulerProjection.projectHandoff.projectRevision)
+                  ? "durable"
+                  : "unavailable",
+              },
+            },
+            finalVerification: projectFinalVerificationObservability(
+              schedulerProjection,
+              historicalFinalVerificationDiagnostics && structuredClone(historicalFinalVerificationDiagnostics),
+            ),
+            independentVerifier:
+              projectIndependentVerifierObservability(schedulerProjection),
+          };
+        },
+        transcript: async (afterSequence = 0) => {
+          const provenance = await transcriptProvenance();
+          const page = provenance === "unavailable"
+            ? { turns: [], cursor: afterSequence }
+            : await sessions!.transcript(spec.runId, afterSequence);
+          return { ...page, historicalProvenance: provenance };
+        },
+        files: async () => {
+          const schedulerProjection = projection();
+          const handoff = schedulerProjection.projectHandoff;
+          const integrationRevision = handoff?.integrationRevision
+            ?? schedulerProjection.integrationRevision;
+          if (!integrationRevision && !(handoff?.appliedToProject && handoff.projectRevision)) {
+            return {
+              source: "integration",
+              revision: "",
+              appliedToProject: false,
+              omittedFileCount: 0,
+              files: [],
+              historicalProvenance: "unavailable",
+            };
+          }
+          return {
+            ...(await historicalIntegrationManager().historicalFiles({
+            integrationRevision,
+            appliedToProject: handoff?.appliedToProject,
+            projectRevision: handoff?.projectRevision,
+            })),
+            historicalProvenance: "durable",
+          };
+        },
+        compact: () => readOnlyError(),
+        projectHandoff: async () => readOnlyError(),
+        cleanup: () => readOnlyError(),
+        close: async () => {
+          if (closed) return;
+          if (closing) return await closing;
+          const attempt = (async (): Promise<void> => {
+            const failures = await closeHistoricalResources();
+            if (failures.length > 0) {
+              throw new AggregateError(
+                failures,
+                `Could not close all historical Build ${spec.runId} resources.`,
+              );
+            }
+            closed = true;
+          })();
+          closing = attempt;
+          try {
+            await attempt;
+          } finally {
+            if (closing === attempt) closing = undefined;
+          }
+        },
+      };
+    } catch (error) {
+      const cleanupFailures = await closeHistoricalResources();
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          `Could not open historical Build ${spec.runId} and clean up its resources.`,
+        );
+      }
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
-    this.closed = true;
-    this.memoryStore.close();
-    this.options.providerConfigs.close();
-    this.managedProcesses.close();
-    await this.browserBackend.closeAll();
+    if (this.closePromise) return await this.closePromise;
+    const attempt = (async (): Promise<void> => {
+      const failures: unknown[] = [];
+      try {
+        await this.closeIncompleteConstructionResources();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (this.memoryStore) {
+        try {
+          this.memoryStore.close();
+          this.memoryStore = undefined;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (!this.providerConfigsClosed && this.options.closeProviderConfigs !== false) {
+        try {
+          this.options.providerConfigs.close();
+          this.providerConfigsClosed = true;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (this.managedProcesses) {
+        try {
+          await this.managedProcesses.close();
+          this.managedProcesses = undefined;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (!this.browserBackendClosed) {
+        try {
+          await this.browserBackend.closeAll();
+          this.browserBackendClosed = true;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Could not close native Build factory resources.");
+      }
+      this.closed = true;
+    })();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+    }
   }
 
   async runArtifactCompaction<T>(operation: () => Promise<T>): Promise<T> {
@@ -412,6 +1840,482 @@ export class NativeBuildFactory {
 
   async prepareArtifactCleanup(): Promise<void> {
     await this.artifactReachability.prepareReachabilityIndex();
+  }
+}
+
+type NativeBuildResourceCleanupMode = "failure" | "handle";
+
+interface NativeBuildResourceCleanupEntry {
+  stage: NativeBuildRuntimeResourceStage;
+  cleanup(): void | Promise<void>;
+  closeOnHandle: boolean;
+  completedOnFailure: boolean;
+  completedOnHandle: boolean;
+}
+
+/**
+ * Keeps live Build construction ownership explicit until the returned handle
+ * takes over. Failed cleanup entries remain retryable instead of being hidden
+ * behind a prematurely-set closed flag.
+ */
+class NativeBuildResourceCleanupStack {
+  private readonly entries: NativeBuildResourceCleanupEntry[] = [];
+  private readonly closing = new Map<NativeBuildResourceCleanupMode, Promise<void>>();
+
+  constructor(private readonly hooks?: NativeBuildRuntimeConstructionHooks) {}
+
+  add(
+    stage: NativeBuildRuntimeResourceStage,
+    cleanup: () => void | Promise<void>,
+    closeOnHandle = false,
+  ): void {
+    this.entries.push({
+      stage,
+      cleanup,
+      closeOnHandle,
+      completedOnFailure: false,
+      completedOnHandle: false,
+    });
+  }
+
+  isComplete(mode: NativeBuildResourceCleanupMode): boolean {
+    return this.entries.every((entry) =>
+      mode === "failure"
+        ? entry.completedOnFailure
+        : !entry.closeOnHandle || entry.completedOnHandle,
+    );
+  }
+
+  completeHandleStage(stage: NativeBuildRuntimeResourceStage): void {
+    const matching = this.entries.filter((entry) =>
+      entry.stage === stage && entry.closeOnHandle);
+    if (matching.length !== 1) {
+      throw new Error(`Native Build handle cleanup stage ${stage} is not uniquely owned.`);
+    }
+    matching[0]!.completedOnHandle = true;
+  }
+
+  async close(mode: NativeBuildResourceCleanupMode): Promise<void> {
+    const inFlight = this.closing.get(mode);
+    if (inFlight) return await inFlight;
+    const attempt = this.closeEntries(mode);
+    this.closing.set(mode, attempt);
+    try {
+      await attempt;
+    } finally {
+      if (this.closing.get(mode) === attempt) this.closing.delete(mode);
+    }
+  }
+
+  private async closeEntries(mode: NativeBuildResourceCleanupMode): Promise<void> {
+    const failures: unknown[] = [];
+    for (const entry of [...this.entries].reverse()) {
+      if (mode === "handle" && !entry.closeOnHandle) continue;
+      if (mode === "failure" ? entry.completedOnFailure : entry.completedOnHandle) continue;
+      try {
+        await this.hooks?.beforeCleanup?.(entry.stage);
+        await entry.cleanup();
+        if (mode === "failure") {
+          entry.completedOnFailure = true;
+        } else {
+          entry.completedOnHandle = true;
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Could not close all native Build ${mode} resources.`,
+      );
+    }
+  }
+}
+
+interface RetryableNativeBuildCleanup {
+  close(): Promise<void>;
+  isComplete(): boolean;
+}
+
+function retryableNativeBuildCleanup(
+  action: () => void | Promise<void>,
+): RetryableNativeBuildCleanup {
+  let complete = false;
+  let closing: Promise<void> | undefined;
+  return Object.freeze({
+    async close() {
+      if (complete) return;
+      if (closing) return await closing;
+      const attempt = Promise.resolve().then(action);
+      closing = attempt;
+      try {
+        await attempt;
+        complete = true;
+      } finally {
+        if (closing === attempt) closing = undefined;
+      }
+    },
+    isComplete: () => complete,
+  });
+}
+
+function nativeBuildConstructionFailure(
+  stage: NativeBuildRuntimeInitializationStage,
+  error: unknown,
+): unknown {
+  if (error instanceof RunnerCapabilityContractError) return error;
+  if (error instanceof NativeBuildRuntimeInitializationError) return error;
+  if (stage === "capabilities") {
+    return new RunnerCapabilityContractError(
+      "capability_preflight_failed",
+      `Native Build capability startup failed: ${boundedErrorMessage(error)}.`,
+      { cause: error },
+    );
+  }
+  return new NativeBuildRuntimeInitializationError(
+    stage,
+    `Native Build ${stage} initialization failed: ${boundedErrorMessage(error)}.`,
+    { cause: error },
+  );
+}
+
+function aggregateConstructionFailure(
+  runId: string,
+  primary: unknown,
+  cleanupError: unknown,
+): AggregateError {
+  const cleanupFailures = cleanupError instanceof AggregateError
+    ? [...cleanupError.errors]
+    : [cleanupError];
+  return new AggregateError(
+    [primary, ...cleanupFailures],
+    `Native Build ${runId} construction failed and cleanup reported errors.`,
+  );
+}
+
+export interface RunnerCapabilityPreflightOptions {
+  lspTransportFactory?: LspTransportFactory;
+  environment?: Readonly<Record<string, string | undefined>>;
+  git?: RunGitExecutionContext;
+  config: RunnerCapabilitiesConfig;
+  projectDirectory: string;
+  stateDirectory: string;
+  reservedToolNames: readonly string[];
+  verifyExtensionIntegrity?: () => Promise<void>;
+}
+
+export interface RecoveredRunnerCapabilityPreflightOptions {
+  environment?: Readonly<Record<string, string | undefined>>;
+  spec: Pick<NativeBuildSpec, "runId" | "capabilityContract">;
+  config: RunnerCapabilitiesConfig;
+  projectDirectory: string;
+  stateDirectory: string;
+  reservedToolNames: readonly string[];
+}
+
+interface ClosableLanguageProvider {
+  close(): Promise<void>;
+}
+
+class NativeCapabilityStartupCleanupError extends AggregateError {
+  constructor(
+    errors: readonly unknown[],
+    readonly disposer: NativeCapabilityCleanupOwner,
+  ) {
+    super(errors, "Runner capability startup failed and cleanup remains incomplete.");
+    this.name = "NativeCapabilityStartupCleanupError";
+  }
+}
+
+class NativeCapabilityCleanupOwner {
+  private closePromise?: Promise<void>;
+  private closed = false;
+
+  constructor(
+    private pendingProviders: ClosableLanguageProvider[],
+    private pendingExtensions?: RunnerExtensionCleanupDisposer,
+  ) {
+    this.pendingProviders = uniqueClosableProviders(pendingProviders);
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    if (this.closePromise) return await this.closePromise;
+    const attempt = this.closeOwnedResources();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      this.closed = true;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
+  }
+
+  private async closeOwnedResources(): Promise<void> {
+    const failures: unknown[] = [];
+    const failedProviders: ClosableLanguageProvider[] = [];
+    for (const provider of this.pendingProviders) {
+      try {
+        await provider.close();
+      } catch (error) {
+        failures.push(error);
+        failedProviders.push(provider);
+      }
+    }
+    this.pendingProviders = failedProviders;
+    if (this.pendingExtensions) {
+      try {
+        await this.pendingExtensions.close();
+        this.pendingExtensions = undefined;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "One or more partially started Runner capability resources failed to close.",
+      );
+    }
+  }
+}
+
+class NativeRunCapabilities {
+  private closePromise?: Promise<void>;
+  private closed = false;
+
+  constructor(
+    readonly registry: CapabilityRegistry,
+    readonly language: LanguageProviderRouter,
+    private readonly projectDirectory: string,
+    private readonly extensions?: LoadedRunnerExtensions,
+  ) {}
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    if (this.closePromise) return await this.closePromise;
+    const attempt = closeCapabilityResources(
+      [this.language],
+      this.extensions,
+    );
+    this.closePromise = attempt;
+    try {
+      await attempt;
+      this.closed = true;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
+    }
+  }
+
+  async preflight(): Promise<void> {
+    await this.language.preflightConfiguredServers(this.projectDirectory);
+  }
+}
+
+async function createNativeRunCapabilities(
+  options: RunnerCapabilityPreflightOptions,
+): Promise<NativeRunCapabilities> {
+  const config = await attestRunnerCapabilitiesLanguageServers(options.config, {
+    commandSearchDirectory: options.projectDirectory,
+    environment: options.environment ?? {},
+  });
+  const builtInLanguage = new TypeScriptIntelligence(
+    new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined),
+  );
+  let extensions: LoadedRunnerExtensions | undefined;
+  let registry: CapabilityRegistry | undefined;
+  let language: LanguageProviderRouter | undefined;
+  try {
+    if (config.extensions.length > 0) {
+      extensions = await new LocalPluginLoader({
+        pluginDirectories: config.extensions,
+        projectDirectory: options.projectDirectory,
+        stateDirectory: options.stateDirectory,
+        reservedToolNames: options.reservedToolNames,
+        ...(options.verifyExtensionIntegrity
+          ? { verifyExtensionIntegrity: options.verifyExtensionIntegrity }
+          : {}),
+      }).load();
+    }
+    registry = extensions?.registry ?? new CapabilityRegistry([], {
+      reservedToolNames: options.reservedToolNames,
+    });
+    language = new LanguageProviderRouter({
+      builtInProvider: builtInLanguage,
+      extensionProviders: registry.languageProviders(),
+      configuredServers: config.languageServers,
+      lspTransportFactory: options.lspTransportFactory,
+      environment: options.environment ?? {},
+    });
+    return new NativeRunCapabilities(
+      registry,
+      language,
+      options.projectDirectory,
+      extensions,
+    );
+  } catch (error) {
+    const extensionProviders = language
+      ? []
+      : (registry?.languageProviders().map((registration) => registration.provider) ?? [])
+        .reverse();
+    const disposer = new NativeCapabilityCleanupOwner(
+      language ? [language] : [...extensionProviders, builtInLanguage],
+      extensions ?? extensionCleanupDisposer(error),
+    );
+    const cleanup = await boundedCapabilityCleanup(disposer);
+    if (cleanup.incomplete) {
+      throw new NativeCapabilityStartupCleanupError(
+        [error, ...cleanup.failures],
+        disposer,
+      );
+    }
+    if (cleanup.failures.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanup.failures],
+        "Runner capability startup failed and cleanup reported errors.",
+      );
+    }
+    throw error;
+  }
+}
+
+async function boundedCapabilityCleanup(
+  disposer: NativeCapabilityCleanupOwner,
+): Promise<{ failures: unknown[]; incomplete: boolean }> {
+  const failures: unknown[] = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await disposer.close();
+      return { failures, incomplete: false };
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return { failures, incomplete: true };
+}
+
+function extensionCleanupDisposer(
+  error: unknown,
+): RunnerExtensionCleanupDisposer | undefined {
+  return error instanceof RunnerExtensionLoadError ? error.disposer : undefined;
+}
+
+function nativeCapabilityCleanupDisposer(
+  error: unknown,
+): NativeCapabilityCleanupOwner | undefined {
+  return error instanceof NativeCapabilityStartupCleanupError
+    ? error.disposer
+    : undefined;
+}
+
+function uniqueClosableProviders(
+  providers: readonly ClosableLanguageProvider[],
+): ClosableLanguageProvider[] {
+  const seen = new Set<ClosableLanguageProvider>();
+  return providers.filter((provider) => {
+    if (seen.has(provider)) return false;
+    seen.add(provider);
+    return true;
+  });
+}
+
+/** Validates and starts configured capabilities before accepting control-plane traffic. */
+export async function preflightRunnerCapabilities(
+  options: RunnerCapabilityPreflightOptions,
+): Promise<void> {
+  const capabilities = await createNativeRunCapabilities(options);
+  try {
+    await capabilities.preflight();
+  } catch (error) {
+    try {
+      await closePreflightCapabilities(capabilities);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Runner capability preflight failed and cleanup reported errors.",
+      );
+    }
+    throw error;
+  }
+  await closePreflightCapabilities(capabilities);
+}
+
+async function closePreflightCapabilities(
+  capabilities: NativeRunCapabilities,
+): Promise<void> {
+  try {
+    await capabilities.close();
+  } catch (firstError) {
+    try {
+      await capabilities.close();
+    } catch (retryError) {
+      throw new AggregateError(
+        [firstError, retryError],
+        "Runner capability preflight cleanup failed after a retry.",
+      );
+    }
+    throw firstError;
+  }
+}
+
+/** Statically validates the capabilities attributable to one recovered Build. */
+export async function preflightRecoveredRunnerCapabilities(
+  options: RecoveredRunnerCapabilityPreflightOptions,
+): Promise<void> {
+  await validateRunnerCapabilityContract(options.spec.capabilityContract, options.config, {
+    commandSearchDirectory: options.projectDirectory,
+    environment: options.environment ?? {},
+  });
+  const contract = options.spec.capabilityContract;
+  if (!contract) {
+    throw new RunnerCapabilityContractError(
+      "capability_contract_missing",
+      "Active Build recovery requires a persisted Runner capability contract.",
+    );
+  }
+  await validateRunnerCapabilityContractSnapshot(contract, options.stateDirectory);
+  const contractConfig = runnerCapabilitiesForContract(options.config, contract);
+  try {
+    await attestRunnerCapabilitiesLanguageServers(contractConfig, {
+      commandSearchDirectory: options.projectDirectory,
+    environment: options.environment ?? {},
+    });
+  } catch (error) {
+    throw new RunnerCapabilityContractError(
+      "capability_preflight_failed",
+      `Active Build recovery capability preflight failed: ${boundedErrorMessage(error)}.`,
+      { cause: error },
+    );
+  }
+}
+
+async function closeCapabilityResources(
+  languageProviders: readonly ClosableLanguageProvider[],
+  extensions: LoadedRunnerExtensions | undefined,
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const provider of languageProviders) {
+    try {
+      await provider.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (extensions) {
+    try {
+      await extensions.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      "One or more Runner capabilities failed to close.",
+    );
   }
 }
 
@@ -441,9 +2345,221 @@ export function integrationInitializationModeFromEvents(
   events: readonly SchedulerEvent[]
 ): "active" | "cleanup-only" {
   if (events.length === 0) return "active";
-  return rebuildSchedulerProjection(events).status === "completed"
+  // Callers obtain this list from SchedulerStore.readRun(), which already
+  // replays and validates every event. Do not reinterpret a terminal legacy
+  // history against today's stronger completion preconditions.
+  return events.some((event) => event.type === "run.completed")
     ? "cleanup-only"
     : "active";
+}
+
+export function deriveNativeVerifierRiskInput(input: {
+  projection: SchedulerProjection;
+  sessions: readonly AgentSessionProjection[];
+  schedulerEvents: readonly SchedulerEvent[];
+  toolEvents: readonly ToolLedgerEvent[];
+  stricterQualification: boolean;
+}): BuildRiskAssessmentInput {
+  const accepted = acceptedChangeSessions(input.projection, input.sessions);
+  const toolEffects = input.toolEvents.filter(
+    (event) => event.type === "tool.started" || event.type === "tool.retry_started",
+  );
+  return {
+    architectDeclaration:
+      input.projection.finalVerification?.current?.review?.decision
+        ?.architectRisk.risk ?? "low",
+    stricterQualification: input.stricterQualification,
+    kernelFacts: {
+      destructiveEffects: toolEffects.some(
+        (event) => event.access?.destructive === true,
+      ),
+      credentialEffects: toolEffects.some(
+        (event) => event.access?.credentialChange === true,
+      ),
+      externalWriteEffects:
+        accepted.some((session) =>
+          (session.changeSet?.externalEffects.length ?? 0) > 0
+        ) ||
+        toolEffects.some(
+          (event) =>
+            event.effect === "external" ||
+            event.access?.external === true ||
+            event.outsideWorkspace === true,
+        ),
+      integrationConflict: input.schedulerEvents.some(
+        (event) =>
+          event.type === "task.transitioned" &&
+          event.payload.status === "integration_resolution",
+      ),
+      changedPaths: [...new Set(accepted.flatMap(
+        (session) => session.changeSet?.changedPaths ?? [],
+      ))].sort(),
+    },
+  };
+}
+
+export function buildNativeVerifierInspectionRequest(input: {
+  runId: string;
+  objective: string;
+  architectRuntimeId: string;
+  projection: SchedulerProjection;
+  sessions: readonly AgentSessionProjection[];
+  risk: BuildRiskAssessmentProjection;
+  preferredRuntimeId?: string;
+  providerRetryDeadlineMs?: number;
+  signal?: AbortSignal;
+}): NativeVerifierInspectionRequest {
+  const integrationRevision = input.projection.integrationRevision;
+  const finalVerification = input.projection.finalVerification?.current;
+  if (
+    !integrationRevision || !finalVerification ||
+    finalVerification.state !== "current" ||
+    finalVerification.targetRevision !== integrationRevision ||
+    finalVerification.submissionResult?.green !== true ||
+    input.risk.state !== "current" ||
+    input.risk.targetRevision !== integrationRevision
+  ) {
+    throw new Error(
+      "Native verifier context requires current risk and green final verification for the integration revision.",
+    );
+  }
+  const reviews = Object.values(input.projection.reviewHistory ?? {})
+    .flatMap((history) => history)
+    .concat(
+      Object.entries(input.projection.reviewHistory ?? {}).length === 0
+        ? Object.values(input.projection.reviews)
+        : [],
+    )
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      (left.attempt ?? 0) - (right.attempt ?? 0)
+    );
+  const guidance = [
+    ...Object.values(input.projection.userGuidance).map((item) => ({
+      id: item.guidanceId,
+      kind: "user_guidance" as const,
+      version: item.version,
+      text: item.text,
+    })),
+    ...Object.values(input.projection.guidance)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.requestId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+    ...Object.values(input.projection.architectQuestions)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.questionId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+  ].sort((left, right) => left.id.localeCompare(right.id));
+  const changes = acceptedChangeSessions(input.projection, input.sessions)
+    .map((session) => {
+      const changeSet = session.changeSet!;
+      return {
+        taskId: changeSet.taskId,
+        attempt: input.projection.tasks[changeSet.taskId]?.attempt ?? 1,
+        changeSetId: changeSet.id,
+        authorRuntimeId: session.actor.id,
+        baselineRevision: changeSet.baselineRevision,
+        taskRevision: changeSet.taskRevision,
+        changedPaths: [...changeSet.changedPaths],
+        diffArtifactHash: changeSet.diffArtifactHash,
+      };
+    })
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      left.changeSetId.localeCompare(right.changeSetId)
+    );
+  return {
+    runId: input.runId,
+    objective: input.objective,
+    targetRevision: integrationRevision,
+    architectRuntimeId: input.architectRuntimeId,
+    criteria: Object.values(input.projection.tasks)
+      .filter(
+        (task) =>
+          task.status !== "cancelled" &&
+          task.kind !== "final_verification",
+      )
+      .flatMap((task) => (task.acceptanceCriteria ?? []).map((criterion) => ({
+        taskId: task.id,
+        taskTitle: task.objective,
+        criterion: { ...criterion },
+      })))
+      .sort((left, right) =>
+        left.taskId.localeCompare(right.taskId) ||
+        left.criterion.id.localeCompare(right.criterion.id)
+      ),
+    reviews: reviews.map((review) => ({
+      taskId: review.taskId,
+      attempt: review.attempt ?? input.projection.tasks[review.taskId]?.attempt ?? 1,
+      status: review.status,
+      ...(review.summary ? { summary: review.summary } : {}),
+      evidenceArtifactHashes: [...review.evidenceArtifactHashes],
+      ...(review.criterionVerdicts
+        ? {
+            criterionVerdicts: review.criterionVerdicts.map((verdict) => ({
+              ...verdict,
+              evidenceIds: [...verdict.evidenceIds],
+              ...(verdict.artifactHashes
+                ? { artifactHashes: [...verdict.artifactHashes] }
+                : {}),
+            })),
+          }
+        : {}),
+    })),
+    guidance,
+    changes,
+    finalVerification: {
+      generationId: finalVerification.generationId,
+      targetRevision: finalVerification.targetRevision,
+      green: finalVerification.submissionResult.green,
+      checks: finalVerification.submissionResult.checks.map((check) => ({
+        ...check,
+        evidenceIds: [...check.evidenceIds],
+        facts: check.facts.map((fact) => structuredClone(fact)),
+        issues: [],
+      })),
+    },
+    riskReasons: input.risk.assessment.reasons.map((reason) => ({
+      ...reason,
+      evidence: [...reason.evidence],
+    })),
+    ...(input.preferredRuntimeId
+      ? { preferredRuntimeId: input.preferredRuntimeId }
+      : {}),
+    ...(input.providerRetryDeadlineMs !== undefined
+      ? { providerRetryDeadlineMs: input.providerRetryDeadlineMs }
+      : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+  };
+}
+
+function acceptedChangeSessions(
+  projection: SchedulerProjection,
+  sessions: readonly AgentSessionProjection[],
+): AgentSessionProjection[] {
+  const acceptedIds = new Set(
+    Object.values(projection.tasks)
+      .filter(
+        (task) => task.status === "integrated" && Boolean(task.changeSetId),
+      )
+      .map((task) => task.changeSetId!),
+  );
+  return sessions.filter(
+    (session) =>
+      session.actor.role === "worker" &&
+      Boolean(session.changeSet) &&
+      acceptedIds.has(session.changeSet!.id) &&
+      projection.tasks[session.changeSet!.taskId]?.changeSetId ===
+        session.changeSet!.id,
+  );
 }
 
 function summarizeToolCalls(
@@ -458,6 +2574,11 @@ function summarizeToolCalls(
       sessionId: event.sessionId,
       callId: event.callId,
       toolName: event.toolName,
+      ...(event.extensionId
+        ? { extensionId: event.extensionId }
+        : previous?.extensionId
+          ? { extensionId: previous.extensionId }
+          : {}),
       status: event.type === "tool.completed"
         ? "completed"
         : event.type === "tool.retry_started"
@@ -497,11 +2618,38 @@ export function providerHealthFromSchedulerEvents(
   ).filter(isProviderHealthState);
 }
 
+function persistProviderHealth(
+  store: SqliteSchedulerStore,
+  runId: string,
+  state: ProviderHealthState,
+  source: string,
+): void {
+  store.append({
+    runId,
+    type: "provider.health_changed",
+    occurredAt: new Date(state.updatedAt).toISOString(),
+    actor: { role: "runner", id: "runtime-router" },
+    idempotencyKey: [
+      "provider-health",
+      source,
+      state.providerId,
+      state.updatedAt,
+      state.consecutiveFailures,
+      state.status,
+    ].join(":"),
+    payload: { state: { ...state } },
+  });
+}
+
 function selectConfigs(
   configs: readonly RunnerProviderConfig[],
   spec: NativeBuildSpec
 ): RunnerProviderConfig[] {
-  const required = new Set([spec.architectRuntimeId, ...spec.workerRuntimeIds]);
+  const required = new Set([
+    spec.architectRuntimeId,
+    ...spec.workerRuntimeIds,
+    ...spec.verifierRuntimeIds,
+  ]);
   const selected = configs.filter((config) => required.has(config.runtimeId));
   for (const runtimeId of required) {
     if (!selected.some((config) => config.runtimeId === runtimeId)) {
@@ -518,14 +2666,17 @@ export function selectRuntimeCandidates(
   configs: RunnerProviderConfig[];
   all: AgentRuntimeCandidate[];
   workers: AgentRuntimeCandidate[];
+  verifiers: AgentRuntimeCandidate[];
 } {
   const selected = selectConfigs(configs, spec);
   const all = selected.map(toCandidate);
   const workerIds = new Set(spec.workerRuntimeIds);
+  const verifierIds = new Set(spec.verifierRuntimeIds);
   return {
     configs: selected,
     all,
     workers: all.filter((candidate) => workerIds.has(candidate.runtimeId)),
+    verifiers: all.filter((candidate) => verifierIds.has(candidate.runtimeId)),
   };
 }
 
@@ -546,6 +2697,7 @@ export function configuredModelUsageRuntime(
   const roles = new Set<NativeModelUsageRuntime["roles"][number]>();
   if (config.runtimeId === spec.architectRuntimeId) roles.add("architect");
   if (spec.workerRuntimeIds.includes(config.runtimeId)) roles.add("worker");
+  if (spec.verifierRuntimeIds.includes(config.runtimeId)) roles.add("verifier");
   return {
     ...providerUsageConfig(config),
     roles: [...roles],
@@ -554,6 +2706,20 @@ export function configuredModelUsageRuntime(
       config.capabilities.includes("*") ||
       config.capabilities.includes("code"),
   };
+}
+
+export function snapshotNativeBuildAmbientEnvironment(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): Readonly<Record<string, string>> {
+  const filtered = Object.create(null) as Record<string, string>;
+  for (const [name, value] of Object.entries(source)) {
+    const canonical = name.toUpperCase();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || value === undefined ||
+        isSensitiveKey(name) || /(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|API[_-]?KEY)/i.test(name) ||
+        canonical.startsWith("RUNNER_") || canonical.startsWith("AIBOARD_RUNNER_")) continue;
+    filtered[name] = value;
+  }
+  return Object.freeze(filtered);
 }
 
 export function createProviderModel(
@@ -693,10 +2859,275 @@ function isProviderHealthState(value: unknown): value is ProviderHealthState {
 }
 
 function safeSegment(value: string): string {
-  const readable = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "run";
-  return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+  return runnerRunStateSegment(value);
+}
+
+async function loadHistoricalFinalVerificationDiagnostics(input: {
+  stateDirectory: string;
+  runId: string;
+  diagnosticsPath?: string;
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+}) {
+  const read = async (expectedRunSegment: string) => await loadFinalVerificationDiagnostics({
+    ...input,
+    expectedRunSegment,
+  });
+  // Older historical layouts used the Build run-root segment. Cleanup's
+  // production archive uses its own hashed ownership segment; accept either
+  // exact Runner-owned root without widening the containment check.
+  return await read(safeSegment(input.runId)) ?? await read(
+    createHash("sha256").update(input.runId).digest("hex").slice(0, 32),
+  );
+}
+
+function boundedErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length <= 512 ? message : `${message.slice(0, 512)}…`;
+}
+
+async function loadOrCreateProcessStateKey(path: string): Promise<Uint8Array> {
+  try {
+    const existing = await readFile(path);
+    if (existing.byteLength !== 32) throw new Error("Runner subprocess state key is invalid.");
+    return new Uint8Array(existing);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const bytes = randomBytes(32);
+  let handle;
+  try {
+    handle = await open(path, "wx", 0o600);
+    await handle.writeFile(bytes);
+    await handle.sync();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      const existing = await readFile(path);
+      if (existing.byteLength !== 32) throw new Error("Runner subprocess state key is invalid.");
+      return new Uint8Array(existing);
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+  return new Uint8Array(bytes);
+}
+
+function assertIsolationRecoveryClear(
+  results: readonly { providerId: string; blockers: readonly string[] }[],
+): void {
+  const blockers = results.flatMap((result) =>
+    result.blockers.map((blocker) => `${result.providerId}: ${blocker}`));
+  if (blockers.length > 0) {
+    throw new Error(
+      `Configured execution-isolation recovery is blocked: ${blockers.join("; ")}`,
+    );
+  }
+}
+
+/** Derives usage identities solely from settled, attributable budget records. */
+function historicalModelUsageRuntimes(
+  budget: BudgetProjection,
+): NativeModelUsageRuntime[] {
+  const runtimes = new Map<string, {
+    providerId: string;
+    modelId: string;
+    roles: Set<NativeModelUsageRuntime["roles"][number]>;
+  }>();
+  for (const reservation of Object.values(budget.reservations)) {
+    if (
+      reservation.kind !== "model" ||
+      reservation.status !== "settled" ||
+      !reservation.actual ||
+      !reservation.attribution
+    ) continue;
+    const attribution = reservation.attribution;
+    const existing = runtimes.get(attribution.runtimeId);
+    if (
+      existing &&
+      (existing.providerId !== attribution.providerId ||
+        existing.modelId !== attribution.modelId)
+    ) {
+      throw new Error(
+        `Historical model attribution conflicts for ${attribution.runtimeId}.`,
+      );
+    }
+    const runtime = existing ?? {
+      providerId: attribution.providerId,
+      modelId: attribution.modelId,
+      roles: new Set<NativeModelUsageRuntime["roles"][number]>(),
+    };
+    runtime.roles.add(attribution.role);
+    runtimes.set(attribution.runtimeId, runtime);
+  }
+  return [...runtimes.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([runtimeId, runtime]) => ({
+      runtimeId,
+      providerId: runtime.providerId,
+      modelId: runtime.modelId,
+      // A terminal reader intentionally does not consult current provider config.
+      billingBasis: "unknown" as const,
+      transport: "openai-compatible" as const,
+      roles: [...runtime.roles],
+      selectable: false,
+    }));
+}
+
+/** Returns the latest durable `list_skills` result for this run, if recorded. */
+function skillsFromHistoricalToolLedger(
+  events: readonly ToolLedgerEvent[],
+): SkillMetadata[] | undefined {
+  let latest: SkillMetadata[] | undefined;
+  for (const event of events) {
+    const result = event.result;
+    if (
+      event.type !== "tool.completed" ||
+      event.toolName !== "list_skills" ||
+      !result ||
+      result.isError
+    ) continue;
+    for (const block of result.content) {
+      if (block.type !== "json" || !Array.isArray(block.value)) continue;
+      latest = block.value.map((value, index) => historicalSkillMetadata(value, index));
+    }
+  }
+  return latest?.map((skill) => ({ ...skill }));
+}
+
+function historicalSkillMetadata(value: unknown, index: number): SkillMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Historical list_skills result ${index} is malformed.`);
+  }
+  const skill = value as Record<string, unknown>;
+  if (
+    typeof skill.id !== "string" ||
+    typeof skill.name !== "string" ||
+    typeof skill.description !== "string" ||
+    typeof skill.relativePath !== "string" ||
+    typeof skill.digest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(skill.digest) ||
+    !Number.isSafeInteger(skill.byteLength) ||
+    (skill.byteLength as number) < 0 ||
+    (skill.source !== "project" && skill.source !== "built-in" && skill.source !== "user")
+  ) {
+    throw new Error(`Historical list_skills result ${index} is malformed.`);
+  }
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    relativePath: skill.relativePath,
+    digest: skill.digest,
+    byteLength: skill.byteLength as number,
+    source: skill.source as SkillMetadata["source"],
+  };
+}
+
+/**
+ * Node's SQLite read-only connections may still create WAL shared-memory
+ * sidecars beside the opened file. Historical reads therefore open a private
+ * copy outside Runner state, including WAL-visible committed content.
+ */
+async function materializeHistoricalSqliteSnapshot(source: string): Promise<{
+  directory: string;
+  databasePath: string;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "aiboard-historical-sqlite-"));
+  const databasePath = join(directory, basename(source));
+  try {
+    await copyFile(source, databasePath);
+    for (const suffix of ["-wal", "-shm"] as const) {
+      const sidecar = `${source}${suffix}`;
+      if (hasOptionalHistoricalFile(sidecar)) {
+        await copyFile(sidecar, `${databasePath}${suffix}`);
+      }
+    }
+    return { directory, databasePath };
+  } catch (error) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Could not materialize historical SQLite snapshot ${source}.`,
+      );
+    }
+    throw error;
+  }
+}
+
+interface HistoricalCloseable {
+  close(): void;
+}
+
+/**
+ * Historical readers never bootstrap a database. A terminal Build may predate
+ * one of these optional stores, in which case callers receive the equivalent
+ * empty projection while the path remains absent.
+ */
+function hasHistoricalStore(path: string): boolean {
+  try {
+    const metadata = statSync(path);
+    if (metadata.isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  throw new Error(`Historical Runner store ${path} must be a regular file.`);
+}
+
+function hasOptionalHistoricalFile(path: string): boolean {
+  try {
+    const metadata = statSync(path);
+    if (metadata.isFile()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  throw new Error(`Historical Runner store sidecar ${path} must be a regular file.`);
+}
+
+function hasHistoricalDirectory(path: string): boolean {
+  try {
+    const metadata = statSync(path);
+    if (metadata.isDirectory()) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  throw new Error(`Historical Runner directory ${path} must be a directory.`);
+}
+
+function historicalSchedulerProjection(
+  spec: NativeBuildSpec,
+  events: readonly SchedulerEvent[],
+  terminalState: HistoricalTerminalState,
+): SchedulerProjection {
+  if (events.length > 0) {
+    return { ...rebuildSchedulerProjection(events), status: terminalState };
+  }
+  return {
+    runId: spec.runId,
+    initialObjective: spec.objective,
+    runPolicy: spec.runPolicy,
+    status: terminalState,
+    planRevision: 0,
+    tasks: {},
+    guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 0,
+  };
+}
+
+function assertHistoricalTerminalState(value: unknown): asserts value is HistoricalTerminalState {
+  if (value !== "completed" && value !== "failed" && value !== "stopped") {
+    throw new Error("Historical Build requires an authoritative terminal RunSupervisor state.");
+  }
 }

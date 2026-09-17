@@ -1,0 +1,20 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-lsPWrB"}
+# Subtest: final verification managed adapter issues a fresh exact run-owned grant for start poll and stop
+ok 1 - final verification managed adapter issues a fresh exact run-owned grant for start poll and stop
+  ---
+  duration_ms: 36.2717
+  type: 'test'
+  ...
+# synthetic final-verification managed root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-final-managed-authority-lsPWrB
+# verified final-verification managed root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-final-managed-authority-lsPWrB
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-lsPWrB","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 434.3069

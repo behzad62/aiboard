@@ -39,6 +39,13 @@ export type AgentLoopResult =
       messages: AgentMessage[];
     }
   | {
+      status: "verifier_verdict_submitted";
+      reviewId: string;
+      satisfied: boolean;
+      turns: number;
+      messages: AgentMessage[];
+    }
+  | {
       status: "subagent_returned";
       summary: string;
       artifactHashes: string[];
@@ -67,6 +74,12 @@ export type AgentLoopResult =
         | "guidance_answered"
         | "review_decided"
         | "integration_requested"
+        | "acceptance_contract_upgraded"
+        | "final_verification_planned"
+        | "final_verification_review_decided"
+        | "verification_repairs_planned"
+        | "user_guidance_acknowledged"
+        | "user_question_requested"
         | "run_completed";
       referenceId?: string;
       turns: number;
@@ -940,6 +953,14 @@ function lifecycleResult(
       return {
         status: "submitted",
         changeSetId: signal.changeSetId,
+        turns,
+        messages,
+      };
+    case "verifier_verdict_submitted":
+      return {
+        status: "verifier_verdict_submitted",
+        reviewId: signal.reviewId,
+        satisfied: signal.satisfied,
         turns,
         messages,
       };

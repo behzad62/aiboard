@@ -1,0 +1,15 @@
+{
+  "pid": 10596,
+  "identity": {
+    "Id": 10596,
+    "StartTimeUtc": "2026-09-13T19:44:31.0739295Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 956,
+  "spawnedAt": "2026-09-13T19:44:31.371Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final.linux.json"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "pid": 40324,
+  "identity": {
+    "Id": 40324,
+    "StartTimeUtc": "2026-09-13T19:43:43.5459699Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-13T19:43:43.584Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red-controller.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red.linux.json"
+  ],
+  "spec": {
+    "id": "linux-linked-regression-reverse-red-controller",
+    "args": [
+      ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+      ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red.linux.json"
+    ],
+    "inputPaths": [
+      ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+      ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red.linux.json"
+    ]
+  }
+}

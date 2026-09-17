@@ -1,0 +1,7 @@
+{
+  "id": "current-shutdown-budget-green",
+  "tests": [
+    "runner-v2/test/lsp-shared-client.test.ts"
+  ],
+  "pattern": "^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$"
+}

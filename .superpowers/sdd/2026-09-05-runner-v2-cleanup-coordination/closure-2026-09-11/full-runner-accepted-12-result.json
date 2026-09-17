@@ -1,0 +1,14 @@
+{
+  "index": 12,
+  "label": "test-runner-v2-observability",
+  "exitCode": 0,
+  "startedAt": "2026-09-11T10:21:48.649952+00:00",
+  "finishedAt": "2026-09-11T10:21:49.111513+00:00",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/tsx/dist/cli.mjs",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "scripts/test-runner-v2-observability.mts"
+  ]
+}

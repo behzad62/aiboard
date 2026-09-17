@@ -1,0 +1,1103 @@
+===== runner-v2/src/process-recovery-contracts.ts =====
+/** Closed recovery commands and redacted durable facts. No model or OS effects. */
+import { createHash } from "node:crypto";
+import { types } from "node:util";
+import type { ExecutionSafetyCapabilities, ExecutionSafetyCapabilityName, ProcessCleanupStatus } from "./execution-safety-contracts.js";
+
+export const EXCEPTIONAL_PROCESS_STATES = ["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"] as const;
+export type RecoveryAction = "inspect" | "terminate" | "remove_owned_artifact";
+export interface RecoveryScope {
+  kind: "subprocess" | "streaming"; runId: string; invocationId: string; logicalProcessId: string;
+  taskId?: string; sessionId?: string; revision: number; ownerId: string; fencingToken: number;
+  rootPid?: number; state: string; backendIdentity: string; birthFingerprint: string;
+}
+export interface RecoveryTarget {
+  scope: RecoveryScope; owned: boolean; pendingEffects: boolean;
+  capabilities: ExecutionSafetyCapabilities; cleanup: ProcessCleanupStatus;
+  backend?: Readonly<{ backendId: string; implementationDigest: string }>;
+  leaseExpiresAt?: string;
+  requiredCapabilities?: readonly ExecutionSafetyCapabilityName[];
+  /** Redacted aggregate only; no output content or artifact path is projected here. */
+  output?: Readonly<{ totalBytes: number; truncated: boolean; lossyBytes: number }>;
+}
+export interface RecoveryProposal {
+  version: 1; proposalId: string; callId: string; scope: RecoveryScope; requestedAction: RecoveryAction;
+  targetScope: readonly string[]; requestedCapabilities: readonly ExecutionSafetyCapabilityName[];
+  expiresAt: string; rationale: string;
+}
+export type RecoveryState = "proposed" | "user_decision_required" | "authorized" | "executing" | "executed" | "rejected" | "failed" | "outcome_unknown";
+export type RecoveryReason = "submitted" | "validated" | "destructive_requires_user" | "user_approved" | "user_denied" |
+  "scope_changed" | "expired" | "execution_started" | "inspection_completed" | "cleanup_verified" |
+  "effect_failed" | "effect_outcome_unknown" | "model_failed";
+export interface RecoveryAuditRecord extends Omit<RecoveryProposal, "rationale"> {
+  proposalFingerprint: string; commandFingerprint: string; argumentsFingerprint: string; rationaleFingerprint: string;
+  createdAt: string; updatedAt: string; state: RecoveryState; reason: RecoveryReason; attemptId?: string;
+  observation?: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
+  cleanupState?: ProcessCleanupStatus["state"];
+}
+export class ProcessRecoveryError extends Error {
+  constructor(readonly code: string) { super(RECOVERY_ERROR_MESSAGES[code] ?? "Exceptional recovery was refused."); this.name = "ProcessRecoveryError"; }
+}
+const RECOVERY_ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  invalid_recovery_proposal: "Recovery proposal is not a supported closed command.",
+  routine_recovery_forbidden: "Routine process lifecycle never accepts AI recovery commands.",
+  recovery_scope_mismatch: "Recovery proposal no longer matches the exact recorded process and call.",
+  recovery_expired: "Recovery proposal has expired or its deadline is invalid.",
+  recovery_approval_required: "This exact destructive recovery proposal requires a local-user decision.",
+  recovery_identity_unavailable: "A complete process birth and backend identity could not be verified.",
+  recovery_ownership_unavailable: "The exact process ownership lease is not available to this Runner.",
+  recovery_outcome_unknown: "An earlier recovery effect has an unresolved outcome; it will not be replayed.",
+  recovery_capability_unavailable: "The required semantic recovery capability is not enforced.",
+  recovery_action_unsupported: "No trusted ownership recipe exists for that recovery action.",
+  recovery_model_failed: "The exceptional proposal generator failed; no recovery command was executed.",
+  recovery_not_found: "Recovery proposal does not exist for this run.",
+});
+export function recoveryFingerprint(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+  if (value && typeof value === "object") return "{" + Object.entries(value).filter(([,v]) => v !== undefined)
+    .sort(([a],[b]) => a.localeCompare(b)).map(([k,v]) => JSON.stringify(k) + ":" + canonical(v)).join(",") + "}";
+  return JSON.stringify(value);
+}
+export function recoveryScope(target: RecoveryTarget): RecoveryScope { return parseRecoveryScope(target.scope); }
+export function sameRecoveryScope(left: RecoveryScope, right: RecoveryScope): boolean {
+  // Never PID-only: birth, backend, lease fence and every invocation owner matter.
+  return recoveryFingerprint(left) === recoveryFingerprint(right);
+}
+export function isExceptionalProcessState(state: string): boolean {
+  return (EXCEPTIONAL_PROCESS_STATES as readonly string[]).includes(state);
+}
+const scopeKeys = ["kind", "runId", "invocationId", "logicalProcessId", "taskId", "sessionId", "revision", "ownerId", "fencingToken", "rootPid", "state", "backendIdentity", "birthFingerprint"];
+export function parseRecoveryScope(value: unknown): RecoveryScope {
+  const p = closed(value, scopeKeys);
+  if (p.kind !== "subprocess" && p.kind !== "streaming") invalid();
+  for (const k of ["runId", "invocationId", "logicalProcessId", "ownerId", "state", "backendIdentity", "birthFingerprint"]) text(p[k]);
+  for (const k of ["taskId", "sessionId"]) if (p[k] !== undefined) text(p[k]);
+  if (!Number.isSafeInteger(p.revision) || (p.revision as number) < 0 || !Number.isSafeInteger(p.fencingToken) || (p.fencingToken as number) < 1) invalid();
+  if (p.rootPid !== undefined && (!Number.isSafeInteger(p.rootPid) || (p.rootPid as number) < 1)) invalid();
+  return Object.freeze({ ...p }) as unknown as RecoveryScope;
+}
+const proposalKeys = ["version", "proposalId", "callId", "scope", "requestedAction", "targetScope", "requestedCapabilities", "expiresAt", "rationale"];
+const capabilities = ["tree_termination", "crash_cleanup", "verified_emptiness", "write_confinement"];
+export function parseRecoveryProposal(value: unknown): RecoveryProposal {
+  const p = closed(value, proposalKeys);
+  if (p.version !== 1) invalid();
+  text(p.proposalId); text(p.callId); text(p.rationale, 4096);
+  if (!["inspect", "terminate", "remove_owned_artifact"].includes(p.requestedAction as string)) invalid();
+  if (!Array.isArray(p.targetScope) || p.targetScope.length < 1 || p.targetScope.length > 16) invalid();
+  const targets = p.targetScope.map(v => text(v));
+  if (!Array.isArray(p.requestedCapabilities) || p.requestedCapabilities.length > 4 || new Set(p.requestedCapabilities).size !== p.requestedCapabilities.length) invalid();
+  if (p.requestedCapabilities.some(v => !capabilities.includes(v as string))) invalid();
+  date(p.expiresAt);
+  return Object.freeze({ ...p, scope: parseRecoveryScope(p.scope), targetScope: Object.freeze(targets),
+    requestedCapabilities: Object.freeze([...p.requestedCapabilities]) }) as unknown as RecoveryProposal;
+}
+export function makeRecoveryAudit(proposal: RecoveryProposal, at: string): RecoveryAuditRecord {
+  const { rationale, ...safe } = proposal;
+  const fingerprints = { commandFingerprint: recoveryFingerprint(proposal.requestedAction),
+    argumentsFingerprint: recoveryFingerprint({ targetScope: proposal.targetScope, requestedCapabilities: proposal.requestedCapabilities }),
+    rationaleFingerprint: recoveryFingerprint(rationale) };
+  return { ...safe, ...fingerprints, proposalFingerprint: recoveryFingerprint({ ...safe, rationaleFingerprint: fingerprints.rationaleFingerprint }),
+    createdAt: at, updatedAt: at, state: "proposed", reason: "submitted" };
+}
+export function parseRecoveryAuditRecord(value: unknown): RecoveryAuditRecord {
+  const p = closed(value, [...proposalKeys.filter(k => k !== "rationale"), "proposalFingerprint", "commandFingerprint", "argumentsFingerprint", "rationaleFingerprint", "createdAt", "updatedAt", "state", "reason", "attemptId", "observation", "cleanupState"]);
+  const proposal = parseRecoveryProposal(Object.fromEntries(proposalKeys.map(k => [k, k === "rationale" ? "redacted" : p[k]])));
+  for (const k of ["proposalFingerprint", "commandFingerprint", "argumentsFingerprint", "rationaleFingerprint"])
+    if (typeof p[k] !== "string" || !/^[a-f0-9]{64}$/.test(p[k] as string)) invalid();
+  date(p.createdAt); date(p.updatedAt);
+  if (!["proposed", "user_decision_required", "authorized", "executing", "executed", "rejected", "failed", "outcome_unknown"].includes(p.state as string)) invalid();
+  if (!["submitted", "validated", "destructive_requires_user", "user_approved", "user_denied", "scope_changed", "expired", "execution_started", "inspection_completed", "cleanup_verified", "effect_failed", "effect_outcome_unknown", "model_failed"].includes(p.reason as string)) invalid();
+  if (p.attemptId !== undefined) text(p.attemptId);
+  if (p.observation !== undefined && !["running", "exited", "identity_mismatch", "outcome_unknown"].includes(p.observation as string)) invalid();
+  if (p.cleanupState !== undefined && !["not_required", "pending", "verified_empty", "failed"].includes(p.cleanupState as string)) invalid();
+  const { rationale: _r, ...safe } = proposal;
+  if (p.commandFingerprint !== recoveryFingerprint(p.requestedAction) ||
+      p.argumentsFingerprint !== recoveryFingerprint({ targetScope: p.targetScope, requestedCapabilities: p.requestedCapabilities }) ||
+      p.proposalFingerprint !== recoveryFingerprint({ ...safe, rationaleFingerprint: p.rationaleFingerprint })) invalid();
+  return Object.freeze({ ...p, scope: proposal.scope, targetScope: proposal.targetScope,
+    requestedCapabilities: proposal.requestedCapabilities }) as unknown as RecoveryAuditRecord;
+}
+export function validateRecoveryTransition(prior: RecoveryAuditRecord | undefined, next: RecoveryAuditRecord, actor: { role: string; id: string }, at: string): void {
+  const runner = actor.role === "runner" && actor.id === "process-recovery";
+  const user = actor.role === "user" && actor.id === "local-user";
+  if (next.updatedAt !== at || Date.parse(next.createdAt) > Date.parse(at)) invalid();
+  if (!prior) { if (!runner || next.state !== "proposed" || next.reason !== "submitted" || next.createdAt !== at) invalid(); return; }
+  const mutable = ["state", "reason", "updatedAt", "attemptId", "observation", "cleanupState"];
+  const immutable = (r: RecoveryAuditRecord) => Object.fromEntries(Object.entries(r).filter(([k]) => !mutable.includes(k)));
+  if (recoveryFingerprint(immutable(prior)) !== recoveryFingerprint(immutable(next)) || Date.parse(at) < Date.parse(prior.updatedAt)) invalid();
+  const transitions: Record<RecoveryState, readonly RecoveryState[]> = {
+    proposed: ["authorized", "user_decision_required", "rejected", "failed"], user_decision_required: ["authorized", "rejected"],
+    authorized: ["executing", "rejected"], executing: ["executed", "failed", "outcome_unknown", "rejected"],
+    executed: [], rejected: [], failed: [], outcome_unknown: [],
+  };
+  if (!transitions[prior.state].includes(next.state)) invalid();
+  const approval = prior.state === "user_decision_required";
+  if (approval ? (!user && !(runner && next.state === "rejected")) : !runner) invalid();
+  if (next.state === "authorized" && ((next.requestedAction !== "inspect" && (!user || next.reason !== "user_approved")) || Date.parse(at) >= Date.parse(next.expiresAt))) invalid();
+  if (next.state === "user_decision_required" && (next.requestedAction !== "terminate" || next.reason !== "destructive_requires_user")) invalid();
+  if (next.state === "executing" && (!next.attemptId || prior.attemptId || next.reason !== "execution_started" || Date.parse(at) >= Date.parse(next.expiresAt))) invalid();
+  if (prior.attemptId && next.attemptId !== prior.attemptId) invalid();
+  if (next.state === "executed" && (next.requestedAction === "inspect" ? next.reason !== "inspection_completed" : next.reason !== "cleanup_verified" || next.cleanupState !== "verified_empty")) invalid();
+}
+export function recoveryBlocksRun(records: Readonly<Record<string, RecoveryAuditRecord>> | undefined): boolean {
+  return Object.values(records ?? {}).some(r => ["user_decision_required", "executing", "outcome_unknown"].includes(r.state) || (r.state === "authorized" && r.requestedAction !== "inspect"));
+}
+function closed(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || types.isProxy(value) || ![null, Object.prototype].includes(Object.getPrototypeOf(value))) invalid();
+  const result: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !keys.includes(key)) invalid();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!("value" in descriptor)) invalid();
+    result[key] = descriptor.value;
+  }
+  return result;
+}
+function invalid(): never { throw new ProcessRecoveryError("invalid_recovery_proposal"); }
+function text(value: unknown, max = 512): string {
+  if (typeof value !== "string" || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) invalid();
+  return value;
+}
+function date(value: unknown): void {
+  if (typeof value !== "string" || value.length > 64 || !Number.isFinite(Date.parse(value))) invalid();
+}
+
+===== runner-v2/src/process-recovery.ts =====
+/** On-demand proposal controller. Ordinary process lifecycle never imports this module. */
+import { randomUUID } from "node:crypto";
+import type { AgentModel } from "./agent-contracts.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
+import type { PermissionProfile } from "./contracts.js";
+import { rebuildSchedulerProjection, type SchedulerStore } from "./scheduler-store.js";
+import type { DurableProcessStore, DurableSubprocessRecord } from "./durable-process-store.js";
+import {
+  durableBackendIdentityFingerprint,
+  durableBirthFingerprint,
+  exceptionalRecoveryCallId,
+  type SubprocessRuntime,
+} from "./subprocess-runtime.js";
+import type { ExecutionSafetyCapabilities, ProcessCleanupStatus } from "./execution-safety-contracts.js";
+import { isExceptionalProcessState, makeRecoveryAudit, parseRecoveryProposal, ProcessRecoveryError,
+  recoveryScope, sameRecoveryScope, type RecoveryAuditRecord, type RecoveryProposal,
+  type RecoveryReason, type RecoveryScope, type RecoveryState, type RecoveryTarget } from "./process-recovery-contracts.js";
+export * from "./process-recovery-contracts.js";
+
+export interface RecoveryExecutionAuthority {
+  readonly userApproved: boolean;
+  readonly signal: AbortSignal;
+  assertCurrent(): void;
+}
+export interface RecoveryExecutionResult {
+  observation: "running" | "exited" | "identity_mismatch" | "outcome_unknown";
+  cleanup: ProcessCleanupStatus;
+}
+export interface ProcessRecoveryRuntime {
+  inspect(invocationId: string): RecoveryTarget | undefined;
+  list?(): readonly RecoveryTarget[];
+  execute(request: RecoveryAuditRecord, authority: RecoveryExecutionAuthority): Promise<RecoveryExecutionResult>;
+}
+/**
+ * Production recovery runtime. It is backed by the shared SubprocessRuntime and
+ * its read-only durable store; there is no raw kill, shell string or ambient
+ * spawn anywhere on this path, and no new unconfined subprocess is created.
+ */
+export function createSubprocessProcessRecoveryRuntime(options: {
+  readonly runtime: Pick<SubprocessRuntime, "recoverExceptional">;
+  /** Shared kernel authority for current-owner or safely reclaimable exceptional records. */
+  readonly canRecoverExceptional: (invocationId: string) => boolean;
+  readonly store: Pick<DurableProcessStore, "readByInvocation"> & Partial<Pick<DurableProcessStore, "listRowIds">>;
+  readonly kind?: "subprocess" | "streaming";
+  readonly capabilities?: (record: DurableSubprocessRecord) => ExecutionSafetyCapabilities;
+  readonly executionGrants: ExecutionGrantAuthority;
+  readonly permissionProfile: PermissionProfile;
+  readonly workspacePath: string;
+  /** Last-mile native grant expiry/revocation check, evaluated at the effect boundary. */
+  readonly assertGrant?: (record: DurableSubprocessRecord) => void;
+}): ProcessRecoveryRuntime {
+  const kind = options.kind ?? "subprocess";
+  const inspect = (invocationId: string): RecoveryTarget | undefined => {
+    const record = options.store.readByInvocation(invocationId);
+    if (!record) return undefined;
+    const binding = record.backendBinding;
+    return Object.freeze({
+      scope: Object.freeze({
+        kind,
+        runId: record.runId,
+        invocationId: record.invocationId,
+        logicalProcessId: record.logicalProcessId,
+        ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
+        ...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }),
+        revision: record.revision,
+        ownerId: record.ownerId,
+        fencingToken: record.fencingToken,
+        ...(binding?.rootPid === undefined ? {} : { rootPid: binding.rootPid }),
+        state: record.state,
+        // A process with no durable backend binding has no provable identity;
+        // the empty fingerprints make the controller refuse rather than guess.
+        backendIdentity: binding ? durableBackendIdentityFingerprint(binding) : "",
+        birthFingerprint: binding ? durableBirthFingerprint(binding) : "",
+      }),
+      owned: options.canRecoverExceptional(record.invocationId),
+      pendingEffects: record.pendingEffects.length > 0,
+      capabilities: options.capabilities?.(record) ?? binding?.capabilities ?? {
+        tree_termination: "unverified", crash_cleanup: "unverified",
+        verified_emptiness: "unverified", write_confinement: "unverified",
+      },
+      cleanup: structuredClone(record.cleanup),
+      ...(binding ? { backend: Object.freeze({ backendId: binding.backendId, implementationDigest: binding.implementationDigest }) } : {}),
+      leaseExpiresAt: record.leaseExpiresAt,
+      requiredCapabilities: Object.freeze([...record.requiredCapabilities]),
+      ...(record.output ? { output: Object.freeze({
+        totalBytes: record.output.reduce((sum, stream) => sum + stream.totalBytes, 0),
+        truncated: record.output.some(stream => stream.truncated),
+        lossyBytes: record.output.reduce((sum, stream) => sum + stream.lossyBytes, 0),
+      }) } : {}),
+    }) as RecoveryTarget;
+  };
+  return Object.freeze({
+    inspect,
+    list: () => Object.freeze((options.store.listRowIds?.() ?? []).flatMap(invocationId => {
+      const value = inspect(invocationId); return value ? [value] : [];
+    })),
+    async execute(
+      request: RecoveryAuditRecord,
+      authority: RecoveryExecutionAuthority,
+    ): Promise<RecoveryExecutionResult> {
+      authority.assertCurrent();
+      if (request.requestedAction === "remove_owned_artifact")
+        throw new ProcessRecoveryError("recovery_action_unsupported");
+      const record = options.store.readByInvocation(request.scope.invocationId);
+      if (!record) throw new ProcessRecoveryError("recovery_identity_unavailable");
+      const nativeRequest = Object.freeze({
+        invocationId: request.scope.invocationId,
+        runId: request.scope.runId,
+        logicalProcessId: request.scope.logicalProcessId,
+        ...(request.scope.taskId === undefined ? {} : { taskId: request.scope.taskId }),
+        ...(request.scope.sessionId === undefined ? {} : { sessionId: request.scope.sessionId }),
+        expectedRevision: request.scope.revision,
+        ownerId: request.scope.ownerId,
+        fencingToken: request.scope.fencingToken,
+        backendIdentityFingerprint: request.scope.backendIdentity,
+        birthFingerprint: request.scope.birthFingerprint,
+        action: request.requestedAction,
+        expiresAt: request.expiresAt,
+      });
+      const binding = Object.freeze({ runId: request.scope.runId, sessionId: request.scope.sessionId ?? "process-recovery",
+        actor: Object.freeze({ role: "runner_internal" as const, id: "process-recovery" }), toolName: "process.recovery",
+        callId: exceptionalRecoveryCallId(nativeRequest), permissionProfile: options.permissionProfile });
+      const grant = await options.executionGrants.issue({ ...binding, workspacePath: options.workspacePath, access: [],
+        externalApproved: false, destructiveApproved: request.requestedAction === "terminate" && authority.userApproved,
+        networkApproved: false, signal: authority.signal });
+      try {
+        const observation = await options.runtime.recoverExceptional({ ...nativeRequest, userApproved: authority.userApproved,
+          authorization: { authority: options.executionGrants, grant, binding }, assertGrant: () => {
+            authority.assertCurrent(); options.assertGrant?.(record);
+          } });
+        return Object.freeze({ observation: observation.observation, cleanup: observation.cleanup });
+      } finally {
+        await options.executionGrants.revoke(grant, authority.signal.aborted ? "cancelled" : "completed");
+      }
+    },
+  });
+}
+
+export function createAgentProcessRecoveryGenerator(options: {
+  readonly model: AgentModel;
+  readonly clock?: () => Date;
+  readonly ttlMs?: number;
+}) {
+  const clock = options.clock ?? (() => new Date());
+  const ttlMs = options.ttlMs ?? 60_000;
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 300_000)
+    throw new ProcessRecoveryError("invalid_recovery_proposal");
+  return async (scope: RecoveryScope, proposalId: string, signal: AbortSignal): Promise<RecoveryProposal> => {
+    const expiresAt = new Date(clock().getTime() + ttlMs).toISOString();
+    const turn = await options.model.complete({
+      sessionId: `process-recovery:${scope.runId}:${proposalId}`,
+      signal,
+      tools: [],
+      messages: [
+        { id: "recovery-system", role: "system", content:
+          "Propose one exceptional process-recovery action. Return exactly one JSON object with only requestedAction, requestedCapabilities, and rationale. Never invent scope, targets, shell commands, credentials, approval, or expiry." },
+        { id: "recovery-target", role: "user", content: JSON.stringify({
+          exceptionalState: scope.state,
+          kind: scope.kind,
+          logicalProcessId: scope.logicalProcessId,
+          allowedActions: ["inspect", "terminate", "remove_owned_artifact"],
+          allowedCapabilities: ["tree_termination", "crash_cleanup", "verified_emptiness", "write_confinement"],
+        }) },
+      ],
+    });
+    if (turn.stopReason !== "end_turn" || turn.blocks.length !== 1 || turn.blocks[0]?.type !== "text")
+      throw new ProcessRecoveryError("invalid_recovery_proposal");
+    let fragment: unknown;
+    try { fragment = JSON.parse(turn.blocks[0].text); }
+    catch { throw new ProcessRecoveryError("invalid_recovery_proposal"); }
+    if (!fragment || typeof fragment !== "object" || Array.isArray(fragment))
+      throw new ProcessRecoveryError("invalid_recovery_proposal");
+    const keys = Object.keys(fragment);
+    if (keys.length !== 3 || keys.some(key => !["requestedAction", "requestedCapabilities", "rationale"].includes(key)))
+      throw new ProcessRecoveryError("invalid_recovery_proposal");
+    return parseRecoveryProposal({
+      version: 1, proposalId, callId: `recovery:${proposalId}`, scope,
+      requestedAction: (fragment as Record<string, unknown>).requestedAction,
+      targetScope: [scope.logicalProcessId],
+      requestedCapabilities: (fragment as Record<string, unknown>).requestedCapabilities,
+      expiresAt, rationale: (fragment as Record<string, unknown>).rationale,
+    });
+  };
+}
+
+export interface ProcessRecoveryCoordinator {
+  records(): Readonly<Record<string, RecoveryAuditRecord>>;
+  generate(invocationId: string, proposalId: string): Promise<RecoveryAuditRecord>;
+  decide(proposalId: string, fingerprint: string, decision: "approve" | "reject"): Promise<RecoveryAuditRecord>;
+  execute(proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord>;
+}
+export interface ProcessRecoveryControlPlane {
+  processRecoveryRecords(runId: string): Readonly<Record<string, RecoveryAuditRecord>>;
+  generateProcessRecovery(runId: string, invocationId: string, proposalId: string): Promise<RecoveryAuditRecord>;
+  decideProcessRecovery(runId: string, proposalId: string, fingerprint: string, decision: "approve" | "reject"): Promise<RecoveryAuditRecord>;
+  executeProcessRecovery(runId: string, proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord>;
+}
+export interface ProcessRecoveryControllerOptions {
+  runId: string; store: SchedulerStore; runtime: ProcessRecoveryRuntime; clock?: () => Date;
+  generate?: (scope: RecoveryScope, proposalId: string, signal: AbortSignal) => Promise<unknown>;
+  timeoutMs?: number;
+}
+export class ProcessRecoveryController {
+  private readonly pending = new Map<string, Promise<RecoveryAuditRecord>>();
+  private readonly generating = new Map<string, Promise<RecoveryAuditRecord>>();
+  constructor(private readonly options: ProcessRecoveryControllerOptions) {}
+  records(): Readonly<Record<string, RecoveryAuditRecord>> {
+    return rebuildSchedulerProjection(this.options.store.readRun(this.options.runId)).processRecovery ?? {};
+  }
+  async submit(value: unknown): Promise<RecoveryAuditRecord> {
+    const proposal = parseRecoveryProposal(value);
+    const record = makeRecoveryAudit(proposal, this.now().toISOString());
+    const prior = this.find(proposal.proposalId);
+    if (prior) {
+      if (prior.proposalFingerprint !== record.proposalFingerprint) throw new ProcessRecoveryError("recovery_scope_mismatch");
+      return prior;
+    }
+    this.validate(proposal);
+    this.append(record);
+    return proposal.requestedAction === "inspect"
+      ? this.update(record, "authorized", "validated")
+      : this.update(record, "user_decision_required", "destructive_requires_user");
+  }
+  async decide(proposalId: string, fingerprint: string, decision: "approve" | "reject"): Promise<RecoveryAuditRecord> {
+    const record = this.require(proposalId, fingerprint);
+    if (!["approve", "reject"].includes(decision)) throw new ProcessRecoveryError("invalid_recovery_proposal");
+    if ((record.state === "authorized" && record.reason === "user_approved" && decision === "approve") ||
+        (record.state === "rejected" && record.reason === "user_denied" && decision === "reject")) return record;
+    if (record.state !== "user_decision_required") throw new ProcessRecoveryError("recovery_scope_mismatch");
+    if (decision === "approve") this.validate(record);
+    return this.update(record, decision === "approve" ? "authorized" : "rejected",
+      decision === "approve" ? "user_approved" : "user_denied", {}, true);
+  }
+  async execute(proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord> {
+    this.require(proposalId, fingerprint);
+    const existing = this.pending.get(proposalId);
+    if (existing) return existing;
+    const pending = this.executeOnce(proposalId, fingerprint).finally(() => this.pending.delete(proposalId));
+    this.pending.set(proposalId, pending); return pending;
+  }
+  private async executeOnce(proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord> {
+    let record = this.require(proposalId, fingerprint);
+    if (["executed", "rejected", "failed", "outcome_unknown"].includes(record.state)) return record;
+    if (record.state === "executing") return this.update(record, "outcome_unknown", "effect_outcome_unknown");
+    if (record.state !== "authorized") throw new ProcessRecoveryError("recovery_approval_required");
+    try { this.validate(record); }
+    catch (error) { return this.update(record, "rejected", error instanceof ProcessRecoveryError && error.code === "recovery_expired" ? "expired" : "scope_changed"); }
+    const userApproved = record.requestedAction === "inspect" || record.reason === "user_approved";
+    if (!userApproved) throw new ProcessRecoveryError("recovery_approval_required");
+    // A fresh attempt ID plus the SQLite transition/idempotency guard is the durable execution claim.
+    record = this.update(record, "executing", "execution_started", { attemptId: randomUUID() });
+    const abort = new AbortController();
+    const authority: RecoveryExecutionAuthority = Object.freeze({ userApproved, signal: abort.signal,
+      assertCurrent: () => {
+        const current = this.require(proposalId, fingerprint);
+        if (abort.signal.aborted || Date.parse(record.expiresAt) <= this.now().getTime()) throw new ProcessRecoveryError("recovery_expired");
+        if (current.state !== "executing" || current.attemptId !== record.attemptId) throw new ProcessRecoveryError("recovery_outcome_unknown");
+      } });
+    try {
+      authority.assertCurrent();
+      const result = await this.bounded(() => this.options.runtime.execute(record, authority), abort,
+        Math.min(this.timeoutMs(), Date.parse(record.expiresAt) - this.now().getTime()));
+      authority.assertCurrent();
+      const facts = { observation: result.observation, cleanupState: result.cleanup.state };
+      if (result.observation === "identity_mismatch") return this.update(record, "rejected", "scope_changed", facts);
+      if (result.observation === "outcome_unknown" || (record.requestedAction !== "inspect" && result.cleanup.state !== "verified_empty"))
+        return this.update(record, "outcome_unknown", "effect_outcome_unknown", facts);
+      return this.update(record, "executed", record.requestedAction === "inspect" ? "inspection_completed" : "cleanup_verified", facts);
+    } catch {
+      // After dispatch, silence/rejection is not proof that no effect occurred.
+      return this.update(record, "outcome_unknown", "effect_outcome_unknown");
+    } finally { abort.abort(); }
+  }
+  async generate(invocationId: string, proposalId: string): Promise<RecoveryAuditRecord> {
+    const target = this.target(invocationId); // Gate before touching a model, even when no generator is configured.
+    const prior = this.find(proposalId);
+    if (prior) {
+      if (prior.scope.invocationId !== invocationId) throw new ProcessRecoveryError("recovery_scope_mismatch");
+      return prior;
+    }
+    const key = JSON.stringify([invocationId, proposalId]);
+    const existing = this.generating.get(key); if (existing) return existing;
+    const pending = this.generateOnce(target, proposalId).finally(() => this.generating.delete(key));
+    this.generating.set(key, pending); return pending;
+  }
+  private async generateOnce(target: RecoveryTarget, proposalId: string): Promise<RecoveryAuditRecord> {
+    const scope = recoveryScope(target), abort = new AbortController();
+    let value: unknown;
+    try {
+      if (!this.options.generate) throw new ProcessRecoveryError("recovery_model_failed");
+      value = await this.bounded(() => this.options.generate!(scope, proposalId, abort.signal), abort, this.timeoutMs());
+    } catch { throw new ProcessRecoveryError("recovery_model_failed"); }
+    finally { abort.abort(); }
+    const proposal = parseRecoveryProposal(value);
+    if (proposal.proposalId !== proposalId || !sameRecoveryScope(proposal.scope, scope) ||
+        !sameRecoveryScope(recoveryScope(this.target(scope.invocationId)), scope)) throw new ProcessRecoveryError("recovery_scope_mismatch");
+    return this.submit(proposal);
+  }
+  private target(invocationId: string): RecoveryTarget {
+    const target = this.options.runtime.inspect(invocationId);
+    if (!target || target.scope.runId !== this.options.runId) throw new ProcessRecoveryError("recovery_scope_mismatch");
+    if (!isExceptionalProcessState(target.scope.state)) throw new ProcessRecoveryError("routine_recovery_forbidden");
+    if (!target.owned) throw new ProcessRecoveryError("recovery_ownership_unavailable");
+    if (target.pendingEffects) throw new ProcessRecoveryError("recovery_outcome_unknown");
+    if (![target.scope.backendIdentity, target.scope.birthFingerprint].every(v => /^[a-f0-9]{64}$/.test(v))) throw new ProcessRecoveryError("recovery_identity_unavailable");
+    return target;
+  }
+  private validate(proposal: Omit<RecoveryProposal, "rationale">): void {
+    const target = this.target(proposal.scope.invocationId);
+    if (!sameRecoveryScope(proposal.scope, recoveryScope(target)) || proposal.callId !== `recovery:${proposal.proposalId}` ||
+        proposal.targetScope.length !== 1 || proposal.targetScope[0] !== target.scope.logicalProcessId) throw new ProcessRecoveryError("recovery_scope_mismatch");
+    const remaining = Date.parse(proposal.expiresAt) - this.now().getTime();
+    if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 300_000) throw new ProcessRecoveryError("recovery_expired");
+    if (proposal.requestedAction === "remove_owned_artifact") throw new ProcessRecoveryError("recovery_action_unsupported");
+    const required = new Set([...proposal.requestedCapabilities,
+      ...(proposal.requestedAction === "terminate" ? ["tree_termination", "verified_emptiness"] as const : [])]);
+    for (const capability of required) if (target.capabilities[capability] !== "enforced") throw new ProcessRecoveryError("recovery_capability_unavailable");
+  }
+  private now(): Date { return this.options.clock?.() ?? new Date(); }
+  private timeoutMs(): number {
+    const value = this.options.timeoutMs ?? 30_000;
+    if (!Number.isSafeInteger(value) || value < 1 || value > 30_000) throw new ProcessRecoveryError("invalid_recovery_proposal");
+    return value;
+  }
+  private find(proposalId: string): RecoveryAuditRecord | undefined {
+    const records = this.records(); return Object.hasOwn(records, proposalId) ? records[proposalId] : undefined;
+  }
+  private require(proposalId: string, fingerprint: string): RecoveryAuditRecord {
+    const record = this.find(proposalId); if (!record) throw new ProcessRecoveryError("recovery_not_found");
+    if (record.proposalFingerprint !== fingerprint) throw new ProcessRecoveryError("recovery_scope_mismatch");
+    return record;
+  }
+  private append(record: RecoveryAuditRecord, user = false): RecoveryAuditRecord {
+    this.options.store.append({ runId: this.options.runId, type: "process.recovery_updated", occurredAt: record.updatedAt,
+      actor: user ? { role: "user", id: "local-user" } : { role: "runner", id: "process-recovery" },
+      idempotencyKey: `process-recovery:${record.proposalId}:${record.state}`, payload: { record } });
+    return this.require(record.proposalId, record.proposalFingerprint);
+  }
+  private update(record: RecoveryAuditRecord, state: RecoveryState, reason: RecoveryReason,
+    facts: Partial<Pick<RecoveryAuditRecord, "attemptId" | "observation" | "cleanupState">> = {}, user = false): RecoveryAuditRecord {
+    return this.append({ ...record, ...facts, state, reason, updatedAt: this.now().toISOString() }, user);
+  }
+  private async bounded<T>(operation: () => Promise<T>, abort: AbortController, milliseconds: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([Promise.resolve().then(operation), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { abort.abort(); reject(new ProcessRecoveryError("recovery_outcome_unknown")); }, Math.max(1, milliseconds));
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
+}
+
+===== runner-v2/test/process-recovery-control.test.ts =====
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import type { BuildRuntime } from "../src/build-runtime.js";
+import type { NativeBuildSpec } from "../src/build-spec.js";
+import { ControlServer } from "../src/control-server.js";
+import { NativeBuildManager, type NativeBuildRuntimeHandle } from "../src/native-build-manager.js";
+import type { RecoveryAuditRecord } from "../src/process-recovery.js";
+import { RunSupervisor } from "../src/run-supervisor.js";
+import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
+import { SqliteEventStore } from "../src/sqlite-event-store.js";
+
+const spec: NativeBuildSpec = {
+  version: 2, runId: "run-recovery", projectId: "project", objective: "Recover exceptional process",
+  architectRuntimeId: "architect", workerRuntimeIds: ["worker"], verifierRuntimeIds: ["verifier"],
+  alwaysRequireIndependentVerifier: false, maxConcurrency: 1, permissionProfile: "project",
+  runPolicy: "finish", budgetLimits: {},
+  createdAt: "2026-09-15T00:00:00.000Z", idempotencyKey: "spec:recovery",
+};
+const record = { proposalId: "proposal-1", proposalFingerprint: "a".repeat(64), state: "user_decision_required" } as RecoveryAuditRecord;
+test("native Build manager exposes recovery only through the live handle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task11-manager-"));
+  const calls: string[] = [];
+  const recovery = {
+    records: () => ({ [record.proposalId]: record }),
+    generate: async (invocationId: string, proposalId: string) => { calls.push(`generate:${invocationId}:${proposalId}`); return record; },
+    decide: async (proposalId: string, fingerprint: string, decision: "approve" | "reject") => { calls.push(`decide:${proposalId}:${fingerprint}:${decision}`); return record; },
+    execute: async (proposalId: string, fingerprint: string) => { calls.push(`execute:${proposalId}:${fingerprint}`); return record; },
+  };
+  const runtime = { id: spec.runId, projection: () => ({ runId: spec.runId, status: "paused" }) } as unknown as BuildRuntime;
+  const handle = { runtime, processRecovery: recovery, cleanup: async () => {}, close: async () => {} } as unknown as NativeBuildRuntimeHandle;
+  const manager = new NativeBuildManager({ specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")), createRuntime: async () => handle,
+    shouldAutoRun: () => false, onPumpResult: () => {}, onPumpError: () => {} });
+  try {
+    await manager.create(spec);
+    assert.deepEqual(manager.processRecoveryRecords(spec.runId), { [record.proposalId]: record });
+    assert.equal(await manager.generateProcessRecovery(spec.runId, "invocation", "proposal-1"), record);
+    assert.equal(await manager.decideProcessRecovery(spec.runId, "proposal-1", record.proposalFingerprint, "approve"), record);
+    assert.equal(await manager.executeProcessRecovery(spec.runId, "proposal-1", record.proposalFingerprint), record);
+    assert.deepEqual(calls, [`generate:invocation:proposal-1`, `decide:proposal-1:${record.proposalFingerprint}:approve`, `execute:proposal-1:${record.proposalFingerprint}`]);
+  } finally { await manager.close(); rmSync(root, { recursive: true, force: true }); }
+});
+test("control server recovery routes are authenticated, closed and serialize exact decisions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task11-control-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(root, "runs.sqlite")));
+  supervisor.createRun({ runId: spec.runId, projectPath: root, permissionProfile: "project", idempotencyKey: "create" });
+  const calls: string[] = [];
+  const processRecovery = {
+    processRecoveryRecords: (runId: string) => { assert.equal(runId, spec.runId); return { [record.proposalId]: record }; },
+    generateProcessRecovery: async (runId: string, invocationId: string, proposalId: string) => { calls.push(`generate:${runId}:${invocationId}:${proposalId}`); return record; },
+    decideProcessRecovery: async (runId: string, proposalId: string, fingerprint: string, decision: "approve" | "reject") => { calls.push(`decide:${runId}:${proposalId}:${fingerprint}:${decision}`); return record; },
+    executeProcessRecovery: async (runId: string, proposalId: string, fingerprint: string) => { calls.push(`execute:${runId}:${proposalId}:${fingerprint}`); return record; },
+  };
+  const server = new ControlServer({ supervisor, token: "secret", processRecovery, bootstrapRun: async () => ({ baselineRevision: "b".repeat(40), baselineRef: "refs/baseline" }) });
+  try {
+    const { url } = await server.start(0);
+    assert.equal((await fetch(`${url}/v2/runs/${spec.runId}/build/recovery`)).status, 401);
+    const auth = { Authorization: "Bearer secret", "Content-Type": "application/json" };
+    const listed = await fetch(`${url}/v2/runs/${spec.runId}/build/recovery`, { headers: auth });
+    assert.equal(listed.status, 200); assert.deepEqual((await listed.json() as { records: unknown }).records, [record]);
+    const generated = await fetch(`${url}/v2/runs/${spec.runId}/build/recovery/generate`, { method: "POST", headers: auth, body: JSON.stringify({ invocationId: "invocation", proposalId: "proposal-1" }) });
+    assert.equal(generated.status, 200);
+    const decision = await fetch(`${url}/v2/runs/${spec.runId}/build/recovery/proposal-1/decision`, { method: "POST", headers: auth,
+      body: JSON.stringify({ fingerprint: record.proposalFingerprint, decision: "approve" }) });
+    assert.equal(decision.status, 200);
+    const executed = await fetch(`${url}/v2/runs/${spec.runId}/build/recovery/proposal-1/execute`, { method: "POST", headers: auth,
+      body: JSON.stringify({ fingerprint: record.proposalFingerprint }) });
+    assert.equal(executed.status, 200);
+    const widened = await fetch(`${url}/v2/runs/${spec.runId}/build/recovery/generate`, { method: "POST", headers: auth,
+      body: JSON.stringify({ invocationId: "invocation", proposalId: "proposal-1", command: "taskkill /F" }) });
+    assert.equal(widened.status, 400);
+    assert.deepEqual(calls, [
+      `generate:${spec.runId}:invocation:proposal-1`,
+      `decide:${spec.runId}:proposal-1:${record.proposalFingerprint}:approve`,
+      `execute:${spec.runId}:proposal-1:${record.proposalFingerprint}`,
+    ]);
+  } finally { await server.close(); supervisor.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("CLI connects the native Build recovery plane to the authenticated control server", () => {
+  const source = readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8");
+  assert.match(source, /new ControlServer\(\{[\s\S]*?processRecovery:\s*builds[\s\S]*?\}\)/);
+});
+
+===== runner-v2/test/process-recovery-disclosure.test.ts =====
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { projectExecutionSafetyObservability } from "../src/build-observability.js";
+import type { RecoveryAuditRecord, RecoveryTarget } from "../src/process-recovery.js";
+
+const capabilities = {
+  tree_termination: "enforced", crash_cleanup: "enforced",
+  verified_emptiness: "enforced", write_confinement: "unverified",
+} as const;
+const target: RecoveryTarget = {
+  scope: { kind: "subprocess", runId: "run", invocationId: "inv", logicalProcessId: "logical",
+    revision: 4, ownerId: "owner", fencingToken: 3, state: "outcome_unknown",
+    backendIdentity: "a".repeat(64), birthFingerprint: "b".repeat(64) },
+  owned: true, pendingEffects: false, capabilities, cleanup: { state: "pending" },
+  backend: { backendId: "runner-windows-job-v1", implementationDigest: "c".repeat(64) },
+  leaseExpiresAt: "2026-09-15T17:00:00.000Z", requiredCapabilities: ["tree_termination"],
+  output: { totalBytes: 100, truncated: true, lossyBytes: 5 },
+};
+const recovery = { proposalId: "p", proposalFingerprint: "d".repeat(64), state: "user_decision_required",
+  requestedAction: "terminate", cleanupState: "pending" } as RecoveryAuditRecord;
+test("execution disclosure names Full bypass, backend semantics, output loss and unresolved recovery", () => {
+  const result = projectExecutionSafetyObservability({
+    permissionProfile: "full",
+    isolation: { version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [{
+      occurredAt: "2026-09-15T00:00:00.000Z", runId: "run", invocationId: "inv", grantId: "secret-grant-id",
+      status: "unconfined_explicit_full", enforcement: "unconfined_explicit_full", disclosure: "unconfined_explicit_full", access: [],
+    }] },
+    activeIsolationLeaseCount: 0,
+    grantStates: ["issued"],
+    processes: [target],
+    recovery: { p: recovery },
+  });
+  assert.equal(result.fullBypass, true);
+  assert.equal(result.isolation.status, "unconfined_explicit_full");
+  assert.equal(result.isolation.securityBoundary, "provider_specific_not_universal_security_boundary");
+  assert.deepEqual(result.grants, { active: 1, consumed: 0 });
+  assert.equal(result.processes[0]?.backend?.backendId, "runner-windows-job-v1");
+  assert.deepEqual(result.processes[0]?.capabilities, capabilities);
+  assert.deepEqual(result.processes[0]?.output, { status: "lossy", totalBytes: 100, truncated: true, lossyBytes: 5 });
+  assert.equal(result.processes[0]?.cleanup.state, "pending");
+  assert.equal(result.recovery[0]?.state, "user_decision_required");
+  assert.equal(JSON.stringify(result).includes("secret-grant-id"), false);
+});
+test("execution disclosure never upgrades absent or partial facts into confinement", () => {
+  const result = projectExecutionSafetyObservability({
+    permissionProfile: "project",
+    isolation: { version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] },
+    activeIsolationLeaseCount: 0,
+    grantStates: [],
+    processes: [{ ...target, capabilities: { ...capabilities, tree_termination: "unverified" }, backend: undefined, output: undefined }],
+    recovery: {},
+  });
+  assert.equal(result.fullBypass, false);
+  assert.equal(result.isolation.status, "unverified");
+  assert.equal(result.processes[0]?.backend, undefined);
+  assert.equal(result.processes[0]?.capabilities.tree_termination, "unverified");
+  assert.deepEqual(result.processes[0]?.output, { status: "unavailable" });
+});
+
+===== runner-v2/test/process-recovery-kernel.test.ts =====
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import test from "node:test";
+import { openSqliteDurableProcessKernel, type DurableProcessRuntimeWriter } from "../src/durable-process-store.js";
+import { createProcessBackendRegistration, createProcessBackendRegistry, selectProcessBackend } from "../src/process-backend.js";
+import { createSubprocessRuntimeKernel, exceptionalRecoveryCallId, durableBackendIdentityFingerprint, durableBirthFingerprint, type ExceptionalRecoveryRequest } from "../src/subprocess-runtime.js";
+import { createChildEnvironmentFactory } from "../src/child-environment.js";
+import { createExecutionGrantAuthority } from "../src/execution-grants.js";
+
+async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>) {
+  const f = await setup(); let passed = false;
+  try { await run(f); passed = true; }
+  finally { await f.authority.revokeAll("cleanup"); f.kernel.readOnlyStore.close();
+    if (passed) fs.rmSync(f.root, { recursive: true, force: true }); else console.error(`Task11 kernel RED root retained: ${f.root}`); }
+}
+async function setup() {
+  const root = fs.mkdtempSync(join(tmpdir(), "aiboard-task11-kernel-")), path = join(root, "state.sqlite"), key = new Uint8Array(32).fill(13);
+  let now = new Date("2026-09-15T00:00:00.000Z"), running = true;
+  const calls: string[] = []; let beforeProbe: (() => Promise<void>) | undefined; let beforeReconcile: (() => Promise<void>) | undefined;
+  let empty = true;
+  const capabilities = { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unverified" } as const;
+  const backend = {
+    probe: async () => { calls.push("probe"); await beforeProbe?.(); return { attestationVersion: 1, backendId: "fixture", verified: true, platformLabel: "portable fixture", capabilities }; },
+    launch: async () => { throw new Error("Recovery must not launch"); }, observe: async () => ({ state: "exited", exitCode: 0 }),
+    reconcile: async () => { calls.push("reconcile"); await beforeReconcile?.(); return running ? { state: "running" } : { state: "exited", exitCode: 7 }; },
+    signal: async () => { calls.push("signal"); running = false; return { state: "exited" }; },
+    verifyEmpty: async () => { calls.push("verify"); return empty ? { empty: true } : { empty: false, detail: "Still owned" }; },
+    release: async () => { calls.push("release"); return { released: true }; },
+  };
+  const registry = createProcessBackendRegistry([createProcessBackendRegistration({ stableAdapterId: "fixture", backendId: "fixture", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), backend })]);
+  const selected = await selectProcessBackend(registry, []);
+  const store = openSqliteDurableProcessKernel(path, key);
+  const writer = Object.getOwnPropertySymbols(store).map(symbol => Object.getOwnPropertyDescriptor(store, symbol)?.value)
+    .find(value => value?.claim && value?.apply) as DurableProcessRuntimeWriter;
+  assert.ok(writer);
+  writer.claim({ schemaVersion: 2, revision: 0, logicalProcessId: "logical", invocationId: "invocation", runId: "run", taskId: "task", sessionId: "session",
+    requestFingerprint: "c".repeat(64), retryKey: "c".repeat(64), ownerId: "prior-owner", leaseExpiresAt: new Date(now.getTime() + 10).toISOString(),
+    outputOwnerId: "output-logical", outputPrepared: false, state: "prepared", history: [{ state: "prepared", at: now.toISOString() }],
+    requiredCapabilities: ["tree_termination", "verified_emptiness"], environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, escalation: [], cleanup: { state: "pending" } });
+  const apply = (command: Record<string, unknown>) => {
+    const current = store.store.readByInvocation("invocation")!;
+    return writer.apply({ ...command, invocationId: "invocation", expectedRevision: current.revision, ownerId: current.ownerId, fencingToken: current.fencingToken, at: now.toISOString() } as never);
+  };
+  apply({ type: "mark_output_prepared" });
+  apply({ type: "record_environment", environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] } });
+  apply({ type: "mark_launching" });
+  apply({ type: "bind_launch", binding: { registryId: selected.registryId, backendId: "fixture", implementationGeneration: selected.implementationGeneration,
+    implementationDigest: selected.implementationDigest, attestationVersion: 1, attestationDigest: selected.attestationDigest,
+    opaqueIdentity: "opaque", birthFingerprint: { observedAt: now.toISOString(), discriminator: "birth" }, rootPid: 123, startedAt: now.toISOString() } });
+  apply({ type: "fail", state: "outcome_unknown", detail: "Interrupted prior observation" });
+  store.store.close(); now = new Date(now.getTime() + 100);
+  const output = { ownerId: "output-logical", write: async () => {}, cleanup: async () => { calls.push("output-cleanup"); },
+    finalize: async () => { calls.push("output-finalize"); return { streams: ["stdout", "stderr"].map(stream => ({ stream, tail: "", tailBytesBase64: "", tailByteLength: 0, tailDisplayTruncated: false,
+      totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0, lossyOutput: false, lossReasons: [], spillState: "empty" })) } as never; } };
+  const kernel = createSubprocessRuntimeKernel({ registry, state: { kind: "sqlite", path }, stateKey: key,
+    clock: { now: () => now, sleep: async ms => { now = new Date(now.getTime() + ms); } },
+    environments: createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw Error("No credentials"); } }, now: () => now }),
+    outputs: { prepare: async () => output, reopen: async () => { calls.push("output-reopen"); return output; } } });
+  const authority = createExecutionGrantAuthority({ clock: () => now });
+  const request = async (action: "inspect" | "terminate" = "inspect") => {
+    const record = kernel.readOnlyStore.readByInvocation("invocation")!, binding = record.backendBinding!;
+    const scope = { invocationId: record.invocationId, runId: record.runId, logicalProcessId: record.logicalProcessId, taskId: record.taskId, sessionId: record.sessionId,
+      expectedRevision: record.revision, ownerId: record.ownerId, fencingToken: record.fencingToken,
+      backendIdentityFingerprint: durableBackendIdentityFingerprint(binding), birthFingerprint: durableBirthFingerprint(binding), action,
+      expiresAt: new Date(now.getTime() + 60_000).toISOString() };
+    const grantBinding = { runId: "run", sessionId: "session", actor: { role: "runner_internal" as const, id: "process-recovery" },
+      toolName: "process.recovery", callId: exceptionalRecoveryCallId(scope), permissionProfile: "full" as const };
+    const grant = await authority.issue({ ...grantBinding, workspacePath: root, access: [], externalApproved: false, destructiveApproved: action === "terminate", networkApproved: false });
+    return { invocationId: record.invocationId, runId: record.runId, logicalProcessId: record.logicalProcessId, taskId: record.taskId, sessionId: record.sessionId,
+      expectedRevision: record.revision, ownerId: record.ownerId, fencingToken: record.fencingToken,
+      backendIdentityFingerprint: durableBackendIdentityFingerprint(binding), birthFingerprint: durableBirthFingerprint(binding), action, userApproved: action === "terminate",
+      assertGrant: () => {}, authorization: { authority, grant, binding: grantBinding }, expiresAt: new Date(now.getTime() + 60_000).toISOString() };
+  };
+  calls.length = 0;
+  return { root, kernel, calls, request, authority, backend, setEmpty: (value: boolean) => { empty = value; },
+    setProbe: (value: () => Promise<void>) => { beforeProbe = value; }, setReconcile: (value: () => Promise<void>) => { beforeReconcile = value; } };
+}
+
+test("exceptional kernel requires an actual original-authority grant, not an approval boolean", () => fixture(async f => {
+  const r = await f.request("terminate");
+  await assert.rejects(() => f.kernel.runtime.recoverExceptional({ ...r, authorization: undefined } as unknown as ExceptionalRecoveryRequest));
+  assert.deepEqual(f.calls, []);
+}));
+test("exceptional kernel snapshots inspect action before yielding", () => fixture(async f => {
+  const r = await f.request(); f.setReconcile(async () => { r.action = "terminate"; });
+  await f.kernel.runtime.recoverExceptional(r);
+  assert.equal(f.calls.includes("signal"), false);
+}));
+test("exceptional kernel revocation while reattesting blocks later native effects", () => fixture(async f => {
+  const r = await f.request("terminate"); f.setProbe(async () => { await f.authority.revoke(r.authorization.grant, "cancelled"); });
+  await assert.rejects(() => f.kernel.runtime.recoverExceptional(r));
+  assert.equal(f.calls.includes("reconcile"), false); assert.equal(f.calls.includes("signal"), false);
+}));
+test("exceptional kernel cleanup uses the ordinary output-finalize and backend-release path", () => fixture(async f => {
+  const result = await f.kernel.runtime.recoverExceptional(await f.request("terminate"));
+  assert.equal(result.cleanup.state, "verified_empty");
+  assert.equal(f.calls.includes("output-finalize"), true); assert.equal(f.calls.includes("release"), true);
+  assert.equal(f.kernel.readOnlyStore.readByInvocation("invocation")?.state, "cleaned");
+  assert.deepEqual(f.kernel.readOnlyStore.readByInvocation("invocation")?.pendingEffects, []);
+}));
+test("exceptional kernel false emptiness is non-green and has no unconsumed verification effect", () => fixture(async f => {
+  f.setEmpty(false);
+  const result = await f.kernel.runtime.recoverExceptional(await f.request("terminate"));
+  assert.notEqual(result.cleanup.state, "verified_empty"); assert.equal(f.calls.includes("release"), false);
+  assert.deepEqual(f.kernel.readOnlyStore.readByInvocation("invocation")?.pendingEffects, []);
+}));
+test("exceptional kernel binds its grant to the original action and complete target", () => fixture(async f => {
+  const r = await f.request("terminate");
+  await assert.rejects(() => f.kernel.runtime.recoverExceptional({ ...r, action: "inspect" }));
+  assert.deepEqual(f.calls, []);
+}));
+test("exceptional kernel refuses an expired native proposal before any probe", () => fixture(async f => {
+  const r = await f.request();
+  await assert.rejects(() => f.kernel.runtime.recoverExceptional({ ...r, expiresAt: "2020-01-01T00:00:00Z" }));
+  assert.deepEqual(f.calls, []);
+}));
+test("exceptional kernel revocation after reconciliation prevents signal escalation", () => fixture(async f => {
+  const r = await f.request("terminate");
+  f.setReconcile(async () => { await f.authority.revoke(r.authorization.grant, "cancelled"); });
+  await assert.rejects(() => f.kernel.runtime.recoverExceptional(r));
+  assert.equal(f.calls.includes("signal"), false);
+}));
+
+===== runner-v2/test/process-recovery-model-free.test.ts =====
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const src = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+const read = (name: string) => fs.readFileSync(join(src, name), "utf8");
+
+const ordinaryLifecycleSources = [
+  "subprocess-runtime.ts",
+  "durable-process-store.ts",
+  "process-backend.ts",
+  "windows-process-backend.ts",
+  "posix-process-backend.ts",
+  "execution-grants.ts",
+  "execution-host.ts",
+  "one-shot-command-executor.ts",
+  "streaming-process-session-runtime.ts",
+  "session-authority.ts",
+] as const;
+
+test("ordinary process lifecycle has no model invocation dependency", () => {
+  for (const name of ordinaryLifecycleSources) {
+    const source = read(name);
+    assert.doesNotMatch(source, /\bAgentModel\b/,
+      `${name} must not import or depend on an agent model`);
+    assert.doesNotMatch(source, /createAgentProcessRecoveryGenerator/,
+      `${name} must not construct the exceptional proposal generator`);
+    assert.doesNotMatch(source, /\bmodel\s*\.\s*complete\s*\(/,
+      `${name} must not invoke a model`);
+  }
+});
+
+test("only exceptional recovery composition can construct the proposal model generator", () => {
+  const references = fs.readdirSync(src)
+    .filter((name) => name.endsWith(".ts"))
+    .filter((name) => read(name).includes("createAgentProcessRecoveryGenerator"))
+    .sort();
+  assert.deepEqual(references, ["native-build-factory.ts", "process-recovery.ts"]);
+});
+
+test("ordinary execution host never dispatches exceptional recovery implicitly", () => {
+  assert.doesNotMatch(read("execution-host.ts"), /\.recoverExceptional\s*\(/);
+  assert.doesNotMatch(read("one-shot-command-executor.ts"), /\.recoverExceptional\s*\(/);
+  assert.doesNotMatch(read("streaming-process-session-runtime.ts"), /\.recoverExceptional\s*\(/);
+});
+
+===== runner-v2/test/process-recovery.test.ts =====
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import test from "node:test";
+import { ProcessRecoveryController, createAgentProcessRecoveryGenerator, createSubprocessProcessRecoveryRuntime, recoveryScope,
+  type RecoveryAuditRecord, type RecoveryTarget, type RecoveryProposal } from "../src/process-recovery.js";
+import { createExecutionGrantAuthority } from "../src/execution-grants.js";
+import { exceptionalRecoveryCallId } from "../src/subprocess-runtime.js";
+import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+
+const now = new Date("2026-09-15T00:00:00.000Z");
+function target(state = "orphaned"): RecoveryTarget {
+  return { scope: { kind: "subprocess", runId: "run", invocationId: "invocation", logicalProcessId: "logical",
+    taskId: "task", sessionId: "session", revision: 3, ownerId: "owner", fencingToken: 2, rootPid: 123,
+    state, backendIdentity: "a".repeat(64), birthFingerprint: "b".repeat(64) },
+    owned: true, pendingEffects: false,
+    capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unverified" },
+    cleanup: { state: "pending" } };
+}
+function proposal(t: RecoveryTarget, id = "proposal"): RecoveryProposal {
+  return { version: 1, proposalId: id, callId: "recovery:" + id, scope: recoveryScope(t),
+    requestedAction: "inspect", targetScope: [t.scope.logicalProcessId], requestedCapabilities: ["verified_emptiness"],
+    expiresAt: new Date(now.getTime() + 60000).toISOString(), rationale: "Inspect exact owned process" };
+}
+function fixture(name: string, run: (f: { controller: ProcessRecoveryController; store: SqliteSchedulerStore;
+  get current(): RecoveryTarget; set current(v: RecoveryTarget); effects: string[]; generated: string[]; path: string }) => Promise<void>) {
+  test("process recovery: " + name, async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), "aiboard-task11-recovery-")); const path = join(root,"scheduler.sqlite");
+    const store = new SqliteSchedulerStore(path); let current = target(); const effects: string[] = [], generated: string[] = [];
+    store.append({ runId:"run", type:"run.initialized", actor:{role:"runner",id:"scheduler"}, occurredAt:now.toISOString(), idempotencyKey:"init",payload:{} });
+    const controller = new ProcessRecoveryController({ runId:"run", store, clock:()=>now,
+      runtime: { inspect:()=>structuredClone(current), execute:async(request, authority)=>{
+        authority.assertCurrent(); effects.push(request.requestedAction);
+        // Inspection observes; only a terminate effect may ever report proven emptiness.
+        return request.requestedAction === "terminate"
+          ? { observation:"exited" as const, cleanup:{state:"verified_empty" as const, verifiedAt: now.toISOString()} }
+          : { observation:"running" as const, cleanup:{state:"pending" as const} };
+      } }, generate:async()=>{generated.push("model"); return proposal(current);} });
+    let passed=false;
+    try { await run({controller,store,get current(){return current;},set current(v){current=v;},effects,generated,path});passed=true; }
+    finally { store.close(); if(passed)fs.rmSync(root,{recursive:true,force:true}); else console.error("Task11 RED root retained: "+root); }
+  });
+}
+for(const state of ["prepared","launching","running","stopping","exited","verifying_empty","cleaned","cleanup_blocked"])
+  fixture("routine state " + state + " cannot call a model or effect", async f=>{
+    f.current=target(state);
+    await assert.rejects(()=>f.controller.generate("invocation","proposal"),{code:"routine_recovery_forbidden"});
+    await assert.rejects(()=>f.controller.submit(proposal(f.current)),{code:"routine_recovery_forbidden"});
+    assert.deepEqual(f.generated,[]);assert.deepEqual(f.effects,[]);
+  });
+for(const state of ["orphaned","identity_mismatch","backend_unavailable","outcome_unknown"])
+  fixture("exceptional " + state + " accepts only a validated proposal",async f=>{
+    f.current=target(state); const receipt=await f.controller.submit(proposal(f.current));
+    assert.equal(receipt.state,"authorized"); assert.deepEqual(f.effects,[]);
+    const result=await f.controller.execute("proposal",receipt.proposalFingerprint);
+    assert.equal(result.state,"executed");assert.deepEqual(f.effects,["inspect"]);
+  });
+for(const field of ["runId","taskId","sessionId","invocationId","logicalProcessId","ownerId","revision","fencingToken","backendIdentity","birthFingerprint","rootPid"] as const)
+  fixture("changed " + field + " is rejected before execution",async f=>{
+    const p=proposal(f.current); const v=p.scope[field];
+    const changed={...p,scope:{...p.scope,[field]:typeof v==="number"?v+1:"different"}};
+    await assert.rejects(()=>f.controller.submit(changed),{code:"recovery_scope_mismatch"});assert.deepEqual(f.effects,[]);
+  });
+fixture("same PID with recycled birth invalidates an authorized action",async f=>{
+  const receipt=await f.controller.submit(proposal(f.current));
+  f.current={...f.current,scope:{...f.current.scope,birthFingerprint:"c".repeat(64)}};
+  assert.equal((await f.controller.execute("proposal",receipt.proposalFingerprint)).state,"rejected");assert.deepEqual(f.effects,[]);
+});
+fixture("destructive action pauses and binds exact local-user approval",async f=>{
+  const p={...proposal(f.current),requestedAction:"terminate" as const,requestedCapabilities:["tree_termination" as const,"verified_emptiness" as const]};
+  const r=await f.controller.submit(p);assert.equal(r.state,"user_decision_required");
+  await assert.rejects(()=>f.controller.execute(p.proposalId,r.proposalFingerprint),{code:"recovery_approval_required"});
+  await assert.rejects(()=>f.controller.decide(p.proposalId,"0".repeat(64),"approve"),{code:"recovery_scope_mismatch"});
+  await f.controller.decide(p.proposalId,r.proposalFingerprint,"approve");
+  assert.equal((await f.controller.execute(p.proposalId,r.proposalFingerprint)).state,"executed");assert.deepEqual(f.effects,["terminate"]);
+});
+for(const invalid of ["expired","scope","call","shell","capability","ownership","identity","pending"])
+  fixture("rejects " + invalid + " authority",async f=>{
+    const p: Record<string,unknown>=proposal(f.current) as unknown as Record<string,unknown>;
+    if(invalid==="expired")p.expiresAt=now.toISOString();
+    if(invalid==="scope")p.targetScope=["logical","other"];
+    if(invalid==="call")p.callId="different";
+    if(invalid==="shell")p.command="powershell -Command Remove-Item *";
+    if(invalid==="capability")f.current={...f.current,capabilities:{...f.current.capabilities,verified_emptiness:"unverified"}};
+    if(invalid==="ownership")f.current={...f.current,owned:false};
+    if(invalid==="identity")f.current={...f.current,scope:{...f.current.scope,backendIdentity:""}};
+    if(invalid==="pending")f.current={...f.current,pendingEffects:true};
+    await assert.rejects(()=>f.controller.submit(p));assert.deepEqual(f.effects,[]);
+  });
+fixture("durable replay executes at most once and stores no raw model secrets",async f=>{
+  const secret="unusual-password-without-a-known-prefix";
+  const r=await f.controller.submit({...proposal(f.current),rationale:secret});
+  await f.controller.execute("proposal",r.proposalFingerprint);
+  const restarted=new ProcessRecoveryController({runId:"run",store:f.store,clock:()=>now,
+    runtime:{inspect:()=>f.current,execute:async()=>{throw Error("must not replay");}}});
+  assert.equal((await restarted.execute("proposal",r.proposalFingerprint)).state,"executed");
+  assert.deepEqual(f.effects,["inspect"]);
+  assert.equal(JSON.stringify(f.store.readRun("run")).includes(secret),false);
+  assert.equal(fs.readFileSync(f.path).includes(Buffer.from(secret)),false);
+});
+// Task11.SPEC.pending-cleanup-not-success
+fixture("a terminate whose cleanup stays pending is never reported as executed",async f=>{
+  const store=f.store; const inspected=structuredClone(f.current);
+  const controller=new ProcessRecoveryController({runId:"run",store,clock:()=>now,
+    runtime:{inspect:()=>structuredClone(inspected),execute:async()=>({observation:"running",cleanup:{state:"pending"}})}});
+  const p={...proposal(f.current,"pending-terminate"),requestedAction:"terminate" as const,
+    requestedCapabilities:["tree_termination" as const,"verified_emptiness" as const]};
+  const r=await controller.submit(p);
+  await controller.decide(p.proposalId,r.proposalFingerprint,"approve");
+  const done=await controller.execute(p.proposalId,r.proposalFingerprint);
+  assert.equal(done.state,"outcome_unknown");
+  assert.equal(done.reason,"effect_outcome_unknown");
+  assert.equal(done.cleanupState,"pending");
+  // An unresolved destructive recovery blocks resume and completion.
+  assert.throws(()=>store.append({runId:"run",type:"run.resumed",actor:{role:"runner",id:"scheduler"},
+    occurredAt:now.toISOString(),idempotencyKey:"resume-blocked",payload:{}}),/Unresolved exceptional recovery/);
+});
+// Task11.SPEC.missing-backend-identity
+fixture("a process with no durable backend identity refuses every action",async f=>{
+  const p=proposal(f.current); // Captured while identity was still provable.
+  f.current={...f.current,scope:{...f.current.scope,backendIdentity:"",birthFingerprint:""}};
+  await assert.rejects(()=>f.controller.submit(p),{code:"recovery_identity_unavailable"});
+  await assert.rejects(()=>f.controller.generate("invocation","proposal"),{code:"recovery_identity_unavailable"});
+  // An all-empty identity cannot even be expressed as a closed proposal.
+  await assert.rejects(()=>f.controller.submit({...p,scope:{...p.scope,backendIdentity:""}}),
+    {code:"invalid_recovery_proposal"});
+  assert.deepEqual(f.effects,[]);assert.deepEqual(f.generated,[]);
+});
+// Task11.SPEC.model-failure-no-effect
+fixture("a failing generator yields a typed refusal and no durable record",async f=>{
+  const controller=new ProcessRecoveryController({runId:"run",store:f.store,clock:()=>now,
+    runtime:{inspect:()=>structuredClone(f.current),execute:async()=>{throw Error("must not execute");}},
+    generate:async()=>{throw Error("provider exploded with token sk-live-DEADBEEF");}});
+  await assert.rejects(()=>controller.generate("invocation","from-model"),{code:"recovery_model_failed"});
+  assert.equal(Object.keys(controller.records()).length,0);
+  assert.equal(JSON.stringify(f.store.readRun("run")).includes("sk-live-DEADBEEF"),false);
+});
+// Task11.SPEC.generated-scope-must-match
+fixture("a generator may not widen or retarget the validated scope",async f=>{
+  const controller=new ProcessRecoveryController({runId:"run",store:f.store,clock:()=>now,
+    runtime:{inspect:()=>structuredClone(f.current),execute:async()=>{throw Error("must not execute");}},
+    generate:async()=>({...proposal(f.current,"widened"),targetScope:["logical","another-process"]})});
+  await assert.rejects(()=>controller.generate("invocation","widened"),{code:"recovery_scope_mismatch"});
+  assert.equal(Object.keys(controller.records()).length,0);
+});
+// Task11.SPEC.concurrent-execution-claim
+fixture("concurrent execution requests share one durable claim",async f=>{
+  let entered=0; let release=()=>{};
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const controller=new ProcessRecoveryController({runId:"run",store:f.store,clock:()=>now,
+    runtime:{inspect:()=>structuredClone(f.current),execute:async()=>{
+      entered+=1; await gate; return {observation:"running",cleanup:{state:"pending"}};}}});
+  const r=await controller.submit(proposal(f.current,"concurrent"));
+  const runs=[controller.execute("concurrent",r.proposalFingerprint),
+    controller.execute("concurrent",r.proposalFingerprint),
+    controller.execute("concurrent",r.proposalFingerprint)];
+  release();
+  const settled=await Promise.all(runs);
+  assert.equal(entered,1);
+  for(const value of settled) assert.equal(value.state,"executed");
+});
+// Task11.SPEC.restart-inflight-becomes-unknown
+fixture("an in-flight claim observed after restart becomes outcome_unknown and never replays",async f=>{
+  const r=await f.controller.submit(proposal(f.current,"inflight"));
+  let started=0;
+  const crashing=new ProcessRecoveryController({runId:"run",store:f.store,clock:()=>now,
+    runtime:{inspect:()=>structuredClone(f.current),execute:async()=>{started+=1;throw Error("runner died mid-effect");}}});
+  assert.equal((await crashing.execute("inflight",r.proposalFingerprint)).state,"outcome_unknown");
+  const restarted=new ProcessRecoveryController({runId:"run",store:f.store,clock:()=>now,
+    runtime:{inspect:()=>structuredClone(f.current),execute:async()=>{started+=1;return {observation:"running",cleanup:{state:"pending"}};}}});
+  assert.equal((await restarted.execute("inflight",r.proposalFingerprint)).state,"outcome_unknown");
+  assert.equal(started,1);
+});
+
+// Task11.SPEC.native-grant-adapter
+test("process recovery: subprocess adapter issues one exact native recovery grant and revokes it", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "aiboard-task11-adapter-"));
+  const executionGrants = createExecutionGrantAuthority({ clock: () => now });
+  const t = target(); const expiresAt = new Date(now.getTime() + 60_000).toISOString();
+  let observed = false;
+  const runtime = createSubprocessProcessRecoveryRuntime({
+    runtime: { recoverExceptional: async (request) => {
+      observed = true;
+      const active = executionGrants.activeSnapshots(); assert.equal(active.length, 1);
+      assert.equal(active[0]!.toolName, "process.recovery");
+      assert.equal(active[0]!.callId, exceptionalRecoveryCallId({ ...request, authorization: undefined, assertGrant: undefined, userApproved: undefined } as never));
+      assert.deepEqual(active[0]!.access, []); assert.equal(active[0]!.networkApproved, false);
+      return { invocationId: request.invocationId, state: "outcome_unknown", observation: "running",
+        cleanup: { state: "pending" }, identityProof: request.backendIdentityFingerprint, revision: request.expectedRevision };
+    } }, store: { readByInvocation: () => ({}) as never }, capabilities: () => t.capabilities,
+    canRecoverExceptional: () => true,
+    executionGrants, permissionProfile: "full", workspacePath: root,
+  });
+  const audit = { requestedAction: "inspect", scope: t.scope, expiresAt } as RecoveryAuditRecord;
+  try {
+    const result = await runtime.execute(audit, { userApproved: false, signal: new AbortController().signal, assertCurrent() {} });
+    assert.equal(observed, true); assert.equal(result.observation, "running");
+    assert.deepEqual(executionGrants.activeSnapshots(), []);
+  } finally { await executionGrants.revokeAll("cleanup"); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Task11.SPEC.kernel-owned-recoverability
+ test("process recovery: adapter never invents ownership when the shared kernel refuses recovery", () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "aiboard-task11-ownership-"));
+  const executionGrants = createExecutionGrantAuthority({ clock: () => now });
+  const binding = {
+    registryId: "registry", backendId: "backend", implementationGeneration: "generation",
+    implementationDigest: "1".repeat(64), attestationVersion: 1, attestationDigest: "2".repeat(64),
+    capabilities: target().capabilities, opaqueIdentity: "opaque",
+    birthFingerprint: { observedAt: now.toISOString(), discriminator: "birth" },
+    rootPid: 123, startedAt: now.toISOString(),
+  };
+  const record = {
+    runId: "run", invocationId: "invocation", logicalProcessId: "logical", taskId: "task", sessionId: "session",
+    revision: 3, ownerId: "other-owner", fencingToken: 2,
+    leaseExpiresAt: new Date(now.getTime() + 60_000).toISOString(), state: "orphaned",
+    pendingEffects: [], cleanup: { state: "pending" }, requiredCapabilities: ["verified_emptiness"], backendBinding: binding,
+  } as never;
+  try {
+    const runtime = createSubprocessProcessRecoveryRuntime({
+      runtime: { recoverExceptional: async () => { throw Error("must not execute"); } },
+      store: { readByInvocation: () => record }, capabilities: () => target().capabilities,
+      canRecoverExceptional: () => false,
+      executionGrants, permissionProfile: "full", workspacePath: root,
+    });
+    assert.equal(runtime.inspect("invocation")?.owned, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Task11.SPEC.closed-model-generator
+test("process recovery: model generator cannot author scope, target, call identity or expiry", async () => {
+  const seen: unknown[] = [];
+  const generate = createAgentProcessRecoveryGenerator({
+    model: { complete: async request => { seen.push(request); return { stopReason: "end_turn" as const, blocks: [{ type: "text" as const,
+      text: JSON.stringify({ requestedAction: "inspect", requestedCapabilities: ["verified_emptiness"], rationale: "Inspect the exact exceptional process" }) }] }; } },
+    clock: () => now,
+  });
+  const t = target("orphaned");
+  const value = await generate(recoveryScope(t), "model-proposal", new AbortController().signal) as RecoveryProposal;
+  assert.equal(value.proposalId, "model-proposal");
+  assert.equal(value.callId, "recovery:model-proposal");
+  assert.deepEqual(value.scope, recoveryScope(t));
+  assert.deepEqual(value.targetScope, ["logical"]);
+  assert.equal(value.expiresAt, new Date(now.getTime() + 60_000).toISOString());
+  const request = seen[0] as { tools: unknown[]; messages: Array<{ content: string }> };
+  assert.deepEqual(request.tools, []);
+  assert.equal(request.messages.some(message => message.content.includes("sk-live")), false);
+});
+
+test("process recovery: model generator rejects extra command/scope authority", async () => {
+  const generate = createAgentProcessRecoveryGenerator({ model: { complete: async () => ({ stopReason: "end_turn" as const, blocks: [{ type: "text" as const,
+    text: JSON.stringify({ requestedAction: "terminate", requestedCapabilities: ["tree_termination"], rationale: "stop", command: "taskkill /F", targetScope: ["other"] }) }] }) }, clock: () => now });
+  await assert.rejects(() => generate(recoveryScope(target()), "bad-model", new AbortController().signal), { code: "invalid_recovery_proposal" });
+});
+

@@ -1,0 +1,34 @@
+{
+  "pid": 47856,
+  "identity": {
+    "Id": 47856,
+    "StartTimeUtc": "2026-09-14T15:25:45.6961334Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T15:25:45.733Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\integration-concurrency-recheck.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^concurrent managers cannot delete the winning post-ref crash journal$",
+    "runner-v2/test/integration-manager.test.ts"
+  ],
+  "spec": {
+    "id": "integration-concurrency-recheck",
+    "pattern": "^concurrent managers cannot delete the winning post-ref crash journal$",
+    "tests": [
+      "runner-v2/test/integration-manager.test.ts"
+    ]
+  }
+}

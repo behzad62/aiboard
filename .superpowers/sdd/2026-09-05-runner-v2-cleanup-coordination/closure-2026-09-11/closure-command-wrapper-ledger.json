@@ -1,0 +1,126 @@
+{
+  "observedAt": "2026-09-11T10:22:10.5041249Z",
+  "method": "Read only exact process IDs recorded in this closure packet; compare start identity where recorded. No process control.",
+  "entries": [
+    {
+      "handle": "full-runner-accepted-handle.json",
+      "recordedProcessId": 57728,
+      "terminalReceiptPresent": true,
+      "exitCode": 0,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "full-runner-final-handle.json",
+      "recordedProcessId": 56328,
+      "terminalReceiptPresent": true,
+      "exitCode": 0,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "full-runner-handle.json",
+      "recordedProcessId": 52812,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "linux-native-final-handle.json",
+      "recordedProcessId": 58044,
+      "terminalReceiptPresent": true,
+      "exitCode": 0,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "prior-cli-recovery-handle.json",
+      "recordedProcessId": 56648,
+      "terminalReceiptPresent": false,
+      "exitCode": null,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "prior-cli-recovery2-handle.json",
+      "recordedProcessId": 5356,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "prior-cli-recovery3-handle.json",
+      "recordedProcessId": 11668,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "remaining-gates-handle.json",
+      "recordedProcessId": 56932,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "remaining-safety-native-handle.json",
+      "recordedProcessId": 33988,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "semantic-native-final-handle.json",
+      "recordedProcessId": 51708,
+      "terminalReceiptPresent": true,
+      "exitCode": 0,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "strict-oci-after-recovery-handle.json",
+      "recordedProcessId": 59088,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "strict-oci-final-handle.json",
+      "recordedProcessId": 45524,
+      "terminalReceiptPresent": true,
+      "exitCode": 0,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "windows-contained-corrected-handle.json",
+      "recordedProcessId": 31928,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "windows-control-aligned-handle.json",
+      "recordedProcessId": 57564,
+      "terminalReceiptPresent": true,
+      "exitCode": 0,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    },
+    {
+      "handle": "windows-finalizers-native-handle.json",
+      "recordedProcessId": 56824,
+      "terminalReceiptPresent": true,
+      "exitCode": 1,
+      "observedProcessPresent": false,
+      "exactStartIdentityStillPresent": false
+    }
+  ]
+}

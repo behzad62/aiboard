@@ -15,15 +15,26 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 
 const defaults = normalizeBuildSettings({});
 check("default policy is finish", defaults.runPolicy === "finish", defaults);
+check(
+  "independent verification is not forced for low-risk builds by default",
+  defaults.alwaysRequireIndependentVerifier === false,
+  defaults
+);
 check("default USD budget is unlimited", defaults.budgetUsd === 0, defaults);
 check("default time limit is 2 hours", defaults.timeLimitMinutes === DEFAULT_BUILD_TIME_LIMIT_MINUTES, defaults);
 
 const clamped = normalizeBuildSettings({
   buildRunPolicy: "not-real",
+  buildAlwaysRequireIndependentVerifier: "not-a-boolean",
   buildBudgetUsd: -4,
   buildTimeLimitMinutes: -30,
 });
 check("invalid policy falls back to finish", clamped.runPolicy === "finish", clamped);
+check(
+  "invalid independent-verifier override falls back to false",
+  clamped.alwaysRequireIndependentVerifier === false,
+  clamped
+);
 check("negative USD budget is unlimited", clamped.budgetUsd === 0, clamped);
 check("negative time limit is unlimited", clamped.timeLimitMinutes === 0, clamped);
 check("zero budget is unlimited", isBuildBudgetUnlimited(0), clamped);
@@ -69,6 +80,15 @@ check("time budget stops at threshold", timeStop === "time", timeStop);
 check(
   "invalid policy label falls back to finish",
   buildRunPolicyLabel("not-real") === "Finish job"
+);
+
+const stricterQualification = normalizeBuildSettings({
+  buildAlwaysRequireIndependentVerifier: true,
+});
+check(
+  "a run can explicitly strengthen independent verification",
+  stricterQualification.alwaysRequireIndependentVerifier === true,
+  stricterQualification
 );
 
 const finishWithBudget = shouldStopForBuildGuardrail({

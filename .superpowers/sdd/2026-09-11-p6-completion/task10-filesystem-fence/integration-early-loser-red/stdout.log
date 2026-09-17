@@ -1,0 +1,18 @@
+C5 CLI root: {"event":"created","path":"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-cyIUZx"}
+CAUSAL: loser rejected before update-ref callback Error: The project changed during automatic handoff.
+✖ concurrent managers cannot delete the winning post-ref crash journal (15007.3306ms)
+C5 CLI root: {"event":"exit","path":"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-cyIUZx","existsAtExit":true}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15856.1889
+
+✖ failing tests:
+
+test at .superpowers\sdd\2026-09-11-p6-completion\task10-filesystem-fence\integration-early-loser.probe.test.ts:2:19773
+✖ concurrent managers cannot delete the winning post-ref crash journal (15007.3306ms)
+  'test timed out after 15000ms'

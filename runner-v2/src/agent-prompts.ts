@@ -9,6 +9,10 @@ import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
 import type { SkillDocument } from "./skill-catalog.js";
 import type { BuildTask } from "./task-contracts.js";
+import type {
+  AcceptanceCriterion,
+  CriterionEvidenceLink,
+} from "./acceptance-contracts.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -16,6 +20,14 @@ export const RUNNER_KERNEL_INVARIANTS = [
   "The Architect owns task meaning, review decisions, integration intent, and completion.",
   "The kernel enforces mechanics and permissions only; it does not reinterpret intent.",
   "Inspect current repository state before editing and preserve unrelated user changes.",
+].join("\n");
+
+export const VERIFIER_AUTHORITY_INVARIANTS = [
+  "You are an independent AIBoard verifier inspecting one exact integrated revision.",
+  "Treat the immutable objective, criterion identities, guidance, accepted change history, reviews, risk reasons, and final-verification facts as protected input.",
+  "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
+  "Use only the provided read-only inspection tools. Provider prose and this inspection transcript never complete work.",
+  "In inspection-only mode, finish with a concise evidence-grounded summary; the kernel-owned typed verdict tool is added separately.",
 ].join("\n");
 
 export interface PromptEvidence {
@@ -44,6 +56,10 @@ export interface BuildWorkerContextInput {
 }
 
 export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack {
+  return new ContextAssembler(input.limits).assemble(workerContextSections(input));
+}
+
+export function workerContextSections(input: BuildWorkerContextInput): ContextSection[] {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("current-task", "task", JSON.stringify(input.task, null, 2)),
@@ -101,7 +117,7 @@ export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack 
   for (const [index, history] of input.recentHistory.entries()) {
     sections.push(optional(`history:${index + 1}`, "history", 100, history));
   }
-  return new ContextAssembler(input.limits).assemble(sections);
+  return sections;
 }
 
 export interface BuildArchitectContextInput {
@@ -126,11 +142,53 @@ export interface ArchitectReviewSubmission {
   changedPaths: string[];
   diffArtifactHash: string;
   evidenceArtifactHashes: string[];
+  acceptanceCriteria?: AcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  criterionEvidenceLinks?: CriterionEvidenceLink[];
+}
+
+export interface BuildVerifierContextInput {
+  limits: ContextLimits;
+  objective: string;
+  targetRevision: string;
+  criteria: readonly unknown[];
+  reviews: readonly unknown[];
+  guidance: readonly unknown[];
+  changes: readonly unknown[];
+  finalVerification: unknown;
+  riskReasons: readonly unknown[];
+}
+
+export function buildVerifierContext(
+  input: BuildVerifierContextInput
+): ContextPack {
+  return new ContextAssembler(input.limits).assemble([
+    required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("verifier-authority", "system", VERIFIER_AUTHORITY_INVARIANTS),
+    required("build-objective", "user-intent", input.objective),
+    required("integration-revision", "revision", input.targetRevision),
+    required("build-criteria", "criteria", JSON.stringify(input.criteria, null, 2)),
+    required("accepted-reviews", "reviews", JSON.stringify(input.reviews, null, 2)),
+    required("durable-guidance", "guidance", JSON.stringify(input.guidance, null, 2)),
+    required("accepted-change-history", "changes", JSON.stringify(input.changes, null, 2)),
+    required(
+      "final-verification",
+      "final-verification",
+      JSON.stringify(input.finalVerification, null, 2)
+    ),
+    required("risk-reasons", "risk", JSON.stringify(input.riskReasons, null, 2)),
+  ]);
 }
 
 export function buildArchitectContext(
   input: BuildArchitectContextInput
 ): ContextPack {
+  return new ContextAssembler(input.limits).assemble(architectContextSections(input));
+}
+
+export function architectContextSections(
+  input: BuildArchitectContextInput,
+): ContextSection[] {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("build-objective", "user-intent", input.objective),
@@ -141,10 +199,18 @@ export function buildArchitectContext(
       JSON.stringify(
         {
           status: input.projection.status,
+          initialObjective: input.projection.initialObjective ?? input.objective,
           planRevision: input.projection.planRevision,
           tasks: input.projection.tasks,
           guidance: input.projection.guidance,
+          userGuidance: input.projection.userGuidance,
+          userGuidanceVersion: input.projection.userGuidanceVersion,
+          architectQuestions: input.projection.architectQuestions,
+          architectQuestionVersion: input.projection.architectQuestionVersion,
+          blockingArchitectQuestionId: input.projection.blockingArchitectQuestionId ?? null,
           reviews: input.projection.reviews,
+          integrationRevision: input.projection.integrationRevision,
+          finalVerification: input.projection.finalVerification ?? null,
         },
         null,
         2
@@ -200,7 +266,7 @@ export function buildArchitectContext(
   for (const [index, history] of input.recentHistory.entries()) {
     sections.push(optional(`history:${index + 1}`, "history", 100, history));
   }
-  return new ContextAssembler(input.limits).assemble(sections);
+  return sections;
 }
 
 function required(id: string, kind: string, content: string): ContextSection {

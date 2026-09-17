@@ -1,0 +1,24 @@
+{
+  "id": "review-fixes-green-2",
+  "startedAt": "2026-09-14T22:10:58.143Z",
+  "finishedAt": "2026-09-14T22:10:59.825Z",
+  "wrapperPid": 41872,
+  "testPid": 48056,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 440,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "rootCount": 41,
+  "retainedRoots": []
+}

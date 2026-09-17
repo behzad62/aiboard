@@ -1,0 +1,6 @@
+{
+  "id": "lsp-revision-red",
+  "tests": [
+    "runner-v2/test/lsp-real-host.test.ts"
+  ]
+}

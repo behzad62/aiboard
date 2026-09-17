@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   TaskScheduler,
@@ -32,7 +33,26 @@ class DeferredDriver implements WorkerRuntimeDriver {
 
 test("scheduler bounds concurrency, respects dependencies, and releases guidance slots", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-"));
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const evidence = evidenceStore.record({
+    runId: "run_1",
+    taskId: "a",
+    actor: { role: "worker", id: "worker_a_1" },
+    fact: {
+      kind: "browser_screenshot",
+      label: "Task a evidence",
+      capturedAt: "2026-07-12T00:00:00.000Z",
+      screenshotArtifactHash: "a".repeat(64),
+      mediaType: "image/png",
+      byteLength: 16,
+    },
+    createdAt: "2026-07-12T00:00:00.000Z",
+    idempotencyKey: "task-a-evidence",
+    attempt: 1,
+  });
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    evidenceStore,
+  });
   const driver = new DeferredDriver();
   try {
     store.append(planEvent("run_1", [
@@ -74,13 +94,22 @@ test("scheduler bounds concurrency, respects dependencies, and releases guidance
     assert.equal(scheduler.activeCount(), 1);
     assert.equal(scheduler.projection().guidance.guidance_b.status, "open");
 
-    driver.resolve("a", { type: "submitted", changeSetId: "changeset_a" });
+    driver.resolve("a", {
+      type: "submitted",
+      changeSetId: "changeset_a",
+      criterionEvidenceLinks: [{
+        criterionId: "ready",
+        evidenceId: evidence.id,
+        artifactHashes: ["a".repeat(64)],
+      }],
+    });
     await waitFor(() => scheduler.projection().tasks.a.status === "submitted");
     transitionToIntegrated(store, "run_1", "a");
     await scheduler.tick();
     assert.equal(driver.assignments.at(-1)?.task.id, "c");
   } finally {
     store.close();
+    evidenceStore.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -149,6 +178,39 @@ test("scheduler threads the active lifecycle signal and absolute retry deadline"
   }
 });
 
+test("an aborted active worker cannot persist a stale outcome or consume another attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-steering-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const driver = new DeferredDriver();
+  const controller = new AbortController();
+  try {
+    store.append(planEvent("run_1", [task("a")]));
+    const scheduler = new TaskScheduler({
+      runId: "run_1",
+      store,
+      driver,
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/work/a",
+      lifecycleSignal: () => controller.signal,
+    });
+    await scheduler.tick();
+    assert.equal(scheduler.projection().tasks.a.attempt, 1);
+
+    controller.abort(new DOMException("User guidance arrived.", "AbortError"));
+    driver.resolve("a", { type: "submitted", changeSetId: "stale-change-set" });
+    await scheduler.awaitIdle();
+
+    const projection = scheduler.projection();
+    assert.equal(projection.status, "running");
+    assert.equal(projection.tasks.a.status, "running");
+    assert.equal(projection.tasks.a.attempt, 1);
+    assert.equal(projection.tasks.a.changeSetId, undefined);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function planEvent(runId: string, tasks: BuildTask[]) {
   return {
     runId,
@@ -165,6 +227,11 @@ function task(id: string, dependencies: string[] = []): BuildTask {
     id,
     objective: `Objective ${id}`,
     dependencies,
+    acceptanceCriteria: [{
+      id: "ready",
+      text: `Task ${id} is complete.`,
+    }],
+    acceptanceCriteriaVersion: 1,
     status: "planned",
     requiredCapabilities: [],
     attempt: 0,

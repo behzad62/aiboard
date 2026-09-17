@@ -1,0 +1,24 @@
+{
+  "id": "grant-disclosure-red",
+  "startedAt": "2026-09-15T14:53:17.780Z",
+  "finishedAt": "2026-09-15T14:53:18.473Z",
+  "wrapperPid": 53024,
+  "testPid": 56096,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 448,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery-disclosure.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

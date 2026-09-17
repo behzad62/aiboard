@@ -1,0 +1,747 @@
+{
+  "created": 48,
+  "absentAtTerminalCopy": 47,
+  "copiedNoLaunchDiagnostics": [
+    "/tmp/aiboard-git-inspection-cpIddP"
+  ],
+  "containerRemoved": true,
+  "containerId": "640ed88b388ab81138127c2bb50cad461c4b0fc37a07c1ea1a0ae278affbfaa2",
+  "roots": [
+    {
+      "path": "/tmp/p6-git-grant-NLPKNO",
+      "events": [
+        {
+          "line": 3,
+          "event": "created"
+        },
+        {
+          "line": 147,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-hjJHoO",
+      "events": [
+        {
+          "line": 20,
+          "event": "created"
+        },
+        {
+          "line": 148,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-nLmEBP",
+      "events": [
+        {
+          "line": 21,
+          "event": "created"
+        },
+        {
+          "line": 149,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-kiidEP",
+      "events": [
+        {
+          "line": 30,
+          "event": "created"
+        },
+        {
+          "line": 150,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-BLEcHP",
+      "events": [
+        {
+          "line": 39,
+          "event": "created"
+        },
+        {
+          "line": 151,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-CHOGKP",
+      "events": [
+        {
+          "line": 48,
+          "event": "created"
+        },
+        {
+          "line": 152,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-dNOCMP",
+      "events": [
+        {
+          "line": 57,
+          "event": "created"
+        },
+        {
+          "line": 153,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-pLjCOP",
+      "events": [
+        {
+          "line": 66,
+          "event": "created"
+        },
+        {
+          "line": 154,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-iFjLfP",
+      "events": [
+        {
+          "line": 75,
+          "event": "created"
+        },
+        {
+          "line": 155,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-kkDJiP",
+      "events": [
+        {
+          "line": 84,
+          "event": "created"
+        },
+        {
+          "line": 156,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-HJCnkP",
+      "events": [
+        {
+          "line": 93,
+          "event": "created"
+        },
+        {
+          "line": 157,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-GklkmP",
+      "events": [
+        {
+          "line": 102,
+          "event": "created"
+        },
+        {
+          "line": 158,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-nKGNoP",
+      "events": [
+        {
+          "line": 111,
+          "event": "created"
+        },
+        {
+          "line": 159,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-NIjLAa",
+      "events": [
+        {
+          "line": 120,
+          "event": "created"
+        },
+        {
+          "line": 160,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-mDFJCa",
+      "events": [
+        {
+          "line": 129,
+          "event": "created"
+        },
+        {
+          "line": 161,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-grant-mlhGMb",
+      "events": [
+        {
+          "line": 138,
+          "event": "created"
+        },
+        {
+          "line": 162,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-bootstrap-hCLMEJ",
+      "events": [
+        {
+          "line": 163,
+          "event": "created"
+        },
+        {
+          "line": 202,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-bootstrap-DkakjJ",
+      "events": [
+        {
+          "line": 172,
+          "event": "created"
+        },
+        {
+          "line": 203,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-bootstrap-DLNMDK",
+      "events": [
+        {
+          "line": 181,
+          "event": "created"
+        },
+        {
+          "line": 204,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-history-MdgnNK",
+      "events": [
+        {
+          "line": 190,
+          "event": "created"
+        },
+        {
+          "line": 205,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/aiboard-git-inspection-KPDehK",
+      "events": [
+        {
+          "line": 191,
+          "event": "created"
+        },
+        {
+          "line": 206,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/aiboard-git-inspection-AAlePN",
+      "events": [
+        {
+          "line": 192,
+          "event": "created"
+        },
+        {
+          "line": 207,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/aiboard-git-inspection-cpIddP",
+      "events": [
+        {
+          "line": 193,
+          "event": "created"
+        },
+        {
+          "line": 208,
+          "event": "exit",
+          "existsAtExit": true
+        }
+      ],
+      "presentInCopiedTerminalTmp": true,
+      "noLaunchProof": {
+        "databases": [
+          "runtime/streaming-sessions.sqlite",
+          "runtime/subprocess-runtime.sqlite"
+        ],
+        "processAndSessionRows": {
+          "streaming_host_launches": 0,
+          "streaming_output_checkpoints": 0,
+          "streaming_sessions": 0,
+          "durable_processes": 0
+        },
+        "issuedWorkloads": 0,
+        "method": "read-only exact retained fixture databases; no migration, reset, signal or deletion"
+      },
+      "classification": "copied intentional no-launch diagnostic; stopped label-verified container subsequently removed"
+    },
+    {
+      "path": "/tmp/p6-git-caller-MADNPk",
+      "events": [
+        {
+          "line": 227,
+          "event": "created"
+        },
+        {
+          "line": 251,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-baseline-guard-ddKijk",
+      "events": [
+        {
+          "line": 236,
+          "event": "created"
+        },
+        {
+          "line": 252,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-control-cBLNlK",
+      "events": [
+        {
+          "line": 253,
+          "event": "created"
+        },
+        {
+          "line": 271,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-control-doLgfN",
+      "events": [
+        {
+          "line": 262,
+          "event": "created"
+        },
+        {
+          "line": 272,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-AoChDh",
+      "events": [
+        {
+          "line": 273,
+          "event": "created"
+        },
+        {
+          "line": 399,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-efPbdh",
+      "events": [
+        {
+          "line": 282,
+          "event": "created"
+        },
+        {
+          "line": 400,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-FCmcih",
+      "events": [
+        {
+          "line": 291,
+          "event": "created"
+        },
+        {
+          "line": 401,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-enaLnh",
+      "events": [
+        {
+          "line": 300,
+          "event": "created"
+        },
+        {
+          "line": 402,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-FNKNKi",
+      "events": [
+        {
+          "line": 309,
+          "event": "created"
+        },
+        {
+          "line": 403,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-pCFKPi",
+      "events": [
+        {
+          "line": 318,
+          "event": "created"
+        },
+        {
+          "line": 404,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-lepFfi",
+      "events": [
+        {
+          "line": 327,
+          "event": "created"
+        },
+        {
+          "line": 405,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-mOPIki",
+      "events": [
+        {
+          "line": 336,
+          "event": "created"
+        },
+        {
+          "line": 406,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-DdbCoi",
+      "events": [
+        {
+          "line": 345,
+          "event": "created"
+        },
+        {
+          "line": 407,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-EKbbHj",
+      "events": [
+        {
+          "line": 354,
+          "event": "created"
+        },
+        {
+          "line": 408,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-cdgIMj",
+      "events": [
+        {
+          "line": 363,
+          "event": "created"
+        },
+        {
+          "line": 409,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-EPMHaj",
+      "events": [
+        {
+          "line": 372,
+          "event": "created"
+        },
+        {
+          "line": 410,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-IknFgj",
+      "events": [
+        {
+          "line": 381,
+          "event": "created"
+        },
+        {
+          "line": 411,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-git-context-JIImkj",
+      "events": [
+        {
+          "line": 390,
+          "event": "created"
+        },
+        {
+          "line": 412,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-command-capture-fbgffB",
+      "events": [
+        {
+          "line": 557,
+          "event": "created"
+        },
+        {
+          "line": 602,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-command-capture-acodAC",
+      "events": [
+        {
+          "line": 566,
+          "event": "created"
+        },
+        {
+          "line": 603,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-command-capture-EBFFDC",
+      "events": [
+        {
+          "line": 575,
+          "event": "created"
+        },
+        {
+          "line": 604,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-command-capture-fKnBGC",
+      "events": [
+        {
+          "line": 584,
+          "event": "created"
+        },
+        {
+          "line": 605,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-command-capture-dONoHC",
+      "events": [
+        {
+          "line": 593,
+          "event": "created"
+        },
+        {
+          "line": 606,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-binary-output-EepAoM",
+      "events": [
+        {
+          "line": 721,
+          "event": "created"
+        },
+        {
+          "line": 745,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    },
+    {
+      "path": "/tmp/p6-binary-output-DAndlP",
+      "events": [
+        {
+          "line": 730,
+          "event": "created"
+        },
+        {
+          "line": 746,
+          "event": "exit",
+          "existsAtExit": false
+        }
+      ],
+      "presentInCopiedTerminalTmp": false
+    }
+  ],
+  "namespace": "actual Linux /tmp, evaluated through terminal docker cp snapshot; no Windows existence assumption about Linux paths"
+}

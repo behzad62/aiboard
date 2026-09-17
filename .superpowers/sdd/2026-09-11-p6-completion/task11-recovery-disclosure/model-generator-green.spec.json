@@ -1,0 +1,7 @@
+{
+  "id": "model-generator-green",
+  "pattern": "model generator",
+  "tests": [
+    "runner-v2/test/process-recovery.test.ts"
+  ]
+}

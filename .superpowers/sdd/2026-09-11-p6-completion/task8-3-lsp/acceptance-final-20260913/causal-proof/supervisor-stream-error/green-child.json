@@ -1,0 +1,20 @@
+{
+  "pid": 54640,
+  "identity": {
+    "pid": 54640,
+    "unavailable": true
+  },
+  "wrapperPid": 104164,
+  "spawnedAt": "2026-09-12T17:26:10.144Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/windows-job-supervisor-input.test.ts"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "pid": 54600,
+  "identity": {
+    "Id": 54600,
+    "StartTimeUtc": "2026-09-15T09:25:24.7564672Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 57496,
+  "spawnedAt": "2026-09-15T09:25:25.010Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts",
+    "runner-v2/test/durable-process-store.test.ts",
+    "runner-v2/test/subprocess-runtime.test.ts",
+    "runner-v2/test/one-shot-command-executor.test.ts",
+    "runner-v2/test/one-shot-output-capture.test.ts",
+    "runner-v2/test/scheduler-store.test.ts",
+    "runner-v2/test/recovery-smoke.test.ts"
+  ]
+}

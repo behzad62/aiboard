@@ -13,8 +13,7 @@ import { relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
 import {
-  runGit,
-  runGitBytes,
+  unavailableGitRunner,
   type GitBinaryRunner,
   type GitCommandOptions,
 } from "./git-command.js";
@@ -141,6 +140,8 @@ export interface IntegrationFileSnapshot {
   appliedToProject: boolean;
   omittedFileCount: number;
   files: IntegrationFile[];
+  /** Present only when a terminal reader reports historical file state. */
+  historicalProvenance?: import("./historical-read-provenance.js").HistoricalReadProvenance;
 }
 
 export class IntegrationManager {
@@ -175,8 +176,8 @@ export class IntegrationManager {
     this.baselineRevision = options.baselineRevision;
     this.initializationMode = options.initializationMode ?? "active";
     this.branch = `refs/heads/aiboard/${this.runSegment}/integration`;
-    this.execute = options.execute ?? runGit;
-    this.executeBytes = options.executeBytes ?? runGitBytes;
+    this.execute = options.execute ?? unavailableGitRunner;
+    this.executeBytes = options.executeBytes ?? unavailableGitRunner;
     this.afterProjectApplyJournalWritten = options.afterProjectApplyJournalWritten;
     this.afterProjectRefAdvanced = options.afterProjectRefAdvanced;
     this.afterProjectBranchAdvanced = options.afterProjectBranchAdvanced;
@@ -213,24 +214,7 @@ export class IntegrationManager {
     }
     return await this.serialized(async () => {
       const revision = await this.fileRevision("integration");
-      const result = await this.git(this.repositoryRoot, [
-        "log",
-        "-n",
-        String(limit),
-        "--format=%H%x1f%P%x1f%s%x1e",
-        `${this.baselineRevision}..${revision}`,
-      ]);
-      const commits: IntegrationCommit[] = [];
-      for (const record of result.stdout.split("\x1e").map((item) => item.trim()).filter(Boolean)) {
-        const [revision = "", parents = "", subject = ""] = record.split("\x1f");
-        if (!revision) continue;
-        commits.push({
-          revision,
-          parents: parents ? parents.split(/\s+/) : [],
-          subject,
-        });
-      }
-      return commits;
+      return await this.historyAtRevision(revision, limit);
     });
   }
 
@@ -240,61 +224,151 @@ export class IntegrationManager {
   ): Promise<IntegrationFileSnapshot> {
     return await this.serialized(async () => {
       const revision = await this.fileRevision(source, projectRevision);
-      const tree = await this.execute({
-        cwd: this.repositoryRoot,
-        args: [
-          "ls-tree",
-          "-r",
-          "-z",
-          "--format=%(objecttype)%x1f%(objectsize)%x1f%(path)",
-          revision,
-        ],
-        maxOutputBytes: MAX_FILE_RESPONSE_BYTES,
-      });
-      const entries = parseTreeEntries(tree.stdout);
-      const files: IntegrationFile[] = [];
-      let omittedFileCount = 0;
-      let responseBytes = snapshotBytes(source, revision, entries.length, []);
-      for (const entry of entries) {
-        const { path, size } = entry;
-        if (
-          entry.type !== "blob" ||
-          !Number.isSafeInteger(size) ||
-          size < 0 ||
-          size > MAX_FILE_BYTES
-        ) {
-          omittedFileCount += 1;
-          continue;
-        }
-        const object = `${revision}:${path}`;
-        const content = await this.executeBytes({
-          cwd: this.repositoryRoot,
-          args: ["show", object],
-          maxOutputBytes: MAX_FILE_BYTES + 4096,
-        });
-        const text = decodeUtf8Text(content.stdout, size);
-        if (text === null) {
-          omittedFileCount += 1;
-          continue;
-        }
-        const candidate = { path, content: text };
-        const candidateBytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
-        const separatorBytes = files.length === 0 ? 0 : 1;
-        if (responseBytes + separatorBytes + candidateBytes > MAX_FILE_RESPONSE_BYTES) {
-          omittedFileCount += 1;
-          continue;
-        }
-        files.push(candidate);
-        responseBytes += separatorBytes + candidateBytes;
-      }
-      return {
-        source,
-        revision,
-        appliedToProject: source === "project",
-        omittedFileCount,
-        files,
-      };
+      return await this.filesAtRevision(source, revision);
     });
+  }
+
+  /**
+   * Reads a terminal Build's recorded revision without recovering or creating
+   * an integration worktree.
+   */
+  async historicalFiles(input: {
+    integrationRevision?: string;
+    appliedToProject?: boolean;
+    projectRevision?: string;
+  }): Promise<IntegrationFileSnapshot> {
+    return await this.serialized(async () => {
+      if (input.appliedToProject) {
+        if (!input.projectRevision) {
+          throw new Error("Historical project handoff is missing its project revision.");
+        }
+        return await this.filesAtRevision(
+          "project",
+          await this.resolveHistoricalCommit(input.projectRevision),
+        );
+      }
+      if (!input.integrationRevision) {
+        throw new Error("Historical Build is missing its integration revision.");
+      }
+      return await this.filesAtRevision(
+        "integration",
+        await this.resolveHistoricalCommit(input.integrationRevision),
+      );
+    });
+  }
+
+  /** Reads durable integration history without touching the integration worktree. */
+  async historicalHistory(
+    integrationRevision: string | undefined,
+    limit = 50,
+  ): Promise<IntegrationCommit[]> {
+    if (!integrationRevision) return [];
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("Integration history limit must be an integer from 1 to 100.");
+    }
+    return await this.serialized(async () =>
+      await this.historyAtRevision(
+        await this.resolveHistoricalCommit(integrationRevision),
+        limit,
+      )
+    );
+  }
+
+  private async historyAtRevision(
+    revision: string,
+    limit: number,
+  ): Promise<IntegrationCommit[]> {
+    const result = await this.git(this.repositoryRoot, [
+      "log",
+      "-n",
+      String(limit),
+      "--format=%H%x1f%P%x1f%s%x1e",
+      `${this.baselineRevision}..${revision}`,
+    ]);
+    const commits: IntegrationCommit[] = [];
+    for (const record of result.stdout.split("\x1e").map((item) => item.trim()).filter(Boolean)) {
+      const [commitRevision = "", parents = "", subject = ""] = record.split("\x1f");
+      if (!commitRevision) continue;
+      commits.push({
+        revision: commitRevision,
+        parents: parents ? parents.split(/\s+/) : [],
+        subject,
+      });
+    }
+    return commits;
+  }
+
+  private async filesAtRevision(
+    source: IntegrationFileSource,
+    revision: string,
+  ): Promise<IntegrationFileSnapshot> {
+    const tree = await this.execute({
+      cwd: this.repositoryRoot,
+      args: [
+        "ls-tree",
+        "-r",
+        "-z",
+        "--format=%(objecttype)%x1f%(objectsize)%x1f%(path)",
+        revision,
+      ],
+      maxOutputBytes: MAX_FILE_RESPONSE_BYTES,
+    });
+    const entries = parseTreeEntries(tree.stdout);
+    const files: IntegrationFile[] = [];
+    let omittedFileCount = 0;
+    let responseBytes = snapshotBytes(source, revision, entries.length, []);
+    for (const entry of entries) {
+      const { path, size } = entry;
+      if (
+        entry.type !== "blob" ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        size > MAX_FILE_BYTES
+      ) {
+        omittedFileCount += 1;
+        continue;
+      }
+      const object = `${revision}:${path}`;
+      const content = await this.executeBytes({
+        cwd: this.repositoryRoot,
+        args: ["show", object],
+        maxOutputBytes: MAX_FILE_BYTES + 4096,
+      });
+      const text = decodeUtf8Text(content.stdout, size);
+      if (text === null) {
+        omittedFileCount += 1;
+        continue;
+      }
+      const candidate = { path, content: text };
+      const candidateBytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+      const separatorBytes = files.length === 0 ? 0 : 1;
+      if (responseBytes + separatorBytes + candidateBytes > MAX_FILE_RESPONSE_BYTES) {
+        omittedFileCount += 1;
+        continue;
+      }
+      files.push(candidate);
+      responseBytes += separatorBytes + candidateBytes;
+    }
+    return {
+      source,
+      revision,
+      appliedToProject: source === "project",
+      omittedFileCount,
+      files,
+    };
+  }
+
+  private async resolveHistoricalCommit(revision: string): Promise<string> {
+    if (!/^[a-f0-9]{40,64}$/i.test(revision)) {
+      throw new Error("Historical Build revision is invalid.");
+    }
+    return (
+      await this.git(this.repositoryRoot, [
+        "rev-parse",
+        "--verify",
+        `${revision}^{commit}`,
+      ])
+    ).stdout.trim();
   }
 
   async initialize(): Promise<void> {

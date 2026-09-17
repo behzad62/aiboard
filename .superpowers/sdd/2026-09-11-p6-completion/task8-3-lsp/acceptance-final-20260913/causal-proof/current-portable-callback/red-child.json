@@ -1,0 +1,21 @@
+{
+  "pid": 33660,
+  "identity": {
+    "Id": 33660,
+    "StartTimeUtc": "2026-09-13T19:40:47.4805095Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 37400,
+  "spawnedAt": "2026-09-13T19:40:47.763Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/portable-supervisor-input.test.ts"
+  ]
+}

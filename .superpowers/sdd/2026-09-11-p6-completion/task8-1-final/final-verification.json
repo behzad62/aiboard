@@ -1,0 +1,68 @@
+{
+  "verifiedAt": "2026-09-11T15:00:46.964302+00:00",
+  "baseCommit": "7e81476561daf917b466885c2a2999561200b824",
+  "windowsCounts": {
+    "tests": 605,
+    "pass": 605,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "windowsTestFiles": 56,
+  "frozenSourceInputs": 367,
+  "sourceDrift": [],
+  "requiredCases": {
+    "real run-owned Git preserves binary bytes and closes exact nested command ownership": "ok 304 - real run-owned Git preserves binary bytes and closes exact nested command ownership",
+    "actual baseline task integration verification and historical Git use their real run owner": "ok 286 - actual baseline task integration verification and historical Git use their real run owner",
+    "production composition settles its owned MCP and run binding while retaining history and isolating another run": "ok 385 - production composition settles its owned MCP and run binding while retaining history and isolating another run",
+    "CLI recovers a paused run and preserves event continuity after restart": "ok 481 - CLI recovers a paused run and preserves event continuity after restart",
+    "native worker fails over with the same session, context, tools, and evidence": "ok 438 - native worker fails over with the same session, context, tools, and evidence",
+    "bounded Git execution verifies the complete process tree, including detached descendants": "ok 281 - bounded Git execution verifies the complete process tree, including detached descendants",
+    "actual ToolBroker carries exact per-call Git authority without changing guarded approval policy": "ok 303 - actual ToolBroker carries exact per-call Git authority without changing guarded approval policy",
+    "subprocess live output observation uses the actual backend bytes without persisting its callback": "ok 557 - subprocess live output observation uses the actual backend bytes without persisting its callback",
+    "migrated Git execution paths have no raw launch ambient environment or stateless compatibility fallback": "ok 258 - migrated Git execution paths have no raw launch ambient environment or stateless compatibility fallback"
+  },
+  "linuxCommandsPassed": 2,
+  "linuxContractTestsPassed": 91,
+  "linuxScope": "actual Linux portable authority/output/bootstrap/API contracts and memory/SQLite results; no real Git executable integration or macOS/remote CI claim",
+  "containerRemoved": true,
+  "materialFaultsDetected": 15,
+  "restoredMaterialCounts": {
+    "tests": 23,
+    "pass": 23,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "protectedFilesUnchanged": 222,
+  "indexClean": true,
+  "exactAcquiredWindowsRoots": 662,
+  "absentWindowsRoots": 661,
+  "retainedWindowsRoots": [
+    "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-git-inspection-NC1Ev2"
+  ],
+  "resourceClassificationPending": false,
+  "selfReviewRequired": true,
+  "independentReviewRequired": false,
+  "P6Complete": false,
+  "retainedNativeWorkloads": 0,
+  "retainedNoLaunchDiagnostics": 1,
+  "linuxAcquisitions": 48,
+  "linuxCopiedDiagnostics": 1,
+  "status": "TASK 8.1 VERIFIED COMPLETE \u2014 TASK 8.2 MCP MAY BEGIN",
+  "Task81Complete": true,
+  "selfReviewAccepted": true,
+  "nextQueue": "Task8.2 MCP",
+  "laterPhasesStarted": false,
+  "productionFiles": 29,
+  "testFiles": 39,
+  "changedOrNewFiles": 68,
+  "staticChecks": {
+    "eslintExit": 0,
+    "typecheckExit": 0,
+    "diffCheckExit": 0,
+    "verifiedAt": "2026-09-11T14:56:01.2841569Z"
+  }
+}

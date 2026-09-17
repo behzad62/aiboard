@@ -1,0 +1,20 @@
+{
+  "pid": 32412,
+  "identity": {
+    "pid": 32412,
+    "unavailable": true
+  },
+  "wrapperPid": 103852,
+  "spawnedAt": "2026-09-12T17:26:13.648Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ]
+}

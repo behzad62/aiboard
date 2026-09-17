@@ -1,0 +1,19 @@
+{
+  "id": "eslint-acceptance",
+  "startedAt": "2026-09-13T19:46:22.842Z",
+  "finishedAt": "2026-09-13T19:46:39.618Z",
+  "wrapperPid": 15340,
+  "testPid": 35416,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 418,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

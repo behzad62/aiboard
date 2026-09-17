@@ -1,6 +1,7 @@
 import type { AgentActor } from "./agent-contracts.js";
 import type { AgentLoopCheckpoint } from "./agent-loop.js";
 import type { ChangeSet } from "./change-set.js";
+import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
 
 export type AgentSessionEventType =
   | "session.created"
@@ -52,4 +53,6 @@ export interface AgentTranscriptTurn {
 export interface AgentTranscriptPage {
   turns: AgentTranscriptTurn[];
   cursor: number;
+  /** Present for a terminal reader so an absent legacy projection is explicit. */
+  historicalProvenance?: HistoricalReadProvenance;
 }

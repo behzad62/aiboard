@@ -105,7 +105,11 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       const expectedTypeScriptVersion = rootPackageJson.devDependencies?.typescript
         ?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
       check(`${path} uses the root package license`, packageJson.license === rootPackageJson.license);
-      check(`${path} requires Node.js 24.18.0 or newer`, packageJson.engines?.node === ">=24.18.0");
+      check(
+        `${path} accepts only maintained Node.js LTS lines with node:sqlite support`,
+        packageJson.engines?.node === ">=22.13.0 <23 || >=24.0.0 <25",
+        packageJson.engines
+      );
       check(`${path} starts src/cli.ts`, packageJson.scripts?.start === "tsx src/cli.ts --");
       check(
         `${path} installs Chromium through Playwright`,
@@ -128,6 +132,8 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
 
     if (readmeFile) {
       const readme = await readmeFile.async("string");
+      check(`${path} README documents maintained Node.js LTS lines`, /Node\.js 22\.x or 24\.x/.test(readme));
+      check(`${path} README does not pin a Node patch`, !/24\.18\.0/.test(readme));
       check(`${path} README requires Git`, /\bGit\b/.test(readme));
       check(`${path} README documents npm install`, /\bnpm install\b/.test(readme));
       check(`${path} README documents browser setup`, /\bnpm run setup:browser\b/.test(readme));

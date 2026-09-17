@@ -1,0 +1,62 @@
+{
+  "mismatchCount": 11,
+  "allLineEndingOnly": true,
+  "normalizedPaths": [
+    {
+      "path": "runner-v2/src/build-observability.ts",
+      "workingBytes": 20861,
+      "stagedBytes": 20357
+    },
+    {
+      "path": "runner-v2/src/cli.ts",
+      "workingBytes": 22815,
+      "stagedBytes": 22166
+    },
+    {
+      "path": "runner-v2/src/control-server.ts",
+      "workingBytes": 43736,
+      "stagedBytes": 42683
+    },
+    {
+      "path": "runner-v2/src/native-build-factory.ts",
+      "workingBytes": 122708,
+      "stagedBytes": 119585
+    },
+    {
+      "path": "runner-v2/src/native-build-manager.ts",
+      "workingBytes": 34235,
+      "stagedBytes": 33732
+    },
+    {
+      "path": "runner-v2/src/scheduler-store.ts",
+      "workingBytes": 190315,
+      "stagedBytes": 189714
+    },
+    {
+      "path": "runner-v2/src/streaming-session-store.ts",
+      "workingBytes": 214578,
+      "stagedBytes": 211346
+    },
+    {
+      "path": "lib/client/runner-v2.ts",
+      "workingBytes": 49407,
+      "stagedBytes": 48488
+    },
+    {
+      "path": "components/RunnerV2ObservabilityPanel.tsx",
+      "workingBytes": 72575,
+      "stagedBytes": 71690
+    },
+    {
+      "path": "scripts/test-runner-v2-client.mts",
+      "workingBytes": 32035,
+      "stagedBytes": 31407
+    },
+    {
+      "path": "scripts/test-runner-v2-observability.mts",
+      "workingBytes": 33225,
+      "stagedBytes": 32623
+    }
+  ],
+  "remaining": []
+}

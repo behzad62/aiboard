@@ -1,0 +1,14 @@
+{
+  "index": 7,
+  "label": "test-build-live-state",
+  "exitCode": 0,
+  "startedAt": "2026-09-11T10:21:44.545224+00:00",
+  "finishedAt": "2026-09-11T10:21:44.797902+00:00",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/tsx/dist/cli.mjs",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "scripts/test-build-live-state.mts"
+  ]
+}

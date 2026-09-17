@@ -1,0 +1,6 @@
+{
+  "id": "core-red",
+  "tests": [
+    "runner-v2/test/process-recovery.test.ts"
+  ]
+}

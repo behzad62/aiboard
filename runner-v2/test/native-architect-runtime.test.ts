@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ProviderTransportError } from "../src/account-runner-model.js";
+import { buildArchitectContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createBrowserTools, type BrowserBackend } from "../src/browser-tools.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
-import {
-  NativeArchitectRuntime,
-  PlanOnlyInspectionRuntime,
-  architectInspectionWorkspace,
-  architectModelAttribution,
-  prioritizedArchitectCapabilities,
-} from "../src/native-architect-runtime.js";
+import { LanguageProviderRouter } from "../src/language-provider-router.js";
+import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
+import { PlanOnlyInspectionRuntime, architectInspectionWorkspace, architectModelAttribution, loadArchitectReviewSubmission, prioritizedArchitectCapabilities } from "../src/native-architect-runtime.js";
+import { NativeArchitectRuntime } from "./support/git-fixture.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
+import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { createMcpTools, type McpManager } from "../src/mcp-tools.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
@@ -58,6 +58,137 @@ test("Architect model calls carry direct durable role attribution", () => {
       sessionId: "architect:run_1",
     }
   );
+});
+
+test("Architect review context carries the submitted criterion evidence mapping", () => {
+  const context = buildArchitectContext({
+    limits: { maxBytes: 64 * 1024, maxEstimatedTokens: 16 * 1024 },
+    objective: "Build the requested feature.",
+    reason: { type: "review_required", taskId: "task_a", changeSetId: "changeset_1" },
+    projection: {
+      runId: "run_1",
+      status: "running",
+      planRevision: 1,
+      tasks: {},
+      guidance: {},
+      userGuidance: {},
+      userGuidanceVersion: 0,
+      architectQuestions: {},
+      architectQuestionVersion: 0,
+      reviews: {},
+      runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+      lastSequence: 1,
+    },
+    reviewSubmission: {
+      taskId: "task_a",
+      attempt: 1,
+      changeSetId: "changeset_1",
+      baselineRevision: "a".repeat(40),
+      taskRevision: "b".repeat(40),
+      changedPaths: ["value.txt"],
+      diffArtifactHash: "c".repeat(64),
+      evidenceArtifactHashes: ["d".repeat(64)],
+      acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+      acceptanceCriteriaVersion: 1,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_1",
+        artifactHashes: ["d".repeat(64)],
+        taskId: "task_a",
+        attempt: 1,
+      }],
+    },
+    instructions: [],
+    skills: [],
+    memories: [],
+    evidence: [],
+    recentHistory: [],
+  });
+  assert.match(context.text, /criterionEvidenceLinks/);
+  assert.match(context.text, /evidence_1/);
+});
+
+test("Architect review loads the revised worker session instead of the legacy same-attempt session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-reassigned-review-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  const legacySessionId = "worker:run-review:task-a:1";
+  const revisedSessionId = "worker:run-review:task-a:1:worker_task-a_1_plan_2";
+  try {
+    for (const [sessionId, changeSetId, changedPath] of [
+      [legacySessionId, "legacy-change", "legacy.txt"],
+      [revisedSessionId, "revised-change", "revised.txt"],
+    ] as const) {
+      await sessions.create({
+        sessionId,
+        runId: "run-review",
+        actor: { role: "worker", id: sessionId === revisedSessionId ? "worker_task-a_1_plan_2" : "worker_task-a_1" },
+        occurredAt: "2026-08-27T00:00:00.000Z",
+      });
+      await sessions.submit(sessionId, {
+        id: changeSetId,
+        runId: "run-review",
+        taskId: "task-a",
+        baselineRevision: "a".repeat(40),
+        taskRevision: "b".repeat(40),
+        commits: [],
+        changedPaths: [changedPath],
+        diffArtifactHash: "c".repeat(64),
+        evidenceArtifactHashes: [],
+        externalEffects: [],
+        guidanceIds: [],
+        memoryIds: [],
+        unresolvedConcerns: [],
+      }, "2026-08-27T00:00:01.000Z");
+    }
+    const projection = {
+      runId: "run-review",
+      status: "running",
+      planRevision: 2,
+      tasks: {
+        "task-a": {
+          id: "task-a",
+          objective: "Implement revised intent.",
+          dependencies: [],
+          requiredCapabilities: ["code"],
+          status: "architect_review",
+          attempt: 1,
+          assignedWorkerId: "worker_task-a_1_plan_2",
+          changeSetId: "revised-change",
+        },
+      },
+      guidance: {},
+      userGuidance: {},
+      userGuidanceVersion: 1,
+      architectQuestions: {},
+      architectQuestionVersion: 0,
+      reviews: {},
+      runtime: {
+        providerHealth: {},
+        workerAssignments: {
+          "task-a:1": {
+            taskId: "task-a",
+            attempt: 1,
+            runtimeId: "runtime-revised",
+            sessionId: revisedSessionId,
+          },
+        },
+        architect: {},
+      },
+      lastSequence: 1,
+    } as SchedulerProjection;
+    const submission = await loadArchitectReviewSubmission(
+      sessions,
+      "run-review",
+      { type: "review_required", taskId: "task-a", changeSetId: "revised-change" },
+      projection
+    );
+    assert.equal(submission?.changeSetId, "revised-change");
+    assert.deepEqual(submission?.changedPaths, ["revised.txt"]);
+  } finally {
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Architect skill routing prioritizes the task named by the current action", () => {
@@ -109,6 +240,202 @@ test("Architect reviews inspect the submitted attempt workspace instead of the p
     architectInspectionWorkspace({ type: "plan_required" }, projection, "C:/project"),
     "C:/project"
   );
+  assert.equal(
+    architectInspectionWorkspace(
+      { type: "final_verification_plan_required", integrationRevision: "a".repeat(40) },
+      projection,
+      "C:/project",
+      "C:/runner/integration/run",
+    ),
+    "C:/runner/integration/run",
+  );
+});
+
+test("Native Architect steering cancellation does not create a user-decision pause", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-architect-steering-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const objective = "Build\nthis exact application.  ";
+  try {
+    scheduler.append({
+      runId: "run-steering-cancel",
+      type: "run.initialized",
+      occurredAt: "2026-08-27T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { objective },
+    });
+    scheduler.append({
+      runId: "run-steering-cancel",
+      type: "plan.created",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "plan",
+      payload: { revision: 1, tasks: [{
+        id: "task-a",
+        objective: "Implement A",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "A is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned",
+        attempt: 0,
+      }] },
+    });
+    scheduler.append({
+      runId: "run-steering-cancel",
+      type: "user.guidance_submitted",
+      occurredAt: "2026-08-27T00:00:02.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance",
+      payload: {
+        guidanceId: "guidance-1",
+        text: "Keep the public API stable.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const steeringModel = new ScriptedModel([{
+      blocks: [],
+      stopReason: "cancelled",
+    }]);
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, steeringModel]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-steering",
+      projectRoot: project,
+      objective,
+    });
+    const projection = rebuildSchedulerProjection(scheduler.readRun("run-steering-cancel"));
+    await architect.run({
+      runId: "run-steering-cancel",
+      reason: { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
+      projection,
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run-steering-cancel",
+        sessionId: "architect:run-steering-cancel",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const recovered = rebuildSchedulerProjection(scheduler.readRun("run-steering-cancel"));
+    assert.equal(recovered.status, "running");
+    assert.equal(recovered.pauseReason, undefined);
+    assert.equal(scheduler.readRun("run-steering-cancel").some((event) => event.type === "run.paused"), false);
+    assert.equal(recovered.initialObjective, objective);
+    const steeringContext = steeringModel.requests[0].messages
+      .map((message) => typeof message.content === "string" ? message.content : "")
+      .join("\n");
+    assert.match(steeringContext, /Keep the public API stable/);
+    assert.match(steeringContext, /Build\\nthis exact application/);
+    assert.match(steeringContext, /immutable initial objective/i);
+    assert.match(steeringContext, /evidence-proven semantic equivalence/i);
+    assert.match(steeringContext, /acknowledge_user_guidance/);
+    assert.match(steeringContext, /ask_user/);
+
+    const mismatchHealth = new ProviderHealthRegistry();
+    const mismatchedArchitect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health: mismatchHealth }),
+      health: mismatchHealth,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([{
+        blocks: [],
+        stopReason: "cancelled",
+      }])]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-mismatch",
+      projectRoot: project,
+      objective: `${objective}changed`,
+    });
+    await assert.rejects(() => mismatchedArchitect.run({
+      runId: "run-steering-cancel",
+      reason: { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
+      projection: recovered,
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run-steering-cancel",
+        sessionId: "architect:run-steering-cancel:mismatch",
+        actor: { role: "architect", id: "architect" },
+      },
+    }), /durable initial objective.*does not match/i);
+
+    const directObjective = "Direct native initialization\nkeeps\tthese bytes.  ";
+    const directHealth = new ProviderHealthRegistry();
+    const directArchitect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health: directHealth }),
+      health: directHealth,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([{
+        blocks: [],
+        stopReason: "cancelled",
+      }])]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-direct-init",
+      projectRoot: project,
+      objective: directObjective,
+    });
+    await directArchitect.run({
+      runId: "run-direct-native-init",
+      reason: { type: "plan_required" },
+      projection: {
+        ...projection,
+        runId: "run-direct-native-init",
+        userGuidance: {},
+        userGuidanceVersion: 0,
+      },
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run-direct-native-init",
+        sessionId: "architect:run-direct-native-init",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const directEvents = scheduler.readRun("run-direct-native-init");
+    assert.equal(directEvents[0].type, "run.initialized");
+    assert.equal(directEvents[0].payload.objective, directObjective);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Architect provider failure pauses for user-selected handoff before planning", async () => {
@@ -123,13 +450,63 @@ test("Architect provider failure pauses for user-selected handoff before plannin
   const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
   const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
   const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  let language: LanguageProviderRouter | undefined;
   try {
+    const capabilityRegistry = new CapabilityRegistry([{
+      manifest: {
+        apiVersion: 1,
+        id: "fixture.architect",
+        name: "Architect fixture",
+        version: "1.0.0",
+        entry: "index.mjs",
+        capabilities: ["tools", "context"],
+      },
+      instance: {
+        capabilities: () => ({
+          tools: [{
+            definition: {
+              name: "fixture.architect.inspect",
+              description: "Inspect fixture architecture",
+              inputSchema: { type: "object" },
+              readOnly: true,
+              effect: "none",
+            },
+            validate: () => ({ ok: true as const, value: {} }),
+            execute: async () => ({ content: [], isError: false }),
+          }],
+          contextContributors: [{
+            id: "architect-context",
+            kind: "fixture",
+            priority: 850,
+            maxBytes: 1_024,
+            contribute: async () => ({ content: "EXTENSION_ARCHITECT_CONTEXT" }),
+          }],
+          languageProviders: [],
+        }),
+        start: async () => undefined,
+        close: async () => undefined,
+      },
+    }]);
     const candidates: AgentRuntimeCandidate[] = [
       { runtimeId: "primary:architect", providerId: "primary", modelId: "architect", capabilities: ["code"], priority: 1 },
       { runtimeId: "fallback:architect", providerId: "fallback", modelId: "architect", capabilities: ["code"], priority: 2 },
     ];
     const health = new ProviderHealthRegistry();
+    language = new LanguageProviderRouter({
+      builtInProvider: fixtureLanguageProvider(),
+      extensionProviders: [],
+      configuredServers: [],
+    });
     const fallback = new ScriptedModel([
+      {
+        blocks: [{
+          type: "tool_call",
+          callId: "fixture_definition",
+          name: "code.definition",
+          arguments: { path: "AGENTS.md", line: 1, column: 1 },
+        }],
+        stopReason: "tool_calls",
+      },
       {
         blocks: [{
           type: "tool_call",
@@ -140,8 +517,9 @@ test("Architect provider failure pauses for user-selected handoff before plannin
             tasks: [{
               id: "task_a",
               objective: "Implement the stable API",
-              dependencies: [],
-              requiredCapabilities: ["code"],
+               dependencies: [],
+               requiredCapabilities: ["code"],
+               acceptanceCriteria: [{ id: "api", text: "The stable API is implemented." }],
             }],
           },
         }],
@@ -173,12 +551,14 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       projectId: "project_1",
       projectRoot: project,
       objective: "Build the requested feature.",
+      capabilityRegistry,
+      language,
       providerRetryRuntime: {
         now: () => 0,
         random: () => 0.5,
         sleep: async () => undefined,
       },
-    });
+    } as ConstructorParameters<typeof NativeArchitectRuntime>[0]);
     const runtime = new BuildRuntime({
       runId: "run_1",
       store: scheduler,
@@ -221,6 +601,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     assert.equal(architectTools.has("fs.search"), true);
     assert.equal(architectTools.has("git.diff"), true);
     assert.equal(architectTools.has("research.fetch"), true);
+    assert.equal(architectTools.has("fixture.architect.inspect"), true);
     for (const name of [
       "repo.manifest",
       "repo.map",
@@ -237,6 +618,15 @@ test("Architect provider failure pauses for user-selected handoff before plannin
         .join("\n"),
       /Keep the API stable/
     );
+    assert.match(
+      fallback.requests[0].messages
+        .map((message) => (typeof message.content === "string" ? message.content : ""))
+        .join("\n"),
+      /EXTENSION_ARCHITECT_CONTEXT/,
+    );
+    assert.deepEqual(language.auditRecords().map((record) => record.providerId), [
+      "fixture.language",
+    ]);
 
     const onlyCandidate = candidates[0];
     const deadlineHealth = new ProviderHealthRegistry();
@@ -335,6 +725,7 @@ test("Architect provider failure pauses for user-selected handoff before plannin
       ["primary:architect"]
     );
   } finally {
+    await language?.close();
     sessions.close();
     scheduler.close();
     evidence.close();
@@ -342,6 +733,170 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Architect excludes mutating extension tools under Project and Full access", async () => {
+  for (const permissionProfile of ["project", "full"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `aiboard-architect-extension-${permissionProfile}-`));
+    const project = join(root, "project");
+    const state = join(root, "state");
+    mkdirSync(project);
+    mkdirSync(state);
+    writeFileSync(join(project, "source.txt"), "original\n");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    try {
+      const model = new ScriptedModel([
+        {
+          blocks: [{
+            type: "tool_call",
+            callId: "mutate_source",
+            name: "fixture.architect.mutate",
+            arguments: {},
+          }],
+          stopReason: "tool_calls",
+        },
+        {
+          blocks: [{
+            type: "tool_call",
+            callId: "plan_tasks",
+            name: "plan_tasks",
+            arguments: {
+              revision: 1,
+              tasks: [{
+                id: "task_a",
+                objective: "Inspect the extension boundary.",
+                dependencies: [],
+                requiredCapabilities: ["code"],
+                acceptanceCriteria: [{ id: "boundary", text: "The boundary is preserved." }],
+              }],
+            },
+          }],
+          stopReason: "tool_calls",
+        },
+      ]);
+      const candidate: AgentRuntimeCandidate = {
+        runtimeId: "fixture:architect",
+        providerId: "fixture",
+        modelId: "architect",
+        capabilities: ["code"],
+        priority: 1,
+      };
+      const registry = new CapabilityRegistry([{
+        manifest: {
+          apiVersion: 1,
+          id: "fixture.architect-boundary",
+          name: "Architect boundary fixture",
+          version: "1.0.0",
+          entry: "index.mjs",
+          capabilities: ["tools"],
+        },
+        instance: {
+          capabilities: () => ({
+            tools: [
+              {
+                definition: {
+                  name: "fixture.architect.inspect",
+                  description: "Inspect the source boundary.",
+                  inputSchema: { type: "object", additionalProperties: false },
+                  readOnly: true,
+                  effect: "none",
+                },
+                validate: () => ({ ok: true as const, value: {} }),
+                execute: async () => ({ content: [], isError: false }),
+              },
+              {
+                definition: {
+                  name: "fixture.architect.mutate",
+                  description: "Mutate the source boundary.",
+                  inputSchema: { type: "object", additionalProperties: false },
+                  readOnly: false,
+                  effect: "workspace",
+                },
+                validate: () => ({ ok: true as const, value: {} }),
+                execute: async (_input, context) => {
+                  assert.ok(context.workspacePath);
+                  writeFileSync(join(context.workspacePath, "source.txt"), "mutated\n");
+                  return { content: [], isError: false };
+                },
+              },
+            ],
+            contextContributors: [],
+            languageProviders: [],
+          }),
+          start: async () => undefined,
+          close: async () => undefined,
+        },
+      }]);
+      const health = new ProviderHealthRegistry();
+      const architect = new NativeArchitectRuntime({
+        schedulerStore: scheduler,
+        router: new RuntimeRouter({ candidates: [candidate], health }),
+        health,
+        candidates: [candidate],
+        models: new Map([[candidate.runtimeId, model]]),
+        initialRuntimeId: candidate.runtimeId,
+        sessions,
+        artifacts,
+        skillCatalog: new SkillCatalog({ projectRoot: project }),
+        memoryStore: memory,
+        evidenceStore: evidence,
+        projectId: "project_1",
+        projectRoot: project,
+        objective: "Protect the project source.",
+        permissionProfile,
+        capabilityRegistry: registry,
+      });
+      const runtime = new BuildRuntime({
+        runId: `run_${permissionProfile}`,
+        store: scheduler,
+        workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+        architectDriver: architect,
+        integrationDriver: {
+          integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+        },
+        maxConcurrency: 1,
+        workspaceFor: async () => "unused",
+      });
+
+      assert.equal((await runtime.step()).status, "progressed");
+      const advertised = new Set(model.requests[0]!.tools.map((tool) => tool.name));
+      assert.equal(advertised.has("fixture.architect.inspect"), true);
+      assert.equal(advertised.has("fixture.architect.mutate"), false);
+      assert.equal(readFileSync(join(project, "source.txt"), "utf8"), "original\n");
+      assert.equal(runtime.projection().planRevision, 1);
+    } finally {
+      sessions.close();
+      scheduler.close();
+      evidence.close();
+      memory.close();
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  }
+});
+
+function fixtureLanguageProvider(): LanguageIntelligenceProvider {
+  return {
+    descriptor: {
+      id: "fixture.language",
+      displayName: "Fixture language",
+      extensions: [".fixture", ".md"],
+      rootMarkers: [],
+      priority: 1,
+    },
+    workspaceSymbols: async () => ({ status: "ok", results: [], truncated: false }),
+    definition: async () => ({
+      status: "ok",
+      results: [{ path: "fixture", line: 1, column: 1, preview: "fixture" }],
+      truncated: false,
+    }),
+    references: async () => ({ status: "ok", results: [], truncated: false }),
+    diagnostics: async () => ({ status: "ok", results: [], truncated: false }),
+    close: async () => undefined,
+  };
+}
 
 test("Plan-only rejects forged mutating browser and MCP calls even under Full access", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-plan-only-tools-"));
@@ -359,6 +914,7 @@ test("Plan-only rejects forged mutating browser and MCP calls even under Full ac
     screenshot: async () => Buffer.from("png"),
     events: async () => ({ console: [], network: [] }),
     close: async () => undefined,
+    closeRun: async () => undefined,
     closeAll: async () => undefined,
   } satisfies BrowserBackend;
   const mcp = {
@@ -451,8 +1007,9 @@ test("resumed Architect action receives a fresh mechanical reminder", async () =
             tasks: [{
               id: "task_a",
               objective: "Implement the feature",
-              dependencies: [],
-              requiredCapabilities: ["code"],
+               dependencies: [],
+               requiredCapabilities: ["code"],
+               acceptanceCriteria: [{ id: "feature", text: "The feature is implemented." }],
             }],
           },
         }],

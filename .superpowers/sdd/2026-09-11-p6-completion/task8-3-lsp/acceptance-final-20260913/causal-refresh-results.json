@@ -1,0 +1,120 @@
+[
+  {
+    "id": "current-shutdown-budget",
+    "file": "runner-v2/src/lsp-client.ts",
+    "old": "this.shutdownTimeoutMs + this.writeTimeoutMs).then",
+    "replacement": "this.shutdownTimeoutMs).then",
+    "test": "lsp-shared-client",
+    "pattern": "^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$",
+    "originalHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "faultHash": "156ac2afbf4a5f6a158fbc475c8966ebbdd66b99363816206e75fe7e2aadfd0b",
+    "red": {
+      "id": "current-shutdown-budget-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [
+        "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-UJ25fQ"
+      ],
+      "failedTests": [
+        "not ok 1 - LSP shared shutdown budgets response and acknowledged exit as serial bounded phases"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "green": {
+      "id": "current-shutdown-budget-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  {
+    "id": "current-chunk-limit",
+    "file": "runner-v2/src/execution-host-lsp-transport.ts",
+    "old": "const MAX_SHARED_LSP_WRITE_BYTES = 1024 * 1024;",
+    "replacement": "const MAX_SHARED_LSP_WRITE_BYTES = 4 * 1024 * 1024;",
+    "test": "lsp-transport-authority",
+    "pattern": "^LSP shared transport uses the real launching call and fresh exact language request authority$",
+    "originalHash": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+    "faultHash": "24b53693e71cc82cff19a14b30a4a8cd6aaad3767058f56f61cdbfc9b677c523",
+    "red": {
+      "id": "current-chunk-limit-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [
+        "not ok 1 - LSP shared transport uses the real launching call and fresh exact language request authority"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+    "green": {
+      "id": "current-chunk-limit-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  {
+    "id": "current-portable-callback",
+    "file": "runner-v2/src/portable-process-supervisor.mjs",
+    "old": "try { child.stdin.write(bytes, (error) => { pending.status = error ? \"failed\" : \"acknowledged\"; pending.settled = true; }); }",
+    "replacement": "try { child.stdin.write(bytes); pending.status = \"acknowledged\"; pending.settled = true; }",
+    "test": "portable-supervisor-input",
+    "originalHash": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+    "faultHash": "7b0ca897624c63f4ada7f7dbbc7ad141285555dd25fa1ecaecff2e06fefbeb9a",
+    "red": {
+      "id": "current-portable-callback-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [
+        "not ok 1 - portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write",
+        "not ok 2 - portable supervisor refuses stale completed write acknowledgement without reissuing bytes",
+        "not ok 3 - portable supervisor retains settled input through temporary coordination refusal"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+    "green": {
+      "id": "current-portable-callback-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  {
+    "id": "current-raw-launch-policy",
+    "file": "runner-v2/src/lsp-client.ts",
+    "append": "\nimport { spawn as task83ForbiddenSpawn } from \"node:child_process\";\nfunction task83ControlledUncalledLaunch() { return task83ForbiddenSpawn(\"task83-never-executed\"); }\n",
+    "test": "lsp-caller-audit",
+    "pattern": "^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+    "originalHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "faultHash": "8b75728bcee078e041c74149a537c3d5326b2cc1cc4d2a987df47e6364522a28",
+    "red": {
+      "id": "current-raw-launch-policy-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [
+        "not ok 1 - LSP migrated family contains no direct launch signal shell or ambient environment fallback"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "green": {
+      "id": "current-raw-launch-policy-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  }
+]

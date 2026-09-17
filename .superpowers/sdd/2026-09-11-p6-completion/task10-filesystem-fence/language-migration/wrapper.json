@@ -1,0 +1,32 @@
+{
+  "pid": 7224,
+  "identity": {
+    "Id": 7224,
+    "StartTimeUtc": "2026-09-14T21:46:18.9097920Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T21:46:18.946Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task10-filesystem-fence\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/language-migration.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ],
+  "spec": {
+    "id": "language-migration",
+    "tests": [
+      "runner-v2/test/language-invocation-propagation.test.ts"
+    ]
+  }
+}

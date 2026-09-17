@@ -1,0 +1,57 @@
+{
+  "at": "2026-09-12T05:38:29.791901+00:00",
+  "priorGate": "task82-affected1",
+  "priorCounts": {
+    "tests": 1927,
+    "passCount": 1924,
+    "fail": 2,
+    "skipped": 1
+  },
+  "priorFailures": [
+    "CLI eager-manager fixture expected 2 processes instead of new lazy 1; revised exact no-launch assertions",
+    "Generic pre-effect cleanup expiry check accidentally suppressed original durable startup blocker; restricted to actual pending graceful input"
+  ],
+  "modifiedAcceptedInputs": [
+    "runner-v2/src/execution-host-mcp-transport.ts",
+    "runner-v2/src/mcp-rpc-peer.ts",
+    "runner-v2/src/runner-internal-execution-context.ts",
+    "runner-v2/src/streaming-process-session-runtime.ts",
+    "runner-v2/test/cli-capabilities-config.test.ts",
+    "runner-v2/test/mcp-lazy-native.test.ts"
+  ],
+  "replacementTests": [
+    "runner-v2/test/cli-capabilities-config.test.ts",
+    "runner-v2/test/mcp-agent-lifecycle.test.ts",
+    "runner-v2/test/mcp-broker-envelope.test.ts",
+    "runner-v2/test/mcp-caller-audit.test.ts",
+    "runner-v2/test/mcp-configuration.test.ts",
+    "runner-v2/test/mcp-discovery-lifecycle.test.ts",
+    "runner-v2/test/mcp-discovery-protocol.test.ts",
+    "runner-v2/test/mcp-lazy-manager.test.ts",
+    "runner-v2/test/mcp-lazy-native.test.ts",
+    "runner-v2/test/mcp-pending-notification.test.ts",
+    "runner-v2/test/mcp-rpc-peer.test.ts",
+    "runner-v2/test/mcp-tools.test.ts",
+    "runner-v2/test/mcp-transport-authority.test.ts",
+    "runner-v2/test/native-architect-runtime.test.ts",
+    "runner-v2/test/native-build-capabilities.test.ts",
+    "runner-v2/test/native-build-cleanup.test.ts",
+    "runner-v2/test/native-build-initialization.test.ts",
+    "runner-v2/test/real-streaming-crash-lifecycle.test.ts",
+    "runner-v2/test/real-streaming-integration.test.ts",
+    "runner-v2/test/recovery-smoke.test.ts",
+    "runner-v2/test/runner-internal-execution-context.test.ts",
+    "runner-v2/test/streaming-process-session-runtime.test.ts",
+    "runner-v2/test/streaming-request-operation.test.ts",
+    "runner-v2/test/subagent-tools.test.ts",
+    "runner-v2/test/tool-broker.test.ts",
+    "runner-v2/test/worker-runtime.test.ts"
+  ],
+  "addedNativeCoverage": [
+    "real-streaming-integration",
+    "real-streaming-crash-lifecycle",
+    "recovery-smoke"
+  ],
+  "reason": "Delta is limited to internal MCP discovery lifecycle, private MCP protocol/transport, native MCP fixture, stale CLI fixture, and one conditional guard for graceful input in shared cleanup. Complete affected families/consumers and complete shared streaming-runtime tests are rechecked. Unchanged Git/integration/filesystem/process/store implementation evidence remains hash-bound, not rerun.",
+  "wholeP6Acceptance": false
+}

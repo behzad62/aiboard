@@ -1,0 +1,606 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-kikmS4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-d59RBO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-x1epcH"}
+# Subtest: bootstrap .gitignore symlink cannot mutate an outside object
+ok 1 - bootstrap .gitignore symlink cannot mutate an outside object
+  ---
+  duration_ms: 50.569
+  type: 'test'
+  ...
+# Subtest: bootstrap .gitignore hardlink cannot mutate an outside object
+ok 2 - bootstrap .gitignore hardlink cannot mutate an outside object
+  ---
+  duration_ms: 45.0205
+  type: 'test'
+  ...
+# Subtest: bootstrap .gitignore refuses a stale prior read before creating Git metadata
+ok 3 - bootstrap .gitignore refuses a stale prior read before creating Git metadata
+  ---
+  duration_ms: 57.1992
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-kikmS4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-d59RBO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-x1epcH","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5n5cfi"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TWYET6"}
+# Subtest: filesystem fence: fs.write requires the caller's expected revision
+ok 4 - filesystem fence: fs.write requires the caller's expected revision
+  ---
+  duration_ms: 21.3504
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a13GBg"}
+# Subtest: filesystem fence: fs.patch requires the caller's expected revision
+ok 5 - filesystem fence: fs.patch requires the caller's expected revision
+  ---
+  duration_ms: 6.3682
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MsQrao"}
+# Subtest: filesystem fence: stale revision refuses replacement and supplies a current revision
+ok 6 - filesystem fence: stale revision refuses replacement and supplies a current revision
+  ---
+  duration_ms: 7.9273
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jBuOr7"}
+# Subtest: filesystem fence: an authorization-time create race cannot become replacement
+ok 7 - filesystem fence: an authorization-time create race cannot become replacement
+  ---
+  duration_ms: 9.2967
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V9yG3g"}
+# Subtest: filesystem fence: publication is create-if-absent even after the final absence check
+ok 8 - filesystem fence: publication is create-if-absent even after the final absence check
+  ---
+  duration_ms: 31.8208
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bfsz2b"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-9sPRHj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-1HAdMM"}
+# Subtest: filesystem fence: parent replacement cannot redirect an approved write
+ok 9 - filesystem fence: parent replacement cannot redirect an approved write
+  ---
+  duration_ms: 9.3054
+  type: 'test'
+  ...
+# Subtest: filesystem fence: target symbolic links are refused before replacement
+ok 10 - filesystem fence: target symbolic links are refused before replacement
+  ---
+  duration_ms: 4.1206
+  type: 'test'
+  ...
+# Subtest: filesystem fence: directory junction or reparse alias cannot redirect a write
+ok 11 - filesystem fence: directory junction or reparse alias cannot redirect a write
+  ---
+  duration_ms: 3.8909
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-RrrNHZ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7KQso6"}
+# Subtest: filesystem fence: retargeting an authorized parent to a junction is refused
+ok 12 - filesystem fence: retargeting an authorized parent to a junction is refused
+  ---
+  duration_ms: 9.2369
+  type: 'test'
+  ...
+# Subtest: filesystem fence: outside hard links are refused rather than claiming confinement
+ok 13 - filesystem fence: outside hard links are refused rather than claiming confinement
+  ---
+  duration_ms: 4.5184
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PpiRhR"}
+# Subtest: filesystem fence: move destination must not overwrite an existing file
+ok 14 - filesystem fence: move destination must not overwrite an existing file
+  ---
+  duration_ms: 10.9183
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bxb9U0"}
+# Subtest: filesystem fence: move source substitution is refused
+ok 15 - filesystem fence: move source substitution is refused
+  ---
+  duration_ms: 10.8013
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jaEISd"}
+# Subtest: filesystem fence: move destination substitution is refused
+ok 16 - filesystem fence: move destination substitution is refused
+  ---
+  duration_ms: 10.301
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-b9KAJU"}
+# Subtest: filesystem fence: delete identity substitution is refused
+ok 17 - filesystem fence: delete identity substitution is refused
+  ---
+  duration_ms: 10.0624
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ADog38"}
+# Subtest: filesystem fence: delete symlink substitution is refused
+ok 18 - filesystem fence: delete symlink substitution is refused
+  ---
+  duration_ms: 8.7933
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a5VAXn"}
+# Subtest: filesystem fence: the same call cannot reserve or perform a second filesystem mutation
+ok 19 - filesystem fence: the same call cannot reserve or perform a second filesystem mutation
+  ---
+  duration_ms: 30.9884
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NieICw"}
+# Subtest: filesystem fence: revocation at the last mile prevents writes
+ok 20 - filesystem fence: revocation at the last mile prevents writes
+  ---
+  duration_ms: 5.6382
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-SMaFIT"}
+# Subtest: filesystem fence: controlled external writer proves replacement is not atomic CAS
+ok 21 - filesystem fence: controlled external writer proves replacement is not atomic CAS
+  ---
+  duration_ms: 84.9227
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-aQHQCa"}
+# Subtest: filesystem fence: ordinary create, revision replacement, patch, directory move and recursive delete work
+ok 22 - filesystem fence: ordinary create, revision replacement, patch, directory move and recursive delete work
+  ---
+  duration_ms: 153.6006
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gwVJFQ"}
+# Subtest: filesystem fence: a permit cannot change its run after authorization
+ok 23 - filesystem fence: a permit cannot change its run after authorization
+  ---
+  duration_ms: 5.4216
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gOcDVf"}
+# Subtest: filesystem fence: a permit cannot change its session after authorization
+ok 24 - filesystem fence: a permit cannot change its session after authorization
+  ---
+  duration_ms: 4.7138
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0FTVVq"}
+# Subtest: filesystem fence: a permit cannot change its actor after authorization
+ok 25 - filesystem fence: a permit cannot change its actor after authorization
+  ---
+  duration_ms: 4.8162
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PBAKq4"}
+# Subtest: filesystem fence: a permit cannot change its call after authorization
+ok 26 - filesystem fence: a permit cannot change its call after authorization
+  ---
+  duration_ms: 5.076
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-qGN5c1"}
+# Subtest: filesystem fence: a permit cannot change its tool after authorization
+ok 27 - filesystem fence: a permit cannot change its tool after authorization
+  ---
+  duration_ms: 4.5483
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5WEuAH"}
+# Subtest: filesystem fence: a permit cannot change its grant after authorization
+ok 28 - filesystem fence: a permit cannot change its grant after authorization
+  ---
+  duration_ms: 4.6731
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pB3ZoM"}
+# Subtest: filesystem fence: a permit cannot change its case-only path after authorization
+ok 29 - filesystem fence: a permit cannot change its case-only path after authorization
+  ---
+  duration_ms: 4.634
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4CvoSt"}
+# Subtest: filesystem fence: a new-file parent retarget cannot redirect create publication
+ok 30 - filesystem fence: a new-file parent retarget cannot redirect create publication
+  ---
+  duration_ms: 7.8953
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XoAeFp"}
+# Subtest: filesystem fence: fs.write rechecks revision after staging immediately before publication
+ok 31 - filesystem fence: fs.write rechecks revision after staging immediately before publication
+  ---
+  duration_ms: 21.3714
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-S6nV8c"}
+# Subtest: filesystem fence: fs.patch rechecks revision after staging immediately before publication
+ok 32 - filesystem fence: fs.patch rechecks revision after staging immediately before publication
+  ---
+  duration_ms: 19.2669
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-THAEwI"}
+# Subtest: filesystem fence: revocation after staging refuses publication and cleans its owned temporary
+ok 33 - filesystem fence: revocation after staging refuses publication and cleans its owned temporary
+  ---
+  duration_ms: 24.5668
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AW3u5A"}
+# Subtest: filesystem fence: move destination publication cannot overwrite a late race winner
+ok 34 - filesystem fence: move destination publication cannot overwrite a late race winner
+  ---
+  duration_ms: 20.6118
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-yK9vmG"}
+# Subtest: filesystem fence: a source substitution at the move syscall is detected before unlink and reports partial effects
+ok 35 - filesystem fence: a source substitution at the move syscall is detected before unlink and reports partial effects
+  ---
+  duration_ms: 25.5763
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-hI80rv"}
+# Subtest: filesystem fence: fs.move refuses changed recursive directory membership before any effect
+ok 36 - filesystem fence: fs.move refuses changed recursive directory membership before any effect
+  ---
+  duration_ms: 10.8237
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V3ZnkS"}
+# Subtest: filesystem fence: fs.delete refuses changed recursive directory membership before any effect
+ok 37 - filesystem fence: fs.delete refuses changed recursive directory membership before any effect
+  ---
+  duration_ms: 7.8732
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Ff1QJI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0mIr83"}
+# Subtest: filesystem fence: delete requires the original grant's destructive approval
+ok 38 - filesystem fence: delete requires the original grant's destructive approval
+  ---
+  duration_ms: 6.4365
+  type: 'test'
+  ...
+# Subtest: filesystem fence: a configured workspace junction cannot bypass the original grant root policy
+ok 39 - filesystem fence: a configured workspace junction cannot bypass the original grant root policy
+  ---
+  duration_ms: 2.3493
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bkFjMY"}
+# Subtest: filesystem fence: unprovable staging identity returns an explicit retained-resource failure
+ok 40 - filesystem fence: unprovable staging identity returns an explicit retained-resource failure
+  ---
+  duration_ms: 16.6271
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ZNQsqm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gfGGB6"}
+# Subtest: filesystem fence: POSIX identity contract does not treat ctime fallback as immutable creation time
+ok 41 - filesystem fence: POSIX identity contract does not treat ctime fallback as immutable creation time
+  ---
+  duration_ms: 38.6832
+  type: 'test'
+  ...
+# Subtest: filesystem fence: recursive capture has a typed depth bound before mutation
+ok 42 - filesystem fence: recursive capture has a typed depth bound before mutation
+  ---
+  duration_ms: 310.6584
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WTYroa"}
+# Subtest: filesystem fence: Windows open destination causes a typed refusal without losing the file
+ok 43 - filesystem fence: Windows open destination causes a typed refusal without losing the file
+  ---
+  duration_ms: 27.5126
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xnk1qY"}
+# Subtest: filesystem fence: an unobserved entry after recursive preflight survives the removal syscall
+ok 44 - filesystem fence: an unobserved entry after recursive preflight survives the removal syscall
+  ---
+  duration_ms: 13.8694
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MOR3IT"}
+# Subtest: filesystem fence: POSIX distinct birthtime still detects a generation change
+ok 45 - filesystem fence: POSIX distinct birthtime still detects a generation change
+  ---
+  duration_ms: 9.3786
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-iCxMrV"}
+# Subtest: filesystem fence: fs.write refuses a hard link introduced after authorization
+ok 46 - filesystem fence: fs.write refuses a hard link introduced after authorization
+  ---
+  duration_ms: 8.0416
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-JxHfzx"}
+# Subtest: filesystem fence: fs.move refuses a hard link introduced after authorization
+ok 47 - filesystem fence: fs.move refuses a hard link introduced after authorization
+  ---
+  duration_ms: 11.5539
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4Q0XjJ"}
+# Subtest: filesystem fence: fs.delete refuses a hard link introduced after authorization
+ok 48 - filesystem fence: fs.delete refuses a hard link introduced after authorization
+  ---
+  duration_ms: 9.0491
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-mrJSmk"}
+# Subtest: filesystem fence: consuming diagnostics authority prevents a subsequent filesystem effect
+ok 49 - filesystem fence: consuming diagnostics authority prevents a subsequent filesystem effect
+  ---
+  duration_ms: 4.6636
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7yLXrf"}
+# Subtest: filesystem fence: project policy preserves logical move approval and denies unapproved outside writes
+ok 50 - filesystem fence: project policy preserves logical move approval and denies unapproved outside writes
+  ---
+  duration_ms: 44.9526
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ioNvDV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pqYFV9"}
+# Subtest: filesystem fence: OS refusal is durably completed and replayed rather than left in doubt
+ok 51 - filesystem fence: OS refusal is durably completed and replayed rather than left in doubt
+  ---
+  duration_ms: 74.5053
+  type: 'test'
+  ...
+# Subtest: filesystem fence: Windows device, alternate stream and ambiguous names are refused
+ok 52 - filesystem fence: Windows device, alternate stream and ambiguous names are refused
+  ---
+  duration_ms: 2.6834
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WWd8yc"}
+# Subtest: filesystem fence: review2: create link refusal EPERM is actionable and cleans staging
+ok 53 - filesystem fence: review2: create link refusal EPERM is actionable and cleans staging
+  ---
+  duration_ms: 30.3276
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-LCaCJU"}
+# Subtest: filesystem fence: review2: create link refusal EACCES is actionable and cleans staging
+ok 54 - filesystem fence: review2: create link refusal EACCES is actionable and cleans staging
+  ---
+  duration_ms: 26.1249
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XUsenR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4bDsqe"}
+# Subtest: filesystem fence: review2: create link refusal EMLINK is actionable and cleans staging
+ok 55 - filesystem fence: review2: create link refusal EMLINK is actionable and cleans staging
+  ---
+  duration_ms: 25.8901
+  type: 'test'
+  ...
+# Subtest: filesystem fence: review2: POSIX canonical spelling refusal supplies the exact retry path without broadening authority
+ok 56 - filesystem fence: review2: POSIX canonical spelling refusal supplies the exact retry path without broadening authority
+  ---
+  duration_ms: 5.7833
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XSQXQg"}
+# Subtest: filesystem fence: review2: POSIX catches a same-object writer after the final revision read
+ok 57 - filesystem fence: review2: POSIX catches a same-object writer after the final revision read
+  ---
+  duration_ms: 30.0887
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AUzvHI"}
+# Subtest: filesystem fence: review2: POSIX positioned rehash and handle cleanup contract (0 bytes)
+ok 58 - filesystem fence: review2: POSIX positioned rehash and handle cleanup contract (0 bytes)
+  ---
+  duration_ms: 26.2817
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NEc72H"}
+# Subtest: filesystem fence: review2: POSIX positioned rehash and handle cleanup contract (131073 bytes)
+ok 59 - filesystem fence: review2: POSIX positioned rehash and handle cleanup contract (131073 bytes)
+  ---
+  duration_ms: 31.5753
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-HL14mI"}
+# Subtest: filesystem fence: review2: missing intermediate parent needs explicit createDirectories
+ok 60 - filesystem fence: review2: missing intermediate parent needs explicit createDirectories
+  ---
+  duration_ms: 19.1743
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xNE3rX"}
+# Subtest: filesystem fence: review2: mkdir race never takes over the winning directory
+ok 61 - filesystem fence: review2: mkdir race never takes over the winning directory
+  ---
+  duration_ms: 18.9847
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VKCsKB"}
+# Subtest: filesystem fence: review2: cross-device move refuses without copying or deleting the source
+ok 62 - filesystem fence: review2: cross-device move refuses without copying or deleting the source
+  ---
+  duration_ms: 24.0414
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-2ExlKd"}
+# Subtest: filesystem fence: review3: create refuses staged-byte tampering at flush
+ok 63 - filesystem fence: review3: create refuses staged-byte tampering at flush
+  ---
+  duration_ms: 29.9575
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TQTwdc"}
+# Subtest: filesystem fence: review3: create refuses staged-byte tampering at publication
+ok 64 - filesystem fence: review3: create refuses staged-byte tampering at publication
+  ---
+  duration_ms: 35.3181
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-wMIK3o"}
+# Subtest: filesystem fence: review3: replace refuses staged-byte tampering at flush
+ok 65 - filesystem fence: review3: replace refuses staged-byte tampering at flush
+  ---
+  duration_ms: 21.1884
+  type: 'test'
+  ...
+# Subtest: filesystem fence: review3: replace refuses staged-byte tampering at publication
+ok 66 - filesystem fence: review3: replace refuses staged-byte tampering at publication
+  ---
+  duration_ms: 29.8872
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5n5cfi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TWYET6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a13GBg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MsQrao","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jBuOr7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V9yG3g","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bfsz2b","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-9sPRHj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-1HAdMM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-RrrNHZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7KQso6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PpiRhR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bxb9U0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jaEISd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-b9KAJU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ADog38","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a5VAXn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NieICw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-SMaFIT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-aQHQCa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gwVJFQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gOcDVf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0FTVVq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PBAKq4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-qGN5c1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5WEuAH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pB3ZoM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4CvoSt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XoAeFp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-S6nV8c","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-THAEwI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AW3u5A","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-yK9vmG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-hI80rv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V3ZnkS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Ff1QJI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0mIr83","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bkFjMY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ZNQsqm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gfGGB6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WTYroa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xnk1qY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MOR3IT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-iCxMrV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-JxHfzx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4Q0XjJ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-mrJSmk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7yLXrf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ioNvDV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pqYFV9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WWd8yc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-LCaCJU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XUsenR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4bDsqe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XSQXQg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AUzvHI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NEc72H","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-HL14mI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xNE3rX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VKCsKB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-2ExlKd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TQTwdc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-wMIK3o","existsAtExit":false}
+# Subtest: native filesystem mutation-capable imports have a closed reviewed ownership boundary
+ok 67 - native filesystem mutation-capable imports have a closed reviewed ownership boundary
+  ---
+  duration_ms: 402.1102
+  type: 'test'
+  ...
+# Subtest: all four native mutations and bootstrap content route through the trusted seam
+ok 68 - all four native mutations and bootstrap content route through the trusted seam
+  ---
+  duration_ms: 0.812
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-tools-9ggsja"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-patch-crlf-T5Nnl0"}
+# Subtest: filesystem tools read, inspect, list, search, and preserve CRLF edits
+ok 69 - filesystem tools read, inspect, list, search, and preserve CRLF edits
+  ---
+  duration_ms: 222.3094
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-git-aware-j33BrW"}
+# Subtest: fs.patch accepts LF multiline edits for CRLF files without mixing line endings
+ok 70 - fs.patch accepts LF multiline edits for CRLF files without mixing line endings
+  ---
+  duration_ms: 41.1243
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-mutations-wXdKso"}
+# Subtest: directory listing and search follow Git discovery and classification
+ok 71 - directory listing and search follow Git discovery and classification
+  ---
+  duration_ms: 680.4841
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostics-kxzxAa"}
+# Subtest: filesystem mutations are revision-aware, serialized, movable, and deletable
+ok 72 - filesystem mutations are revision-aware, serialized, movable, and deletable
+  ---
+  duration_ms: 89.523
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostic-failure-lWHYbC"}
+# Subtest: text mutations attach changed-file TypeScript diagnostics
+ok 73 - text mutations attach changed-file TypeScript diagnostics
+  ---
+  duration_ms: 327.4207
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-benchmark-policy-4jflu0"}
+# Subtest: diagnostic failures never roll back a successful atomic mutation
+ok 74 - diagnostic failures never roll back a successful atomic mutation
+  ---
+  duration_ms: 32.4184
+  type: 'test'
+  ...
+# Subtest: benchmark filesystem policy hides oracle files and protects verifier assets
+ok 75 - benchmark filesystem policy hides oracle files and protects verifier assets
+  ---
+  duration_ms: 121.008
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-tools-9ggsja","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-patch-crlf-T5Nnl0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-git-aware-j33BrW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-mutations-wXdKso","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostics-kxzxAa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostic-failure-lWHYbC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-benchmark-policy-4jflu0","existsAtExit":false}
+1..75
+# tests 75
+# suites 0
+# pass 75
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6853.4379

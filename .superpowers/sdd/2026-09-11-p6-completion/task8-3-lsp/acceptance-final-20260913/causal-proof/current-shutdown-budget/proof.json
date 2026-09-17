@@ -1,0 +1,164 @@
+{
+  "id": "current-shutdown-budget",
+  "target": "runner-v2/src/lsp-client.ts",
+  "test": "runner-v2/test/lsp-shared-client.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green",
+  "mutation": {
+    "id": "current-shutdown-budget",
+    "file": "runner-v2/src/lsp-client.ts",
+    "old": "this.shutdownTimeoutMs + this.writeTimeoutMs).then",
+    "replacement": "this.shutdownTimeoutMs).then",
+    "test": "lsp-shared-client",
+    "pattern": "^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$",
+    "originalHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "faultHash": "156ac2afbf4a5f6a158fbc475c8966ebbdd66b99363816206e75fe7e2aadfd0b",
+    "red": {
+      "id": "current-shutdown-budget-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [
+        "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-UJ25fQ"
+      ],
+      "failedTests": [
+        "not ok 1 - LSP shared shutdown budgets response and acknowledged exit as serial bounded phases"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "green": {
+      "id": "current-shutdown-budget-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  "sourceFinalSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+  "testFinalSha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e",
+  "redReceipt": {
+    "id": "current-shutdown-budget-red",
+    "startedAt": "2026-09-13T19:40:43.823Z",
+    "finishedAt": "2026-09-13T19:40:44.487Z",
+    "wrapperPid": 3480,
+    "testPid": 38524,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$",
+      "runner-v2/test/lsp-shared-client.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-UJ25fQ"
+    ]
+  },
+  "greenReceipt": {
+    "id": "current-shutdown-budget-green",
+    "startedAt": "2026-09-13T19:40:44.536Z",
+    "finishedAt": "2026-09-13T19:40:45.142Z",
+    "wrapperPid": 22220,
+    "testPid": 35032,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$",
+      "runner-v2/test/lsp-shared-client.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-terminal.json",
+      "sha256": "185d5ccb4c7ef87de8350046391c58119e1c5ef66b4398bc0ef7ea00c62fec26"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-inputs-before.json",
+      "sha256": "9274b3e35333454529251ca4137b21669209facb5fcb3f6934f2e99ebf08dd05"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-inputs-after.json",
+      "sha256": "9274b3e35333454529251ca4137b21669209facb5fcb3f6934f2e99ebf08dd05"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-stdout.log",
+      "sha256": "0d1f37e7275308b47eb07da9a40a1cde4b4b67560c7b326f2f2779970fdb846f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-wrapper.json",
+      "sha256": "dfa00ed0502302d13c6f954a33ee1ed5e1d5343f13dd1521a18dd6d3592431c8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/red-child.json",
+      "sha256": "95b21519a36e3fb1acedf9fa0d76a52b98a6c3dadb0d66e7cf64aa6e58e70ddb"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-terminal.json",
+      "sha256": "15d5c4ff0c07580facbdd67ed409da4ec3c5241295300369be4e0fe5c4565d06"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-inputs-before.json",
+      "sha256": "ed4ad47c2c6d8cdd36d123ae49a99c62371ac750ca68e0790c8fbba51955dfce"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-inputs-after.json",
+      "sha256": "ed4ad47c2c6d8cdd36d123ae49a99c62371ac750ca68e0790c8fbba51955dfce"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-stdout.log",
+      "sha256": "70e50bd55d1c42ee1740efbb0f46fb8dba2ed0dd92c8dea65bec48bcb3bcb7cb"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-wrapper.json",
+      "sha256": "a32067be40688c8f56b604fca1e2b67d5ab36512327b3b4e5d19b432895fd6d4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-shutdown-budget-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-shutdown-budget/green-child.json",
+      "sha256": "c684a8e4ba7cfbcd1e51f96a1aa5422327557784cf73342f468612e8837cc350"
+    }
+  ]
+}

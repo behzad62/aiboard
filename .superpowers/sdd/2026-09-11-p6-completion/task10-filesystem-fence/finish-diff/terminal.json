@@ -1,0 +1,19 @@
+{
+  "id": "finish-diff",
+  "startedAt": "2026-09-15T08:16:16.421Z",
+  "finishedAt": "2026-09-15T08:16:17.173Z",
+  "wrapperPid": 57492,
+  "testPid": 6868,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 442,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--input-type=module",
+    "-e",
+    "import {spawnSync} from 'node:child_process';const r=spawnSync('git',['diff','--check','--','runner-v2'],{stdio:'inherit',windowsHide:true});if(r.error)throw r.error;process.exitCode=r.status??1;"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

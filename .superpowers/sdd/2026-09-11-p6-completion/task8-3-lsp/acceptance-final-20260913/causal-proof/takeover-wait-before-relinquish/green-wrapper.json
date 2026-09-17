@@ -1,0 +1,34 @@
+{
+  "pid": 60776,
+  "identity": {
+    "Id": 60776,
+    "StartTimeUtc": "2026-09-12T15:46:17.1052454Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-12T15:46:17.139Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\resume-20260912\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\resume-20260912\\rev-takeover-wait-before-relinquish-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^C2\\ round7\\ live\\ cleanup\\ takes\\ over\\ accepted\\ output\\ before\\ ACK-gated\\ quiescence$",
+    "runner-v2/test/streaming-process-session-runtime.test.ts"
+  ],
+  "spec": {
+    "tests": [
+      "runner-v2/test/streaming-process-session-runtime.test.ts"
+    ],
+    "pattern": "^C2\\ round7\\ live\\ cleanup\\ takes\\ over\\ accepted\\ output\\ before\\ ACK-gated\\ quiescence$",
+    "id": "rev-takeover-wait-before-relinquish-green"
+  }
+}

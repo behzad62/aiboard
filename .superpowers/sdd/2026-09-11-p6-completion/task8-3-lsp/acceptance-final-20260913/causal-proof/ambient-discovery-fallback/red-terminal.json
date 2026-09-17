@@ -1,0 +1,26 @@
+{
+  "id": "fault-ambient-discovery-fallback-red",
+  "startedAt": "2026-09-12T17:26:23.816Z",
+  "finishedAt": "2026-09-12T17:26:24.523Z",
+  "wrapperPid": 93540,
+  "testPid": 97980,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 412,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/language-environment.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-env-LoswuF"
+  ]
+}

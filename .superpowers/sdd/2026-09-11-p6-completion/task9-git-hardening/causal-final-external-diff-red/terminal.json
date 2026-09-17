@@ -1,0 +1,27 @@
+{
+  "id": "causal-final-external-diff-red",
+  "startedAt": "2026-09-14T19:49:56.957Z",
+  "finishedAt": "2026-09-14T19:50:11.999Z",
+  "wrapperPid": 40684,
+  "testPid": 41140,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=repository external diff before diff can launch it",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "rootCount": 4,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-lfiXdu"
+  ]
+}

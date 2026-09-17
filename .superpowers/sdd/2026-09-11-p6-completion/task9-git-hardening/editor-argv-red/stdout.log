@@ -1,0 +1,30 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-Ddhy9Q"}
+# Subtest: Git policy refuses operations that would require an editor before Git can mutate
+not ok 1 - Git policy refuses operations that would require an editor before Git can mutate
+  ---
+  duration_ms: 8.7418
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-execution-policy.test.ts:1:3336'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async rejectsPolicy (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:26:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:92:5)
+    async withRepository (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:14:16)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-execution-policy.test.ts:89:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-Ddhy9Q","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 274.6944

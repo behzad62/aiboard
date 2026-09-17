@@ -1,0 +1,21 @@
+{
+  "pid": 37200,
+  "identity": {
+    "Id": 37200,
+    "StartTimeUtc": "2026-09-15T07:30:01.0551547Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 36064,
+  "spawnedAt": "2026-09-15T07:30:01.321Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/review3-staging.probe.test.ts"
+  ]
+}

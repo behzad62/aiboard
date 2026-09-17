@@ -1,0 +1,10 @@
+{
+  "id": "fault-canonicalization-red",
+  "pattern": "a new-file parent retarget",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/reverse-fault.mjs"
+  ]
+}

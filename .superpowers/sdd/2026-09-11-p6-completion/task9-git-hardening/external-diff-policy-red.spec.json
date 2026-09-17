@@ -1,0 +1,7 @@
+{
+  "pattern": "repository external diff before diff can launch it",
+  "id": "external-diff-policy-red",
+  "tests": [
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ]
+}

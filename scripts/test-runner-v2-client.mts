@@ -8,10 +8,21 @@ import {
   getNativeBuildTranscript,
   getNativeBuildUsage,
   getNativeBuildObservability,
+  getNativeProcessRecovery,
+  generateNativeProcessRecovery,
+  decideNativeProcessRecovery,
+  executeNativeProcessRecovery,
+  projectNativeAcceptanceContract,
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
+  selectNativeVerifierRuntime,
+  submitNativeBuildUserGuidance,
+  answerNativeArchitectQuestion,
+  NativeRunnerError,
   type NativeRunnerConnection,
+  type NativeBuildProjection,
+  type NativeBuildStepResult,
 } from "../lib/client/runner-v2";
 import {
   nativeBuildProvisioningRunId,
@@ -49,6 +60,7 @@ assert.deepEqual(
   {
     configuredRuntimeIds: ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
     workerRuntimeIds: ["chatgpt:gpt-5.4"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
   }
 );
 assert.deepEqual(resolveNativeProviderTransport("openai"), {
@@ -81,6 +93,7 @@ assert.deepEqual(
   {
     configuredRuntimeIds: ["chatgpt:gpt-5.5"],
     workerRuntimeIds: ["chatgpt:gpt-5.5"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.5"],
   }
 );
 
@@ -88,8 +101,66 @@ const connection: NativeRunnerConnection = {
   url: "http://127.0.0.1:8787/",
   token: "runner-control-token",
 };
+const blockedStep: NativeBuildStepResult = {
+  status: "blocked",
+  action: "architect_question_pending",
+};
+assert.equal(blockedStep.status, "blocked");
+const steeringProjection: NativeBuildProjection = {
+  runId: "run-steering",
+  status: "running",
+  planRevision: 1,
+  tasks: {},
+  guidance: {},
+  userGuidance: {
+    "guidance-1": {
+      guidanceId: "guidance-1",
+      text: "Preserve the public API.",
+      version: 1,
+      status: "submitted",
+    },
+  },
+  userGuidanceVersion: 1,
+  architectQuestions: {
+    "question-1": {
+      questionId: "question-1",
+      question: "Which public contract is authoritative?",
+      version: 1,
+      decisionKind: "authority_decision",
+      status: "open",
+      resumeStatus: "pending",
+    },
+  },
+  architectQuestionVersion: 1,
+  blockingArchitectQuestionId: "question-1",
+  reviews: {},
+  runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+  lastSequence: 4,
+};
+assert.equal(steeringProjection.userGuidance["guidance-1"].status, "submitted");
+assert.equal(steeringProjection.architectQuestions["question-1"].resumeStatus, "pending");
 const calls: Array<{ url: string; init: RequestInit }> = [];
 const requestController = new AbortController();
+const recoveryRecord = {
+  version: 1,
+  proposalId: "proposal-1",
+  callId: "recovery:proposal-1",
+  scope: { kind: "subprocess", runId: "run_1", invocationId: "invocation-1", logicalProcessId: "logical-1",
+    revision: 4, ownerId: "owner", fencingToken: 2, state: "outcome_unknown",
+    backendIdentity: "a".repeat(64), birthFingerprint: "b".repeat(64) },
+  requestedAction: "terminate",
+  targetScope: ["logical-1"],
+  requestedCapabilities: ["tree_termination", "verified_emptiness"],
+  expiresAt: "2026-09-15T18:30:00.000Z",
+  proposalFingerprint: "c".repeat(64),
+  commandFingerprint: "d".repeat(64),
+  argumentsFingerprint: "e".repeat(64),
+  rationaleFingerprint: "f".repeat(64),
+  createdAt: "2026-09-15T18:00:00.000Z",
+  updatedAt: "2026-09-15T18:00:01.000Z",
+  state: "user_decision_required",
+  reason: "destructive_requires_user",
+} as const;
 const fetchImpl: typeof fetch = async (input, init = {}) => {
   calls.push({ url: String(input), init });
   if (String(input).endsWith("/v2/health")) {
@@ -131,15 +202,70 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       providers: [],
       events: [],
       git: { integrationBranch: "aiboard/run/integration", integrationRevision: "abc123", commits: [] },
+      executionSafety: {
+        availability: "live",
+        fullBypass: true,
+        isolation: { status: "unconfined_explicit_full", securityBoundary: "provider_specific_not_universal_security_boundary", activeLeaseCount: 0, blockers: [] },
+        grants: { active: 1, consumed: 0 },
+        processes: [],
+        recovery: [recoveryRecord],
+      },
     });
+  }
+  if (String(input).endsWith("/build/recovery")) {
+    return Response.json({ records: [recoveryRecord] });
+  }
+  if (String(input).endsWith("/build/recovery/generate")) {
+    return Response.json(recoveryRecord);
+  }
+  if (String(input).endsWith("/build/recovery/proposal-1/decision")) {
+    return Response.json({ ...recoveryRecord, state: "authorized", reason: "user_approved" });
+  }
+  if (String(input).endsWith("/build/recovery/proposal-1/execute")) {
+    return Response.json({ ...recoveryRecord, state: "executed", reason: "cleanup_verified", cleanupState: "verified_empty" });
   }
   if (String(input).endsWith("/build/audit")) {
     return Response.json({
       protocolVersion: 2,
       run: { runId: "run_1" },
-      build: { runId: "run_1" },
+      build: {
+        runId: "run_1",
+        tasks: {
+          task_a: {
+            acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+            criterionEvidenceLinks: [{
+              criterionId: "behavior",
+              evidenceId: "evidence_behavior",
+              artifactHashes: ["a".repeat(64)],
+            }],
+          },
+        },
+      },
       usage: { effective: { modelCalls: 9 } },
       observability: { runId: "run_1", toolCallCount: 1 },
+      acceptanceContract: {
+        status: "current",
+        planRevision: 1,
+        tasks: {
+          task_a: {
+            acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+            acceptanceCriteriaVersion: 1,
+            criterionEvidenceLinks: [{
+              criterionId: "behavior",
+              evidenceId: "evidence_behavior",
+              artifactHashes: ["a".repeat(64)],
+            }],
+            criterionVerdicts: [{
+              criterionId: "behavior",
+              verdict: "satisfied",
+              rationale: "The evidence supports the behavior.",
+              evidenceIds: ["evidence_behavior"],
+              artifactHashes: ["a".repeat(64)],
+            }],
+            reviewStatus: "approved",
+          },
+        },
+      },
       runEvents: [{ sequence: 1 }],
       buildEvents: [{ sequence: 1 }],
     });
@@ -176,6 +302,8 @@ await createNativeBuild(connection, {
     objective: "Build the requested feature.",
     architectRuntimeId: "chatgpt:gpt-5.5",
     workerRuntimeIds: ["chatgpt:gpt-5.5"],
+    verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+    alwaysRequireIndependentVerifier: true,
     maxConcurrency: 2,
     runPolicy: "budgeted",
     budgetLimits: {
@@ -184,6 +312,37 @@ await createNativeBuild(connection, {
     },
   },
 }, fetchImpl, requestController.signal);
+await submitNativeBuildUserGuidance(
+  connection,
+  "run_1",
+  {
+    guidanceId: "guidance-1",
+    text: "Preserve the public API.",
+    idempotencyKey: "guidance:1",
+  },
+  fetchImpl,
+  requestController.signal,
+);
+await answerNativeArchitectQuestion(
+  connection,
+  "run_1",
+  "question-1",
+  {
+    expectedVersion: 1,
+    answer: "Use the documented public contract.",
+    idempotencyKey: "answer:1",
+  },
+  fetchImpl,
+  requestController.signal,
+);
+await selectNativeVerifierRuntime(
+  connection,
+  "run_1",
+  "google:verifier",
+  "verifier:google",
+  fetchImpl,
+  requestController.signal,
+);
 await selectNativeProjectHandoff(
   connection,
   "run_1",
@@ -209,6 +368,11 @@ const observed = await getNativeBuildObservability(
 assert.equal(observed.agents.length, 1);
 assert.equal(observed.toolCallCount, 1);
 assert.equal(observed.tools[0].toolName, "fs.read");
+assert.equal(observed.executionSafety?.availability, "live");
+if (observed.executionSafety?.availability === "live") {
+  assert.equal(observed.executionSafety.fullBypass, true);
+  assert.equal(observed.executionSafety.recovery[0]?.state, "user_decision_required");
+}
 const audit = await getNativeBuildAudit(
   connection,
   "run_1",
@@ -217,6 +381,187 @@ const audit = await getNativeBuildAudit(
 );
 assert.equal(audit.protocolVersion, 2);
 assert.equal(audit.runEvents.length, 1);
+assert.equal(audit.acceptanceContract.tasks.task_a.acceptanceCriteria[0].text, "The behavior works.");
+assert.equal(audit.acceptanceContract.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
+assert.equal(audit.acceptanceContract.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+const recoveryRecords = await getNativeProcessRecovery(connection, "run_1", fetchImpl, requestController.signal);
+assert.equal(recoveryRecords[0]?.proposalId, "proposal-1");
+const generatedRecovery = await generateNativeProcessRecovery(
+  connection, "run_1", "invocation-1", "proposal-1", fetchImpl, requestController.signal,
+);
+assert.equal(generatedRecovery.state, "user_decision_required");
+const approvedRecovery = await decideNativeProcessRecovery(
+  connection, "run_1", "proposal-1", recoveryRecord.proposalFingerprint, "approve", fetchImpl, requestController.signal,
+);
+assert.equal(approvedRecovery.state, "authorized");
+const executedRecovery = await executeNativeProcessRecovery(
+  connection, "run_1", "proposal-1", recoveryRecord.proposalFingerprint, fetchImpl, requestController.signal,
+);
+assert.equal(executedRecovery.cleanupState, "verified_empty");
+const guidanceCall = calls.find((call) => call.url.endsWith("/v2/runs/run_1/build/user-guidance"));
+assert.ok(guidanceCall);
+assert.equal(guidanceCall.init.method, "POST");
+assert.deepEqual(JSON.parse(String(guidanceCall.init.body)), {
+  guidanceId: "guidance-1",
+  text: "Preserve the public API.",
+  idempotencyKey: "guidance:1",
+});
+const answerCall = calls.find((call) => call.url.endsWith("/v2/runs/run_1/build/architect-questions/question-1/answer"));
+assert.ok(answerCall);
+assert.equal(answerCall.init.method, "POST");
+assert.deepEqual(JSON.parse(String(answerCall.init.body)), {
+  expectedVersion: 1,
+  answer: "Use the documented public contract.",
+  idempotencyKey: "answer:1",
+});
+await assert.rejects(
+  () => answerNativeArchitectQuestion(
+    connection,
+    "run_1",
+    "question-stale",
+    { expectedVersion: 1, answer: "Stale answer.", idempotencyKey: "answer:stale" },
+    async () => Response.json(
+      { error: "Architect question question-stale is not open.", code: "invalid_transition" },
+      { status: 409 },
+    ),
+  ),
+  (error: unknown) => error instanceof NativeRunnerError &&
+    error.status === 409 && error.code === "invalid_transition",
+);
+
+const clientProjection = projectNativeAcceptanceContract({
+  runId: "run_1",
+  status: "running",
+  planRevision: 1,
+  tasks: {
+    task_a: {
+      id: "task_a",
+      objective: "Implement A",
+      dependencies: [],
+      status: "submitted",
+      requiredCapabilities: ["code"],
+      acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+      acceptanceCriteriaVersion: 1,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_behavior",
+        artifactHashes: ["a".repeat(64)],
+      }],
+      attempt: 1,
+    },
+  },
+  guidance: {},
+  reviews: {
+    task_a: {
+      taskId: "task_a",
+      status: "approved",
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "satisfied",
+        rationale: "The evidence supports the behavior.",
+        evidenceIds: ["evidence_behavior"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    },
+  },
+  runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+  lastSequence: 3,
+} satisfies NativeBuildProjection);
+assert.equal(clientProjection.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+assert.equal(clientProjection.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
+
+const retryProjection = projectNativeAcceptanceContract(({
+  planRevision: 2,
+  acceptanceContractStatus: "current",
+  tasks: {
+    task_a: {
+      id: "task_a",
+      objective: "Retry task",
+      dependencies: [],
+      status: "submitted",
+      requiredCapabilities: ["code"],
+      acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+      acceptanceCriteriaVersion: 2,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_attempt_1",
+        artifactHashes: ["a".repeat(64)],
+        attempt: 1,
+      }],
+      attempt: 2,
+    },
+  },
+  reviews: {
+    task_a: {
+      taskId: "task_a",
+      status: "rejected",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "unsatisfied",
+        rationale: "Attempt one is incomplete.",
+        evidenceIds: ["evidence_attempt_1"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    },
+  },
+  submissionHistory: {
+    task_a: [{
+      taskId: "task_a",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      changeSetId: "changeset_attempt_1",
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_attempt_1",
+        artifactHashes: ["a".repeat(64)],
+        attempt: 1,
+      }],
+    }],
+  },
+  reviewHistory: {
+    task_a: [{
+      taskId: "task_a",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      status: "rejected",
+      summary: "Attempt one is incomplete.",
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "unsatisfied",
+        rationale: "Attempt one is incomplete.",
+        evidenceIds: ["evidence_attempt_1"],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    }],
+  },
+} as unknown as NativeBuildProjection));
+assert.deepEqual(retryProjection.tasks.task_a.criterionEvidenceLinks, []);
+assert.deepEqual(retryProjection.tasks.task_a.criterionVerdicts, []);
+assert.equal(retryProjection.tasks.task_a.reviewStatus, undefined);
+const retryTaskHistory = retryProjection.tasks.task_a as typeof retryProjection.tasks.task_a & {
+  submissionHistory: Array<{ attempt: number; acceptanceCriteriaVersion?: number }>;
+  reviewHistory: Array<{ attempt?: number; acceptanceCriteriaVersion?: number; status: string }>;
+};
+assert.deepEqual(retryTaskHistory.submissionHistory, [{
+  taskId: "task_a",
+  attempt: 1,
+  acceptanceCriteriaVersion: 1,
+  changeSetId: "changeset_attempt_1",
+  criterionEvidenceLinks: [{
+    criterionId: "behavior",
+    evidenceId: "evidence_attempt_1",
+    artifactHashes: ["a".repeat(64)],
+    attempt: 1,
+  }],
+}]);
+assert.equal(retryTaskHistory.reviewHistory[0].attempt, 1);
+assert.equal(retryTaskHistory.reviewHistory[0].acceptanceCriteriaVersion, 1);
+assert.equal(retryTaskHistory.reviewHistory[0].status, "rejected");
 
 const attachmentCalls: string[] = [];
 const attachmentFetch: typeof fetch = async (input) => {
@@ -278,11 +623,18 @@ assert.deepEqual(JSON.parse(String(calls[2].init.body)).build.budgetLimits, {
   maxEstimatedCostMicros: 1_000_000,
   maxActiveMs: 1_800_000,
 });
-assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
-assert.equal(JSON.parse(String(calls[3].init.body)).choice, "keep_integration_branch");
-assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
-assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
-assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
+assert.equal(calls[3].url, "http://127.0.0.1:8787/v2/runs/run_1/build/user-guidance");
+assert.equal(calls[4].url, "http://127.0.0.1:8787/v2/runs/run_1/build/architect-questions/question-1/answer");
+assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/verifier-handoff");
+assert.deepEqual(JSON.parse(String(calls[5].init.body)), {
+  runtimeId: "google:verifier",
+  idempotencyKey: "verifier:google",
+});
+assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
+assert.equal(JSON.parse(String(calls[6].init.body)).choice, "keep_integration_branch");
+assert.equal(calls[7].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");
+assert.equal(calls[8].url, "http://127.0.0.1:8787/v2/runs/run_1/build/observability");
+assert.equal(calls[9].url, "http://127.0.0.1:8787/v2/runs/run_1/build/audit");
 
 const recoveryFetch: typeof fetch = async (input) => {
   const url = String(input);

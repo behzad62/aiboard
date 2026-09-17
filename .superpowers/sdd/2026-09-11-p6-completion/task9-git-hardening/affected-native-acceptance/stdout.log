@@ -1,0 +1,464 @@
+TAP version 13
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-b001134c-56f5-47ba-8ea6-ffab5eac2851"}
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-b001134c-56f5-47ba-8ea6-ffab5eac2851"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-b001134c-56f5-47ba-8ea6-ffab5eac2851"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-3abb0375-d0f1-400d-a0c5-af7407f31167"}
+# Subtest: ExecutionHost close conjunction retains a pre-adoption unknown launch and exact retry authority
+ok 1 - ExecutionHost close conjunction retains a pre-adoption unknown launch and exact retry authority
+  ---
+  duration_ms: 120.9214
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-3abb0375-d0f1-400d-a0c5-af7407f31167"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-3abb0375-d0f1-400d-a0c5-af7407f31167"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-3e81d26e-fd20-4ff2-b93b-45ab33b66521"}
+# Subtest: ExecutionHost close conjunction independently checks launches beyond bounded recovery
+ok 2 - ExecutionHost close conjunction independently checks launches beyond bounded recovery
+  ---
+  duration_ms: 4038.3589
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-3e81d26e-fd20-4ff2-b93b-45ab33b66521"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-3e81d26e-fd20-4ff2-b93b-45ab33b66521"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-c9643397-bfea-4709-ab91-dc01e464ae1a"}
+# Subtest: ExecutionHost close conjunction consumes blocked recovery when durable settlement fails
+ok 3 - ExecutionHost close conjunction consumes blocked recovery when durable settlement fails
+  ---
+  duration_ms: 92.2167
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-c9643397-bfea-4709-ab91-dc01e464ae1a"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-c9643397-bfea-4709-ab91-dc01e464ae1a"}
+# {"fixture":"c2-close-conjunction","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-1ed0b393-d6c5-4bcd-b6a8-18f1e08f7ced"}
+# Subtest: ExecutionHost close conjunction validates handed-off launch with released session
+ok 4 - ExecutionHost close conjunction validates handed-off launch with released session
+  ---
+  duration_ms: 76.0892
+  type: 'test'
+  ...
+# {"fixture":"c2-close-conjunction","event":"handles-closed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-1ed0b393-d6c5-4bcd-b6a8-18f1e08f7ced"}
+# {"fixture":"c2-close-conjunction","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2-close-1ed0b393-d6c5-4bcd-b6a8-18f1e08f7ced"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-5970759e-927e-436e-9f0f-e4eeddef2e6e"}
+# Subtest: ExecutionHost close conjunction validates handed-off launch with missing session
+ok 5 - ExecutionHost close conjunction validates handed-off launch with missing session
+  ---
+  duration_ms: 69.5793
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-5970759e-927e-436e-9f0f-e4eeddef2e6e"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-219994d3-e46f-4cff-b227-1fd9a1029f59"}
+# Subtest: one ExecutionHost creates isolated per-run grants stores runtimes and cleanup ownership
+ok 6 - one ExecutionHost creates isolated per-run grants stores runtimes and cleanup ownership
+  ---
+  duration_ms: 85.7666
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-219994d3-e46f-4cff-b227-1fd9a1029f59"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-b42fddfa-0085-43ff-9f9d-4150b57adeaa"}
+# Subtest: ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings
+ok 7 - ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings
+  ---
+  duration_ms: 51.5127
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-b42fddfa-0085-43ff-9f9d-4150b57adeaa"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-d546e473-f758-476d-a639-05eaa8479e86"}
+# Subtest: ExecutionHost excludes provider-prefixed credentials from its captured child source
+ok 8 - ExecutionHost excludes provider-prefixed credentials from its captured child source
+  ---
+  duration_ms: 3.1623
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-d546e473-f758-476d-a639-05eaa8479e86"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-298852c7-f154-48ee-aee7-02601771447c"}
+# Subtest: failed ExecutionHost run construction unwinds its opened SQLite resources
+ok 9 - failed ExecutionHost run construction unwinds its opened SQLite resources
+  ---
+  duration_ms: 27.3423
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-298852c7-f154-48ee-aee7-02601771447c"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-8e351557-19a1-4f38-b797-5d46f1624a40"}
+# Subtest: run binding retains membership and retries a transient cleanup failure
+ok 10 - run binding retains membership and retries a transient cleanup failure
+  ---
+  duration_ms: 47.5706
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-8e351557-19a1-4f38-b797-5d46f1624a40"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-3a3b60f4-85fc-4f7c-a550-5edfd38008e9"}
+# Subtest: ExecutionHost close retains failed bindings and retries its exact cleanup graph
+ok 11 - ExecutionHost close retains failed bindings and retries its exact cleanup graph
+  ---
+  duration_ms: 48.0735
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-985b96c8-8b49-4ccd-aafd-f00a9aa57039"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted active
+ok 12 - fresh ExecutionHost close accounts for unreleased adopted active
+  ---
+  duration_ms: 86.577
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-df34efd8-8a53-431f-9936-3ab1d95e408f"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted stopping
+ok 13 - fresh ExecutionHost close accounts for unreleased adopted stopping
+  ---
+  duration_ms: 77.944
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-aad08b9c-1ffc-43ee-96cc-ffb1fe04cec8"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted input_unavailable
+ok 14 - fresh ExecutionHost close accounts for unreleased adopted input_unavailable
+  ---
+  duration_ms: 79.2125
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-eefc21d5-996e-4dd2-ae65-fff8aff49591"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted backend_unavailable
+ok 15 - fresh ExecutionHost close accounts for unreleased adopted backend_unavailable
+  ---
+  duration_ms: 77.6667
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-a3241219-0821-4101-9a3c-552525746e7c"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted outcome_unknown
+ok 16 - fresh ExecutionHost close accounts for unreleased adopted outcome_unknown
+  ---
+  duration_ms: 79.9394
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-cec8b084-5340-4214-b09c-c3890fd8f971"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted cleanup_pending
+ok 17 - fresh ExecutionHost close accounts for unreleased adopted cleanup_pending
+  ---
+  duration_ms: 72.4596
+  type: 'test'
+  ...
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-88105e6a-37d2-4b37-831a-98b8f98eeae1"}
+# Subtest: fresh ExecutionHost close accounts for unreleased adopted cleanup_blocked
+ok 18 - fresh ExecutionHost close accounts for unreleased adopted cleanup_blocked
+  ---
+  duration_ms: 79.2403
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-6BrIwj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-J98QMz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QHRx4U"}
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-88105e6a-37d2-4b37-831a-98b8f98eeae1"}
+# Subtest: two real concurrent run bindings cannot cross grants outputs or cleanup effects
+ok 19 - two real concurrent run bindings cannot cross grants outputs or cleanup effects
+  ---
+  duration_ms: 14877.5433
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-6BrIwj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-J98QMz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QHRx4U","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution IiefTB"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 2FINKz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution yZzwAR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 00twLP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution iKDqkF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution Red6FE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution GmaC0h"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution PeoEdM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution ROvpNu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 6yOVEH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution XqwmRN"}
+# Subtest: restart reuses completed checks and executes only pending categories before one submission
+ok 20 - restart reuses completed checks and executes only pending categories before one submission
+  ---
+  duration_ms: 100.8795
+  type: 'test'
+  ...
+# Subtest: a non-green check is persisted once and stops the generation before submission
+ok 21 - a non-green check is persisted once and stops the generation before submission
+  ---
+  duration_ms: 50.9674
+  type: 'test'
+  ...
+# Subtest: a persisted mechanical failure is cleaned, typed into repair work, and survives restart exactly once
+ok 22 - a persisted mechanical failure is cleaned, typed into repair work, and survives restart exactly once
+  ---
+  duration_ms: 125.9036
+  type: 'test'
+  ...
+# Subtest: durable cleanup failure blocks review and restart retries the exact generation
+ok 23 - durable cleanup failure blocks review and restart retries the exact generation
+  ---
+  duration_ms: 83.0568
+  type: 'test'
+  ...
+# Subtest: mechanical cleanup failure retries after restart without duplicating the failure report
+ok 24 - mechanical cleanup failure retries after restart without duplicating the failure report
+  ---
+  duration_ms: 66.6543
+  type: 'test'
+  ...
+# Subtest: forged or stale failure reports and raw review approval cannot bypass mechanical failure
+ok 25 - forged or stale failure reports and raw review approval cannot bypass mechanical failure
+  ---
+  duration_ms: 54.2253
+  type: 'test'
+  ...
+# Subtest: timeout, cancellation, browser policy, and missing evidence outcomes map into durable failures
+ok 26 - timeout, cancellation, browser policy, and missing evidence outcomes map into durable failures
+  ---
+  duration_ms: 217.5343
+  type: 'test'
+  ...
+# Subtest: integration advancement during a check invalidates the generation and forbids stale persistence
+ok 27 - integration advancement during a check invalidates the generation and forbids stale persistence
+  ---
+  duration_ms: 46.5856
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution IiefTB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 2FINKz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution yZzwAR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 00twLP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution iKDqkF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution Red6FE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution GmaC0h","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution PeoEdM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution ROvpNu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 6yOVEH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution XqwmRN","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-zQFe1C"}
+# Subtest: final verification managed adapter issues a fresh exact run-owned grant for start poll and stop
+ok 28 - final verification managed adapter issues a fresh exact run-owned grant for start poll and stop
+  ---
+  duration_ms: 20.8022
+  type: 'test'
+  ...
+# synthetic final-verification managed root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-final-managed-authority-zQFe1C
+# verified final-verification managed root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-final-managed-authority-zQFe1C
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-zQFe1C","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-reassigned-review-qYq1ps"}
+# Subtest: Architect model calls carry direct durable role attribution
+ok 29 - Architect model calls carry direct durable role attribution
+  ---
+  duration_ms: 0.8294
+  type: 'test'
+  ...
+# Subtest: Architect review context carries the submitted criterion evidence mapping
+ok 30 - Architect review context carries the submitted criterion evidence mapping
+  ---
+  duration_ms: 0.5418
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-steering-X34irb"}
+# Subtest: Architect review loads the revised worker session instead of the legacy same-attempt session
+ok 31 - Architect review loads the revised worker session instead of the legacy same-attempt session
+  ---
+  duration_ms: 47.9878
+  type: 'test'
+  ...
+# Subtest: Architect skill routing prioritizes the task named by the current action
+ok 32 - Architect skill routing prioritizes the task named by the current action
+  ---
+  duration_ms: 0.765
+  type: 'test'
+  ...
+# Subtest: Architect reviews inspect the submitted attempt workspace instead of the project root
+ok 33 - Architect reviews inspect the submitted attempt workspace instead of the project root
+  ---
+  duration_ms: 0.1337
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-Zl7rMI"}
+# Subtest: Native Architect steering cancellation does not create a user-decision pause
+ok 34 - Native Architect steering cancellation does not create a user-decision pause
+  ---
+  duration_ms: 179.3774
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-project-T9GzN1"}
+# Subtest: Architect provider failure pauses for user-selected handoff before planning
+ok 35 - Architect provider failure pauses for user-selected handoff before planning
+  ---
+  duration_ms: 164.3782
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-full-UbQre4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-only-tools-xsSKe9"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-resume-0dXqeh"}
+# Subtest: Architect excludes mutating extension tools under Project and Full access
+ok 36 - Architect excludes mutating extension tools under Project and Full access
+  ---
+  duration_ms: 225.7904
+  type: 'test'
+  ...
+# Subtest: Plan-only rejects forged mutating browser and MCP calls even under Full access
+ok 37 - Plan-only rejects forged mutating browser and MCP calls even under Full access
+  ---
+  duration_ms: 1.35
+  type: 'test'
+  ...
+# Subtest: resumed Architect action receives a fresh mechanical reminder
+ok 38 - resumed Architect action receives a fresh mechanical reminder
+  ---
+  duration_ms: 113.38
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-reassigned-review-qYq1ps","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-steering-X34irb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-Zl7rMI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-project-T9GzN1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-full-UbQre4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-only-tools-xsSKe9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-resume-0dXqeh","existsAtExit":false}
+# Subtest: only durably completed Builds use cleanup-only integration initialization
+ok 39 - only durably completed Builds use cleanup-only integration initialization
+  ---
+  duration_ms: 0.5446
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard native final verification factory bOMKpO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zRHuUA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7nhrTP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-D69NGD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright-artifacts-6JyoXZ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright_chromiumdev_profile-S4I5ti"}
+# Subtest: NativeBuildFactory executes all four bound categories from clean integration state while user checkout is dirty
+ok 40 - NativeBuildFactory executes all four bound categories from clean integration state while user checkout is dirty
+  ---
+  duration_ms: 105659.6884
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard native final verification factory bOMKpO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zRHuUA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7nhrTP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-D69NGD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright-artifacts-6JyoXZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright_chromiumdev_profile-S4I5ti","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-preferred-7gnr6f"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-provider-fallback-4WWRwL"}
+# Subtest: typed user selection constrains verifier routing to the preferred candidate
+ok 41 - typed user selection constrains verifier routing to the preferred candidate
+  ---
+  duration_ms: 68.984
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-context-9f6Dqx"}
+# Subtest: restart excludes a provider-failed pending verifier session and selects fallback
+ok 42 - restart excludes a provider-failed pending verifier session and selects fallback
+  ---
+  duration_ms: 58.6427
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-budget-attribution-ICeZ4T"}
+# Subtest: verifier receives complete revision-bound context in a separate read-only session
+ok 43 - verifier receives complete revision-bound context in a separate read-only session
+  ---
+  duration_ms: 57.3611
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-authority-y4wyBe"}
+# Subtest: verifier model calls and evidence inspections consume the governed run budget
+ok 44 - verifier model calls and evidence inspections consume the governed run budget
+  ---
+  duration_ms: 105.9938
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-stale-inIa5I"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-vEG1pe"}
+# Subtest: verifier cannot invoke write, commit, lifecycle, or completion tools
+ok 45 - verifier cannot invoke write, commit, lifecycle, or completion tools
+  ---
+  duration_ms: 77.4636
+  type: 'test'
+  ...
+# Subtest: verifier refuses a workspace whose revision differs from the requested integration snapshot
+ok 46 - verifier refuses a workspace whose revision differs from the requested integration snapshot
+  ---
+  duration_ms: 46.3552
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-replay-YbsoQY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-pending-6RtRQV"}
+# Subtest: verifier submits one typed criterion-complete lifecycle verdict with kernel-bound identity
+ok 47 - verifier submits one typed criterion-complete lifecycle verdict with kernel-bound identity
+  ---
+  duration_ms: 65.6506
+  type: 'test'
+  ...
+# Subtest: persisted verifier verdict resumes without a duplicate model call
+ok 48 - persisted verifier verdict resumes without a duplicate model call
+  ---
+  duration_ms: 48.8261
+  type: 'test'
+  ...
+# Subtest: restart after a durable model response executes its pending verdict without another model call
+ok 49 - restart after a durable model response executes its pending verdict without another model call
+  ---
+  duration_ms: 65.8887
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-preferred-7gnr6f","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-provider-fallback-4WWRwL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-context-9f6Dqx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-budget-attribution-ICeZ4T","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-authority-y4wyBe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-stale-inIa5I","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-vEG1pe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-replay-YbsoQY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-pending-6RtRQV","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-8Fgxx0"}
+# Subtest: worker model calls carry direct durable role and task attribution
+ok 50 - worker model calls carry direct durable role and task attribution
+  ---
+  duration_ms: 0.8676
+  type: 'test'
+  ...
+# Subtest: steering reassignment gets a distinct session while ordinary and recovered sessions stay compatible
+ok 51 - steering reassignment gets a distinct session while ordinary and recovered sessions stay compatible
+  ---
+  duration_ms: 0.2286
+  type: 'test'
+  ...
+# Subtest: invalid worker requests fail once instead of cycling through runtimes
+ok 52 - invalid worker requests fail once instead of cycling through runtimes
+  ---
+  duration_ms: 0.0945
+  type: 'test'
+  ...
+# Subtest: worker lifecycle no-ops preserve the attempt and receive a fresh resume reminder
+ok 53 - worker lifecycle no-ops preserve the attempt and receive a fresh resume reminder
+  ---
+  duration_ms: 0.1836
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-63iSSD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-cancel-S5t4k9"}
+# Subtest: native worker fails over with the same session, context, tools, and evidence
+ok 54 - native worker fails over with the same session, context, tools, and evidence
+  ---
+  duration_ms: 3237.5102
+  type: 'test'
+  ...
+# Subtest: native worker cancellation interrupts an admitted provider retry sleep
+ok 55 - native worker cancellation interrupts an admitted provider retry sleep
+  ---
+  duration_ms: 1250.0773
+  type: 'test'
+  ...
+# Subtest: worker skill routing prefers required capability skills over generic description overlap
+ok 56 - worker skill routing prefers required capability skills over generic description overlap
+  ---
+  duration_ms: 0.4581
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-8Fgxx0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-63iSSD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-cancel-S5t4k9","existsAtExit":false}
+1..56
+# tests 56
+# suites 0
+# pass 56
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 139120.3035

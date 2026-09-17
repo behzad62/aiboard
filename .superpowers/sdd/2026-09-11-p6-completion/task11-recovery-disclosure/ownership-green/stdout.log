@@ -1,0 +1,18 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-ownership-4oHwgc"}
+# Subtest: process recovery: adapter never invents ownership when the shared kernel refuses recovery
+ok 1 - process recovery: adapter never invents ownership when the shared kernel refuses recovery
+  ---
+  duration_ms: 3.1329
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-ownership-4oHwgc","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 347.4862

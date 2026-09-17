@@ -20,7 +20,7 @@ Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control tok
 
 ## Requirements
 
-- Node.js 24.18.0 or newer.
+- Node.js 22.x or 24.x. Node 22.x must be 22.13.0 or newer for unflagged `node:sqlite` support.
 - Git on `PATH` for Build mode. Runner V2 stops before any model call if Git is unavailable.
 - Provider credentials only for the models you choose.
 
@@ -50,6 +50,8 @@ npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard
 Run `npm run runner:v2 -- --help` to see the full argument list.
 
 Runner V2 prints a local URL and a new control token. Paste both into Build setup. The runner owns the Git baseline, isolated task workspaces, task-level commits, durable agent sessions, native tools, evidence, integration, and recovery.
+
+Execution safety, capability selection, cleanup, OCI configuration, and platform limitations are documented in the [Runner V2 execution safety guide](docs/runner-v2/guide.md), with separate [architecture](docs/runner-v2/architecture.md) and [security](docs/runner-v2/security.md) notes.
 
 Guarded access requires approval for destructive or external effects. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. Final project handoff always pauses for the user in both profiles.
 

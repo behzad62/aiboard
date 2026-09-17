@@ -1,0 +1,9 @@
+{
+  "id": "bootstrap-green-1",
+  "tests": [
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts"
+  ]
+}

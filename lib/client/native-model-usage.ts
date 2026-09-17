@@ -15,6 +15,7 @@ const ROLE_ORDER: Record<NativeModelUsageRole, number> = {
   architect: 0,
   worker: 1,
   subagent: 2,
+  verifier: 3,
 };
 
 const HEALTH_SEVERITY: Record<NativeModelUsageStatus, number> = {
@@ -49,7 +50,9 @@ function mapNativeRow(model: NativeModelUsageProjection): BuildUsageModelTotal {
     modelId: model.modelId,
     modelName: model.displayName ?? model.modelId,
     providerId: model.providerId,
-    roles: [...model.roles],
+    roles: [...model.roles].sort(
+      (left, right) => ROLE_ORDER[left] - ROLE_ORDER[right]
+    ),
     status: model.status,
     calls: model.calls,
     inputTokens: model.inputTokens,

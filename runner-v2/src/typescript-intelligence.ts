@@ -2,53 +2,28 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import * as ts from "typescript";
 
+import type {
+  CodeDiagnostic,
+  CodeIntelligenceResult,
+  CodeLocation,
+  DiagnosticsQuery,
+  LanguageIntelligenceProvider,
+  LanguageProviderDescriptor,
+  PositionQuery,
+  WorkspaceSymbol,
+  WorkspaceSymbolsQuery,
+} from "./language-intelligence.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 
-export interface CodeLocation {
-  path: string;
-  line: number;
-  column: number;
-  preview: string;
-  symbolKind?: string;
-}
-
-export interface WorkspaceSymbol extends CodeLocation {
-  name: string;
-}
-
-export interface CodeDiagnostic extends CodeLocation {
-  category: "error" | "warning" | "suggestion" | "message";
-  code: number;
-  message: string;
-}
-
-export interface CodeIntelligenceResult<T> {
-  status: "ok" | "unsupported_language";
-  projectConfig?: string;
-  results: T[];
-  truncated: boolean;
-}
-
-export interface WorkspaceSymbolsQuery {
-  root: string;
-  query: string;
-  kind?: string;
-  limit?: number;
-}
-
-export interface PositionQuery {
-  root: string;
-  path: string;
-  line: number;
-  column: number;
-  limit?: number;
-}
-
-export interface DiagnosticsQuery {
-  root: string;
-  path?: string;
-  limit?: number;
-}
+export type {
+  CodeDiagnostic,
+  CodeIntelligenceResult,
+  CodeLocation,
+  DiagnosticsQuery,
+  PositionQuery,
+  WorkspaceSymbol,
+  WorkspaceSymbolsQuery,
+} from "./language-intelligence.js";
 
 interface LoadedProject {
   root: string;
@@ -59,8 +34,27 @@ interface LoadedProject {
 
 const MAX_RESULTS = 200;
 const MAX_PREVIEW_LENGTH = 240;
+export const TYPESCRIPT_LANGUAGE_PROVIDER_DESCRIPTOR: LanguageProviderDescriptor =
+  Object.freeze({
+    id: "builtin.typescript",
+    displayName: "Built-in TypeScript and JavaScript",
+    extensions: Object.freeze([
+      ".cjs",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".mts",
+      ".ts",
+      ".tsx",
+    ]),
+    rootMarkers: Object.freeze(["jsconfig.json", "package.json", "tsconfig.json"]),
+    priority: 0,
+  });
 
-export class TypeScriptIntelligence {
+export class TypeScriptIntelligence implements LanguageIntelligenceProvider {
+  readonly descriptor = TYPESCRIPT_LANGUAGE_PROVIDER_DESCRIPTOR;
+
   constructor(
     private readonly repository = new RepositoryIntelligence(),
   ) {}
@@ -146,6 +140,8 @@ export class TypeScriptIntelligence {
     const sorted = deduplicateAndSort(diagnostics);
     return result(project, sorted.slice(0, limit), sorted.length > limit);
   }
+
+  async close(): Promise<void> {}
 
   private async loadProject(
     rootValue: string,

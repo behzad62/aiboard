@@ -1,0 +1,25 @@
+{
+  "id": "fault-mcp-one-write-widened-green",
+  "startedAt": "2026-09-12T17:26:21.493Z",
+  "finishedAt": "2026-09-12T17:26:22.187Z",
+  "wrapperPid": 90860,
+  "testPid": 93772,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 412,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP and MCP",
+    "runner-v2/test/streaming-language-operation.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

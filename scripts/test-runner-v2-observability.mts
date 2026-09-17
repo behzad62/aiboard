@@ -1,16 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   filterRunnerObservability,
+  IndependentVerifierManifest,
+  runnerAcceptanceContractSummary,
   runnerBuildControlSummary,
   runnerEvidenceDiagnosticDetail,
+  runnerExecutionSafetyDiagnostics,
   runnerNextCooldownExpiry,
   runnerObservabilitySummary,
   runnerUserFacingObservability,
   runnerVerificationTone,
 } from "../components/RunnerV2ObservabilityPanel";
 import { nativeBuildActivityEntries } from "../lib/client/native-build-activity";
+import type {
+  NativeBuildObservability,
+  NativeBuildProjection,
+  NativeIndependentVerifierObservability,
+} from "../lib/client/runner-v2";
 
 const activity = nativeBuildActivityEntries("run_1", [
   {
@@ -49,6 +59,20 @@ const projection = {
       attempt: 1,
       changeSetId: "change_1",
       integrationRevision: "abc123",
+      acceptanceCriteria: [
+        { id: "behavior", text: "The feature works." },
+        { id: "inspection", text: "The inspection evidence is recorded." },
+      ],
+      acceptanceCriteriaVersion: 1,
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_tests_passed",
+        artifactHashes: ["c".repeat(64)],
+      }, {
+        criterionId: "inspection",
+        evidenceId: "evidence_tests_passed",
+        artifactHashes: ["c".repeat(64)],
+      }],
     },
   },
   guidance: {
@@ -63,7 +87,26 @@ const projection = {
       answer: "Preserve the public interface.",
     },
   },
-  reviews: {},
+  reviews: {
+    T1: {
+      taskId: "T1",
+      status: "approved",
+      summary: "Accepted.",
+      evidenceArtifactHashes: ["c".repeat(64)],
+      criterionEvidenceLinks: [{
+        criterionId: "behavior",
+        evidenceId: "evidence_tests_passed",
+        artifactHashes: ["c".repeat(64)],
+      }],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "satisfied",
+        rationale: "The evidence supports the requested behavior.",
+        evidenceIds: ["evidence_tests_passed"],
+        artifactHashes: ["c".repeat(64)],
+      }],
+    },
+  },
   runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
   projectHandoff: {
     status: "requested",
@@ -78,6 +121,42 @@ const control = runnerBuildControlSummary(projection);
 assert.equal(control.guidance[0].question, "Which API shape?");
 assert.equal(control.integration[0].revision, "abc123");
 assert.equal(control.branch, "aiboard/run/integration");
+const acceptance = runnerAcceptanceContractSummary(projection);
+assert.equal(acceptance.status, "current");
+assert.equal(acceptance.planRevision, 2);
+assert.deepEqual(acceptance.tasks, [{
+  taskId: "T1",
+  title: "Implement feature",
+  version: 1,
+  criteria: [{
+    id: "behavior",
+    text: "The feature works.",
+    evidence: {
+      status: "submitted",
+      evidenceIds: ["evidence_tests_passed"],
+      artifactHashes: ["c".repeat(64)],
+    },
+    verdict: {
+      status: "satisfied",
+      rationale: "The evidence supports the requested behavior.",
+      evidenceIds: ["evidence_tests_passed"],
+      artifactHashes: ["c".repeat(64)],
+    },
+  }, {
+    id: "inspection",
+    text: "The inspection evidence is recorded.",
+    evidence: {
+      status: "submitted",
+      evidenceIds: ["evidence_tests_passed"],
+      artifactHashes: ["c".repeat(64)],
+    },
+    verdict: {
+      status: "not_reviewed",
+      evidenceIds: [],
+      artifactHashes: [],
+    },
+  }],
+}]);
 
 const observability = {
   runId: "run_1",
@@ -228,6 +307,61 @@ assert.equal(view.verification.length, 1);
 assert.equal(view.verification.find((item) => item.category === "Tests")?.status, "passed");
 assert.deepEqual(view.problems, []);
 
+const canonicalSnapshot = {
+  ...observability,
+  evidence: observability.evidence.slice(0, 1),
+  finalVerification: {
+    canonicalRevision: "revision-current",
+    history: [{ generationId: "old-generation", taskId: "old-verify", targetRevision: "revision-old", revisionStatus: "stale" }],
+    current: {
+      generationId: "generation-7",
+      taskId: "verify-7",
+      targetRevision: "revision-current",
+      revisionStatus: "current",
+      categories: [
+        { category: "build", applicability: "required", status: "passed", evidenceIds: ["build-evidence"], issues: [] },
+        { category: "tests", applicability: "required", status: "failed", evidenceIds: ["test-evidence"], issues: ["tests exited 1"] },
+        { category: "runtime_smoke", applicability: "not_applicable", rationale: "No server", repositoryInspection: { inspectedPaths: ["package.json"], summary: "No server" }, status: "not_applicable", evidenceIds: [], issues: [] },
+        { category: "browser", applicability: "required", status: "pending", evidenceIds: [], issues: [] },
+      ],
+      submission: { status: "pending" },
+      mechanicalFailure: { failureId: "failure-7", failedCategories: ["tests"], evidenceIds: ["test-evidence"] },
+      cleanup: { status: "succeeded", attempt: 1, diagnosticsAvailable: true },
+      review: { status: "pending" },
+      repairs: [{ taskId: "repair-tests", status: "running" }],
+    },
+  },
+} as unknown as NativeBuildObservability;
+const canonicalProjection = {
+  ...projection,
+  integrationRevision: "revision-current",
+  tasks: {
+    ...projection.tasks,
+    "verify-7": { id: "verify-7", kind: "final_verification", objective: "Verify integrated revision", dependencies: [], status: "planned", requiredCapabilities: [], attempt: 1, generationId: "generation-7", targetRevision: "revision-current" },
+    "repair-tests": { id: "repair-tests", kind: "verification_repair", objective: "Repair failing tests", dependencies: [], status: "running", requiredCapabilities: [], attempt: 1 },
+  },
+} as unknown as NativeBuildProjection;
+const canonicalView = runnerUserFacingObservability(canonicalSnapshot, canonicalProjection);
+assert.deepEqual(canonicalView.verification.map((item) => [item.category, item.status]), [
+  ["Build", "passed"], ["Tests", "failed"], ["Runtime", "not_applicable"], ["Browser", "pending"],
+]);
+assert.ok(canonicalView.problems.some((problem) => problem.key === "final-verification:failure"));
+assert.ok(canonicalView.problems.some((problem) => problem.key === "final-verification:repair"));
+assert.doesNotMatch(JSON.stringify(canonicalView), /old-generation/);
+
+const evidenceCannotApprove = runnerUserFacingObservability({
+  ...canonicalSnapshot,
+  finalVerification: { ...canonicalSnapshot.finalVerification, current: { ...canonicalSnapshot.finalVerification.current, categories: canonicalSnapshot.finalVerification.current.categories.map((category) => ({ ...category, status: category.applicability === "not_applicable" ? "not_applicable" : "passed" })), mechanicalFailure: undefined, cleanup: { status: "succeeded", diagnosticsAvailable: false }, review: { status: "pending" }, repairs: [] } },
+} as NativeBuildObservability, canonicalProjection);
+assert.ok(evidenceCannotApprove.verificationSeal?.status === "review_pending");
+assert.notEqual(evidenceCannotApprove.verificationSeal?.status, "approved");
+const cleanupFailed = runnerUserFacingObservability({
+  ...canonicalSnapshot,
+  finalVerification: { ...canonicalSnapshot.finalVerification, current: { ...canonicalSnapshot.finalVerification.current, mechanicalFailure: undefined, repairs: [], categories: canonicalSnapshot.finalVerification.current.categories.map((category) => ({ ...category, status: category.applicability === "not_applicable" ? "not_applicable" : "passed" })), cleanup: { status: "failed", attempt: 2, error: "owned workspace busy", diagnosticsAvailable: true }, review: { status: "pending" } } },
+} as NativeBuildObservability, canonicalProjection);
+assert.equal(cleanupFailed.verificationSeal?.status, "failed");
+assert.ok(cleanupFailed.problems.some((problem) => problem.key === "final-verification:cleanup"));
+
 assert.equal(runnerVerificationTone([{ status: "failed" }, { status: "passed" }]), "error");
 assert.equal(runnerVerificationTone([{ status: "passed" }, { status: "recorded" }]), "success");
 assert.equal(runnerVerificationTone([{ status: "recorded" }]), "progress");
@@ -243,6 +377,65 @@ const problemKeys = (
   projected: Parameters<typeof runnerUserFacingObservability>[1],
   now?: number
 ) => runnerUserFacingObservability(snapshot, projected, now).problems.map((problem) => problem.key);
+const executionSafetySnapshot = {
+  ...observability,
+  executionSafety: {
+    availability: "live",
+    fullBypass: true,
+    isolation: {
+      status: "unconfined_explicit_full",
+      securityBoundary: "provider_specific_not_universal_security_boundary",
+      activeLeaseCount: 0,
+      blockers: [],
+    },
+    grants: { active: 1, consumed: 0 },
+    processes: [{
+      kind: "subprocess", invocationId: "invocation-1", logicalProcessId: "logical-1",
+      lifecycleState: "outcome_unknown", owned: true, pendingEffects: false,
+      backend: { backendId: "runner-windows-job-v1", implementationDigest: "a".repeat(64) },
+      capabilities: {
+        tree_termination: "enforced", crash_cleanup: "enforced",
+        verified_emptiness: "enforced", write_confinement: "unverified",
+      },
+      requiredCapabilities: ["tree_termination"],
+      leaseExpiresAt: "2026-09-15T18:30:00.000Z",
+      cleanup: { state: "pending" },
+      output: { status: "lossy", totalBytes: 100, truncated: true, lossyBytes: 5 },
+    }],
+    recovery: [{
+      proposalId: "proposal-1", requestedAction: "terminate", state: "user_decision_required",
+      reason: "destructive_requires_user", updatedAt: "2026-09-15T18:00:00.000Z", cleanupState: "pending",
+    }],
+  },
+} as unknown as NativeBuildObservability;
+const safetyDiagnostics = runnerExecutionSafetyDiagnostics(executionSafetySnapshot);
+assert.ok(safetyDiagnostics.some((item) => item.title === "Full permission bypass active"));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("runner-windows-job-v1")));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("lossy")));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("user decision")));
+assert.deepEqual(problemKeys(executionSafetySnapshot, projectionWithoutHandoff), [
+  "execution-safety:full-bypass",
+  "execution-safety:output:invocation-1",
+  "execution-safety:cleanup:invocation-1",
+  "execution-safety:recovery:proposal-1",
+]);
+const unverifiedSafety = {
+  ...executionSafetySnapshot,
+  executionSafety: {
+    ...executionSafetySnapshot.executionSafety,
+    fullBypass: false,
+    isolation: { ...executionSafetySnapshot.executionSafety.isolation, status: "unverified" },
+    processes: [],
+    recovery: [],
+  },
+} as NativeBuildObservability;
+assert.deepEqual(problemKeys(unverifiedSafety, projectionWithoutHandoff), ["execution-safety:isolation"]);
+const unavailableSafety = {
+  ...observability,
+  executionSafety: { availability: "unavailable", reason: "historical_execution_safety_unavailable" },
+} as NativeBuildObservability;
+assert.equal(runnerExecutionSafetyDiagnostics(unavailableSafety)[0]?.title, "Execution safety unavailable");
+assert.deepEqual(problemKeys(unavailableSafety, projectionWithoutHandoff), []);
 
 assert.deepEqual(problemKeys(observability, {
   ...projectionWithoutHandoff,
@@ -273,6 +466,163 @@ assert.deepEqual(problemKeys(observability, {
   ...projectionWithoutHandoff,
   status: "paused",
 }), ["run:paused"]);
+
+const verifierSnapshot = {
+  ...observability,
+  independentVerifier: {
+    policy: {
+      mode: "risk_based",
+      candidateRuntimeIds: ["google:verifier"],
+      alwaysRequireIndependentVerifier: false,
+    },
+    risk: {
+      current: {
+        targetRevision: "revision-current",
+        state: "current",
+        risk: "high",
+        architectDeclaration: "high",
+        architectRationale: "Authentication behavior changed.",
+        architectRiskSource: "architect",
+        stricterQualification: false,
+        kernelFacts: {
+          destructiveEffects: false,
+          credentialEffects: false,
+          externalWriteEffects: false,
+          integrationConflict: false,
+          changedPaths: ["src/auth/session.ts"],
+        },
+        reasons: [{
+          code: "security_auth_crypto_path",
+          evidence: ["src/auth/session.ts"],
+        }],
+        normalizedChangedPaths: ["src/auth/session.ts"],
+        assessedAt: "2026-08-27T01:00:00.000Z",
+      },
+      history: [],
+    },
+    selection: {
+      status: "selected",
+      reason: "A distinct verifier is required.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+      selectedRuntimeId: "google:verifier",
+    },
+    review: {
+      current: {
+        reviewId: "review-current",
+        targetRevision: "revision-current",
+        finalVerificationGenerationId: "generation-current",
+        runtime: {
+          runtimeId: "google:verifier",
+          providerId: "google",
+          modelId: "verifier",
+          modelIdentity: "verifier",
+          sessionId: "verifier:run:1",
+        },
+        excludedModels: [{
+          source: "architect",
+          runtimeId: "openai:architect",
+          modelIdentity: "architect",
+        }],
+        criteria: [{ taskId: "T1", criterionId: "behavior" }],
+        status: "submitted",
+        state: "current",
+        requestedAt: "2026-08-27T01:00:01.000Z",
+        repairTaskIds: ["repair:behavior"],
+        verdict: {
+          reviewId: "review-current",
+          targetRevision: "revision-current",
+          sessionId: "verifier:run:1",
+          satisfied: false,
+          criterionVerdicts: [{
+            taskId: "T1",
+            criterionId: "behavior",
+            verdict: "unsatisfied",
+            rationale: "The authentication flow still fails.",
+            evidenceIds: ["evidence_auth_failure"],
+          }],
+          submittedAt: "2026-08-27T01:00:02.000Z",
+        },
+      },
+      history: [{
+        reviewId: "review-stale",
+        targetRevision: "revision-stale",
+        finalVerificationGenerationId: "generation-stale",
+        runtime: {
+          runtimeId: "old:verifier",
+          providerId: "old",
+          modelId: "old-verifier",
+          modelIdentity: "old-verifier",
+          sessionId: "verifier:old:1",
+        },
+        excludedModels: [{
+          source: "architect",
+          runtimeId: "openai:architect",
+          modelIdentity: "architect",
+        }],
+        criteria: [{ taskId: "T1", criterionId: "behavior" }],
+        status: "submitted",
+        state: "invalidated",
+        requestedAt: "2026-08-27T00:00:00.000Z",
+        verdict: {
+          reviewId: "review-stale",
+          targetRevision: "revision-stale",
+          sessionId: "verifier:old:1",
+          satisfied: true,
+          criterionVerdicts: [{
+            taskId: "T1",
+            criterionId: "behavior",
+            verdict: "satisfied",
+            rationale: "Stale approval must stay historical.",
+            evidenceIds: ["evidence_stale"],
+          }],
+          submittedAt: "2026-08-27T00:00:01.000Z",
+        },
+      }],
+    },
+  },
+} as unknown as NativeBuildObservability;
+const verifierView = runnerUserFacingObservability(
+  verifierSnapshot,
+  { ...projectionWithoutHandoff, integrationRevision: "revision-current" },
+);
+assert.ok(
+  verifierView.problems.some((problem) => problem.key === "verifier:repair"),
+);
+assert.doesNotMatch(JSON.stringify(verifierView), /Stale approval/);
+
+const verifierSelectionView = runnerUserFacingObservability({
+  ...verifierSnapshot,
+  independentVerifier: {
+    ...verifierSnapshot.independentVerifier,
+    selection: {
+      status: "required",
+      reason: "No compatible independent verifier is available.",
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["google:verifier"],
+    },
+    review: { history: [] },
+  },
+}, { ...projectionWithoutHandoff, status: "paused" });
+assert.ok(
+  verifierSelectionView.problems.some(
+    (problem) => problem.key === "verifier:selection",
+  ),
+);
+
+const pendingRiskMarkup = renderToStaticMarkup(
+  createElement(IndependentVerifierManifest, {
+    verifier: {
+      ...verifierSnapshot.independentVerifier,
+      risk: { history: [] },
+      selection: undefined,
+      review: { history: [] },
+    } as unknown as NativeIndependentVerifierObservability,
+    projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
+  }),
+);
+assert.match(pendingRiskMarkup, /Risk assessment pending/i);
+assert.doesNotMatch(pendingRiskMarkup, /current low-risk revision/i);
 
 const cooldownNow = 2_000;
 assert.equal(runnerNextCooldownExpiry([{
@@ -472,6 +822,14 @@ for (const copy of [
   "Build activity",
   "Progress",
   "Verification",
+  "Acceptance contract",
+  "Evidence submitted",
+  "Architect verdict",
+  "Independent verification",
+  "Build risk",
+  "Verifier verdict",
+  "High-risk builds always require an independent verifier.",
+  "Evidence is mechanical; Architect verdict is semantic.",
   "Problems requiring attention",
   "<details",
 ]) {
@@ -573,3 +931,20 @@ assert.equal(filtered.tools.length, 1);
 assert.equal(filtered.events.length, 0);
 
 console.log("PASS Runner V2 observability panel");
+
+const authorizedDestructiveRecovery = {
+  ...executionSafetySnapshot,
+  executionSafety: {
+    ...executionSafetySnapshot.executionSafety,
+    fullBypass: false,
+    isolation: { ...executionSafetySnapshot.executionSafety.isolation, status: "write_confinement_exact_grant" },
+    processes: [],
+    recovery: [{
+      ...executionSafetySnapshot.executionSafety.recovery[0],
+      state: "authorized", reason: "user_approved",
+    }],
+  },
+} as NativeBuildObservability;
+assert.deepEqual(problemKeys(authorizedDestructiveRecovery, projectionWithoutHandoff), [
+  "execution-safety:recovery:proposal-1",
+]);

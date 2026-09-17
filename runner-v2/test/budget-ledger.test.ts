@@ -253,12 +253,11 @@ test("model attribution and token provenance rebuild durably while legacy events
   let ledger = new SqliteBudgetLedger(fixture.database, { limitsFor: () => limits });
   try {
     const attribution = {
-      runtimeId: "runtime_worker",
-      providerId: "provider_api",
-      modelId: "model_code",
-      role: "worker" as const,
-      sessionId: "session_worker",
-      taskId: "task_1",
+      runtimeId: "runtime_verifier",
+      providerId: "provider_independent",
+      modelId: "model_verifier",
+      role: "verifier" as const,
+      sessionId: "session_verifier",
     };
     ledger.reserve({
       scopeId: "run_1",

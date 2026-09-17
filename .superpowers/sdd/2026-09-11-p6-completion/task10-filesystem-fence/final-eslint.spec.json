@@ -1,0 +1,8 @@
+{
+  "id": "final-eslint",
+  "args": [
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ]
+}

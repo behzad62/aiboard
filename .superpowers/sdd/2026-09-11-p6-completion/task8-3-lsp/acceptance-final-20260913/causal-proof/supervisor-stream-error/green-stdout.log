@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: Windows Job supervisor retains exact ownership after input-pipe error (interactive=true)
+ok 1 - Windows Job supervisor retains exact ownership after input-pipe error (interactive=true)
+  ---
+  duration_ms: 5.001
+  type: 'test'
+  ...
+# Subtest: Windows Job supervisor retains exact ownership after input-pipe error (interactive=false)
+ok 2 - Windows Job supervisor retains exact ownership after input-pipe error (interactive=false)
+  ---
+  duration_ms: 1.1075
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 197.8886

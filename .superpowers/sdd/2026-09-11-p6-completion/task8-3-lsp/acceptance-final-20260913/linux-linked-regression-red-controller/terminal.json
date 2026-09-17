@@ -1,0 +1,18 @@
+{
+  "id": "linux-linked-regression-red-controller",
+  "startedAt": "2026-09-13T19:41:17.424Z",
+  "finishedAt": "2026-09-13T19:41:28.411Z",
+  "wrapperPid": 17088,
+  "testPid": 36256,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 420,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-red.linux.json"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

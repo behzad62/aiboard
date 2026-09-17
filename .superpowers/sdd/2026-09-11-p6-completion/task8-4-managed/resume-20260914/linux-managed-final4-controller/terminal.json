@@ -1,0 +1,18 @@
+{
+  "id": "linux-managed-final4-controller",
+  "startedAt": "2026-09-14T09:06:14.414Z",
+  "finishedAt": "2026-09-14T09:07:31.919Z",
+  "wrapperPid": 17392,
+  "testPid": 42076,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 433,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-4-managed\\resume-20260914\\linux-task84-gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-4-managed\\resume-20260914\\linux-managed-final4.json"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

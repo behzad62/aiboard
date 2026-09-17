@@ -1,0 +1,20 @@
+{
+  "id": "typecheck-factory-1",
+  "startedAt": "2026-09-15T13:04:38.058Z",
+  "finishedAt": "2026-09-15T13:04:45.125Z",
+  "wrapperPid": 22620,
+  "testPid": 59108,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 446,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

@@ -1,0 +1,21 @@
+{
+  "pid": 42144,
+  "identity": {
+    "Id": 42144,
+    "StartTimeUtc": "2026-09-15T07:06:42.6345506Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 20696,
+  "spawnedAt": "2026-09-15T07:06:43.033Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/lsp-real-host.test.ts"
+  ]
+}

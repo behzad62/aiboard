@@ -1,0 +1,22 @@
+{
+  "pid": 38252,
+  "identity": {
+    "Id": 38252,
+    "StartTimeUtc": "2026-09-13T19:40:50.0288502Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 8940,
+  "spawnedAt": "2026-09-13T19:40:50.299Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+    "runner-v2/test/lsp-caller-audit.test.ts"
+  ]
+}

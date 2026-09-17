@@ -1,0 +1,34 @@
+{
+  "pid": 47252,
+  "identity": {
+    "Id": 47252,
+    "StartTimeUtc": "2026-09-14T22:20:58.1872606Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T22:20:58.219Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task10-filesystem-fence\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/fault-controls-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=publication is create-if-absent|a new-file parent retarget",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "spec": {
+    "id": "fault-controls-green",
+    "pattern": "publication is create-if-absent|a new-file parent retarget",
+    "tests": [
+      "runner-v2/test/filesystem-mutation-fence.test.ts"
+    ]
+  }
+}

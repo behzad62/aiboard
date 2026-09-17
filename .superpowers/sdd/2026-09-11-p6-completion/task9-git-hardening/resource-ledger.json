@@ -1,0 +1,721 @@
+{
+  "generatedAt": "2026-09-14T19:59:34.377Z",
+  "terminalReceipts": 49,
+  "acceptedGreen": {
+    "runs": 16,
+    "rootCount": 321,
+    "retained": [],
+    "allExitZero": true,
+    "allInputsUnchanged": true
+  },
+  "rows": [
+    {
+      "id": "affected-git-acceptance",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 87,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-TXjc2u",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-managers-DPs0l3",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "affected-git-core",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 56,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-NGFUnx",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-managers-B5uLrg",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Qz7OtY",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-47ZUdl",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-CCYUyk",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-XjU5AX",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-r342aA",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-ZerxdQ",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-kAkwHf",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-concurrent-journals-qmLWi5",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "affected-git-core-green",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 62,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-drxUWn",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-managers-2rhriT",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-B6XWsJ",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-PvRlDf",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-8DWKZf",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "affected-git-final-green",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 89,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-3199y4",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-SNaXbm",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "affected-git-final2-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 82,
+      "retainedRoots": []
+    },
+    {
+      "id": "affected-native-acceptance",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 40,
+      "retainedRoots": []
+    },
+    {
+      "id": "causal-clean-filter-red",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": []
+    },
+    {
+      "id": "causal-clean-filter-red2",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-BqUUQ4",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-credential-helper-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-W5bay9",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-external-diff-policy-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-NBbdQr",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-external-diff-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-neutralized-config-lbYPc1",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-final-clean-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-xp9yQo",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-final-credential-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-uLtl6o",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-final-external-diff-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-lfiXdu",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-final-fsmonitor-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-SQ9FSd",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-final-hook-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-F3u0eA",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-final-ssh-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-l9JBLn",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-fsmonitor-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-neutralized-config-Kg7y4n",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-hook-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-KQemsw",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "causal-ssh-command-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-lEBg4w",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "child-env-delete-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "child-env-delete-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "editor-argv-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": []
+    },
+    {
+      "id": "editor-argv-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-Ddhy9Q",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "external-diff-policy-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 19,
+      "retainedRoots": []
+    },
+    {
+      "id": "external-diff-policy-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-ib6QXJ",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "git-bootstrap-safe-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 3,
+      "retainedRoots": []
+    },
+    {
+      "id": "git-production-managers-external-diff-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 5,
+      "retainedRoots": []
+    },
+    {
+      "id": "git-runtime-integration-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": []
+    },
+    {
+      "id": "git-runtime-integration-recheck",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-hogm7O",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OWrxBd",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-3FpJjp",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-ttoeye",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "hook-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": []
+    },
+    {
+      "id": "hook-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 4,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-EBAL17",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "hostile-matrix-acceptance-green",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 60,
+      "retainedRoots": []
+    },
+    {
+      "id": "hostile-matrix-final-green",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 60,
+      "retainedRoots": []
+    },
+    {
+      "id": "hostile-matrix-final16-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 64,
+      "retainedRoots": []
+    },
+    {
+      "id": "hostile-matrix-green",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": false,
+      "rootCount": 60,
+      "retainedRoots": []
+    },
+    {
+      "id": "hostile-matrix-post-causal-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 64,
+      "retainedRoots": []
+    },
+    {
+      "id": "hostile-matrix-red-preserved",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 60,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-eIMawV",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-f3r3Bh",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-process-filter-Td6vlA",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-include-ONg07q",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-textconv-4jEk1C",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-alias-v823CT",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-ao2ZrN",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-remote-helper-jScTZu",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-submodule-update-wwkjha",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-editor-x7lbtx",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-sequence-editor-Hucmnl",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-pager-G4uiIR",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-5MmBL2",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "integration-manager-focused-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 10,
+      "retainedRoots": []
+    },
+    {
+      "id": "policy-baseline-final-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 25,
+      "retainedRoots": []
+    },
+    {
+      "id": "policy-matrix-green",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 23,
+      "retainedRoots": []
+    },
+    {
+      "id": "policy-matrix-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 9,
+      "retainedRoots": []
+    },
+    {
+      "id": "policy-matrix-red-preserved",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 9,
+      "retainedRoots": [
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-c9pgnP",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-G5NoMs",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-YrNLlg",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-RgM3Yy",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-UGU54Y",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-1Q0IRW",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-c2LsXI",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-tlBS43",
+          "exists": true
+        },
+        {
+          "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-policy-plcKTE",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "id": "policy-runtime-green-2",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 24,
+      "retainedRoots": []
+    },
+    {
+      "id": "runtime-current-red",
+      "classification": "preserved-red-or-failed",
+      "acceptedGreen": false,
+      "exitCode": 1,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "runtime-policy-green",
+      "classification": "non-accepted-diagnostic-or-superseded-green",
+      "acceptedGreen": false,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 1,
+      "retainedRoots": []
+    },
+    {
+      "id": "static-eslint-final-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "static-tsc-final-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    {
+      "id": "static-whitespace-final-green",
+      "classification": "accepted-green",
+      "acceptedGreen": true,
+      "exitCode": 0,
+      "inputsUnchanged": true,
+      "rootCount": 0,
+      "retainedRoots": []
+    }
+  ]
+}

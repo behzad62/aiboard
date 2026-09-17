@@ -1,0 +1,27 @@
+{
+  "id": "causal-final-clean-red",
+  "startedAt": "2026-09-14T19:48:59.045Z",
+  "finishedAt": "2026-09-14T19:49:13.104Z",
+  "wrapperPid": 47920,
+  "testPid": 33820,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=repository clean filter",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "rootCount": 4,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-xp9yQo"
+  ]
+}

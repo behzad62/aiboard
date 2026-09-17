@@ -1,0 +1,8 @@
+{
+  "tests": [
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "id": "external-diff-policy-green",
+  "pattern": "repository external diff|config capable"
+}

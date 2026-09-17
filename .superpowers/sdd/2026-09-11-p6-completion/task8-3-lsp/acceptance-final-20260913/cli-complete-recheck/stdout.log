@@ -1,0 +1,162 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-cli-retention-WghPQl"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-cli-retention-3AioOP"}
+# Subtest: CLI fixture cleanup retains undefined primary failure cleanupFails=false
+ok 1 - CLI fixture cleanup retains undefined primary failure cleanupFails=false
+  ---
+  duration_ms: 7.1486
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-cleanup-guard-hFNtXF"}
+# Subtest: CLI fixture cleanup retains undefined primary failure cleanupFails=true
+ok 2 - CLI fixture cleanup retains undefined primary failure cleanupFails=true
+  ---
+  duration_ms: 2.1271
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-cleanup-guard-tIMDNB"}
+# Subtest: CLI fixture cleanup preserves recovery records and both failures when verification fails
+ok 3 - CLI fixture cleanup preserves recovery records and both failures when verification fails
+  ---
+  duration_ms: 7.7948
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-cleanup-guard-jwCCCP"}
+# Subtest: CLI fixture cleanup preserves diagnostics after primary failure even when cleanup verifies
+ok 4 - CLI fixture cleanup preserves diagnostics after primary failure even when cleanup verifies
+  ---
+  duration_ms: 2.0198
+  type: 'test'
+  ...
+# Subtest: CLI fixture cleanup deletes only after successful cleanup verification
+ok 5 - CLI fixture cleanup deletes only after successful cleanup verification
+  ---
+  duration_ms: 1.5012
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-Yvy9Br"}
+# Subtest: CLI successful shutdown guard rejects a nonzero child close result
+ok 6 - CLI successful shutdown guard rejects a nonzero child close result
+  ---
+  duration_ms: 62.7062
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-invalid-extension-75kpkD"}
+# Subtest: CLI rejects malformed capability configuration before Git preflight or readiness
+ok 7 - CLI rejects malformed capability configuration before Git preflight or readiness
+  ---
+  duration_ms: 1316.6954
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-start-failure-rKx93p"}
+# Subtest: CLI statically validates extension closure without evaluating live tool declarations
+ok 8 - CLI statically validates extension closure without evaluating live tool declarations
+  ---
+  duration_ms: 4219.2357
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-valid-Ω-gya8S9"}
+# Subtest: CLI does not start extension lifecycle code until a run owns the public facade
+ok 9 - CLI does not start extension lifecycle code until a run owns the public facade
+  ---
+  duration_ms: 4386.2833
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-missing-9ANtCc"}
+# Subtest: CLI accepts a valid external capability configuration before listening
+ok 10 - CLI accepts a valid external capability configuration before listening
+  ---
+  duration_ms: 4152.5425
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-execution-safety-version-aX9v0g"}
+# Subtest: CLI rejects an active legacy Build without a capability contract before listening
+ok 11 - CLI rejects an active legacy Build without a capability contract before listening
+  ---
+  duration_ms: 4209.969
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-runtime-recovery-stage-s5bxqc"}
+# Subtest: CLI records an unsupported persisted execution-safety version as a per-run capability refusal
+ok 12 - CLI records an unsupported persisted execution-safety version as a per-run capability refusal
+  ---
+  duration_ms: 4332.5081
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-terminal-Hszttc"}
+# Subtest: CLI records a non-capability runtime recovery failure with its initialization stage
+ok 13 - CLI records a non-capability runtime recovery failure with its initialization stage
+  ---
+  duration_ms: 3745.9738
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-mutated-bQkJuX"}
+# Subtest: CLI keeps a terminal legacy Build readable without recovering it against current capabilities
+ok 14 - CLI keeps a terminal legacy Build readable without recovering it against current capabilities
+  ---
+  duration_ms: 4521.1313
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-syntax-tJOKZa"}
+# Subtest: CLI rejects a changed active extension before evaluating or starting it
+ok 15 - CLI rejects a changed active extension before evaluating or starting it
+  ---
+  duration_ms: 4484.1052
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-snapshot-start-YXTrLi"}
+# Subtest: CLI rejects a syntactically invalid changed active extension before preflight
+ok 16 - CLI rejects a syntactically invalid changed active extension before preflight
+  ---
+  duration_ms: 4230.1464
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-snapshot-start-YXTrLi\\\\state\\\\capability-snapshots\\\\.staging-9pmpe0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-qfyLgP"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-Mv8ZRX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-jJ6ZOo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-snapshot-start-YXTrLi\\\\state\\\\builds\\\\snapshot-start-capability-contract-b3afbd8bf9\\\\extension-executions\\\\.714c84c8a0a53cf5-OrValP"}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-qfyLgP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-Mv8ZRX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-jJ6ZOo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-snapshot-start-YXTrLi\\\\state\\\\builds\\\\snapshot-start-capability-contract-b3afbd8bf9\\\\extension-executions\\\\.714c84c8a0a53cf5-OrValP","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-contained-gaSVJL"}
+# Subtest: CLI closes discovery without launching live MCP when active extension startup fails before readiness
+ok 17 - CLI closes discovery without launching live MCP when active extension startup fails before readiness
+  ---
+  duration_ms: 23079.9128
+  type: 'test'
+  ...
+# Subtest: CLI rejects a capability configuration placed inside the project
+ok 18 - CLI rejects a capability configuration placed inside the project
+  ---
+  duration_ms: 1181.2207
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-cli-retention-WghPQl","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c-phase-cli-retention-3AioOP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-cleanup-guard-hFNtXF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-cleanup-guard-tIMDNB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-cleanup-guard-jwCCCP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-Yvy9Br","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-invalid-extension-75kpkD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-start-failure-rKx93p","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-valid-Ω-gya8S9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-missing-9ANtCc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-execution-safety-version-aX9v0g","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-runtime-recovery-stage-s5bxqc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-terminal-Hszttc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-mutated-bQkJuX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-syntax-tJOKZa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-snapshot-start-YXTrLi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capability-recovery-snapshot-start-YXTrLi\\\\state\\\\capability-snapshots\\\\.staging-9pmpe0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cli-capabilities-contained-gaSVJL","existsAtExit":false}
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 64737.9666

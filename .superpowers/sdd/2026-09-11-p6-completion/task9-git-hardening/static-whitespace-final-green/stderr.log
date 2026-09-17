@@ -1,0 +1,7 @@
+warning: in the working copy of 'runner-v2/src/child-environment.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/git-command.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/git-runtime-runner.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/child-environment.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/git-production-managers.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/git-runtime-integration.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/git-runtime-runner.test.ts', LF will be replaced by CRLF the next time Git touches it

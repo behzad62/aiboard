@@ -1,0 +1,54 @@
+{
+  "id": "causal-final-fsmonitor-red",
+  "pattern": "neutralizes repository fsmonitor helpers",
+  "sentinel": "fsmonitor-sentinel.txt",
+  "expected": "fsmonitor",
+  "beforeHash": "b1425d99a8cd46620934a9aebafea7f8000af0cc50c6b84ed6860c66a8da42db",
+  "afterHash": "b1425d99a8cd46620934a9aebafea7f8000af0cc50c6b84ed6860c66a8da42db",
+  "restoredExact": true,
+  "mutatedHash": "fa53774c26c8ad54f3254adabb0e606470353b6d79a6d7175020b77d99493fa7",
+  "replacements": [
+    {
+      "oldValue": "\"core.fsmonitor=false\", ",
+      "newValue": ""
+    }
+  ],
+  "childExit": 1,
+  "terminal": {
+    "id": "causal-final-fsmonitor-red",
+    "startedAt": "2026-09-14T19:49:13.195Z",
+    "finishedAt": "2026-09-14T19:49:27.381Z",
+    "wrapperPid": 42728,
+    "testPid": 15932,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 437,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=neutralizes repository fsmonitor helpers",
+      "runner-v2/test/git-indirect-execution-policy.test.ts"
+    ],
+    "rootCount": 4,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-SQ9FSd"
+    ]
+  },
+  "sentinelProof": {
+    "matches": [
+      {
+        "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task9-fsmonitor-SQ9FSd\\fsmonitor-sentinel.txt",
+        "content": "fsmonitor"
+      }
+    ]
+  },
+  "controllerError": null,
+  "finishedAt": "2026-09-14T19:49:27.389Z"
+}

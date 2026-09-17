@@ -1,728 +1,302 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { request } from "node:http";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
-
-const SUPERVISOR_PROTOCOL = "aiboard-managed-process/v1";
-const DEFAULT_START_DEADLINE_MS = 5_000;
-const DEFAULT_STOP_DEADLINE_MS = 5_000;
-
-export type ManagedProcessStatus = "running" | "stopped" | "exited_unknown";
-
-export interface ManagedProcessSupervisorRecord {
-  protocol: typeof SUPERVISOR_PROTOCOL;
-  token: string;
-  statusPath: string;
-  supervisorPid: number;
-  port: number;
-}
-
-export interface ManagedProcessRecord {
-  processId: string;
-  pid: number;
-  runId: string;
-  sessionId: string;
-  actor: AgentActor;
-  command: string;
-  args: string[];
-  cwd: string;
-  environmentKeys: string[];
-  startedAt: string;
-  updatedAt: string;
-  status: ManagedProcessStatus;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  stdoutPath: string;
-  stderrPath: string;
-  supervisor?: ManagedProcessSupervisorRecord;
-}
-
-interface SupervisorStatus {
-  protocol: typeof SUPERVISOR_PROTOCOL;
-  processId: string;
-  supervisorPid: number;
-  childPid: number;
-  port: number;
-  status: "starting" | "running" | "stopped" | "exited_unknown";
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  error: string | null;
-  ownershipReleased: boolean;
-  updatedAt: string;
-}
-
-export interface StartManagedProcessInput {
-  command: string;
-  args?: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-}
-
-export interface ManagedProcessSnapshot {
-  processId: string;
-  pid: number;
-  status: ManagedProcessStatus;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  startedAt: string;
-  updatedAt: string;
-  stdout: string;
-  stderr: string;
-}
-
-export interface ManagedProcessObservation extends ManagedProcessSnapshot {
-  runId: string;
-  sessionId: string;
-  actor: AgentActor;
-  command: string;
-  args: string[];
-  cwd: string;
-  environmentKeys: string[];
-}
+import { createHash, randomUUID } from "node:crypto";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import type { ToolExecutionContext } from "./agent-contracts.js";
+import { ManagedProcessError, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { historicalSnapshot, readHistoricalManagedProcessRecord } from "./managed-process-history.js";
+import { MAX_MANAGED_OUTPUT_BYTES, managedIdentity, managedProcessId, managedSnapshot, parseManagedSessionRecord, persistManagedSessionRecord, readManagedRecordValue, type ManagedSessionRecord } from "./managed-process-record.js";
+import type { ManagedProcessOwner, ManagedProcessRunRuntime } from "./managed-process-transport.js";
+export * from "./managed-process-contracts.js";
+export { readHistoricalManagedProcessObservations } from "./managed-process-history.js";
 
 export interface ManagedProcessServiceOptions {
   stateDirectory: string;
+  /** Compatibility-only descriptor. Semantic platform selection belongs to ExecutionHost. */
   platform?: NodeJS.Platform;
   idFactory?: () => string;
   clock?: () => string;
   maxPollBytes?: number;
   startDeadlineMs?: number;
   stopDeadlineMs?: number;
+  /** Legacy test configuration is no longer an execution route. */
   supervisorScriptPath?: string;
+  runtime?: ManagedProcessRunRuntime;
 }
 
-export class ManagedProcessError extends Error {
-  constructor(readonly code: string, message: string) {
-    super(message);
-    this.name = "ManagedProcessError";
-  }
-}
-
+/** Public durable metadata facade. Only an injected exact run transport can
+ * launch, observe live evidence or clean resources. OS mechanics never enter here. */
 export class ManagedProcessService {
+  private readonly records = new Map<string, Readonly<ManagedSessionRecord>>();
+  private readonly legacy = new Map<string, ManagedProcessRecord>();
+  private readonly runtimes = new Map<string, ManagedProcessRunRuntime>();
+  private readonly starts = new Set<Promise<unknown>>();
+  private readonly reads = new Set<Promise<unknown>>();
+  private readonly stops = new Map<string, Promise<ManagedProcessSnapshot>>();
   private readonly stateDirectory: string;
   private readonly idFactory: () => string;
   private readonly clock: () => string;
   private readonly maxPollBytes: number;
   private readonly startDeadlineMs: number;
   private readonly stopDeadlineMs: number;
-  private readonly platform: NodeJS.Platform;
-  private readonly supervisorScriptPath: string;
-  private readonly records = new Map<string, ManagedProcessRecord>();
-  private readonly launchers = new Set<ChildProcess>();
+  private closing = false;
+  private closed = false;
+  private closePromise?: Promise<void>;
 
   constructor(options: ManagedProcessServiceOptions) {
+    if (!isAbsolute(options.stateDirectory)) throw new ManagedProcessError("process_record_invalid", "Managed state requires an absolute directory.");
     this.stateDirectory = resolve(options.stateDirectory);
-    this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
+    this.idFactory = options.idFactory ?? (() => randomUUID());
     this.clock = options.clock ?? (() => new Date().toISOString());
-    this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
-    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_DEADLINE_MS;
-    this.stopDeadlineMs = options.stopDeadlineMs ?? DEFAULT_STOP_DEADLINE_MS;
-    this.platform = options.platform ?? process.platform;
-    this.supervisorScriptPath = options.supervisorScriptPath ?? join(
-      dirname(fileURLToPath(import.meta.url)),
-      "managed-process-supervisor.mjs"
-    );
-    mkdirSync(this.stateDirectory, { recursive: true });
-    for (const name of readdirSync(this.stateDirectory)) {
-      if (!name.endsWith(".json")) continue;
-      const record = JSON.parse(
-        readFileSync(join(this.stateDirectory, name), "utf8")
-      ) as ManagedProcessRecord;
-      this.records.set(record.processId, record);
-    }
+    this.maxPollBytes = bound(options.maxPollBytes ?? MAX_MANAGED_OUTPUT_BYTES, 1, MAX_MANAGED_OUTPUT_BYTES);
+    this.startDeadlineMs = bound(options.startDeadlineMs ?? 30_000, 1, 120_000);
+    this.stopDeadlineMs = bound(options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, 1, 120_000);
+    mkdirSync(this.stateDirectory, { recursive: true, mode: 0o700 });
+    const directory = lstatSync(this.stateDirectory);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new ManagedProcessError("process_record_invalid", "Managed state directory identity is invalid.");
+    const entries = readdirSync(this.stateDirectory).filter(name => name.endsWith(".json"));
+    if (entries.length > 4096) throw new ManagedProcessError("process_capacity_exceeded", "Managed record capacity exceeded.");
+    for (const entry of entries) this.load(entry);
+    if (options.runtime) this.registerRuntime(options.runtime);
   }
 
-  async start(
-    input: StartManagedProcessInput,
-    context: ToolExecutionContext,
-    workspacePath: string
-  ): Promise<ManagedProcessSnapshot> {
-    if (this.platform !== "win32") {
-      throw new ManagedProcessError(
-        "process_containment_unavailable",
-        "Background process containment is unavailable on this platform. " +
-          "This Runner release requires Windows Job Objects and refused to launch anything."
-      );
-    }
-    const processId = this.idFactory();
-    if (this.records.has(processId)) {
-      throw new ManagedProcessError("process_id_conflict", `Process ${processId} already exists.`);
-    }
-    const processDirectory = join(this.stateDirectory, processId);
-    mkdirSync(processDirectory, { recursive: true });
-    const stdoutPath = join(processDirectory, "stdout.log");
-    const stderrPath = join(processDirectory, "stderr.log");
-    const statusPath = join(processDirectory, "supervisor.jsonl");
-    const token = randomBytes(32).toString("hex");
-    const now = this.clock();
-    const record: ManagedProcessRecord = {
-      processId,
-      pid: 0,
-      runId: context.runId,
-      sessionId: context.sessionId,
-      actor: { ...context.actor },
-      command: input.command,
-      args: [...(input.args ?? [])],
-      cwd: resolve(workspacePath, input.cwd ?? "."),
-      environmentKeys: Object.keys(input.env ?? {}).sort(),
-      startedAt: now,
-      updatedAt: now,
-      status: "running",
-      exitCode: null,
-      signal: null,
-      stdoutPath,
-      stderrPath,
-      supervisor: {
-        protocol: SUPERVISOR_PROTOCOL,
-        token,
-        statusPath,
-        supervisorPid: 0,
-        port: 0,
-      },
+  /** Composition-only: bind an already-created execution graph, never create one here. */
+  registerRuntime(runtime: ManagedProcessRunRuntime): () => void {
+    this.assertOpen();
+    if (!runtime.runId || typeof runtime.start !== "function" || typeof runtime.observe !== "function" || typeof runtime.stop !== "function") throw new ManagedProcessError("process_runtime_unavailable", "Managed execution runtime is invalid.");
+    const prior = this.runtimes.get(runtime.runId);
+    if (prior && prior !== runtime) throw new ManagedProcessError("process_runtime_unavailable", "A different managed runtime already owns this run.");
+    this.runtimes.set(runtime.runId, runtime);
+    return () => {
+      if ([...this.records.values()].some(record => record.runId === runtime.runId && record.status !== "stopped")) throw new ManagedProcessError("process_cleanup_unverified", "Managed runtime cannot detach before exact cleanup is verified.");
+      if (this.runtimes.get(runtime.runId) === runtime) this.runtimes.delete(runtime.runId);
     };
-    const launcher = spawn(process.execPath, [
-      this.supervisorScriptPath,
-      processId,
-      statusPath,
-    ], {
-      detached: true,
-      windowsHide: true,
-      stdio: ["pipe", "ignore", "ignore", "ipc"],
-    });
-    this.launchers.add(launcher);
-    launcher.once("exit", () => this.launchers.delete(launcher));
-    launcher.once("error", () => this.launchers.delete(launcher));
-    if (!launcher.pid) {
-      throw new ManagedProcessError("process_start_failed", "Supervisor process has no PID.");
-    }
-    record.supervisor!.supervisorPid = launcher.pid;
-    record.updatedAt = this.clock();
-    this.records.set(processId, record);
-    this.persist(record);
+  }
 
-    const config = JSON.stringify({
-      processId,
-      token,
-      statusPath,
-      stdoutPath,
-      stderrPath,
-      command: input.command,
-      args: [...(input.args ?? [])],
-      cwd: record.cwd,
-      env: mergeManagedEnvironment(process.env, input.env ?? {}),
-      stopDeadlineMs: this.stopDeadlineMs,
-    });
-    let supervisorStatus: SupervisorStatus;
-    try {
-      await writeSupervisorConfig(launcher, config);
-      supervisorStatus = await waitForSupervisor(
-        statusPath,
-        processId,
-        launcher.pid,
-        token,
-        this.startDeadlineMs
-      );
-    } catch (error) {
+  async start(input: StartManagedProcessInput, context: ToolExecutionContext, workspaceRoot = context.workspacePath): Promise<ManagedProcessSnapshot> {
+    this.assertOpen(); const exact = exactCall(context, "process.start");
+    if (!workspaceRoot || !isAbsolute(workspaceRoot) || !exact.workspacePath || resolve(workspaceRoot) !== resolve(exact.workspacePath)) throw new ManagedProcessError("invalid_arguments", "Managed start requires the actual absolute calling workspace.");
+    const runtime = this.runtime(exact.runId);
+    const processId = managedProcessId(this.idFactory());
+    if (this.records.has(processId) || this.legacy.has(processId) || this.records.size + this.legacy.size >= 4096) throw new ManagedProcessError("process_capacity_exceeded", "Managed identity is already used or its record bound was reached.");
+    const command = checkedCommand(input.command), args = checkedArguments(input.args ?? []), environment = checkedEnvironment(input.env ?? {});
+    const cwd = resolve(workspaceRoot, input.cwd ?? "."), at = this.clock();
+    const identity = managedIdentity({ processId, runId: exact.runId, sessionId: exact.sessionId, actor: exact.actor });
+    const record: ManagedSessionRecord = { ...identity, recordKind: "runner.managed-process", schemaVersion: 2,
+      command, args: [...args], cwd, environmentKeys: Object.keys(environment).sort(),
+      configurationDigest: createHash("sha256").update(JSON.stringify({ command, args, cwd, environment })).digest("hex"),
+      streamingSessionId: `managed-stream-${processId}`, launchId: `managed-launch-${processId}`,
+      pid: 0, status: "exited_unknown", exitCode: null, signal: null, startedAt: at, updatedAt: at, stdout: "", stderr: "" };
+    this.save(record);
+    const work = (async () => {
       try {
-        await abortStartingSupervisor(launcher, token, this.stopDeadlineMs);
-      } catch (abortError) {
-        throw new ManagedProcessError(
-          "process_start_failed",
-          `${error instanceof Error ? error.message : String(error)} ` +
-            `Supervisor abort failed: ${abortError instanceof Error ? abortError.message : String(abortError)}`
-        );
+        const snapshot = await runtime.start(Object.freeze({ identity, context: exact, command, args, cwd, environment,
+          startTimeoutMs: this.startDeadlineMs, cleanupTimeoutMs: this.stopDeadlineMs, maxOutputBytes: this.maxPollBytes,
+          onTerminal: (observation: Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null }>) => {
+            const current = this.records.get(processId);
+            if (current && current.status !== "stopped") this.save({ ...current, ...observation, status: "exited_unknown", updatedAt: this.clock() });
+          } }));
+        this.saveSnapshot(processId, snapshot);
+        if (exact.signal?.aborted || this.closing) throw cancelled("start");
+        return managedSnapshot(this.records.get(processId)!);
+      } catch (primary) {
+        try { await this.stopExact(this.records.get(processId)!, runtime); }
+        catch (cleanup) { throw new AggregateError([primary, cleanup], "Managed failed start retains unverified exact cleanup."); }
+        throw primary;
       }
-      throw error;
-    }
-    this.applySupervisorStatus(record, supervisorStatus);
-    if (supervisorStatus.status === "stopped" && supervisorStatus.error) {
-      throw new ManagedProcessError("process_start_failed", supervisorStatus.error);
-    }
-    if (supervisorStatus.status === "starting") {
-      throw new ManagedProcessError(
-        "process_start_failed",
-        "Managed process supervisor did not confirm child startup."
-      );
-    }
-    if (launcher.connected) launcher.disconnect();
-    launcher.unref();
-    this.launchers.delete(launcher);
-    return this.snapshot(record);
+    })();
+    this.starts.add(work);
+    try { return await work; } finally { this.starts.delete(work); }
   }
 
-  poll(processId: string, context: ToolExecutionContext): ManagedProcessSnapshot {
-    const record = this.ownedRecord(processId, context);
-    this.reconcile(record);
-    return this.snapshot(record);
+  async poll(processId: string, context: ToolExecutionContext): Promise<ManagedProcessSnapshot> {
+    const exact = exactCall(context, "process.poll"); const record = this.owned(processId, exact);
+    if (!("schemaVersion" in record)) return historicalSnapshot(record, this.maxPollBytes);
+    const read = this.runtime(record.runId).observe(record, exact, this.maxPollBytes).then(snapshot => {
+      if (exact.signal?.aborted) throw cancelled("poll");
+      return this.saveSnapshot(processId, snapshot);
+    });
+    this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
+    return await cancelRead(read, exact.signal);
   }
 
-  list(context: ToolExecutionContext): ManagedProcessSnapshot[] {
-    return [...this.records.values()]
-      .filter(
-        (record) =>
-          record.runId === context.runId && record.sessionId === context.sessionId
-      )
-      .map((record) => {
-        this.reconcile(record);
-        return this.snapshot(record);
+  async list(context: ToolExecutionContext): Promise<ManagedProcessSnapshot[]> {
+    const exact = exactCall(context, "process.list");
+    const records = [...this.records.values()].filter(record => sameOwner(record, exact));
+    if (records.length > 128) throw new ManagedProcessError("process_capacity_exceeded", "Managed observation batch exceeds its bound.");
+    const old = [...this.legacy.values()].filter(record => sameOwner(record, exact)).map(record => historicalSnapshot(record, this.maxPollBytes));
+    if (!records.length) return old;
+    const runtime = this.runtime(exact.runId);
+    const read = (runtime.observeMany ? runtime.observeMany(records, exact, this.maxPollBytes) : records.length === 1
+      ? runtime.observe(records[0]!, exact, this.maxPollBytes).then(value => [value])
+      : Promise.reject(new ManagedProcessError("process_runtime_unavailable", "The managed runtime lacks single-call batch observation authority.")))
+      .then(snapshots => {
+        if (exact.signal?.aborted) throw cancelled("poll");
+        if (snapshots.length !== records.length) throw new ManagedProcessError("process_record_invalid", "Managed batch returned different identities.");
+        return snapshots.map((snapshot, index) => this.saveSnapshot(records[index]!.processId, snapshot));
       });
+    this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
+    return [...await cancelRead(read, exact.signal), ...old];
   }
 
-  listRun(runId: string): ManagedProcessObservation[] {
-    return [...this.records.values()]
-      .filter((record) => record.runId === runId)
-      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
-      .map((record) => {
-        this.reconcile(record);
-        return {
-          ...this.snapshot(record),
-          runId: record.runId,
-          sessionId: record.sessionId,
-          actor: { ...record.actor },
-          command: record.command,
-          args: [...record.args],
-          cwd: record.cwd,
-          environmentKeys: [...record.environmentKeys],
-        };
-      });
+  /** Trusted control-plane observation, never a model-facing substitute for poll authority. */
+  async listRun(runId: string): Promise<ManagedProcessObservation[]> {
+    const observations: ManagedProcessObservation[] = [...this.legacy.values()].filter(record => record.runId === runId)
+      .map(record => ({ ...historicalSnapshot(record, this.maxPollBytes), runId: record.runId, sessionId: record.sessionId, actor: { ...record.actor }, command: record.command, args: [...record.args], cwd: record.cwd, environmentKeys: [...record.environmentKeys] }));
+    for (const record of this.records.values()) {
+      if (record.runId !== runId) continue;
+      const runtime = this.runtimes.get(runId);
+      const snapshot = runtime ? await runtime.observe(record, undefined, this.maxPollBytes) : managedSnapshot(record);
+      observations.push({ ...snapshot, runId, sessionId: record.sessionId, actor: { ...record.actor }, command: record.command, args: [...record.args], cwd: record.cwd, environmentKeys: [...record.environmentKeys] });
+    }
+    return observations;
   }
 
-  async signal(
-    processId: string,
-    signal: "SIGTERM" | "SIGINT" | "SIGKILL",
-    context: ToolExecutionContext
-  ): Promise<ManagedProcessSnapshot> {
-    const record = this.ownedRecord(processId, context);
-    await this.signalRecord(record, signal);
-    return this.snapshot(record);
+  async signal(processId: string, signal: NodeJS.Signals, context: ToolExecutionContext): Promise<ManagedProcessSnapshot> {
+    const exact = exactCall(context, "process.signal"); const record = this.owned(processId, exact);
+    if (!["SIGTERM", "SIGINT", "SIGKILL"].includes(signal)) throw new ManagedProcessError("invalid_arguments", "Unsupported managed signal.");
+    if (!("schemaVersion" in record)) return historicalSnapshot(record, this.maxPollBytes);
+    // The transport commits exact stop authority before any cancellable wait.
+    // Do not race its acknowledgement against the caller signal afterwards.
+    const stop = this.runtime(record.runId).stop(record, exact, signal, this.stopDeadlineMs).then(snapshot => this.saveSnapshot(processId, snapshot));
+    this.stops.set(processId, stop);
+    try { return await stop; } finally { if (this.stops.get(processId) === stop) this.stops.delete(processId); }
   }
 
   async stopRun(runId: string): Promise<void> {
-    const records = [...this.records.values()].filter((record) => record.runId === runId);
+    await this.stopMatching(record => record.runId === runId);
+  }
+  async closeAgent(owner: ManagedProcessOwner): Promise<void> {
+    await this.stopMatching(record => sameOwner(record, owner));
+  }
+  async close(): Promise<void> {
+    if (this.closed) return;
+    if (this.closePromise) return await this.closePromise;
+    this.closing = true;
+    const attempt = (async () => {
+      // A late start cannot disappear merely because the owner requested close.
+      await Promise.allSettled([...this.starts]);
+      await this.stopMatching(() => true);
+      await Promise.allSettled([...this.reads]);
+      this.closed = true; this.runtimes.clear();
+    })();
+    this.closePromise = attempt;
+    try { await attempt; } finally { if (this.closePromise === attempt) this.closePromise = undefined; }
+  }
+
+  private async stopMatching(predicate: (record: Readonly<ManagedSessionRecord>) => boolean): Promise<void> {
     const failures: unknown[] = [];
-    for (const record of records) {
-      this.reconcile(record);
-      if (record.status === "stopped") continue;
-      try {
-        await this.signalRecord(record, "SIGTERM");
-      } catch (error) {
-        failures.push(error);
+    for (const record of this.records.values()) {
+      if (!predicate(record)) continue;
+      const runtime = this.runtimes.get(record.runId);
+      if (!runtime && record.status === "stopped") continue; // persisted terminal history has no live operation
+      try { await this.stopExact(record, runtime ?? this.runtime(record.runId)); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Managed process cleanup remains unverified.");
+  }
+  private async stopExact(record: Readonly<ManagedSessionRecord>, runtime: ManagedProcessRunRuntime): Promise<ManagedProcessSnapshot> {
+    const existing = this.stops.get(record.processId); if (existing) return await existing;
+    const work = (async () => {
+      if (record.status === "stopped") {
+        const observed = await runtime.observe(record, undefined, this.maxPollBytes);
+        if (observed.status === "stopped") return this.saveSnapshot(record.processId, observed);
       }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        `Could not stop all managed processes for settled Build ${runId}.`
-      );
-    }
+      const snapshot = await runtime.stop(record, undefined, "SIGTERM", this.stopDeadlineMs);
+      if (snapshot.status !== "stopped") throw new ManagedProcessError("process_cleanup_unverified", "Shared managed cleanup did not prove release.");
+      return this.saveSnapshot(record.processId, snapshot);
+    })();
+    this.stops.set(record.processId, work);
+    try { return await work; } finally { if (this.stops.get(record.processId) === work) this.stops.delete(record.processId); }
   }
 
-  close(): void {
-    for (const launcher of this.launchers) launcher.removeAllListeners();
-    this.launchers.clear();
+  private load(entry: string): void {
+    const value = readManagedRecordValue(join(this.stateDirectory, entry));
+    if (value && typeof value === "object" && ("schemaVersion" in value || "recordKind" in value)) {
+      const record = parseManagedSessionRecord(value, entry.slice(0, -5)); this.records.set(record.processId, record); return;
+    }
+    const legacy = readHistoricalManagedProcessRecord(join(this.stateDirectory, entry));
+    if (!legacy || legacy.processId !== entry.slice(0, -5)) throw new ManagedProcessError("process_record_invalid", "Managed historical record identity is invalid.");
+    if (legacy.status !== "stopped") throw new ManagedProcessError("process_active_schema_unsupported", "Legacy active managed record requires exact migration/recovery before execution; PID-only adoption is refused.");
+    this.legacy.set(legacy.processId, legacy);
   }
-
-  private ownedRecord(
-    processId: string,
-    context: ToolExecutionContext
-  ): ManagedProcessRecord {
-    const disk = this.readRecord(processId);
-    if (disk) this.records.set(processId, disk);
-    const record = this.records.get(processId);
-    if (!record) {
-      throw new ManagedProcessError("process_not_found", `Process ${processId} was not found.`);
-    }
-    if (record.runId !== context.runId || record.sessionId !== context.sessionId) {
-      throw new ManagedProcessError(
-        "process_not_owned",
-        `Process ${processId} belongs to another agent session.`
-      );
-    }
+  private owned(processId: string, owner: ManagedProcessOwner): Readonly<ManagedSessionRecord> | ManagedProcessRecord {
+    const id = managedProcessId(processId), record = this.records.get(id) ?? this.legacy.get(id);
+    if (!record) throw new ManagedProcessError("process_not_found", "Managed process was not found.");
+    if (!sameOwner(record, owner)) throw new ManagedProcessError("process_not_owned", "Managed process belongs to another exact owner.");
     return record;
   }
 
-  private async signalRecord(
-    record: ManagedProcessRecord,
-    signal: "SIGTERM" | "SIGINT" | "SIGKILL"
-  ): Promise<void> {
-    if (!validSupervisorIdentity(record.supervisor)) {
-      throw new ManagedProcessError(
-        "process_control_unavailable",
-        `Process ${record.processId} predates authenticated supervision and cannot be signalled safely.`
-      );
-    }
-    this.reconcile(record);
-    if (record.status === "stopped") return;
-    if (!validSupervisorEndpoint(record.supervisor)) {
-      throw new ManagedProcessError(
-        "process_control_unavailable",
-        `Authenticated supervisor endpoint for ${record.processId} is not recoverable.`
-      );
-    }
-    let confirmedStatus: SupervisorStatus;
-    try {
-      confirmedStatus = await supervisorRequest(
-        record.supervisor,
-        "/signal",
-        "POST",
-        {
-          signal,
-          deadlineMs: this.stopDeadlineMs,
-        },
-        this.stopDeadlineMs + 250
-      );
-      this.applySupervisorStatus(record, confirmedStatus);
-    } catch (error) {
-      throw new ManagedProcessError(
-        "process_control_unavailable",
-        `Authenticated supervisor for ${record.processId} could not confirm termination: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-    if (confirmedStatus.status !== "stopped") {
-      throw new ManagedProcessError(
-        "process_stop_timeout",
-        `Managed process ${record.processId} did not stop before the deadline.`
-      );
-    }
+  private runtime(runId: string): ManagedProcessRunRuntime {
+    const runtime = this.runtimes.get(runId);
+    if (!runtime) throw new ManagedProcessError("process_runtime_unavailable", "Managed processes require the injected run-owned execution runtime.");
+    return runtime;
   }
-
-  private reconcile(record: ManagedProcessRecord): void {
-    if (record.status === "stopped") return;
-    if (!validSupervisorIdentity(record.supervisor)) {
-      record.status = "exited_unknown";
-      record.updatedAt = this.clock();
-      this.persist(record);
-      return;
-    }
-    const status = readSupervisorStatus(record.supervisor.statusPath);
-    if (!status || !matchesSupervisor(record, status)) {
-      record.status = "exited_unknown";
-      record.updatedAt = this.clock();
-      this.persist(record);
-      return;
-    }
-    this.applySupervisorStatus(record, status);
+  private save(record: ManagedSessionRecord): Readonly<ManagedSessionRecord> {
+    const current = persistManagedSessionRecord(this.stateDirectory, record);
+    this.records.set(current.processId, current); return current;
   }
-
-  private applySupervisorStatus(
-    record: ManagedProcessRecord,
-    status: SupervisorStatus
-  ): void {
-    if (!record.supervisor || !matchesSupervisor(record, status)) {
-      throw new ManagedProcessError(
-        "process_control_unavailable",
-        `Supervisor identity mismatch for ${record.processId}.`
-      );
-    }
-    record.pid = status.childPid;
-    record.supervisor.port = status.port;
-    record.status = status.status === "stopped"
-      ? "stopped"
-      : status.status === "exited_unknown"
-        ? "exited_unknown"
-        : "running";
-    record.exitCode = status.exitCode;
-    record.signal = status.signal;
-    record.updatedAt = status.updatedAt;
-    this.persist(record);
+  private saveSnapshot(processId: string, snapshot: ManagedProcessSnapshot): ManagedProcessSnapshot {
+    const previous = this.records.get(processId);
+    if (!previous || snapshot.processId !== processId) throw new ManagedProcessError("process_record_invalid", "Managed runtime returned a different process identity.");
+    const current = this.save({ ...previous, ...managedSnapshot(snapshot), stdout: boundedTail(snapshot.stdout, this.maxPollBytes), stderr: boundedTail(snapshot.stderr, this.maxPollBytes) });
+    return managedSnapshot(current);
   }
-
-  private snapshot(record: ManagedProcessRecord): ManagedProcessSnapshot {
-    return {
-      processId: record.processId,
-      pid: record.pid,
-      status: record.status,
-      exitCode: record.exitCode,
-      signal: record.signal,
-      startedAt: record.startedAt,
-      updatedAt: record.updatedAt,
-      stdout: tail(record.stdoutPath, this.maxPollBytes),
-      stderr: tail(record.stderrPath, this.maxPollBytes),
-    };
-  }
-
-  private persist(record: ManagedProcessRecord): void {
-    const destination = join(this.stateDirectory, `${record.processId}.json`);
-    const temporary = `${destination}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 });
-    renameSync(temporary, destination);
-  }
-
-  private readRecord(processId: string): ManagedProcessRecord | null {
-    try {
-      return JSON.parse(
-        readFileSync(join(this.stateDirectory, `${processId}.json`), "utf8")
-      ) as ManagedProcessRecord;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
+  private assertOpen(): void {
+    if (this.closing || this.closed) throw new ManagedProcessError("process_service_closed", "Managed process service is closing or closed.");
   }
 }
 
-function mergeManagedEnvironment(
-  inherited: NodeJS.ProcessEnv,
-  overrides: Record<string, string>
-): Record<string, string> {
-  if (process.platform !== "win32") {
-    return Object.fromEntries([
-      ...Object.entries(inherited).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined
-      ),
-      ...Object.entries(overrides),
-    ]);
+function sameOwner(a: ManagedProcessOwner, b: ManagedProcessOwner): boolean {
+  return a.runId === b.runId && a.sessionId === b.sessionId && a.actor.role === b.actor.role && a.actor.id === b.actor.id;
+}
+function bound(value: number, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new ManagedProcessError("invalid_arguments", "Managed process bound is invalid.");
+  return value;
+}
+function exactCall(context: ToolExecutionContext, toolName: string): Readonly<ToolExecutionContext> {
+  if (!context || !context.runId || !context.sessionId || !context.actor?.id || !["architect", "worker", "subagent", "verifier"].includes(context.actor.role) ||
+      !context.callId || context.toolName !== toolName || !context.executionGrant || !context.workspacePath || !isAbsolute(context.workspacePath)) {
+    throw new ManagedProcessError("process_authority_required", "Managed invocation requires its exact original ToolBroker grant and identity.");
   }
-  const values = new Map<string, { key: string; value: string }>();
-  for (const [key, value] of Object.entries(inherited)) {
-    if (value !== undefined) values.set(key.toLowerCase(), { key, value });
-  }
-  for (const [key, value] of Object.entries(overrides)) {
-    values.set(key.toLowerCase(), { key, value });
-  }
-  return Object.fromEntries([...values.values()].map(({ key, value }) => [key, value]));
+  if (context.signal?.aborted) throw cancelled(toolName);
+  return Object.freeze({ ...context, actor: Object.freeze({ ...context.actor }) });
 }
-
-function validSupervisorIdentity(
-  supervisor: ManagedProcessSupervisorRecord | undefined
-): supervisor is ManagedProcessSupervisorRecord {
-  return Boolean(
-    supervisor &&
-      supervisor.protocol === SUPERVISOR_PROTOCOL &&
-      typeof supervisor.token === "string" &&
-      supervisor.token.length >= 32 &&
-      typeof supervisor.statusPath === "string" &&
-      supervisor.statusPath.length > 0 &&
-      Number.isInteger(supervisor.supervisorPid) &&
-      supervisor.supervisorPid > 0 &&
-      Number.isInteger(supervisor.port) &&
-      supervisor.port >= 0 &&
-      supervisor.port <= 65_535
-  );
+function cancelled(operation: string): ManagedProcessError {
+  return new ManagedProcessError("process_cancelled", `Managed ${operation} was cancelled.`);
 }
-
-function validSupervisorEndpoint(
-  supervisor: ManagedProcessSupervisorRecord | undefined
-): supervisor is ManagedProcessSupervisorRecord {
-  return validSupervisorIdentity(supervisor) && supervisor.port > 0;
-}
-
-function readSupervisorStatus(path: string): SupervisorStatus | null {
-  try {
-    const lines = readFileSync(path, "utf8").split(/\r?\n/);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const line = lines[index]?.trim();
-      if (!line) continue;
-      try {
-        return JSON.parse(line) as SupervisorStatus;
-      } catch {
-        // A crash can leave only the final appended line incomplete. Earlier
-        // immutable records remain valid recovery checkpoints.
-      }
-    }
-    return null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-function matchesSupervisor(record: ManagedProcessRecord, status: SupervisorStatus): boolean {
-  return Boolean(
-    record.supervisor &&
-      status.protocol === SUPERVISOR_PROTOCOL &&
-      status.processId === record.processId &&
-      status.supervisorPid === record.supervisor.supervisorPid &&
-      (record.supervisor.port === 0 || status.port === record.supervisor.port)
-  );
-}
-
-async function waitForSupervisor(
-  statusPath: string,
-  processId: string,
-  supervisorPid: number,
-  token: string,
-  deadlineMs: number
-): Promise<SupervisorStatus> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    const status = readSupervisorStatus(statusPath);
-    if (
-      status &&
-      status.protocol === SUPERVISOR_PROTOCOL &&
-      status.processId === processId &&
-      status.supervisorPid === supervisorPid &&
-      status.port > 0
-    ) {
-      if (status.status === "stopped" || status.status === "exited_unknown") return status;
-      if (status.status === "running") {
-        const authenticated = await supervisorRequest(
-          {
-            protocol: SUPERVISOR_PROTOCOL,
-            token,
-            statusPath,
-            supervisorPid,
-            port: status.port,
-          },
-          "/status",
-          "GET",
-          undefined,
-          Math.max(250, deadline - Date.now())
-        );
-        if (
-          authenticated.processId === processId &&
-          authenticated.supervisorPid === supervisorPid
-        ) return authenticated;
-      }
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
-  }
-  throw new ManagedProcessError(
-    "process_start_failed",
-    "Managed process supervisor did not become ready before the deadline."
-  );
-}
-
-async function supervisorRequest(
-  supervisor: ManagedProcessSupervisorRecord,
-  path: string,
-  method: "GET" | "POST",
-  body?: Record<string, unknown>,
-  timeoutMs = DEFAULT_STOP_DEADLINE_MS + 250
-): Promise<SupervisorStatus> {
-  const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
-  return await new Promise<SupervisorStatus>((resolvePromise, reject) => {
-    const call = request(
-      {
-        hostname: "127.0.0.1",
-        port: supervisor.port,
-        path,
-        method,
-        headers: {
-          authorization: `Bearer ${supervisor.token}`,
-          ...(payload
-            ? {
-                "content-type": "application/json",
-                "content-length": String(payload.byteLength),
-              }
-            : {}),
-        },
-        timeout: timeoutMs,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        response.once("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          if (response.statusCode !== 200) {
-            reject(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`));
-            return;
-          }
-          try {
-            resolvePromise(JSON.parse(text) as SupervisorStatus);
-          } catch (error) {
-            reject(error);
-          }
-        });
-      }
-    );
-    call.once("timeout", () => call.destroy(new Error("Supervisor request timed out.")));
-    call.once("error", reject);
-    if (payload) call.write(payload);
-    call.end();
+function cancelRead<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) { void promise.catch(() => undefined); return Promise.reject(cancelled("poll")); }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { signal.removeEventListener("abort", abort); reject(cancelled("poll")); };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
   });
 }
-
-async function writeSupervisorConfig(
-  launcher: ChildProcess,
-  serialized: string
-): Promise<void> {
-  if (!launcher.stdin) throw new Error("Supervisor configuration pipe is unavailable.");
-  await new Promise<void>((resolvePromise, reject) => {
-    launcher.stdin!.end(serialized, (error?: Error | null) => {
-      if (error) reject(error);
-      else resolvePromise();
-    });
-  });
+function checkedCommand(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0") || Buffer.byteLength(value) > 8192) throw new ManagedProcessError("invalid_arguments", "Managed executable is invalid.");
+  return value;
 }
-
-async function abortStartingSupervisor(
-  launcher: ChildProcess,
-  token: string,
-  deadlineMs: number
-): Promise<void> {
-  if (launcher.exitCode !== null || launcher.signalCode !== null) return;
-  const acknowledged = await new Promise<boolean>((resolvePromise) => {
-    let settled = false;
-    const finish = (value: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      launcher.off("message", onMessage);
-      launcher.off("exit", onExit);
-      resolvePromise(value);
-    };
-    const onMessage = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { type?: unknown }).type === "abort_ack" &&
-        (message as { token?: unknown }).token === token
-      ) finish(true);
-    };
-    const onExit = () => finish(true);
-    const timer = setTimeout(() => finish(false), Math.max(250, deadlineMs));
-    launcher.on("message", onMessage);
-    launcher.once("exit", onExit);
-    if (!launcher.connected) {
-      finish(false);
-      return;
-    }
-    launcher.send({ type: "abort", token }, (error) => {
-      if (error) finish(false);
-    });
-  });
-  if (!acknowledged && launcher.exitCode === null && launcher.signalCode === null) {
-    launcher.kill("SIGKILL");
-  }
-  await waitForChildExit(launcher, Math.max(250, deadlineMs));
-  if (launcher.exitCode === null && launcher.signalCode === null) {
-    throw new Error("Supervisor did not acknowledge abort or exit before the deadline.");
-  }
+function checkedArguments(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length > 1024 || Object.keys(value).length !== value.length || value.some(arg => typeof arg !== "string" || arg.includes("\0")) || Buffer.byteLength(JSON.stringify(value)) > 128 * 1024) throw new ManagedProcessError("invalid_arguments", "Managed arguments are invalid or exceed their bound.");
+  return Object.freeze([...value]);
 }
-
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolvePromise) => {
-    const onExit = () => {
-      clearTimeout(timer);
-      resolvePromise();
-    };
-    const timer = setTimeout(() => {
-      child.off("exit", onExit);
-      resolvePromise();
-    }, timeoutMs);
-    child.once("exit", onExit);
-  });
-}
-
-function tail(path: string, maximum: number): string {
-  try {
-    const bytes = readFileSync(path);
-    return bytes.subarray(Math.max(0, bytes.byteLength - maximum)).toString("utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
+function checkedEnvironment(value: unknown): Readonly<Record<string, string>> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || ![null, Object.prototype].includes(Object.getPrototypeOf(value))) throw new ManagedProcessError("invalid_arguments", "Managed environment must be a plain record.");
+  const names = Object.keys(value); const result: Record<string, string> = Object.create(null);
+  if (names.length > 256) throw new ManagedProcessError("invalid_arguments", "Managed environment exceeds its bound.");
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name) || !descriptor || !("value" in descriptor) || typeof descriptor.value !== "string" || descriptor.value.includes("\0") || Buffer.byteLength(descriptor.value) > 32768) throw new ManagedProcessError("invalid_arguments", "Managed environment entry is invalid.");
+    result[name] = descriptor.value;
   }
+  if (Buffer.byteLength(JSON.stringify(result)) > 128 * 1024) throw new ManagedProcessError("invalid_arguments", "Managed environment exceeds its bound.");
+  return Object.freeze(result);
+}
+function boundedTail(value: string, maximum: number): string {
+  if (typeof value !== "string") throw new ManagedProcessError("process_record_invalid", "Managed output is not text.");
+  const bytes = Buffer.from(value); let start = Math.max(0, bytes.length - maximum);
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
+  return bytes.subarray(start).toString("utf8");
 }

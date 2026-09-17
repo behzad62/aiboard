@@ -1,0 +1,21 @@
+{
+  "pid": 50572,
+  "identity": {
+    "Id": 50572,
+    "StartTimeUtc": "2026-09-15T09:14:53.5115105Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 59296,
+  "spawnedAt": "2026-09-15T09:14:53.797Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts"
+  ]
+}

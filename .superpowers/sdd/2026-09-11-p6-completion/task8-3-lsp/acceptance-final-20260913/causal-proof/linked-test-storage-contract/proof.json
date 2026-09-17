@@ -1,0 +1,124 @@
+{
+  "id": "linked-test-storage-contract",
+  "target": "runner-v2/test/support/linked-output-spill-storage.ts",
+  "test": "runner-v2/test/linked-output-spill-storage.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final",
+  "linux": true,
+  "mutation": {
+    "startedAt": "2026-09-13T19:43:43.541Z",
+    "file": "runner-v2/test/support/linked-output-spill-storage.ts",
+    "originalHash": "8d98a8306b84d4854a588ca0b7fff63601f830ab2dc800633a6ac5ee4b583744",
+    "faultHash": "dc216be574d3ed52873ef6a1e305b06cb8ec8d081eb8241721a137f59fb50224",
+    "exitCode": 1,
+    "behavioralRed": true,
+    "restoredHash": "8d98a8306b84d4854a588ca0b7fff63601f830ab2dc800633a6ac5ee4b583744",
+    "finishedAt": "2026-09-13T19:43:54.665Z"
+  },
+  "sourceFinalSha256": "8d98a8306b84d4854a588ca0b7fff63601f830ab2dc800633a6ac5ee4b583744",
+  "testFinalSha256": "086f388ad29c897f0cfb9df4b8b90210645114cda2f8166f6e5d9726ce4fd8bb",
+  "redReceipt": {
+    "startedAt": "2026-09-13T19:43:43.963Z",
+    "finishedAt": "2026-09-13T19:43:54.608Z",
+    "wrapperPid": 39276,
+    "compileExit": 0,
+    "exitCode": 1,
+    "containerId": "5035c71ab1d1dfad33e6490759b3dac70aca5a8aadc671dfb7bde7d6d5d536ec",
+    "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+    "state": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 0,
+      "ExitCode": 1,
+      "Error": "",
+      "StartedAt": "2026-09-13T19:43:52.188760655Z",
+      "FinishedAt": "2026-09-13T19:43:54.305051487Z"
+    },
+    "copiedEvidence": true,
+    "removed": false,
+    "absenceVerified": false,
+    "inputsUnchanged": true
+  },
+  "greenReceipt": {
+    "startedAt": "2026-09-13T19:44:31.173Z",
+    "finishedAt": "2026-09-13T19:45:21.355Z",
+    "wrapperPid": 10596,
+    "compileExit": 0,
+    "exitCode": 0,
+    "containerId": "d6a85daec0f154b48797b8ab00bc06bd120933293b33b5cdbc74c818679873a2",
+    "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+    "state": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 0,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-09-13T19:44:40.703325534Z",
+      "FinishedAt": "2026-09-13T19:45:20.799145391Z"
+    },
+    "copiedEvidence": true,
+    "removed": true,
+    "absenceVerified": true,
+    "inputsUnchanged": true
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/red-terminal.json",
+      "sha256": "6d29481b176545d2836a1b3a46fd05e50dae5dc660731ede646a56d581270520"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/red-inputs-before.json",
+      "sha256": "b5056725b7fe7ffb2749717e45ca93a304e8741d062545792249865bdf4968ff"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/red-inputs-after.json",
+      "sha256": "b5056725b7fe7ffb2749717e45ca93a304e8741d062545792249865bdf4968ff"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red/test.stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/red-test.stdout.log",
+      "sha256": "27e77d75c0871dd291036998fee9ddacd1aa4dd037786b953fd13bcec17f6d50"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-reverse-red/test.stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/red-test.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/green-terminal.json",
+      "sha256": "3f35db9aae7e25f0e78ac60afcd794e3b698d989045b8c974dde864e82e68ac9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/green-inputs-before.json",
+      "sha256": "1693a0cdebb596398e4e6fb6c2e781a035ea93e06fb5322b4c9d4d0e4ea89ddb"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/green-inputs-after.json",
+      "sha256": "1693a0cdebb596398e4e6fb6c2e781a035ea93e06fb5322b4c9d4d0e4ea89ddb"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final/test.stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/green-test.stdout.log",
+      "sha256": "7235399a43951c21e601a7279bad98a6b796b4d897e9d09a0c58992d942a53f5"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-shared-final/test.stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/linked-test-storage-contract/green-test.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

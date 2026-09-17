@@ -1,0 +1,410 @@
+[
+  {
+    "path": "runner-v2/src/change-set.ts",
+    "sha256": "7dd08c64b224be40812647e33ed7d9c06bbd298b1dec2a5760cc3b5344823a7f",
+    "bytes": 5648,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/cli.ts",
+    "sha256": "eba9d290784fde35221e35347571d08a144f4c4d0a157793dd0196619be13101",
+    "bytes": 21574,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/control-server.ts",
+    "sha256": "47529d50038f7306a0925cd3cfb591fb002c4f05704c8b87ec66b89282095d09",
+    "bytes": 40355,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/evidence-tools.ts",
+    "sha256": "588a8de829605c458eea832a8a7b20e69d07a098d98e9668e409d1196f36a581",
+    "bytes": 11054,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/execution-host.ts",
+    "sha256": "e6eaaa60ad82745013f511a990deb9880e1c769a47a2aaff680d20f867afe51b",
+    "bytes": 34268,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/final-verification-cleanup.ts",
+    "sha256": "e02cbda0df077300ae1945cda4be803998a1cb066972578dfad0ac0699609650",
+    "bytes": 19813,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/final-verification-profile.ts",
+    "sha256": "81b659cdb77666f37cd2396f693ba47c092d48990d03a5fbab09a5a034f0c9b3",
+    "bytes": 27928,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/final-verification-runtime.ts",
+    "sha256": "d1b0895078b633cda23adf2bd2e3ec4b731b30803493bedf5cd9f9dadb1cc5c5",
+    "bytes": 71737,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-baseline.ts",
+    "sha256": "0366f3d14a523b0d301e733b7cb8cf57b6a8127c3ad43fcf43763853a5542877",
+    "bytes": 8251,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-bootstrap.ts",
+    "sha256": "e6dac06d0c26c1731ec338f41e84d899ef9ce70ac207bcdfcb1f17402343c991",
+    "bytes": 2089,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/src/git-command.ts",
+    "sha256": "3c3184b6aa897af322825a471b60a4ed17cbd1809efb63825dd9ce542f18fa09",
+    "bytes": 1949,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-preflight.ts",
+    "sha256": "095327393803aaa2b60e5953964a0d604c34d1e97ac12291152330895f87a016",
+    "bytes": 9589,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-repository.ts",
+    "sha256": "11e8b2b2d98582b11e9cba56255d25901811362fc36a6a3380a6b59b4a597ee5",
+    "bytes": 2344,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-run-context.ts",
+    "sha256": "c112bf20ddfdee16dc1cd3045eb24947e5907dab069bb26be76d42f27f1fe291",
+    "bytes": 12763,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-runtime-runner.ts",
+    "sha256": "38f3daf3a07f792d1909435b5d21cfc5e23cf56445d56c1d5d0f7c6fdb631a1a",
+    "bytes": 8295,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/git-tools.ts",
+    "sha256": "6c8c17da0b30273ba762193912df87d1b6eae10236735e320e3047a8463c759d",
+    "bytes": 12147,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/integration-manager.ts",
+    "sha256": "d8d09834cfa53a9a4db6ea790036387952ec70df040cb740911afd7384302d54",
+    "bytes": 59817,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/native-architect-runtime.ts",
+    "sha256": "a12d6e40df95c274b6b30340102e6dda22a497ec958a5a03eae446ce290ac010",
+    "bytes": 30465,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/native-build-factory.ts",
+    "sha256": "ec87221df6f3df6127124d04bc6b0d4115f7ba2facf7e291a0195df4cfcd9bf6",
+    "bytes": 115161,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/native-verifier-runtime.ts",
+    "sha256": "a9dd55730da504be7a34ad06a594a4fdfa217d5878f3ab241b5ac96b98d04cf9",
+    "bytes": 27255,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/native-worker-driver.ts",
+    "sha256": "bf2c0843e44cda8d3eb5557266e57501fe1b7e943b4555b5c6f086230849eb88",
+    "bytes": 23896,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/one-shot-command-executor.ts",
+    "sha256": "ad9ab27fc09f747996e61f60a837b0eadb09061059a43de57784f7b2cb6b92c3",
+    "bytes": 11474,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/repository-intelligence.ts",
+    "sha256": "fd68009267781f205033a65a80724c15a1ec1f4a33ad7b96ab65f651f26d3c74",
+    "bytes": 15247,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/subagent-tools.ts",
+    "sha256": "a58e2766b9e85cdf288200f81a6b26f5de3e0655f1bfce2eae455735e0efeddc",
+    "bytes": 16381,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/subprocess-runtime.ts",
+    "sha256": "91f9ef61eb4f31a84ced3428ceeafc04fcfda83b8d98e4651143ff94c6a1e5ec",
+    "bytes": 75559,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/tool-broker.ts",
+    "sha256": "d9d0743eb26c99e5de4312e2c3ccd7685ada3202c19c93390f68008543383b40",
+    "bytes": 20533,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/verification-workspace.ts",
+    "sha256": "f29d136d62653bf93ee92b656fc7136ba9ea8676eb7d2493ba3c739bd1440054",
+    "bytes": 23335,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/worker-runtime.ts",
+    "sha256": "411e21f5415c8729e980e70999360e5b1d6a7a71b6debe6fa420f79ffe887bab",
+    "bytes": 19442,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/src/workspace-manager.ts",
+    "sha256": "5416c774ba1fc91d2ae710c99958c91585ae48bfc9a7f9a0e565aea9bd8f91b8",
+    "bytes": 14949,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/change-set.test.ts",
+    "sha256": "dd2b32115178fc0157a8cc6a0b3511b0abfae9e3197b41885c569a9018a52388",
+    "bytes": 9505,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/code-intelligence-tools.test.ts",
+    "sha256": "7ea160a52f0df5b94fb444a61b22b99e8c0cfca3fa2187d1f68c59a342af1534",
+    "bytes": 3897,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/filesystem-tools.test.ts",
+    "sha256": "ecc61838aae67db579c3e0e4475ba6a7c2f746abe1aa0577b84ea701c597693f",
+    "bytes": 21938,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/final-verification-browser.test.ts",
+    "sha256": "46c1e00faf2fa8d3df6e0e09d4d7d15a3ca4acd22882dd5e829e2046903dbc91",
+    "bytes": 13842,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/final-verification-cleanup.test.ts",
+    "sha256": "2a673f7ead1494d8aa9e1624e47c9623b045bb1fd5d7761f63c5a83e491007c3",
+    "bytes": 25527,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/final-verification-profile.test.ts",
+    "sha256": "d76edb4eeb8eadefb6d4a670e932f3ac52318eb82f7e1bad11a3f9811d180b30",
+    "bytes": 33836,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/final-verification-runtime-b1.test.ts",
+    "sha256": "fe4feb8818b4f49edd8267a75ae6347f1230d0a337336cc3b686e13582f926db",
+    "bytes": 14508,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/final-verification-runtime.test.ts",
+    "sha256": "e4e4cf95fb12336f81ad6a9539a8aa100c391fd877f85d8716c27add76fbb33a",
+    "bytes": 30790,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/git-baseline.test.ts",
+    "sha256": "67824ef0e996d1752fd82a0fa6743dd387da705e0e256977c6ec4dcb90a397b9",
+    "bytes": 6671,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/git-bootstrap.test.ts",
+    "sha256": "312bb90af0e1acdaf62b0a5ff54c0a58e9a140baf2de4b7ff31bd0788ed75e89",
+    "bytes": 5114,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/git-caller-audit.test.ts",
+    "sha256": "6faf14b68a014645f54024f283a6f9b50bcea84955bf92796ad8ab6476793056",
+    "bytes": 4735,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/git-caller-routing.test.ts",
+    "sha256": "b54f1c6682bc064ca5229c2e19b24dbafe027d245d367c3fc5b81d5c0ba16047",
+    "bytes": 5810,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/git-control-refusal.test.ts",
+    "sha256": "c9a44b4dc1db08f29e7aabe56d55c3579055ec6d861432150f5ffcddb330182e",
+    "bytes": 2426,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/git-production-managers.test.ts",
+    "sha256": "1d389e4260b149d504c3bb0df3b23b1a94291970a00d645f688d2e381dab0d59",
+    "bytes": 6437,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/git-repository.test.ts",
+    "sha256": "a0c9a9b44c0cdb125ce8073ac5bce039a16ff98dfb843fbeb551cbb28e877b31",
+    "bytes": 3137,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/git-run-context.test.ts",
+    "sha256": "b52b702111bfe95abf76f9d98659aac30d5d89c3f0ec6f585a0a2af05c35ab3c",
+    "bytes": 15066,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/git-runtime-integration.test.ts",
+    "sha256": "7321492d43a6dd3a50d1ae8661873de38f211bfa91a2f19cb395d3da5b123ccc",
+    "bytes": 4114,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/git-runtime-runner.test.ts",
+    "sha256": "87526401a901938765c501f5bf1476863d6d5b5241c5f1068726d54bcadb3b17",
+    "bytes": 10824,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/git-tools.test.ts",
+    "sha256": "dd1ff8a158de5c72525113725f828656359c7ca5952cf3d134b8d9630aebe8d8",
+    "bytes": 4981,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/integration-manager.test.ts",
+    "sha256": "923c88bc1de22c4a95844f4a6ad9b5a2ee6dd4c7bd66eb1474a2d026eb800fdb",
+    "bytes": 66463,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/language-provider-compatibility.test.ts",
+    "sha256": "83eae154170badb1b9acadf101033535d41c9c226265e07aa91e0a0f23ce1510",
+    "bytes": 6134,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/language-provider-router.test.ts",
+    "sha256": "be09e95b387de7bbcdf87cb5ffbaeaf44e88288d7d73f9f926f49a5d3a0420b2",
+    "bytes": 12412,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/native-architect-runtime.test.ts",
+    "sha256": "336a05bb5d34de62a0f47792daf17fbe73fcaae22d5616d966cf5dd840cb5552",
+    "bytes": 41331,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/native-build-capabilities.test.ts",
+    "sha256": "0fb6bda99e6a9b860f7f1572686b9ddbbc64f7e1a986ed721130105b98329723",
+    "bytes": 120721,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/native-final-verification-factory.test.ts",
+    "sha256": "b887e84928ab817b841d98272e2ffceb4058c99f61ccc88a306b392ebf9c9358",
+    "bytes": 9216,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/native-verifier-runtime.test.ts",
+    "sha256": "b15aeab94b0aaf1f39688ce32b6b1465c1d23ec0dcaa3bfe6aceb24dad799f31",
+    "bytes": 23484,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/native-worker-driver.test.ts",
+    "sha256": "33996521559efcc0e605067cc892312dc63aad4249b2c478b696f135742a4c00",
+    "bytes": 21807,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/one-shot-command-family-production-matrix.test.ts",
+    "sha256": "5a275d52db140e6fa7fefad80197c34ee17222ddfbde2b8151ccd5b74289b0e6",
+    "bytes": 16131,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/one-shot-output-capture.test.ts",
+    "sha256": "6faa5346964bc285781c694b16299c2578e84a1aa884e9a27d0505c860fe82e5",
+    "bytes": 4962,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/recovery-smoke.test.ts",
+    "sha256": "675065d7f4d9ed769a04a1511e6652f897639136545196bbbf86fcbdc2b3d371",
+    "bytes": 7292,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/repository-intelligence.test.ts",
+    "sha256": "1f1119e9355cfed4775f608a559ed4c24d1aa065134c78100399a24e60a534f5",
+    "bytes": 5902,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/subagent-tools.test.ts",
+    "sha256": "f3aee9d68a42dc1779e085cf75abc2f6e32c471d1196c7c6fb6b012438d52d93",
+    "bytes": 10547,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/subprocess-runtime.test.ts",
+    "sha256": "0af12a581be777c67bdd303d5cd8ab1ae50c0498e9cfc4378ce7d0947d8ab319",
+    "bytes": 113077,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/support/git-caller-audit.ts",
+    "sha256": "4a62b225d389f350e68d32da6cbc500216b0e58b1d81eb71463bf4d2c84d8e90",
+    "bytes": 3864,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/support/git-fixture.ts",
+    "sha256": "ac7ed4506036786e755c7e44f1c4fc27fe79e0f078e2e71d05a93013c26f7b74",
+    "bytes": 10188,
+    "kind": "new"
+  },
+  {
+    "path": "runner-v2/test/typescript-intelligence.test.ts",
+    "sha256": "df803c41110e53aa78f86c76cc9e2ba3e253a7da4bfc531dbb4f5e7d623bbdea",
+    "bytes": 3054,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/verification-workspace.test.ts",
+    "sha256": "58c6bdacf7b9cba275fa84d8932061c9ef67f9be44d8f1341f06d41c20855a08",
+    "bytes": 11666,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/worker-runtime.test.ts",
+    "sha256": "5821de18a5e93b62f07c4bdec3ddffd8509cd07fd5e56508d739877185e45422",
+    "bytes": 31943,
+    "kind": "modified"
+  },
+  {
+    "path": "runner-v2/test/workspace-manager.test.ts",
+    "sha256": "b11b0bc3716da0c86acf2bd66863b34632b89f72c3a936af349ef9f68b3aff94",
+    "bytes": 16469,
+    "kind": "modified"
+  }
+]

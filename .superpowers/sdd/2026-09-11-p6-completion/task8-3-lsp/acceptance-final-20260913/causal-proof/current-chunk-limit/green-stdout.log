@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: LSP shared transport uses the real launching call and fresh exact language request authority
+ok 1 - LSP shared transport uses the real launching call and fresh exact language request authority
+  ---
+  duration_ms: 346.9711
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 572.0697

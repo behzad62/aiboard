@@ -1,0 +1,7 @@
+{
+  "tests": [
+    "runner-v2/test/integration-manager.test.ts"
+  ],
+  "id": "integration-manager-focused-green",
+  "pattern": "change sets integrate serially|integration conflicts are mechanical|a later attempt can integrate|evidence-backed no-change|final handoff applies|final handoff rejects dirty|a fresh manager repairs|the real apply path leaves|crash recovery never overwrites|the live checkout rechecks"
+}

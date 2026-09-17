@@ -1,0 +1,26 @@
+{
+  "id": "final-managed-call-scope-red",
+  "startedAt": "2026-09-14T10:53:23.937Z",
+  "finishedAt": "2026-09-14T10:53:24.900Z",
+  "wrapperPid": 10224,
+  "testPid": 27436,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/final-verification-managed-authority.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-g9hhfj"
+  ]
+}

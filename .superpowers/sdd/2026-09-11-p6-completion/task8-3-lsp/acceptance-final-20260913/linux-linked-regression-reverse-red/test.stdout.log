@@ -1,0 +1,55 @@
+LINUX_RUNTIME {"node":"v24.20.0","platform":"linux","arch":"x64","pid":15,"startedAt":"2026-09-13T19:43:54.039Z"}
+FSYNC_ROOT {"dir":"/home/node/task83-fsync-HEnAeg","at":"2026-09-13T19:43:54.043Z"}
+FSYNC_PROBE {"parent":"/home/node","samples":[3.5793630000000007,3.1074420000000025,2.9134340000000023,2.9691349999999943,3.017337999999995,3.04354,2.930033999999999,3.052939000000002,3.055138999999997,3.0267390000000063,2.987537000000003,2.9964370000000073,2.9847360000000123,3.085441000000003,3.0614400000000046,3.140843000000004],"removed":true}
+FSYNC_ROOT {"dir":"/tmp/task83-fsync-mkHJGi","at":"2026-09-13T19:43:54.095Z"}
+FSYNC_PROBE {"parent":"/tmp","samples":[0.002600000000001046,0.001300000000000523,0.0011000000000080945,0.0011999999999972033,0.0011999999999972033,0.0011000000000080945,0.0010999999999938836,0.0010999999999938836,0.001300000000000523,0.0011999999999972033,0.0010999999999938836,0.0011000000000080945,0.0011009999999913589,0.0016999999999995907,0.0011999999999972033,0.0010999999999938836],"removed":true}
+LINUX_COMMAND 0 ["node","--import","./runner-v2/test/support/cli-root-observer.mjs","--test","--test-concurrency=1","--test-reporter=tap","--test-timeout=120000","runner-v2/test/linked-output-spill-storage.test.js"]
+LINUX_CONTROLLER_IDENTITY {"pid":15,"startedAt":"2026-09-13T19:43:54.096Z","stat":"15 (MainThread) R 7 7 1 0 -1 4194560 4393 0 0 0 3 0 0 0 20 0 7 0 268376 1108742144 14104 18446744073709551615 105684600987648 105684649641766 140727104026592 0 0 0 0 16781312 17922 0 0 0 17 0 0 0 0 0 0 105684707676312 105684709162064 105684751065088 140727104028415 140727104028453 140727104028453 140727104028644 0\n"}
+TAP version 13
+# C5 CLI root: {"event":"created","path":"/tmp/p683-linked-spill-OiOgAl"}
+# Subtest: linked spill fixture matches its advertised linked-entry contract exact
+not ok 1 - linked spill fixture matches its advertised linked-entry contract exact
+  ---
+  duration_ms: 6.275587
+  type: 'test'
+  location: '/home/node/task83-runtime/runner-v2/test/linked-output-spill-storage.test.js:8:5'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, lstat '/tmp/p683-linked-spill-OiOgAl/owned-spill'"
+  code: 'ENOENT'
+  stack: |-
+    async lstat (node:internal/fs/promises:1734:18)
+    async TestContext.<anonymous> (file:///home/node/task83-runtime/runner-v2/test/linked-output-spill-storage.test.js:17:27)
+    async Test.run (node:internal/test_runner/test:1404:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# exact linked test-storage root acquired: /tmp/p683-linked-spill-OiOgAl
+# linked test-storage failure retained: /tmp/p683-linked-spill-OiOgAl
+# C5 CLI root: {"event":"created","path":"/tmp/p683-linked-spill-HbccGl"}
+# Subtest: linked spill fixture matches its advertised linked-entry contract wrong-identity
+not ok 2 - linked spill fixture matches its advertised linked-entry contract wrong-identity
+  ---
+  duration_ms: 2.775326
+  type: 'test'
+  location: '/home/node/task83-runtime/runner-v2/test/linked-output-spill-storage.test.js:8:5'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, lstat '/tmp/p683-linked-spill-HbccGl/owned-spill'"
+  code: 'ENOENT'
+  stack: |-
+    async lstat (node:internal/fs/promises:1734:18)
+    async TestContext.<anonymous> (file:///home/node/task83-runtime/runner-v2/test/linked-output-spill-storage.test.js:17:27)
+    async Test.run (node:internal/test_runner/test:1404:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:969:7)
+  ...
+# exact linked test-storage root acquired: /tmp/p683-linked-spill-HbccGl
+# linked test-storage failure retained: /tmp/p683-linked-spill-HbccGl
+# C5 CLI root: {"event":"exit","path":"/tmp/p683-linked-spill-OiOgAl","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"/tmp/p683-linked-spill-HbccGl","existsAtExit":true}
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 82.638477

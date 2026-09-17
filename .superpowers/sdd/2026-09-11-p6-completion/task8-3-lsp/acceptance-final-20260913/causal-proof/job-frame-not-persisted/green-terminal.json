@@ -1,0 +1,25 @@
+{
+  "id": "rev-job-frame-not-persisted-green",
+  "startedAt": "2026-09-12T15:46:24.323Z",
+  "finishedAt": "2026-09-12T15:46:25.291Z",
+  "wrapperPid": 63508,
+  "testPid": 28164,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 410,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^Windows\\ Job\\ output\\ reservation\\ survives\\ host\\ reopen\\ without\\ coalescing\\ an\\ accepted\\ frame$",
+    "runner-v2/test/windows-job-output-replay.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

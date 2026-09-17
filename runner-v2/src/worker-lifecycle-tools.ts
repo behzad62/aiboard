@@ -9,6 +9,7 @@ import {
   type SchedulerStore,
 } from "./scheduler-store.js";
 import type { ChangeSet } from "./change-set.js";
+import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
 
 export interface WorkerLifecycleToolsOptions {
   store: SchedulerStore;
@@ -41,8 +42,10 @@ export function createWorkerLifecycleTools(
 }
 
 export function createSubmitTaskTool(
-  submit: (input: SubmitTaskInput) => Promise<ChangeSet>
+  submit: (input: SubmitTaskInput) => Promise<ChangeSet>,
+  options: { requireCriterionEvidenceLinks?: boolean } = {}
 ): NativeTool<SubmitTaskInput> {
+  const requireCriterionEvidenceLinks = options.requireCriterionEvidenceLinks === true;
   return {
     definition: {
       name: "submit_task",
@@ -61,8 +64,15 @@ export function createSubmitTaskTool(
             maxItems: 100,
             items: { type: "string", minLength: 1, maxLength: 2_000 },
           },
+          criterionEvidenceLinks: {
+            type: "array",
+            minItems: requireCriterionEvidenceLinks ? 1 : 0,
+            items: criterionEvidenceLinkSchema(),
+          },
         },
-        required: ["summary", "readiness"],
+        required: requireCriterionEvidenceLinks
+          ? ["summary", "readiness", "criterionEvidenceLinks"]
+          : ["summary", "readiness"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -70,7 +80,7 @@ export function createSubmitTaskTool(
       lifecycle: true,
     },
     validate: (input) =>
-      validateSubmit(input),
+      validateSubmit(input, requireCriterionEvidenceLinks),
     assessAccess: () => ({
       capability: "task.submit",
       paths: [{ path: ".", access: "write" }],
@@ -80,6 +90,10 @@ export function createSubmitTaskTool(
         summary: input.summary.trim(),
         readiness: input.readiness,
         unresolvedConcerns: input.unresolvedConcerns.map((item) => item.trim()),
+        criterionEvidenceLinks: input.criterionEvidenceLinks.map((link) => ({
+          ...link,
+          artifactHashes: [...link.artifactHashes],
+        })),
       });
       return {
         content: [{ type: "json", value: changeSet }],
@@ -90,13 +104,17 @@ export function createSubmitTaskTool(
   };
 }
 
-interface SubmitTaskInput {
+export interface SubmitTaskInput {
   summary: string;
   readiness: "ready_for_architect_review";
   unresolvedConcerns: string[];
+  criterionEvidenceLinks: CriterionEvidenceLink[];
 }
 
-function validateSubmit(input: unknown): ValidationResult<SubmitTaskInput> {
+function validateSubmit(
+  input: unknown,
+  requireCriterionEvidenceLinks = false
+): ValidationResult<SubmitTaskInput> {
   if (!isRecord(input) || !nonEmpty(input.summary)) {
     return invalid("summary must be a non-empty string");
   }
@@ -113,14 +131,77 @@ function validateSubmit(input: unknown): ValidationResult<SubmitTaskInput> {
       (item) => typeof item !== "string" || !item.trim() || item.length > 2_000
     )
   ) return invalid("unresolvedConcerns must contain at most 100 non-empty strings");
+  const criterionEvidenceLinks = parseCriterionEvidenceLinks(
+    input.criterionEvidenceLinks,
+    requireCriterionEvidenceLinks
+  );
+  if (!criterionEvidenceLinks) {
+    return invalid(
+      "criterionEvidenceLinks must contain one valid mapping per acceptance criterion"
+    );
+  }
   return {
     ok: true,
     value: {
       summary: input.summary,
       readiness: input.readiness,
-      unresolvedConcerns: concerns as string[],
+      unresolvedConcerns: (concerns as string[]).map((item) => item.trim()),
+      criterionEvidenceLinks,
     },
   };
+}
+
+function criterionEvidenceLinkSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      criterionId: { type: "string", minLength: 1 },
+      evidenceId: { type: "string", minLength: 1 },
+      artifactHashes: {
+        type: "array",
+        minItems: 1,
+        items: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      },
+      taskId: { type: "string", minLength: 1 },
+      attempt: { type: "integer", minimum: 1 },
+    },
+    required: ["criterionId", "evidenceId", "artifactHashes"],
+    additionalProperties: false,
+  };
+}
+
+function parseCriterionEvidenceLinks(
+  value: unknown,
+  required: boolean
+): CriterionEvidenceLink[] | null {
+  if (value === undefined && !required) return [];
+  if (!Array.isArray(value)) return null;
+  const links: CriterionEvidenceLink[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate)) return null;
+    if (!nonEmpty(candidate.criterionId) || !nonEmpty(candidate.evidenceId)) return null;
+    if (
+      !Array.isArray(candidate.artifactHashes) ||
+      candidate.artifactHashes.length === 0 ||
+      candidate.artifactHashes.some(
+        (hash) => typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)
+      )
+    ) return null;
+    if (candidate.taskId !== undefined && !nonEmpty(candidate.taskId)) return null;
+    const attempt = candidate.attempt;
+    if (
+      attempt !== undefined &&
+      (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1)
+    ) return null;
+    links.push({
+      criterionId: candidate.criterionId,
+      evidenceId: candidate.evidenceId,
+      artifactHashes: [...candidate.artifactHashes] as string[],
+      ...(candidate.taskId !== undefined ? { taskId: candidate.taskId } : {}),
+      ...(typeof attempt === "number" ? { attempt } : {}),
+    });
+  }
+  return required && links.length === 0 ? null : links;
 }
 
 function askArchitectTool(

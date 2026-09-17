@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
-import { runGit, type GitCommandOptions } from "./git-command.js";
+import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   classifyOwnedWorktreeAssociations,
@@ -78,7 +78,7 @@ export class WorkspaceManager {
       this.runSegment
     );
     this.baselineRevision = options.baselineRevision;
-    this.execute = options.execute ?? runGit;
+    this.execute = options.execute ?? unavailableGitRunner;
     this.beforeWorkspaceRootRemoval = options.beforeWorkspaceRootRemoval;
   }
 

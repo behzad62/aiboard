@@ -1,0 +1,331 @@
+{
+  "at": "2026-09-12T05:38:29.827560+00:00",
+  "detected": 16,
+  "planned": 16,
+  "assertionRejections": 15,
+  "typedAuthorityRejections": 1,
+  "sourcesRestored": true,
+  "review": "The last reversal was detected as exact SessionAuthorityError authorization_forged before any write, not a missing module/syntax/timeout. The conservative automatic classifier required ERR_ASSERTION and therefore marked it false; the original receipt is preserved unchanged.",
+  "cases": [
+    {
+      "label": "pinned-executable",
+      "path": "runner-v2/src/runner-internal-execution-context.ts",
+      "pattern": "^MCP re-attestation verifies the pinned",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP re-attestation verifies the pinned",
+        "runner-v2/test/mcp-configuration.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "10875178e69c294b426d319f187cefefb1fb95f2f3f2e30d44c3c4f2e1a8e1f0",
+      "mutantSHA256": "808cc3a2c5b8bd543355ee17dfa111ac4dca170cc08b8a457134c5c3ae2ed3ad"
+    },
+    {
+      "label": "stable-schema-keys",
+      "path": "runner-v2/src/mcp-configuration.ts",
+      "pattern": "mixed-schema-keys",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=mixed-schema-keys",
+        "runner-v2/test/mcp-discovery-protocol.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "6fbcaec824a64133542f984469f1d38ac1f3ee925aeace8313510a08ac33b64f",
+      "mutantSHA256": "85c38d752ebccbddbd5b70ec503ed627f7f11c308677fe4a816463d93265b19a"
+    },
+    {
+      "label": "fixed-network-default",
+      "path": "runner-v2/src/mcp-configuration.ts",
+      "pattern": "^MCP CLI envelope declarations",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP CLI envelope declarations",
+        "runner-v2/test/mcp-configuration.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "6fbcaec824a64133542f984469f1d38ac1f3ee925aeace8313510a08ac33b64f",
+      "mutantSHA256": "795c32664d6a5e383923a2d2793bc91b5fd74c678909bbc407f17070b008d390"
+    },
+    {
+      "label": "config-envelope-digest",
+      "path": "runner-v2/src/mcp-configuration.ts",
+      "pattern": "^MCP config digest binds",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP config digest binds",
+        "runner-v2/test/mcp-configuration.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "6fbcaec824a64133542f984469f1d38ac1f3ee925aeace8313510a08ac33b64f",
+      "mutantSHA256": "14bee6af3c6f4ddec2c9d736034e13efc1f4cd5a66fb589759eacc7160605e5e"
+    },
+    {
+      "label": "broker-empty-access",
+      "path": "runner-v2/src/tool-broker.ts",
+      "pattern": "^MCP ToolBroker",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP ToolBroker",
+        "runner-v2/test/mcp-broker-envelope.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "814c9ba287a47ca252629d223978b59cd264d9cd7140431bbd58b703b361f973",
+      "mutantSHA256": "d9d0743eb26c99e5de4312e2c3ccd7685ada3202c19c93390f68008543383b40"
+    },
+    {
+      "label": "replay-refusal",
+      "path": "runner-v2/src/mcp-session-manager.ts",
+      "pattern": "^MCP crash after write",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP crash after write",
+        "runner-v2/test/mcp-lazy-manager.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "1f4cb0449e350b7a651c77d2a4bf7863051bbc758313a0be42284557ecc0bd9d",
+      "mutantSHA256": "856f3f4c949c74548dd84692f000757fd4d44f938cd3eff166a74f39a7fd351c"
+    },
+    {
+      "label": "restart-budget",
+      "path": "runner-v2/src/mcp-session-manager.ts",
+      "pattern": "^MCP restart budget",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP restart budget",
+        "runner-v2/test/mcp-lazy-manager.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "1f4cb0449e350b7a651c77d2a4bf7863051bbc758313a0be42284557ecc0bd9d",
+      "mutantSHA256": "2f0ce0c1777dabd7233dd2fb36351e2bb696173550090e5bd61d5a2afa7d0cf9"
+    },
+    {
+      "label": "all-agent-invalidation",
+      "path": "runner-v2/src/mcp-session-manager.ts",
+      "pattern": "^MCP schema replacement retires every live",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP schema replacement retires every live",
+        "runner-v2/test/mcp-lazy-manager.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "1f4cb0449e350b7a651c77d2a4bf7863051bbc758313a0be42284557ecc0bd9d",
+      "mutantSHA256": "04d8db2ccf99606a0f3577804e99065db81fc19d4ccbe591441a771838e207d6"
+    },
+    {
+      "label": "request-exclusive-lifetime",
+      "path": "runner-v2/src/streaming-request-operation.ts",
+      "pattern": "^MCP request retains write ownership",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP request retains write ownership",
+        "runner-v2/test/streaming-request-operation.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "b162a717541188cd0e26c96758e00273fc5076c02afba89b4d6fd09a085c86a6",
+      "mutantSHA256": "9eaff6e31f3a01c4e68919a7480a25151dec3ee7d4b54a6f20344767af3817e6"
+    },
+    {
+      "label": "pre-isolation-subset",
+      "path": "runner-v2/src/streaming-process-session-runtime.ts",
+      "pattern": "^MCP fixed envelope is refused",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP fixed envelope is refused",
+        "runner-v2/test/streaming-process-session-runtime.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "5f3d6b307f42e4b7664a04d37cdab0a73d65dfc835a75365e2eda26deb9721b3",
+      "mutantSHA256": "a03d8ad00ed5bc43829d9e3c999630b248e4759bfb728ed24ce94af5e897c73d"
+    },
+    {
+      "label": "discovery-closed-executor",
+      "path": "runner-v2/src/runner-internal-execution-context.ts",
+      "pattern": "close before-discover",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=close before-discover",
+        "runner-v2/test/mcp-discovery-lifecycle.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "10875178e69c294b426d319f187cefefb1fb95f2f3f2e30d44c3c4f2e1a8e1f0",
+      "mutantSHA256": "07bdef9ee21175fe2defc7cd3e903d246b985b55d7a88f9cc5c72ef438819727"
+    },
+    {
+      "label": "discovery-acquisition-join",
+      "path": "runner-v2/src/runner-internal-execution-context.ts",
+      "pattern": "close during-launch",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=close during-launch",
+        "runner-v2/test/mcp-discovery-lifecycle.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "10875178e69c294b426d319f187cefefb1fb95f2f3f2e30d44c3c4f2e1a8e1f0",
+      "mutantSHA256": "b2c35840f356de84717fe6d395b8a65244cb90962f1d104bfb8a54843fdc28ca"
+    },
+    {
+      "label": "incomplete-frame-no-write",
+      "path": "runner-v2/src/mcp-rpc-peer.ts",
+      "pattern": "^MCP refuses a new request when an earlier incomplete",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP refuses a new request when an earlier incomplete",
+        "runner-v2/test/mcp-pending-notification.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "183a23c615cf48153a392c2bf9418d83102d9e22948b9ae46412affe8b2bfe47",
+      "mutantSHA256": "2fbf4928093c65595f4387b29300ef7942dfad7799f9b337542379ffe17151bc"
+    },
+    {
+      "label": "pending-notification-first",
+      "path": "runner-v2/src/execution-host-mcp-transport.ts",
+      "pattern": "^MCP processes an already pending",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP processes an already pending",
+        "runner-v2/test/mcp-pending-notification.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "2e9b515589587233a7c7cedd9ba16841fbbbb6427084d44e21d2796f45171be0",
+      "mutantSHA256": "95b6d15b10c5a2d90b4e80cd64a5e98b332126a8db3142f951e05d26efa6b7b8"
+    },
+    {
+      "label": "original-startup-deadline",
+      "path": "runner-v2/src/streaming-process-session-runtime.ts",
+      "pattern": "^round4 startup retains its original semantic deadline",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^round4 startup retains its original semantic deadline",
+        "runner-v2/test/streaming-process-session-runtime.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": true,
+      "beforeSHA256": "5f3d6b307f42e4b7664a04d37cdab0a73d65dfc835a75365e2eda26deb9721b3",
+      "mutantSHA256": "8e57ef60e30cf62b27afceeda384ab29dd7088010816343a5bff2969b3502ed2"
+    },
+    {
+      "label": "exact-first-authorization",
+      "path": "runner-v2/src/streaming-process-session-runtime.ts",
+      "pattern": "^MCP request scope memory",
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-timeout=8000",
+        "--test-name-pattern=^MCP request scope memory",
+        "runner-v2/test/streaming-process-session-runtime.test.ts"
+      ],
+      "exitCode": 1,
+      "detected": false,
+      "beforeSHA256": "5f3d6b307f42e4b7664a04d37cdab0a73d65dfc835a75365e2eda26deb9721b3",
+      "mutantSHA256": "2f3872e4a60e4933b9114044f9a49ed730dd020353765edee733265d918d2f21"
+    }
+  ]
+}

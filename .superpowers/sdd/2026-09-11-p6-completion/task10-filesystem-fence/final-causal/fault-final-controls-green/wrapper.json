@@ -1,0 +1,37 @@
+{
+  "pid": 54840,
+  "identity": {
+    "Id": 54840,
+    "StartTimeUtc": "2026-09-15T07:52:26.5986794Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T07:52:26.650Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task10-filesystem-fence\\final-causal\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task10-filesystem-fence\\final-causal\\fault-final-controls-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=a new-file parent retarget|publication is create-if-absent",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "spec": {
+    "id": "fault-final-controls-green",
+    "pattern": "a new-file parent retarget|publication is create-if-absent",
+    "tests": [
+      "runner-v2/test/filesystem-mutation-fence.test.ts"
+    ],
+    "inputPaths": [
+      ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/final-causal/reverse-fault.mjs"
+    ]
+  }
+}
