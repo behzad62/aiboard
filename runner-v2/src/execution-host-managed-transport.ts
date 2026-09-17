@@ -159,7 +159,9 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       if (context) {
         const assertion = expected(target, context, "stop");
         if (record?.state === "active") {
-          const authorization = run.sessionAuthority.authorizeOperation({ ...assertion, grant: context.executionGrant! });
+          const facade = entries.get(target.processId)?.facade;
+          if (!facade) throw new ManagedProcessError("process_cleanup_unverified", "Managed stop lost its exact streaming session facade.");
+          const authorization = facade.authorizeOperation({ ...assertion, grant: context.executionGrant! });
           // The shared seam commits intent synchronously. Cancellation afterwards
           // cannot interrupt that already accepted exact-owner cleanup.
           await run.streamingRuntime.stopAuthorizedSession(authorization, assertion);

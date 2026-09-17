@@ -262,7 +262,11 @@ export function createRunnerInternalProcessKernel(options: {
             const forceDeadline = Date.now() + terminationTimeoutMs;
             while (observed.state !== "exited" && Date.now() < forceDeadline) {
               try {
-                parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence));
+                const signalled = parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence));
+                if (signalled.state === "exited") {
+                  observed = { state: "exited" };
+                  break;
+                }
               } catch {}
               observed = parseProcessReconciliation(
                 await backend.reconcile(binding, fence),

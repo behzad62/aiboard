@@ -164,6 +164,7 @@ test("C4 POSIX force queues the exact workload group and retains the supervisor 
   let supervisorAlive = true;
   let workloadAlive = true;
   let controlObserved = false;
+  let postControlPolls = 0;
   const directSignals: Array<[number, NodeJS.Signals]> = [];
   mkdirSync(join(directory, "channel", "output"), { recursive: true });
   mkdirSync(join(directory, "channel", "input"), { recursive: true });
@@ -210,15 +211,19 @@ test("C4 POSIX force queues the exact workload group and retains the supervisor 
       },
       listPosixGroup: (groupId) => {
         if (groupId !== workloadGroup.groupId) return groupId === supervisorPid && supervisorAlive ? [supervisorPid] : [];
-        if (existsSync(join(directory, "control.json")) && !controlObserved) {
+        if (existsSync(join(directory, "control.json"))) {
           controlObserved = true;
+          postControlPolls += 1;
+        }
+        if (postControlPolls >= 4 && workloadAlive) {
           workloadAlive = false;
-          writeFileSync(join(directory, "state.json"), JSON.stringify({
+          const retired = {
             ...runningState,
             workloadGroupRetirement: { state: "retired", cause: "force_terminate", at: "2026-09-06T00:00:01.000Z" },
             revision: 2,
-            status: "stopped",
-          }));
+            status: "running",
+          } as const;
+          writeFileSync(join(directory, "state.json"), JSON.stringify(retired));
         }
         return workloadAlive ? [workloadGroup.leaderPid, 9003] : [];
       },
@@ -237,6 +242,9 @@ test("C4 POSIX force queues the exact workload group and retains the supervisor 
       { state: "exited" },
     );
     assert.equal(controlObserved, true, "the fenced control request must be observed before retirement");
+    const retiredState = JSON.parse(readFileSync(join(directory, "state.json"), "utf8"));
+    assert.equal(retiredState.workloadGroupRetirement.state, "retired", "force must await durable workload-group retirement");
+    assert.equal(retiredState.status, "running", "force must not require supervisor/output finalization before workload quiescence is proven");
     assert.deepEqual(directSignals, [], "the backend must not directly signal the supervisor group");
     assert.equal(supervisorAlive, true, "force-stop must preserve the terminal supervisor witness");
   } finally {
@@ -293,6 +301,8 @@ test("C4 POSIX v2 terminal observation preserves a live supervisor until authori
   const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
   try {
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, true);
+    assert.deepEqual(parseProcessReconciliation(await backend.reconcile(binding, fence)), { state: "exited", exitCode: 0 },
+      "durable workload retirement is terminal even while the supervisor witness remains alive for release");
     assert.deepEqual(await backend.signal(binding, "force_terminate", fence), { state: "exited" });
     assert.equal(existsSync(join(directory, "control.json")), false, "durable retirement must not re-control a numerically reused group");
     assert.equal(reusedGroupListings, 0, "durable retirement must not enumerate a numerically reused group");
@@ -1100,6 +1110,7 @@ test("C4 POSIX supervisor preserves its witness and reports outcome_unknown afte
     lockHolderPath: "root/lock-holder.json",
     handledControl: 0,
     join,
+    posixAnchorExited: false,
     posixForceControlApplied: false,
     posixWorkloadGroup: workloadGroup,
     process: { pid: 9001 },
@@ -1145,6 +1156,7 @@ test("C4 POSIX supervisor reattests inside the fenced effect before a group sign
     lockHolderPath: "root/lock-holder.json",
     handledControl: 0,
     join,
+    posixAnchorExited: false,
     posixForceControlApplied: false,
     posixWorkloadGroup: workloadGroup,
     process: { pid: 9001 },
@@ -2378,6 +2390,104 @@ test("C4 POSIX supervisor keeps its anchor through graceful control before one e
   assert.ok(publications.some(({ status }) => status === "running"));
 });
 
+test("C4 POSIX force after authenticated anchor exit still signals the recorded workload group", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "dead-anchor-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  const context = vm.createContext({
+    Error,
+    JSON,
+    Number,
+    PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json",
+    fencePath: "root/fence.json",
+    handledControl: 0,
+    join,
+    lockHolderPath: "root/lock-holder.json",
+    posixAnchorExited: true,
+    posixForceControlApplied: false,
+    posixSupervisorBirth: "supervisor-birth",
+    posixWorkloadGroup: workloadGroup,
+    process: {
+      pid: 9001,
+      kill: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); },
+    },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/control.json") return JSON.stringify(request);
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    signalOwnedPosixGroup,
+    existsSync: (path: string) => path.replace(/\\/g, "/") === "root/control.json",
+    unlinkSync: () => undefined,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
+  vm.runInContext("handleControl()", context);
+  assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGKILL"]], "force after exact anchor exit must still signal the recorded group, not refuse numeric-only control");
+  assert.equal(vm.runInContext("posixForceControlApplied", context), true);
+  assert.equal(publications.some(({ error }) => /anchor is unavailable at the control boundary/i.test(error ?? "")), false);
+});
+
+test("C4 POSIX force after authenticated anchor exit treats an empty-group ESRCH as applied control", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "dead-anchor-force-esrch", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  const context = vm.createContext({
+    Error,
+    JSON,
+    Number,
+    PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json",
+    fencePath: "root/fence.json",
+    handledControl: 0,
+    join,
+    lockHolderPath: "root/lock-holder.json",
+    posixAnchorExited: true,
+    posixForceControlApplied: false,
+    posixSupervisorBirth: "supervisor-birth",
+    posixWorkloadGroup: workloadGroup,
+    process: {
+      pid: 9001,
+      kill: (pid: number, signal: NodeJS.Signals) => {
+        signals.push([pid, signal]);
+        const error = Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+        throw error;
+      },
+    },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/control.json") return JSON.stringify(request);
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    signalOwnedPosixGroup,
+    existsSync: (path: string) => path.replace(/\\/g, "/") === "root/control.json",
+    unlinkSync: () => undefined,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
+  assert.doesNotThrow(() => vm.runInContext("handleControl()", context), "kernel ESRCH for an already-empty recorded group must not crash the supervisor");
+  assert.deepEqual(signals, [[-workloadGroup.groupId, "SIGKILL"]], "force must still target the recorded group even when the kernel reports it empty");
+  assert.equal(vm.runInContext("posixForceControlApplied", context), true, "empty-group ESRCH is proof the recorded group is gone, so force must count as applied");
+  assert.equal(publications.some(({ error }) => /ESRCH|anchor is unavailable at the control boundary/i.test(error ?? "")), false);
+});
+
 test("C4 POSIX fixture finalizer fails closed and retains its exact authority on force failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-live-finalizer-"));
   const directory = join(root, "owned-fixture");
@@ -2748,6 +2858,12 @@ test("portable POSIX control maps only an explicit workload group to fixed signa
   signalOwnedPosixGroup("force_terminate", (pid: number, signal: NodeJS.Signals) => { effects.push([pid, signal]); return true; }, 9001);
   assert.deepEqual(effects, [[-9001, "SIGTERM"], [-9001, "SIGKILL"]]);
   assert.throws(() => signalOwnedPosixGroup("terminate", (pid: number, signal: NodeJS.Signals) => { effects.push([pid, signal]); }, 0), /identity/i);
+  assert.doesNotThrow(() => signalOwnedPosixGroup("force_terminate", () => {
+    throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+  }, 9001));
+  assert.throws(() => signalOwnedPosixGroup("force_terminate", () => {
+    throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+  }, 9001), { code: "EPERM" });
 });
 
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;

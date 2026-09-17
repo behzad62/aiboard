@@ -63,6 +63,26 @@ test("portable execution CI covers every host on both maintained Node lines and 
   assert.match(crossHost, /runner-v2-package-hashes\.mjs\s+compare/);
 });
 
+test("native adapter CI runs each host-specific backend suite only on the hosts that can execute it", () => {
+  const native = jobBlock(readFileSync(workflowPath, "utf8"), "native-adapter");
+  const steps = stepBlocks(native);
+  const owning = (testPath: string) => {
+    const matches = steps.filter((step) => step.includes(testPath));
+    assert.equal(matches.length, 1, `Exactly one native-adapter step must run ${testPath}.`);
+    return matches[0]!;
+  };
+
+  // The Windows Job-object backend throws "unavailable on linux" before any
+  // assertion, so scheduling it off-Windows fails the matrix by construction.
+  for (const windowsOnly of ["windows-process-backend.test.ts", "windows-job-process-channel.test.ts"])
+    assert.match(owning(windowsOnly), /if:\s*runner\.os\s*==\s*'Windows'/,
+      `${windowsOnly} must be gated to Windows hosts.`);
+  assert.match(owning("posix-process-backend.test.ts"), /if:\s*runner\.os\s*!=\s*'Windows'/,
+    "The POSIX backend suite must be gated to POSIX hosts.");
+  for (const portable of ["managed-shared-native.test.ts", "mcp-lazy-native.test.ts"])
+    assert.doesNotMatch(owning(portable), /^\s+if:/m, `${portable} is host-portable and must run on every host.`);
+});
+
 function jobBlock(source: string, name: string): string {
   const lines = source.split(/\r?\n/);
   const start = lines.findIndex((line) => line === `  ${name}:`);
@@ -72,4 +92,11 @@ function jobBlock(source: string, name: string): string {
     if (/^  [A-Za-z0-9_-]+:$/.test(lines[index]!)) { end = index; break; }
   }
   return lines.slice(start, end).join("\n");
+}
+
+function stepBlocks(job: string): string[] {
+  const lines = job.split(/\r?\n/);
+  const starts = lines.flatMap((line, index) => (/^      - name:/.test(line) ? [index] : []));
+  assert.notEqual(starts.length, 0, "Workflow job declares no steps.");
+  return starts.map((start, position) => lines.slice(start, starts[position + 1] ?? lines.length).join("\n"));
 }

@@ -18,7 +18,6 @@ import {
   parseProcessLaunchResult,
   parseProcessReconciliation,
   parseProcessReleaseResult,
-  parseProcessSignalResult,
   reattestProcessBackend,
   selectProcessBackend,
   type ProcessBackend,
@@ -380,7 +379,7 @@ function backendLaunchNeverBegan(record: HostLaunchRecord): boolean {
     record.history.every((entry) => ["prepared", "isolated", "cleanup_pending", "cleanup_blocked"].includes(entry.state));
 }
 
-async function quiesceExactBackend(
+export async function quiesceExactBackend(
   record: HostLaunchRecord,
   fence: ProcessEffectFence,
   deadlineAt: number,
@@ -395,37 +394,47 @@ async function quiesceExactBackend(
   try {
     const selected = await selectedForBinding(binding, fence);
     let observed = parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
+    // Force/terminate "exited" proves workload quiescence. verifyEmpty also
+    // demands stopped supervisor status and settled output; those belong to
+    // retained_output_settlement / backend_release, not this resource.
+    let workloadExited = observed.state === "exited";
+    // Signal "exited" only means the OS group looked empty. POSIX supervisors can
+    // still publish status=outcome_unknown until force proves durable retirement;
+    // retained_output_settlement then fails because settle requires running|stopping|stopped.
+    // Quiescence is therefore reconcile "exited" (durable retirement / terminal proof).
+    const refreshExited = async () => {
+      observed = parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
+      if (observed.state === "exited") workloadExited = true;
+      return observed;
+    };
     if (observed.state === "running" || observed.state === "outcome_unknown") {
       let gracefulRequested = false;
       try {
-        parseProcessSignalResult(await selected.backend.signal(binding, "terminate", fence));
+        await selected.backend.signal(binding, "terminate", fence);
         gracefulRequested = true;
       } catch { /* force escalation below retains the same exact binding */ }
+      await refreshExited();
       const gracefulDeadline = Math.min(
         deadlineAt,
         Date.now() + HOST_GRACEFUL_SETTLEMENT_MS,
       );
-      while (gracefulRequested && observed.state === "running" && Date.now() < gracefulDeadline) {
+      // outcome_unknown after terminate means the OS group may be empty while the
+      // supervisor still lacks durable retirement; waiting here only burns the
+      // cleanup deadline before force can publish that proof.
+      while (!workloadExited && gracefulRequested && observed.state === "running" && Date.now() < gracefulDeadline) {
         await sleep(HOST_CLEANUP_POLL_MS);
-        observed = parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
+        await refreshExited();
       }
-      while (observed.state !== "exited" && Date.now() < deadlineAt) {
+      while (!workloadExited && Date.now() < deadlineAt) {
         try {
-          parseProcessSignalResult(await selected.backend.signal(binding, "force_terminate", fence));
+          await selected.backend.signal(binding, "force_terminate", fence);
         } catch { /* a just-exited exact tree is settled by the next reconciliation */ }
-        observed = parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
-        if (observed.state !== "exited") await sleep(HOST_CLEANUP_POLL_MS);
+        await refreshExited();
+        if (workloadExited) break;
+        await sleep(HOST_CLEANUP_POLL_MS);
       }
     }
-    if (observed.state !== "exited") return "outcome_unknown";
-    while (Date.now() < deadlineAt) {
-      const empty = parseProcessEmptyVerification(await selected.backend.verifyEmpty(binding, fence));
-      if (empty.empty) return "verified";
-      await sleep(HOST_CLEANUP_POLL_MS);
-      observed = parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
-      if (observed.state !== "exited") return "outcome_unknown";
-    }
-    return "blocked";
+    return workloadExited ? "verified" : "outcome_unknown";
   } catch {
     return "outcome_unknown";
   }
@@ -471,10 +480,9 @@ async function observeExactBackendQuiescence(
   try {
     const selected = await selectedForBinding(binding, fence);
     const observed = parseProcessReconciliation(await selected.backend.reconcile(binding, fence));
-    if (observed.state !== "exited") return observed.state === "running" ? "blocked" : "outcome_unknown";
-    return parseProcessEmptyVerification(await selected.backend.verifyEmpty(binding, fence)).empty
-      ? "verified"
-      : "blocked";
+    if (observed.state === "exited") return "verified";
+    if (observed.state === "running") return "blocked";
+    return "outcome_unknown";
   } catch {
     return "outcome_unknown";
   }

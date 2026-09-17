@@ -868,6 +868,17 @@ function handleControl() {
       return;
     }
   } else {
+    // Force after an authenticated child-exit must still control remaining
+    // descendants. Requiring a live leader here would refuse C4 cleanup once
+    // the launcher has already exited and left a detached process group.
+    if (request.action === "force_terminate" && posixAnchorExited === true && posixWorkloadGroup) {
+      completeControl(request, () => {
+        signalOwnedPosixGroup(request.action, process.kill, posixWorkloadGroup.groupId);
+        posixForceControlApplied = true;
+        return { state: "signalled" };
+      });
+      return;
+    }
     const observedAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
     if (observedAnchor.state !== "ready") {
       publish("outcome_unknown", "POSIX workload anchor is unavailable at the control boundary; refusing numeric-only group control.");

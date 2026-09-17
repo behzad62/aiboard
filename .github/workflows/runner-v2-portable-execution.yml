@@ -60,12 +60,20 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Run current native adapter tests
+      - name: Run Windows-only native adapter tests
+        if: runner.os == 'Windows'
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/windows-process-backend.test.ts
           runner-v2/test/windows-job-process-channel.test.ts
+      - name: Run POSIX-only native adapter tests
+        if: runner.os != 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/posix-process-backend.test.ts
+      - name: Run host-portable native adapter tests
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/managed-shared-native.test.ts
           runner-v2/test/mcp-lazy-native.test.ts
 

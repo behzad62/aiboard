@@ -22,6 +22,7 @@ const WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS = 15_000;
 const PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS = 15_000;
 const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
 const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
+const POSIX_FORCE_SETTLEMENT_DEADLINE_MS = 5_000;
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 
 export interface NativeOwnedProcessBackendOptions {
@@ -421,7 +422,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       });
     }
     await delay(action === "force_terminate" ? 250 : 75);
-    return this.signalState(await this.waitForKnownEmptiness(identity));
+    const awaitPosixForceSettlement = this.options.platform === "posix" && action === "force_terminate";
+    return this.signalState(await this.waitForKnownEmptiness(
+      identity,
+      awaitPosixForceSettlement,
+      awaitPosixForceSettlement ? POSIX_FORCE_SETTLEMENT_DEADLINE_MS : undefined,
+    ));
   }
 
   async verifyEmpty(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
@@ -472,11 +478,25 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (!state) return { state: "outcome_unknown" };
     if (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid)
       return { state: "identity_mismatch" };
+    const posixRetired = this.options.platform === "posix" && identity.version === 2 &&
+      isValidPosixSupervisorStateV2(state) && state.workloadGroupRetirement.state === "retired";
+    // Durable retirement is workload quiescence even if a prior uncertain status
+    // publication has not yet been overwritten by the retired tick.
+    if (posixRetired) {
+      return {
+        state: "exited",
+        ...(state.exitCode === null ? {} : { exitCode: state.exitCode }),
+        ...(state.signal ? { signal: state.signal } : {}),
+      };
+    }
     if (state.status === "outcome_unknown") return { state: "outcome_unknown" };
     const emptiness = await this.emptiness(identity);
     if (emptiness === "identity_mismatch") return { state: "identity_mismatch" };
     if (emptiness === "outcome_unknown") return { state: "outcome_unknown" };
-    if (validation === "live" || emptiness === "nonempty") return { state: "running" };
+    if (emptiness === "nonempty") return { state: "running" };
+    if (validation === "live") {
+      return { state: "running" };
+    }
     try { assertPortableOutputSettledAtFence(identity, _fence); }
     catch { return { state: "outcome_unknown" }; }
     try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
@@ -674,10 +694,17 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (emptiness === "outcome_unknown") throw new Error("Owned process membership could not be verified after signal.");
     return { state: emptiness === "empty" ? "exited" : "running" };
   }
-  private async waitForKnownEmptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
-    const deadline = Date.now() + Math.max(500, this.pollIntervalMs * 100);
+  private async waitForKnownEmptiness(
+    identity: Identity,
+    waitForNonempty = false,
+    deadlineMs = Math.max(500, this.pollIntervalMs * 100),
+  ): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+    const deadline = Date.now() + deadlineMs;
     let result = await this.emptiness(identity);
-    while (result === "outcome_unknown" && Date.now() < deadline) {
+    while (
+      (result === "outcome_unknown" || (waitForNonempty && result === "nonempty")) &&
+      Date.now() < deadline
+    ) {
       await delay(this.pollIntervalMs);
       result = await this.emptiness(identity);
     }

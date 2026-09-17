@@ -113,7 +113,14 @@ export function isExactPosixAnchorRelease(value, nonce, workloadGroup, expectedS
 export function signalOwnedPosixGroup(action, signal = process.kill, groupId) {
   if (!positivePid(groupId)) throw new Error("Owned POSIX workload group identity is invalid.");
   const osSignal = action === "force_terminate" ? "SIGKILL" : "SIGTERM";
-  signal(-groupId, osSignal);
+  try {
+    signal(-groupId, osSignal);
+  } catch (error) {
+    // The kernel reports ESRCH when the recorded group has no remaining
+    // members. That is applied control, not lost fence authority: treating it
+    // as a throw crashes the supervisor before it can retire the workload.
+    if (error?.code !== "ESRCH") throw error;
+  }
 }
 
 function validWorkloadGroup(value) {

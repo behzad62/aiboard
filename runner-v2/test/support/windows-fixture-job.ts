@@ -94,6 +94,12 @@ export function observeWindowsFixtureJob(child: ChildProcessWithoutNullStreams, 
   })();
 }
 
+/** Only a hang stop, never a performance assertion: starting the PowerShell Job
+ * host (including its Add-Type compilation) routinely exceeds 15s on a cold,
+ * loaded CI Windows runner, which failed nine suites for pure startup latency. */
+const FIXTURE_JOB_STARTUP_TIMEOUT_MS = 60_000;
+const FIXTURE_JOB_CLOSE_TIMEOUT_MS = 30_000;
+
 export async function spawnContainedWindowsFixture(root: string, command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean; stdio?: unknown } = {}): Promise<WindowsFixtureJob> {
   if (process.platform !== "win32") throw new Error("The Windows fault-fixture containment helper is Windows-only.");
   const helper = fileURLToPath(new URL("../../src/managed-process-job-host.ps1", import.meta.url));
@@ -102,7 +108,7 @@ export async function spawnContainedWindowsFixture(root: string, command: string
   const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper], {
     stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: fixtureEnvironment,
   });
-  const opening = observeWindowsFixtureJob(child, { startupTimeoutMs: 15_000, closeTimeoutMs: 15_000,
+  const opening = observeWindowsFixtureJob(child, { startupTimeoutMs: FIXTURE_JOB_STARTUP_TIMEOUT_MS, closeTimeoutMs: FIXTURE_JOB_CLOSE_TIMEOUT_MS,
     record: (event) => appendFileSync(join(root, "fixture-job-events.jsonl"), JSON.stringify(event) + "\n"),
   });
   child.stderr.on("data", (bytes) => appendFileSync(join(root, "fixture-job-host.stderr.log"), bytes));

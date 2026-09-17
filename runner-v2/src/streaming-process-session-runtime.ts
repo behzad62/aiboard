@@ -1296,7 +1296,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
   const stopAuthorizedSession = async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => {
     const expected = { ...assertion, operation: "stop" as const };
     options.sessions.assertOperationAuthorization(authorization, expected);
-    const current = options.kernel.store.readBySession(expected.sessionId)!;
+    const cleanupDeadlineAt = clock().getTime() + AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
+    const current = renewOwnedSessionLease(expected.sessionId, cleanupDeadlineAt);
+    if (!current) throw runnerSessionError("cleanup_blocked", "Owned stop authority disappeared before cleanup acceptance.");
     // Accept durable stop intent synchronously before any wait. A later revoked
     // caller cannot revoke cleanup already owned by the exact session.
     writer.apply({ type: "begin_stopping", sessionId: current.sessionId, ownerId: current.ownerId, fencingToken: current.fencingToken, expectedRevision: current.revision, at: clock().toISOString() });
